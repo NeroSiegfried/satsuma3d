@@ -739,7 +739,7 @@ final class SelectIntentState {
     held = intent
     pressed = Date()
     apply()
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    Haptics.impact(.light)
   }
 
   func release(_ intent: SelectIntent) {
@@ -1115,7 +1115,7 @@ struct SidebarSlider: View {
   private func tick(from before: Double, to after: Double) {
     let marks = [0, 1, json.double("default").map(position)].compactMap { $0 }
     if marks.contains(where: { ($0 - before) * ($0 - after) < 0 || ($0 == after && before != after) }) {
-      UISelectionFeedbackGenerator().selectionChanged()
+      Haptics.selection()
     }
   }
 
