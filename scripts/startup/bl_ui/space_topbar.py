@@ -171,7 +171,7 @@ class TOPBAR_MT_file(Menu):
 
         # iOS Workaround: Provide a clean alternative to write errors caused by sandbox restrictions
         import os
-        file_is_writable = os.access(bpy.data.filepath, os.W_OK)
+        file_is_writable = not bpy.data.filepath or os.access(bpy.data.filepath, os.W_OK)
 
         sub = layout.row()
         sub.enabled = file_is_writable
