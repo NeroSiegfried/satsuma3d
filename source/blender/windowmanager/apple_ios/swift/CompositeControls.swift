@@ -250,7 +250,7 @@ struct DataBrowser: View {
           .id(index)
           .accessibilityAddTraits(current ? .isSelected : [])
         }
-        .listStyle(.insetGrouped)
+        .groupedListStyle()
         .scrollContentBackground(.hidden)
         .onAppear {
           if let index = options.firstIndex(where: { jsonEqual($0["value"], property["value"]) }) {
@@ -258,7 +258,7 @@ struct DataBrowser: View {
           }
         }
       }
-      .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+      .searchableInBar(text: $query)
       .navigationTitle(type)
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -498,7 +498,7 @@ struct ListRows: View {
           .frame(maxWidth: .infinity, alignment: .leading)
           .layoutPriority(1)
           .contentShape(Rectangle())
-          .hoverEffect(.highlight)
+          .pointerHighlight()
           .onTapGesture { tap(item, index: index, isActive: isActive) }
       }
       ForEach(Array(item.array("controls").enumerated()), id: \.offset) { _, control in
@@ -541,7 +541,7 @@ struct ListRows: View {
     }
     .scaleEffect(dragging == position ? 1.02 : 1)
     .shadow(color: .black.opacity(dragging == position ? 0.25 : 0), radius: 8, y: 3)
-    .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 8))
+    .contextMenuPreviewShape(RoundedRectangle(cornerRadius: 8))
     .contextMenu { rowMenu(item, index: index, position: position + offset, label: label) }
     .accessibilityElement(children: .contain)
     .accessibilityLabel(label)
@@ -800,7 +800,7 @@ struct ListPage: View {
         }
         .padding(16)
       }
-      .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+      .searchableInBar(text: $query)
       .navigationTitle("\(property.array("rows").count) Items")
       .navigationBarTitleDisplayMode(.inline)
     }

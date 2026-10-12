@@ -12,14 +12,14 @@ import SwiftUI
 import UIKit
 
 /* Matches #IOSAssetDragPhase in `wm_apple_ios_ui.cc`. */
-private enum AssetDragPhase: Int32 {
+enum AssetDragPhase: Int32 {
   case begin = 0, move = 1, drop = 2, cancel = 3, add = 4
 }
 
 private let assetsHeight: CGFloat = 212
 private let assetsCompactHeight: CGFloat = 184
 private let assetsMaxWidth: CGFloat = 1600
-private let assetTile: CGFloat = 96
+let assetTile: CGFloat = 96
 /* The pane opens on the Starter library's basic shapes. */
 private let startType = "Object"
 private let startCategory = "Primitives"
@@ -30,7 +30,7 @@ private let assetTypes: [(type: String, icon: String, plural: String)] = [
   ("Material", "MATERIAL", "Materials"), ("World", "WORLD", "Worlds"), ("Modifier", "MODIFIER", "Modifiers"),
 ]
 
-private func assetTypeIcon(_ type: String?) -> UIImage? {
+func assetTypeIcon(_ type: String?) -> UIImage? {
   if let entry = assetTypes.first(where: { $0.type == type }) { return BlenderIcon.image(entry.icon) }
   return UIImage(systemName: "shippingbox")
 }
@@ -46,7 +46,7 @@ private func assetAddTitle(_ type: String?) -> String {
 }
 
 /** Where a drop lands, shown in the drag preview over the viewport. */
-private func assetDropHint(_ type: String?) -> String {
+func assetDropHint(_ type: String?) -> String {
   type == "Material" || type == "Modifier" ? "Drop on an object" : "Drop to place"
 }
 
@@ -321,6 +321,7 @@ struct AssetsPanel: View {
   }
 }
 
+#if !os(macOS) /* The Mac drags with AppKit, see `MacAssets.swift`. */
 /** The pane's state and Blender's side of it, and dragging assets from it into the viewport. */
 @MainActor
 final class SwiftAssets: NSObject, UIDropInteractionDelegate {
@@ -517,5 +518,6 @@ private struct AssetDropPill: View {
     .background(Color(uiColor: .secondarySystemBackground), in: Capsule())
   }
 }
+#endif
 
 /** \} */

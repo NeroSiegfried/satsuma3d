@@ -333,9 +333,8 @@ struct Rail: View {
       .simultaneousGesture(pressSelect(item), including: state.listVisible ? .subviews : .all)
       .accessibilityAddTraits(.isButton)
       .accessibilityAction { tap(item) }
-    .contentShape(.hoverEffect, Capsule())
     /* The system's own highlight under a hovering Pencil or pointer. */
-    .hoverEffect(.highlight)
+    .hoverHighlight(Capsule())
     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { state.setFrame($0, for: item.id) }
     .onDisappear { state.setFrame(nil, for: item.id) }
     .onHover { inside in
@@ -892,8 +891,7 @@ struct PaintSidebar: View {
       }
       .scaleEffect(pressing == intent ? 0.94 : 1)
       .contentShape(Capsule())
-      .contentShape(.hoverEffect, Capsule())
-      .hoverEffect(.highlight)
+      .hoverHighlight(Capsule())
       /* Never completes, so it reports the finger landing and lifting, however long it stays. */
       .onLongPressGesture(minimumDuration: .infinity, maximumDistance: .infinity, perform: {}) { down in
         pressing = down ? intent : nil

@@ -533,6 +533,32 @@ extension View {
   }
 }
 
+extension View {
+  /** Lists of choices, grouped as the platform groups its lists. */
+  func groupedListStyle() -> some View { self.listStyle(.insetGrouped) }
+
+  /** A search field that stays in the navigation bar. */
+  func searchableInBar(text: Binding<String>) -> some View {
+    self.searchable(text: text, placement: .navigationBarDrawer(displayMode: .always))
+  }
+
+  /** The shape a row lifts in while its context menu shows. */
+  func contextMenuPreviewShape<S: Shape>(_ shape: S) -> some View {
+    self.contentShape(.contextMenuPreview, shape)
+  }
+
+  /** The system's highlight under a hovering Pencil or pointer. */
+  func pointerHighlight() -> some View { self.hoverEffect(.highlight) }
+
+  /** The system's highlight under a hovering Pencil or pointer, in `shape`. */
+  func hoverHighlight<S: Shape>(_ shape: S) -> some View {
+    self.contentShape(.hoverEffect, shape).hoverEffect(.highlight)
+  }
+
+  /** A sheet's heights on a phone, where popovers become sheets. */
+  func sheetDetents() -> some View { self.presentationDetents([.medium, .large]) }
+}
+
 /** Glass shapes that blend and morph into each other as they come and go. */
 struct PanelGlassGroup<Content: View>: View {
   var spacing: CGFloat = 8

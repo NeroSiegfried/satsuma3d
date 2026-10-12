@@ -138,7 +138,7 @@ struct NumberField: View, Equatable {
       }
     }
     .contentShape(RoundedRectangle(cornerRadius: 8))
-    .hoverEffect(.highlight)
+    .pointerHighlight()
     .onTapGesture { beginEditing() }
     .background(PresentationAnchor(anchor: scrubAnchor))
     .gesture(ScrubGesture(enabled: scrubs && editable && !editing, anchor: scrubAnchor,

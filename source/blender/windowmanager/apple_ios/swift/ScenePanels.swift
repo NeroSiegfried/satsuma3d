@@ -153,7 +153,7 @@ final class SwiftScenePanels {
     }
     /* A popover's size; a sheet on a phone, which it fills. */
     .frame(idealWidth: 400, idealHeight: 640)
-    .presentationDetents([.medium, .large])
+    .sheetDetents()
   }
 
   func setShadingShown(_ shown: Bool) {
@@ -191,7 +191,7 @@ final class SwiftScenePanels {
     }
     /* A popover's size; a sheet on a phone, which it fills. */
     .frame(idealWidth: 320, idealHeight: 420)
-    .presentationDetents([.medium, .large])
+    .sheetDetents()
   }
 
   /** \} */
