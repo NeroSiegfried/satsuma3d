@@ -341,21 +341,24 @@ struct HeaderControls: View, Equatable {
   }
 
   var body: some View {
-    ForEach(Array(controls.enumerated()), id: \.offset) { _, control in
-      Group {
-        switch control.string("type") {
-          case "BOOLEAN":
-            PropertyToggle(store: store, property: control)
-          case "OPERATOR" where control.bool("checkbox"):
-            OperatorToggle(store: store, property: control)
-          case "OPERATOR":
-            HeaderOperatorButton(store: store, property: control)
-          default:
-            EmptyView()
+    /* A row of their own: through `equatable()` the header would not lay them out side by side. */
+    HStack(spacing: 8) {
+      ForEach(Array(controls.enumerated()), id: \.offset) { _, control in
+        Group {
+          switch control.string("type") {
+            case "BOOLEAN":
+              PropertyToggle(store: store, property: control)
+            case "OPERATOR" where control.bool("checkbox"):
+              OperatorToggle(store: store, property: control)
+            case "OPERATOR":
+              HeaderOperatorButton(store: store, property: control)
+            default:
+              EmptyView()
+          }
         }
+        .propertyActions(store, control)
+        .fixedSize()
       }
-      .propertyActions(store, control)
-      .fixedSize()
     }
   }
 }
