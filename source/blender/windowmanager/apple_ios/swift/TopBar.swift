@@ -160,14 +160,16 @@ private struct TransformSetting {
 struct ViewportToggle {
   let name: String
   let title: String
+  /** Blender's icon, as in its viewport header; the symbol only where it has none. */
+  let icon: String
   let symbol: String
 
   static let all = [
-    ViewportToggle(name: "overlays", title: "Overlays", symbol: "circle.dashed.inset.filled"),
-    ViewportToggle(name: "xray", title: "X-Ray", symbol: "square.on.square.intersection.dashed"),
-    ViewportToggle(name: "gizmos", title: "Gizmos", symbol: "move.3d"),
-    ViewportToggle(name: "statistics", title: "Statistics", symbol: "chart.bar"),
-    ViewportToggle(name: "wireframe", title: "Wireframe", symbol: "cube"),
+    ViewportToggle(name: "overlays", title: "Overlays", icon: "OVERLAY", symbol: "circle.dashed.inset.filled"),
+    ViewportToggle(name: "xray", title: "X-Ray", icon: "XRAY", symbol: "square.on.square.intersection.dashed"),
+    ViewportToggle(name: "gizmos", title: "Gizmos", icon: "GIZMO", symbol: "move.3d"),
+    ViewportToggle(name: "statistics", title: "Statistics", icon: "INFO", symbol: "chart.bar"),
+    ViewportToggle(name: "wireframe", title: "Wireframe", icon: "SHADING_WIRE", symbol: "cube"),
   ]
 }
 
@@ -411,10 +413,11 @@ struct DocumentToolbar: ToolbarContent {
     }
     Section {
       ForEach(ViewportToggle.all, id: \.name) { toggle in
-        Toggle(toggle.title, systemImage: toggle.symbol, isOn: Binding(
-          get: { model.viewport?.bool(toggle.name) == true },
-          set: { _ in Engine.setting("viewport_toggle", toggle.name) }))
-          .disabled(model.viewport == nil)
+        sidebarToggle(toggle.title, icon: BlenderIcon.image(toggle.icon) ?? UIImage(systemName: toggle.symbol),
+                      isOn: model.viewport?.bool(toggle.name) == true) {
+          Engine.setting("viewport_toggle", toggle.name)
+        }
+        .disabled(model.viewport == nil)
       }
     }
     Section {
