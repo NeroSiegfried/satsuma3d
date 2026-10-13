@@ -5,7 +5,7 @@
 /** \file
  * The Outliner: the scene's collections and objects as a tree. Tap to select, touch and hold or
  * swipe for actions, drag rows into a collection or onto an object to parent them, and use
- * Select mode to act on several at once, as in Mail and Files.
+ * Select mode to act on several at once, as the system's lists do.
  */
 
 import SwiftUI
@@ -136,8 +136,8 @@ struct HierarchyPanel: View {
   @Environment(\.panelInWindow) private var inWindow
 
   /** Its title with Select and Add, a search field, the outline, and in Select mode the actions on
-   * the selection along the bottom, as Files and Mail have them. Plain SwiftUI, so the panel sits
-   * the same in the window's sidebar, a sheet or a window of its own. */
+   * the selection along the bottom, as the system's lists have them. Plain SwiftUI, so the panel
+   * sits the same in the window's sidebar, a sheet or a window of its own. */
   var body: some View {
     VStack(spacing: 0) {
       header
@@ -275,8 +275,8 @@ struct HierarchyPanel: View {
 /** \name Outline
  *
  * The tree as a SwiftUI list: tap to select, Select mode or a two-finger swipe to select several
- * as in Mail, swipe and touch and hold for actions, and drag rows into a collection or onto an
- * object.
+ * as the system's lists do, swipe and touch and hold for actions, and drag rows into a
+ * collection or onto an object.
  * \{ */
 
 struct OutlineList: View {
@@ -453,7 +453,7 @@ struct OutlineList: View {
     }
     .padding(.horizontal, 8)
     .frame(minHeight: 40)
-    /* The selection as a rounded rectangle, as in a sidebar such as Notes'; a drag's target lit up
+    /* The selection as a rounded rectangle, as in the system's sidebars; a drag's target lit up
      * the same way. */
     .background(
       RoundedRectangle(cornerRadius: 10, style: .continuous)

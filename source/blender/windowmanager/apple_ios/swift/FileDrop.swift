@@ -17,7 +17,7 @@ struct FileDrop: DropDelegate {
   /** Assets dragged out of the pane drop through their own path. */
   let assetDragging: () -> Bool
 
-  /** Image formats Blender reads directly. Others, such as HEIC from Photos, become PNG. */
+  /** Image formats Blender reads directly. Others, such as HEIC photos, become PNG. */
   private static let readableImages: [UTType] = [.png, .jpeg, .tiff, .bmp, .webP] +
     ["com.ilm.openexr-image", "public.radiance", "com.truevision.tga-image", "public.jpeg-2000"]
       .compactMap { UTType($0) }

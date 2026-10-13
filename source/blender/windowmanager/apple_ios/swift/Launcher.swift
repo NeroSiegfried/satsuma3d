@@ -215,7 +215,7 @@ struct LauncherScene: View {
   }
 }
 
-/** Suzanne, to look at and flick around, the way Preview turns 3D files. */
+/** Suzanne, to look at and flick around, the way the system shows 3D files. */
 @objc(WMIOSLauncherModelView) public final class WMIOSLauncherModelView: UIView,
   UIGestureRecognizerDelegate
 {

@@ -477,7 +477,7 @@ struct ListRows: View {
     .scrollContentBackground(.hidden)
     .environment(\.defaultMinListRowHeight, Self.rowHeight)
     .frame(height: CGFloat(shown.count) * Self.rowHeight)
-    /* Items added or deleted slide in and out, as in Notes: the list animates the change. */
+    /* Items added or deleted slide in and out: the list animates the change. */
     .animation(UIAccessibility.isReduceMotionEnabled ? nil : .smooth(duration: 0.3),
                value: Self.identities(shown))
     /* Blender's list has changed: show it as it is. */

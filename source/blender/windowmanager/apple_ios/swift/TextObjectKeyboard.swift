@@ -5,7 +5,7 @@
 /** \file
  * Typing into a text object: in its Edit Mode the system keyboard comes up, and what it types,
  * deletes and starts on a new line goes to Blender's text editing, as Blender's own keys would.
- * Above the keyboard, as in Notes, the system's text formatting sets the font, bold, italic,
+ * Above the keyboard, the system's text formatting sets the font, bold, italic,
  * underline and alignment. With a hardware keyboard Blender takes the keys itself, as on the
  * desktop.
  */
@@ -159,7 +159,7 @@ final class TextObjectInputView: UIView, UIKeyInput, UITextFormattingViewControl
     image: UIImage(systemName: "textformat.alt"),
     primaryAction: UIAction { [weak self] _ in self?.showFormatting() })
 
-  /** Above the keyboard, as in Notes: the system's text formatting, and leaving Edit Mode. */
+  /** Above the keyboard: the system's text formatting, and leaving Edit Mode. */
   private lazy var toolbar: UIToolbar = {
     let toolbar = UIToolbar(frame: CGRect(x: 0, y: 0, width: 600, height: 50))
     formatItem.accessibilityLabel = "Text Formatting"
