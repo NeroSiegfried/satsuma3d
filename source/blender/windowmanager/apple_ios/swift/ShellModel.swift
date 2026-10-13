@@ -38,6 +38,8 @@ final class ShellModel {
   /** Blender's navigation gizmo: its center and radius, in fractions of the window's width and
    * height (center) and width (radius). */
   private(set) var navigationGizmo: [Double] = []
+  /** The color the viewport is cleared to, as red, green and blue in display space. */
+  private(set) var viewportBackground: [Double] = []
   /** The modes the active object has, as Blender's header lists them, and the current one. */
   private(set) var modes: [JSON] = []
   private(set) var objectMode = "OBJECT"
@@ -125,6 +127,8 @@ final class ShellModel {
     set(\.redo, toolbar.dict("redo"), equal: { jsonEqual($0, $1) })
     let gizmo = (toolbar["navigationGizmo"] as? [NSNumber])?.map(\.doubleValue) ?? []
     if gizmo.count == 3 { set(\.navigationGizmo, gizmo) }
+    let background = (toolbar["viewportBackground"] as? [NSNumber])?.map(\.doubleValue) ?? []
+    if background.count == 3 { set(\.viewportBackground, background) }
     let modes = toolbar.array("modes")
     if !modes.isEmpty { set(\.modes, modes, equal: jsonListEqual) }
     set(\.objectMode, toolbar.string("objectMode") ?? "OBJECT")

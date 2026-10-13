@@ -36,6 +36,8 @@
 #include "BLI_time.h"
 #include "BLI_timer.h"
 #include "DNA_view3d_types.h"
+
+#include "BLI_math_color.h"
 #include "GHOST_IOSMessageQueue.hh"
 
 #include "DEG_depsgraph.hh"
@@ -2203,6 +2205,17 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
   json += redo_json;
   json += ",\"navigationGizmo\":";
   json += navigation_json;
+  if (view3d && scene) {
+    /* The color the viewport is cleared to, in display space, for chrome that should blend in
+     * with it, such as the Mac window's toolbar. */
+    float background[3];
+    ED_view3d_background_color_get(scene, view3d, background);
+    if (view3d->shading.background_type == V3D_SHADING_BACKGROUND_WORLD && scene->world) {
+      linearrgb_to_srgb_v3_v3(background, background);
+    }
+    json += ",\"viewportBackground\":[" + std::to_string(background[0]) + "," +
+            std::to_string(background[1]) + "," + std::to_string(background[2]) + "]";
+  }
   json += ",\"tools\":";
   json += tools_json;
   json += ",\"brushes\":";
