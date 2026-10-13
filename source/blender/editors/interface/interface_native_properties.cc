@@ -3538,13 +3538,32 @@ bNodeSocket *find_socket(bNode &node, const std::string &identifier, const bool 
   return nullptr;
 }
 
-/** Links an output to an input, replacing what the input had unless it takes several. */
-void link_sockets(bNodeTree &tree, bNode &from, bNodeSocket &from_socket, bNode &to, bNodeSocket &to_socket)
+/**
+ * Links an output to an input, replacing what the input had unless it takes several. The nodes
+ * may take the link their own way, as Blender's editor lets them: an empty socket on a group's
+ * input or output, or a zone's, becomes a new socket of the group or zone.
+ */
+bool link_sockets(bNodeTree &tree,
+                  bNode &from,
+                  bNodeSocket &from_socket,
+                  bNode &to,
+                  bNodeSocket &to_socket,
+                  bContext *C = nullptr)
 {
   if (!(to_socket.flag & SOCK_MULTI_INPUT)) {
     bke::node_remove_socket_links(tree, to_socket);
   }
-  bke::node_add_link(tree, from, from_socket, to, to_socket);
+  bNodeLink &link = bke::node_add_link(tree, from, from_socket, to, to_socket);
+  for (bNode *node : {link.fromnode, link.tonode}) {
+    if (node->typeinfo->insert_link) {
+      bke::NodeInsertLinkParams params{tree, *node, link, C};
+      if (!node->typeinfo->insert_link(params)) {
+        bke::node_remove_link(&tree, link);
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 /** Adds a node at a place, a zone's input with its output, or a group's node with its group. */
@@ -3815,7 +3834,9 @@ std::optional<std::string> apply_node_action(bContext *C, bNodeTree &tree, const
     if (!from_socket || from == to) {
       return std::nullopt;
     }
-    link_sockets(tree, *from, *from_socket, *to, *to_socket);
+    if (!link_sockets(tree, *from, *from_socket, *to, *to_socket, C)) {
+      return std::nullopt;
+    }
     BKE_main_ensure_invariants(*bmain, tree.id);
     return std::string("Link Nodes");
   }
