@@ -1029,31 +1029,32 @@ struct VectorRow: View, Equatable {
   private var caption: some View {
     if let mode = items.first?.dict("group_menu") {
       let options = mode.array("options")
-      let current = options.first { jsonEqual($0["value"], mode["value"]) }
-      /* The mode is a touch and hold away, as in the caption's context menu. */
-      Text(title)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .frame(height: Self.captionHeight)
-        .contentShape(Rectangle())
-        .contextMenu {
-          if mode.bool("editable") {
-            ForEach(Array(options.enumerated()), id: \.offset) { _, option in
-              Button {
-                if !jsonEqual(option["value"], mode["value"]) { store.edit(mode, value: option["value"] ?? "") }
-              } label: {
-                if jsonEqual(option["value"], mode["value"]) {
-                  Label(option.string("label") ?? "", systemImage: "checkmark")
-                }
-                else {
-                  Text(option.string("label") ?? "")
-                }
-              }
-            }
+      let current = options.firstIndex { jsonEqual($0["value"], mode["value"]) } ?? -1
+      /* The mode, such as Rotation's XYZ Euler, as a small picker at the caption's end. */
+      HStack(spacing: 6) {
+        Text(title)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        Spacer(minLength: 0)
+        Picker(title, selection: Binding(
+          get: { current },
+          set: { index in
+            guard options.indices.contains(index), index != current else { return }
+            store.edit(mode, value: options[index]["value"] ?? "")
+          })) {
+          ForEach(Array(options.enumerated()), id: \.offset) { index, option in
+            Text(option.string("label") ?? "").tag(index)
           }
         }
-        .accessibilityValue(current?.string("label") ?? "")
-        .accessibilityHint("Touch and hold to change the mode.")
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .controlSize(.mini)
+        .buttonBorderShape(.capsule)
+        .fixedSize()
+        .disabled(!mode.bool("editable"))
+        .accessibilityLabel("\(title) Mode")
+      }
+      .frame(height: Self.captionHeight)
     }
     else {
       Text(title).font(.caption).foregroundStyle(.secondary)
