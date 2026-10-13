@@ -822,7 +822,7 @@ struct SidebarContent: Equatable {
   }
 }
 
-/** One control on the side of the viewport, Procreate-style: size and strength, and the + and -
+/** One control on the side of the viewport, as painting apps have it: size and strength, and the + and -
  * below them, nearest the hand. */
 struct PaintSidebar: View {
   let state: SelectIntentState
@@ -1012,7 +1012,7 @@ struct SidebarSlider: View {
     .frame(width: width, height: height)
     .overlay(alignment: leading ? .leading : .trailing) {
       if drag?.moved == true {
-        /* As Procreate's: the setting, and below it the brush as it will paint. */
+        /* The setting, and below it the brush as it will paint. */
         VStack(spacing: 12) {
           VStack(spacing: 2) {
             Text(title)

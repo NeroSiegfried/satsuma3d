@@ -474,7 +474,7 @@ struct PropertyRow: View, Equatable {
   var body: some View {
     Group {
       if property.has("slider"), type == "FLOAT" || type == "INT" {
-        /* The name, the slider, then the number, on one line, as in Keynote. */
+        /* The name, the slider, then the number, on one line. */
         labeled(width: 0.66) {
           HStack(spacing: 8) {
             PropertySlider(store: store, property: property)

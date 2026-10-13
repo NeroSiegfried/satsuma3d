@@ -177,7 +177,7 @@ final class TextObjectInputView: UIView, UIKeyInput, UITextFormattingViewControl
 
   override var inputAccessoryView: UIView? { toolbar }
 
-  /** The system's text formatting, as Notes and Pages show it: font, styles and alignment. */
+  /** The system's text formatting: font, styles and alignment. */
   private func showFormatting() {
     let configuration = UITextFormattingViewController.Configuration(groups: [
       .group([.component(.fontPicker, .regular)]),

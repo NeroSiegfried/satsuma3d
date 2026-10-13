@@ -213,7 +213,7 @@ enum RenderThumbnails {
 /** \name Background rendering
  *
  * A render is a continued processing task: iOS keeps the app running when it leaves the
- * foreground and shows the render's progress, as for an export in Final Cut Pro. Blender's loop
+ * foreground and shows the render's progress, as for a video export. Blender's loop
  * keeps running meanwhile, without drawing, see `GHOST_ios_engine_continue_work`.
  * \{ */
 

@@ -284,7 +284,7 @@ static NSArray<NSDictionary *> *launcherTemplates()
 /** \name Launcher
  * \{ */
 
-/** Where a document was open when the app was left, to continue there as Pages does. */
+/** Where a document was open when the app was left, to continue there. */
 static NSString *const launcher_open_document_key = @"BlenderOpenDocument";
 /** Choosing a template before creating a document. */
 static UIDocumentCreationIntent const launcher_template_intent = @"template";
@@ -329,7 +329,7 @@ static NSURL *launcher_pending_url = nil;
   if (@available(iOS 27.0, visionOS 27.0, *)) {
     launch.subtitle = @"Create a new scene or open one";
   }
-  /* As in Pages: choosing a template first, or starting at once from General. Both create
+  /* Choosing a template first, or starting at once from General. Both create
    * through the browser, which places the document and lists it in Recents. */
   UIAction *choose = [UIDocumentViewControllerLaunchOptions
       createDocumentActionWithIntent:launcher_template_intent];
@@ -769,7 +769,7 @@ void wm_apple_ios_launcher_show_documents(id sender)
   }
   NSURL *url = [[document.fileURL retain] autorelease];
   /* Swap Blender's window for a picture of it in the document view, which iOS then shrinks into
-   * the document's place in the browser, as Pages does. */
+   * the document's place in the browser. */
   UIView *view = launcher_controller.view;
   if (UIView *snapshot = (UIView *)GHOST_ios_document_window_snapshot()) {
     snapshot.frame = view.bounds;
@@ -784,7 +784,7 @@ void wm_apple_ios_launcher_show_documents(id sender)
   GHOST_ios_document_window_set_visible(false, false);
   /* The system's back action closes the document and shows the launcher. */
   [launcher_controller.navigationItem.backAction performWithSender:sender target:nil];
-  /* Show where the document is, as Pages does, in case the browser is elsewhere. */
+  /* Show where the document is, in case the browser is elsewhere. */
   if (url) {
     [launcher_controller.launchOptions.browserViewController revealDocumentAtURL:url
                                                                   importIfNeeded:NO

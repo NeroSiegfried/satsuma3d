@@ -260,7 +260,7 @@ final class FontPickerSession: NSObject, UIFontPickerViewControllerDelegate {
 /* -------------------------------------------------------------------- */
 /** \name Font Rows
  *
- * A text object's fonts as Pages and Keynote show them: the family by name, in its own typeface,
+ * A text object's fonts as the system's apps show them: the family by name, in its own typeface,
  * with its typeface beneath; Blender's bold and italic fonts as rows of their own.
  * \{ */
 
@@ -362,7 +362,7 @@ struct FontSlotRow: View {
     FontPickerSession(property: property, store: store).present(from: anchor)
   }
 
-  /** The family's typefaces, as Pages' second font menu. */
+  /** The family's typefaces, in a second menu beside the family. */
   private func typefaceMenu(_ font: UIFont) -> some View {
     Menu {
       ForEach(typefaces(ofFamily: familyName(font)), id: \.name) { face in
@@ -398,7 +398,7 @@ struct FontSlotRow: View {
 /* -------------------------------------------------------------------- */
 /** \name Text Section
  *
- * A text object's text as Keynote's Text inspector shows it: its font, bold, italic and underline,
+ * A text object's text, as a text inspector shows it: its font, bold, italic and underline,
  * and size; its alignment; its spacing. Out of Edit Mode these style all of the text, while
  * typing what is selected and what is typed next.
  * \{ */
@@ -492,7 +492,7 @@ struct TextStyleSection: View {
     .accessibilityLabel("Font, \(font.map(familyName) ?? "Default")")
   }
 
-  /** Bold, italic and underline, with small caps among the rest, as Keynote's row of styles. */
+  /** Bold, italic and underline, with small caps among the rest, in one row. */
   private var stylesRow: some View {
     HStack(spacing: 0) {
       styleButton("BOLD", key: "bold", symbol: "bold", title: "Bold")
@@ -531,7 +531,7 @@ struct TextStyleSection: View {
     .accessibilityAddTraits(on ? .isSelected : [])
   }
 
-  /** A value with the system's minus and plus, as Keynote's size. */
+  /** A value with the system's minus and plus. */
   private func stepperRow(_ title: String, key: String, step: Double, range: ClosedRange<Double>,
                           field: Bool = false) -> some View
   {
@@ -542,7 +542,7 @@ struct TextStyleSection: View {
         .minimumScaleFactor(0.85)
         .layoutPriority(1)
       Spacer(minLength: 4)
-      /* Tapped, the number takes a typed value, as Keynote's do; the stepper nudges it. */
+      /* Tapped, the number takes a typed value; the stepper nudges it. */
       TextField(title, value: Binding(get: { value },
                                       set: { setNumber(key, min(range.upperBound, max(range.lowerBound, $0))) }),
                 format: .number.precision(.fractionLength(2)))
@@ -560,7 +560,7 @@ struct TextStyleSection: View {
     .frame(minHeight: 52)
   }
 
-  /** Choices as a row of icons, the chosen one filled, as Keynote's alignment. */
+  /** Choices as a row of icons, the chosen one filled. */
   private func alignmentRow(key: String, choices: [(String, String, String)], same: [String: String]) -> some View {
     let raw = style.string(key) ?? ""
     let current = same[raw] ?? raw

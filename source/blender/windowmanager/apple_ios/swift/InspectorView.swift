@@ -137,7 +137,7 @@ struct InspectorForm: View {
     VStack(alignment: .leading, spacing: 17) {
       ForEach(store.sections) { section in
         if let style = store.textStyle, section.id == "DATA_PT_font" {
-          /* A text object's text as Keynote shows it; Blender's Font panel stays below for the
+          /* A text object's font, styles and spacing together; Blender's Font panel stays below for the
            * rest, such as its bold and italic fonts and text on a curve. */
           VStack(alignment: .leading, spacing: 0) {
             Text("Text")

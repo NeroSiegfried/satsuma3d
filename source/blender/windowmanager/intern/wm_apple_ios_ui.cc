@@ -555,7 +555,7 @@ static std::string ios_text_object_json(bContext *C)
 
 /**
  * Sets a style on the selection and on what typing adds next, as Blender's Font panel does; out
- * of Edit Mode, on all of the text, as Keynote styles a text box.
+ * of Edit Mode, on all of the text, as a text box is styled.
  */
 static void ios_text_object_style(bContext *C, const std::string &style, const bool on)
 {

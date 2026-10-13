@@ -7,7 +7,7 @@
 
 /**
  * A Blender file as an iOS document. Blender reads and writes the file itself; the document
- * coordinates access to it and, as in Pages, saves changes without being asked.
+ * coordinates access to it and saves changes without being asked, as documents do on iPadOS.
  */
 @interface WMIOSBlendDocument : UIDocument
 @property(nonatomic) BOOL templateDocument;

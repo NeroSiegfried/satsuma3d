@@ -23,7 +23,7 @@ struct CompositeRow: View, Equatable {
     switch property.string("type") {
       case "ID":
         if property.bool("font_picker") {
-          /* Fonts as Pages shows them, from the system's font picker. */
+          /* Fonts by family name, from the system's font picker. */
           FontSlotRow(store: store, property: property)
         }
         else {
