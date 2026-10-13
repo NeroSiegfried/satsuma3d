@@ -14,8 +14,10 @@
 #include "BKE_studiolight.h"
 #include "BKE_main.hh"
 #include "BKE_modifier.hh"
+#include "BKE_packedFile.hh"
 #include "BKE_scene.hh"
 #include "BKE_screen.hh"
+#include "BKE_vfont.hh"
 #include "BLI_array.hh"
 #include "BLI_listbase.h"
 #include "BLI_rect.h"
@@ -25,6 +27,7 @@
 #include "DNA_modifier_types.h"
 #include "DNA_object_types.h"
 #include "DNA_space_types.h"
+#include "DNA_vfont_types.h"
 #include "DNA_workspace_types.h"
 #include "ED_buttons.hh"
 #include "ED_node.hh"
@@ -1210,6 +1213,20 @@ void project_id_template(bContext *C,
   const Button *new_button = id_template_part(block, ptr, prop, UI_ID_ADD_NEW);
   field.append_int("can_new", new_button && new_button->optype && new_button->optype->exec &&
                                   !(new_button->flag & BUT_DISABLED));
+  if (idcode == ID_VF) {
+    /* Fonts are chosen with the system's font picker, see `load_font`. */
+    field.append_int("font_picker", 1);
+    field.append_str("font_role", RNA_property_identifier(prop));
+    if (id) {
+      field.append_str("font_file", reinterpret_cast<VFont *>(id)->filepath);
+    }
+    /* The regular font, whose family the bold and italic fonts are shown against. */
+    if (PropertyRNA *regular = RNA_struct_find_property(&ptr, "font")) {
+      if (ID *regular_id = RNA_property_pointer_get(&ptr, regular).owner_id) {
+        field.append_str("family_file", reinterpret_cast<VFont *>(regular_id)->filepath);
+      }
+    }
+  }
   if (id) {
     field.append_str("name", id->name + 2);
     field.append_int("users", id->us);
@@ -1327,6 +1344,47 @@ bool apply_id_template(bContext *C,
       }
     }
     return true;
+  }
+  else if (action == "load_font" && idcode == ID_VF && !value.empty()) {
+    /* A font file the system's font picker made. Packed, as the file is only a cache. */
+    auto load = [&](const std::string &path) -> VFont * {
+      VFont *font = BKE_vfont_load_exists(bmain, path.c_str());
+      if (font == nullptr) {
+        return nullptr;
+      }
+      /* Loading counts a user, as does assigning it. */
+      id_us_min(&font->id);
+      if (!font->packedfile) {
+        font->packedfile = BKE_packedfile_new(
+            nullptr, font->filepath, BKE_main_blendfile_path(bmain));
+      }
+      return font;
+    };
+    auto assign = [&](PropertyRNA *target, VFont *font) {
+      PointerRNA font_ptr = RNA_id_pointer_create(&font->id);
+      RNA_property_pointer_set(&ptr, target, font_ptr, nullptr);
+      RNA_property_update(C, &ptr, target);
+    };
+    VFont *font = load(value);
+    if (font == nullptr) {
+      return false;
+    }
+    assign(prop, font);
+    /* The family's bold and italic faces along with its regular one, as a text app sets them. */
+    if (const DictionaryValue *family = request.lookup_dict("family")) {
+      for (const auto &[key, path] : family->elements()) {
+        PropertyRNA *style = RNA_struct_find_property(&ptr, key.c_str());
+        const StringValue *style_path = path->as_string_value();
+        if (style && style_path && RNA_property_type(style) == PROP_POINTER &&
+            RNA_property_pointer_type(&ptr, style) == RNA_VectorFont)
+        {
+          if (VFont *style_font = load(style_path->value())) {
+            assign(style, style_font);
+          }
+        }
+      }
+    }
+    undo_name = "Choose Font";
   }
   else if (action == "fake_user" && id && !ID_IS_LINKED(id)) {
     PointerRNA id_ptr = RNA_id_pointer_create(id);
@@ -2708,6 +2766,12 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
       if (but.optype && !(but.flag & UI_HIDDEN)) {
         if (shading && STREQ(but.optype->idname, "SCREEN_OT_userpref_show")) {
           /* This opens an unrelated Blender window, not a viewport shading setting. */
+          continue;
+        }
+        if (STREQ(but.optype->idname, "FILE_OT_unpack_item") && but.opptr &&
+            RNA_int_get(but.opptr, "id_type") == ID_VF)
+        {
+          /* Fonts from the font picker are packed on purpose: their files are only a cache. */
           continue;
         }
         const std::string key = operator_key(C, but, object);

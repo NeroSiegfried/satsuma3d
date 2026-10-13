@@ -21,7 +21,14 @@ struct CompositeRow: View, Equatable {
 
   var body: some View {
     switch property.string("type") {
-      case "ID": DataPicker(store: store, property: property)
+      case "ID":
+        if property.bool("font_picker") {
+          /* Fonts as Pages shows them, from the system's font picker. */
+          FontSlotRow(store: store, property: property)
+        }
+        else {
+          DataPicker(store: store, property: property)
+        }
       case "LIST": ListOutliner(store: store, property: property)
       case "PREVIEW": PreviewRow(store: store, property: property)
       case "OPERATOR_MENU": OperatorMenuRow(store: store, property: property)
