@@ -37,6 +37,8 @@ final class ShellModel {
   private(set) var redo: JSON?
   /** The text object being typed into: its style where the cursor is, alignment and font file. */
   private(set) var textObject: JSON?
+  /** The native node editor shows over the bottom of the viewport. */
+  var nodesShown = false
   /** Blender's navigation gizmo: its center and radius, in fractions of the window's width and
    * height (center) and width (radius). */
   private(set) var navigationGizmo: [Double] = []

@@ -462,6 +462,10 @@ public struct DocumentWindow: View {
         TextObjectKeyboard(model: model)
       }
       BottomTrayLayer(model: model, timeline: shell.timeline.store, assets: shell.assets.store, shown: controlsShown)
+      if controlsShown && model.nodesShown {
+        NodeEditorLayer(model: model, nodes: shell.panels.nodes)
+          .transition(.move(edge: .bottom).combined(with: .opacity))
+      }
       if let pencilMenu {
         /* Frontmost; it passes touches through while it is closed. */
         PencilMenuView(menu: pencilMenu)

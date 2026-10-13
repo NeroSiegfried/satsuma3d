@@ -27,6 +27,9 @@ final class ShellPanels {
         self.model.hierarchyShown = self.panels.hierarchyShown
       }
     }
+    panels.nodes.shownChanged = { [weak self] shown in
+      withAnimation(SwiftTimeline.animation) { self?.model.nodesShown = shown }
+    }
     timeline.visibilityDidChange = { [weak self] in
       guard let self else { return }
       model.timelineShown = timeline.visible

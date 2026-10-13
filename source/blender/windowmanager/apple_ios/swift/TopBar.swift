@@ -249,6 +249,11 @@ struct DocumentToolbar: ToolbarContent {
 #if !os(visionOS)
     ToolbarSpacer(.fixed, placement: .topBarTrailing)
 #endif
+    /* The node editor rises over the bottom of the viewport. */
+    ToolbarItem(placement: .topBarTrailing) {
+      panelToggle("Nodes", image: BlenderIcon.image("NODETREE"), isOn: model.nodesShown,
+                  identifier: "blender.nodes") { shell.panels.nodes.toggle() }
+    }
     /* Properties slides in from the window's trailing edge. */
     ToolbarItem(placement: .topBarTrailing) {
       panelToggle("Properties", image: BlenderIcon.image("PROPERTIES"), isOn: model.inspectorShown,
