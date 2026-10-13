@@ -1620,7 +1620,9 @@ struct TreeRows {
 
 const AbstractTreeViewItem *tree_item(const ButtonViewItem &button)
 {
-  return dynamic_cast<const AbstractTreeViewItem *>(button.view_item);
+  const auto *item = dynamic_cast<const AbstractTreeViewItem *>(button.view_item);
+  /* Blender pads a short tree with blank rows that do nothing, which a native list doesn't. */
+  return item && item->is_interactive() ? item : nullptr;
 }
 
 /** A tree, shown as a list: its items in order, indented by depth. */
