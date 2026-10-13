@@ -594,7 +594,7 @@ struct ToolRails: View {
       let gizmo = model.navigationGizmo
       let gizmoTop = gizmo.count == 3 ? CGFloat(gizmo[1]) * proxy.size.height - CGFloat(gizmo[2]) * proxy.size.width :
                                         safe.maxY - 100
-      let layout = RailLayout(safe: safe, tray: model.bottomTray, tools: tools,
+      let layout = RailLayout(safe: safe, tray: model.bottomTray, tools: tools, toolCount: toolItems.count,
                               brushes: brushesAvailable ? brushes : nil, brushCount: brushItems.count,
                               sidebar: content,
                               colorWell: color != nil, leftHanded: leftHanded, gizmoTop: gizmoTop)
@@ -1200,7 +1200,7 @@ struct RailLayout: Equatable {
   }
 
   @MainActor
-  init(safe: CGRect, tray: CGFloat, tools: RailState, brushes: RailState?, brushCount: Int,
+  init(safe: CGRect, tray: CGFloat, tools: RailState, toolCount: Int, brushes: RailState?, brushCount: Int,
        sidebar: SidebarContent, colorWell: Bool, leftHanded: Bool, gizmoTop: CGFloat)
   {
     let compact: CGFloat = 64, gap: CGFloat = 10, topInset: CGFloat = 16, bottomInset: CGFloat = 12
@@ -1218,7 +1218,10 @@ struct RailLayout: Equatable {
     let height = max(0, safe.height - tray - reserve)
     let maxList = min(max(64, (safe.height - reserve) * 0.58), max(64, safe.height - reserve - 112))
     toolWidth = tools.expanded ? expandedWidth : compact
-    toolHeight = tools.listVisible ? maxList : compact
+    /* As tall as its tools (the handle, then 52 points each, 12 apart), as the room allows: a
+     * mode with few tools leaves no empty space below them. */
+    let toolList = 44 + 12 + CGFloat(toolCount) * 52 + CGFloat(max(0, toolCount - 1)) * 12
+    toolHeight = tools.listVisible ? max(compact, min(toolList, maxList)) : compact
     /* Docking centers the rail; otherwise it rests at the bottom. */
     let bottom = (tools.docked ? max(bottomInset, (height - toolHeight) / 2) : bottomInset) + tray + reserve
     toolTop = safe.maxY - bottom - toolHeight
