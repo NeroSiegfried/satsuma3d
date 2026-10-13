@@ -266,6 +266,15 @@ private func typefaces(ofFamily family: String) -> [(name: String, style: String
 #endif
 }
 
+/** The font's family, which only the Mac's fonts may lack. */
+private func familyName(_ font: UIFont) -> String {
+#if os(macOS)
+  return font.familyName ?? font.fontName
+#else
+  return font.familyName
+#endif
+}
+
 private func styleName(_ font: UIFont) -> String {
   font.fontDescriptor.object(forKey: .face) as? String ?? "Regular"
 }
@@ -279,7 +288,7 @@ struct FontSlotRow: View {
   private var font: UIFont? { FontFiles.font(file: property.string("font_file"), size: 17) }
   private var editable: Bool { property.bool("editable") }
   /** The regular font's family, which the other slots usually share. */
-  private var family: String? { FontFiles.font(file: property.string("family_file"), size: 17)?.familyName }
+  private var family: String? { FontFiles.font(file: property.string("family_file"), size: 17).map(familyName) }
   private var slotTitle: String {
     ["font_bold": "Bold", "font_italic": "Italic", "font_bold_italic": "Bold Italic"][role] ??
       property.string("label") ?? ""
@@ -290,8 +299,8 @@ struct FontSlotRow: View {
       VStack(alignment: .leading, spacing: 8) {
         Button(action: pick) {
           HStack {
-            Text(font?.familyName ?? "Default Font")
-              .font(font.map { Font($0) } ?? .body)
+            Text(font.map(familyName) ?? "Default Font")
+              .font(font.map { Font($0 as CTFont) } ?? .body)
               .lineLimit(1)
             Spacer(minLength: 8)
             Image(systemName: "chevron.up.chevron.down")
@@ -306,9 +315,9 @@ struct FontSlotRow: View {
         .buttonStyle(.plain)
         .background(PresentationAnchor(anchor: anchor))
         .disabled(!editable)
-        .accessibilityLabel("Font, \(font?.familyName ?? "Default Font")")
+        .accessibilityLabel("Font, \(font.map(familyName) ?? "Default Font")")
         .accessibilityHint("Shows the fonts to choose from.")
-        if let font, typefaces(ofFamily: font.familyName).count > 1 {
+        if let font, typefaces(ofFamily: familyName(font)).count > 1 {
           typefaceMenu(font)
         }
       }
@@ -321,8 +330,8 @@ struct FontSlotRow: View {
         Spacer(minLength: 8)
         Button(action: pick) {
           HStack(spacing: 4) {
-            Text(font.map { $0.familyName == family ? styleName($0) : "\($0.familyName) \(styleName($0))" } ?? "Default")
-              .font(font.map { Font($0.withSize(15)) } ?? .body)
+            Text(font.map { familyName($0) == family ? styleName($0) : "\(familyName($0)) \(styleName($0))" } ?? "Default")
+              .font(font.map { Font($0.withSize(15) as CTFont) } ?? .body)
               .lineLimit(1)
             Image(systemName: "chevron.up.chevron.down").font(.caption2.weight(.semibold))
           }
@@ -343,7 +352,7 @@ struct FontSlotRow: View {
   /** The family's typefaces, as Pages' second font menu. */
   private func typefaceMenu(_ font: UIFont) -> some View {
     Menu {
-      ForEach(typefaces(ofFamily: font.familyName), id: \.name) { face in
+      ForEach(typefaces(ofFamily: familyName(font)), id: \.name) { face in
         Button {
           guard let chosen = UIFont(name: face.name, size: 17) else { return }
           FontFiles.choose(chosen.fontDescriptor as CTFontDescriptor, for: property, store: store)
