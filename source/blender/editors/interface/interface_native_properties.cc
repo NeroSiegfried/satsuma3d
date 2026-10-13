@@ -2376,6 +2376,48 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
         find_side(tree.rect, tree.side);
       }
     }
+    /* A list with nothing in it yet, such as shape keys before the first: Blender draws no rows,
+     * only its column of buttons, an Add above a Remove. Shown as an empty list with its buttons,
+     * as lists with items are. */
+    std::vector<std::pair<const Button *, ListSide>> empty_lists;
+    for (int64_t i = 0; i + 1 < block->buttons.size(); i++) {
+      Button &add = *block->buttons[i];
+      const Button &remove = *block->buttons[i + 1];
+      if (!add.optype || !remove.optype || button_icon(&add) != ICON_ADD ||
+          button_icon(&remove) != ICON_REMOVE || !add.str.empty() || combined.count(&add) ||
+          (add.flag & UI_HIDDEN) || std::abs(add.rect.xmin - remove.rect.xmin) > 2)
+      {
+        continue;
+      }
+      ListSide side;
+      for (const auto &button : block->buttons) {
+        Button &but = *button;
+        /* Only the column it heads, as far down as a list's buttons go. */
+        if (std::abs(but.rect.xmin - add.rect.xmin) > 2 || but.rect.ymax > add.rect.ymax + 2 ||
+            but.rect.ymin < add.rect.ymin - 6 * UI_UNIT_Y || (but.flag & UI_HIDDEN))
+        {
+          continue;
+        }
+        MenuType *menu = button_menutype_get(&but);
+        if (menu) {
+          side.menu = menu;
+        }
+        else if (!but.optype) {
+          continue;
+        }
+        else if (button_icon(&but) == ICON_ADD && !side.add) {
+          side.add = &but;
+        }
+        else if (button_icon(&but) == ICON_REMOVE && !side.remove) {
+          side.remove = &but;
+        }
+        else {
+          side.extras.push_back(&but);
+        }
+        combined.insert(&but);
+      }
+      empty_lists.emplace_back(&add, side);
+    }
     auto tree_key = [&](const size_t index) {
       return "tree:" + candidate.id + ":" + std::to_string(index);
     };
@@ -2412,6 +2454,24 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
     std::set<std::string> seen;
     for (const auto &button : block->buttons) {
       Button &but = *button;
+      if (!execute) {
+        for (size_t index = 0; index < empty_lists.size(); index++) {
+          if (empty_lists[index].first != &but) {
+            continue;
+          }
+          auto field = append_field();
+          project_list_side(C, &empty_lists[index].second, object, *field, false);
+          field->append_str("type", "LIST");
+          field->append_str("key", "empty:" + candidate.id + ":" + std::to_string(index));
+          field->append_str("label", "");
+          field->append_int("value", -1);
+          field->append_int("editable", 1);
+          field->append_array("rows");
+          field->append_str("panel", candidate.id);
+          field->append_str("tab", tab_id);
+          field->append_int("native", 1);
+        }
+      }
       if (!execute && combined.count(&but)) {
         continue;
       }
