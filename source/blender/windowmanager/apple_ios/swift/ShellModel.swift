@@ -35,6 +35,8 @@ final class ShellModel {
   private(set) var canUndo = false
   /** Adjust Last Operation: the last operator's settings, or none. */
   private(set) var redo: JSON?
+  /** The text object being typed into: its style where the cursor is, alignment and font file. */
+  private(set) var textObject: JSON?
   /** Blender's navigation gizmo: its center and radius, in fractions of the window's width and
    * height (center) and width (radius). */
   private(set) var navigationGizmo: [Double] = []
@@ -125,6 +127,7 @@ final class ShellModel {
     set(\.canUndo, toolbar.bool("canUndo"))
     set(\.menuContext, "\(toolbar.string("objectMode") ?? "")|\(toolbar.string("menuState") ?? "")")
     set(\.redo, toolbar.dict("redo"), equal: { jsonEqual($0, $1) })
+    set(\.textObject, toolbar.dict("textObject"), equal: { jsonEqual($0, $1) })
     let gizmo = (toolbar["navigationGizmo"] as? [NSNumber])?.map(\.doubleValue) ?? []
     if gizmo.count == 3 { set(\.navigationGizmo, gizmo) }
     let background = (toolbar["viewportBackground"] as? [NSNumber])?.map(\.doubleValue) ?? []

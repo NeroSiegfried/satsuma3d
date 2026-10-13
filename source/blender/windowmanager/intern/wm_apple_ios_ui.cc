@@ -18,12 +18,17 @@
 #include "BKE_global.hh"
 #include "BKE_idprop.hh"
 #include "BKE_idtype.hh"
+#include "BKE_lib_id.hh"
+#include "BKE_main.hh"
+#include "BKE_packedFile.hh"
 #include "BKE_paint.hh"
 #include "BKE_preferences.h"
 #include "BKE_preview_image.hh"
 #include "BKE_scene.hh"
 #include "BKE_screen.hh"
 #include "BKE_undo_system.hh"
+#include "BKE_vfont.hh"
+#include "DNA_vfont_types.h"
 #include "BKE_wm_runtime.hh"
 #include "BLT_translation.hh"
 #include "ED_render.hh"
@@ -492,6 +497,174 @@ void ios_operator_call_with_enum_property(bContext *C,
   RNA_enum_set_identifier(C, &props, prop_name, prop_value);
   ios_operator_call(C, op_name, &props);
   WM_operator_properties_free(&props);
+}
+
+PropertyRNA *ios_rna_boolean_set(bContext *C,
+                                 PointerRNA &ptr,
+                                 const char *identifier,
+                                 bool value);
+void ios_rna_undo_push(bContext *C, PropertyRNA *prop);
+
+/** The text object being edited, if one is. */
+static Curve *ios_text_object_edited(bContext *C)
+{
+  Object *object = CTX_data_edit_object(C);
+  if (object == nullptr || object->type != OB_FONT) {
+    return nullptr;
+  }
+  Curve *curve = id_cast<Curve *>(object->data);
+  return curve->editfont ? curve : nullptr;
+}
+
+/** The style the system's formatting panel shows: the selection's, else what typing adds. */
+static std::string ios_text_object_json(bContext *C)
+{
+  Curve *curve = ios_text_object_edited(C);
+  if (curve == nullptr) {
+    return "null";
+  }
+  int selection_start, selection_end;
+  const short flag = BKE_vfont_select_get(curve, &selection_start, &selection_end) ?
+                         curve->editfont->textbufinfo[selection_start].flag :
+                         curve->curinfo.flag;
+  PointerRNA curve_ptr = RNA_id_pointer_create(&curve->id);
+  PropertyRNA *align_prop = RNA_struct_find_property(&curve_ptr, "align_x");
+  const char *align = "";
+  RNA_property_enum_identifier(
+      C, &curve_ptr, align_prop, RNA_property_enum_get(&curve_ptr, align_prop), &align);
+  std::string json = "{";
+  json += std::string("\"bold\":") + ((flag & CU_CHINFO_BOLD) ? "true" : "false");
+  json += std::string(",\"italic\":") + ((flag & CU_CHINFO_ITALIC) ? "true" : "false");
+  json += std::string(",\"underline\":") + ((flag & CU_CHINFO_UNDERLINE) ? "true" : "false");
+  json += ",\"align\":\"" + std::string(align) + "\"";
+  json += ",\"font_file\":\"" +
+          ios_json_escape(curve->vfont ? curve->vfont->filepath : "") + "\"";
+  json += "}";
+  return json;
+}
+
+/** Sets a style on the selection and on what typing adds next, as Blender's Font panel does. */
+static void ios_text_object_style(bContext *C, const std::string &style, const bool on)
+{
+  Curve *curve = ios_text_object_edited(C);
+  const char *format_props[][2] = {{"BOLD", "use_bold"},
+                                   {"ITALIC", "use_italic"},
+                                   {"UNDERLINE", "use_underline"},
+                                   {"SMALL_CAPS", "use_small_caps"}};
+  const char *format_prop = nullptr;
+  for (const auto &item : format_props) {
+    if (style == item[0]) {
+      format_prop = item[1];
+    }
+  }
+  if (curve == nullptr || format_prop == nullptr) {
+    return;
+  }
+  int selection_start, selection_end;
+  if (BKE_vfont_select_get(curve, &selection_start, &selection_end)) {
+    wmOperatorType *ot = WM_operatortype_find("FONT_OT_style_set", false);
+    PointerRNA props = WM_operator_properties_create_ptr(ot);
+    RNA_enum_set_identifier(C, &props, "style", style.c_str());
+    RNA_boolean_set(&props, "clear", !on);
+    ios_operator_call(C, "FONT_OT_style_set", &props);
+    WM_operator_properties_free(&props);
+  }
+  PointerRNA curve_ptr = RNA_id_pointer_create(&curve->id);
+  PointerRNA format = RNA_pointer_get(&curve_ptr, "edit_format");
+  ios_rna_boolean_set(C, format, format_prop, on);
+  ED_undo_push(C, "Set Style");
+}
+
+/** Fonts the system's formatting panel picked, as `slot=path` lines: written font files, which
+ * are packed, as they are only a cache. */
+static void ios_text_object_fonts(bContext *C, const std::string &lines)
+{
+  Curve *curve = ios_text_object_edited(C);
+  if (curve == nullptr) {
+    return;
+  }
+  Main *bmain = CTX_data_main(C);
+  PointerRNA curve_ptr = RNA_id_pointer_create(&curve->id);
+  size_t start = 0;
+  while (start < lines.size()) {
+    size_t end = lines.find('\n', start);
+    if (end == std::string::npos) {
+      end = lines.size();
+    }
+    const std::string line = lines.substr(start, end - start);
+    start = end + 1;
+    const size_t equals = line.find('=');
+    if (equals == std::string::npos) {
+      continue;
+    }
+    const std::string slot = line.substr(0, equals);
+    PropertyRNA *prop = RNA_struct_find_property(&curve_ptr, slot.c_str());
+    if (prop == nullptr || RNA_property_type(prop) != PROP_POINTER) {
+      continue;
+    }
+    VFont *font = BKE_vfont_load_exists(bmain, line.substr(equals + 1).c_str());
+    if (font == nullptr) {
+      continue;
+    }
+    /* Loading counts a user, as does assigning it. */
+    id_us_min(&font->id);
+    if (!font->packedfile) {
+      font->packedfile = BKE_packedfile_new(nullptr, font->filepath, BKE_main_blendfile_path(bmain));
+    }
+    PointerRNA font_ptr = RNA_id_pointer_create(&font->id);
+    RNA_property_pointer_set(&curve_ptr, prop, font_ptr, nullptr);
+    RNA_property_update(C, &curve_ptr, prop);
+  }
+  ED_undo_push(C, "Choose Font");
+}
+
+/**
+ * Typing into a text object in Edit Mode from the system keyboard, as Blender's keys do, and the
+ * system's text formatting: `insert:<text>`, `delete`, `line_break`, `move:<FONT_OT_move type>`,
+ * `style:<BOLD|ITALIC|UNDERLINE|SMALL_CAPS>:<0|1>`, `align:<align_x>` or `font:<slot=path lines>`.
+ */
+void ios_text_object_edit(bContext *C, const std::string &command)
+{
+  const size_t colon = command.find(':');
+  const std::string action = command.substr(0, colon);
+  const std::string argument = colon == std::string::npos ? "" : command.substr(colon + 1);
+  if (action == "insert" && !argument.empty()) {
+    wmOperatorType *ot = WM_operatortype_find("FONT_OT_text_insert", false);
+    if (ot == nullptr) {
+      return;
+    }
+    PointerRNA props = WM_operator_properties_create_ptr(ot);
+    RNA_string_set(&props, "text", argument.c_str());
+    ios_operator_call(C, "FONT_OT_text_insert", &props);
+    WM_operator_properties_free(&props);
+  }
+  else if (action == "delete") {
+    ios_operator_call_with_enum_property(C, "FONT_OT_delete", "type", "PREVIOUS_OR_SELECTION");
+  }
+  else if (action == "line_break") {
+    ios_operator_call(C, "FONT_OT_line_break");
+  }
+  else if (action == "move") {
+    ios_operator_call_with_enum_property(C, "FONT_OT_move", "type", argument.c_str());
+  }
+  else if (action == "style") {
+    const size_t separator = argument.find(':');
+    ios_text_object_style(
+        C, argument.substr(0, separator), separator != std::string::npos && argument.substr(separator + 1) == "1");
+  }
+  else if (action == "align") {
+    if (Curve *curve = ios_text_object_edited(C)) {
+      PointerRNA curve_ptr = RNA_id_pointer_create(&curve->id);
+      if (PropertyRNA *prop = RNA_struct_find_property(&curve_ptr, "align_x")) {
+        RNA_enum_set_identifier(C, &curve_ptr, "align_x", argument.c_str());
+        RNA_property_update(C, &curve_ptr, prop);
+        ios_rna_undo_push(C, prop);
+      }
+    }
+  }
+  else if (action == "font") {
+    ios_text_object_fonts(C, argument);
+  }
 }
 
 void ios_mode_set(bContext *C, const char *mode)
@@ -1037,6 +1210,10 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     return;
   }
 #endif
+  if (command.setting == "text_object_edit") {
+    ios_text_object_edit(C, command.value);
+    return;
+  }
   if (command.setting == "object_mode") {
     ios_mode_set(C, command.value.c_str());
     return;
@@ -2203,6 +2380,8 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
   json += ",\"propertiesAck\":" + std::to_string(ios_panels_sequence);
   json += ",\"redo\":";
   json += redo_json;
+  json += ",\"textObject\":";
+  json += has_view3d_context ? ios_text_object_json(C) : "null";
   json += ",\"navigationGizmo\":";
   json += navigation_json;
   if (view3d && scene) {

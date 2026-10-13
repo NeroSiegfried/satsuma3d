@@ -459,6 +459,7 @@ public struct DocumentWindow: View {
         ToolRails(model: model)
 #endif
         ViewGizmoLayer(model: model)
+        TextObjectKeyboard(model: model)
       }
       BottomTrayLayer(model: model, timeline: shell.timeline.store, assets: shell.assets.store, shown: controlsShown)
       if let pencilMenu {
