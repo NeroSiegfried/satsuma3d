@@ -2443,7 +2443,8 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
      * only its column of buttons, an Add above a Remove. Shown as an empty list with its buttons,
      * as lists with items are. */
     std::vector<std::pair<const Button *, ListSide>> empty_lists;
-    for (int64_t i = 0; i + 1 < block->buttons.size(); i++) {
+    /* Only where the panel shows no list at all: a list's own column is its list's. */
+    for (int64_t i = 0; trees.empty() && list_sides.empty() && i + 1 < block->buttons.size(); i++) {
       Button &add = *block->buttons[i];
       const Button &remove = *block->buttons[i + 1];
       if (!add.optype || !remove.optype || button_icon(&add) != ICON_ADD ||
