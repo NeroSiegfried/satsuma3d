@@ -14,6 +14,17 @@
 #include "BKE_studiolight.h"
 #include "BKE_main.hh"
 #include "BKE_modifier.hh"
+#include "BLI_string.h"
+#include "BLI_math_vector.h"
+#include "DNA_node_types.h"
+#include "DNA_material_types.h"
+#include "BKE_object.hh"
+#include "BKE_main_invariants.hh"
+#include "BKE_node_tree_zones.hh"
+#include "BKE_node_tree_update.hh"
+#include "BKE_node_runtime.hh"
+#include "BKE_node.hh"
+#include "BKE_material.hh"
 #include "BKE_packedFile.hh"
 #include "BKE_scene.hh"
 #include "BKE_screen.hh"
@@ -3049,4 +3060,691 @@ std::string native_properties_menu_query(bContext *C, const std::string &json, b
   }
   return menu_json;
 }
+
+/* -------------------------------------------------------------------- */
+/** \name Node Graphs
+ *
+ * A node tree for a native canvas: its nodes with their sockets and controls, and its links. The
+ * canvas sends its edits back as actions on the tree, applied as Blender's node editor applies
+ * them, each one undoable.
+ * \{ */
+
+namespace {
+
+struct NativeNodeTree {
+  /** The tree shown: the root tree, or a group entered from it. */
+  bNodeTree *tree = nullptr;
+  bNodeTree *root = nullptr;
+  /** What the root tree belongs to, such as the material. */
+  std::string owner;
+  /** Why there is no tree, and what creating one is called. */
+  std::string empty;
+  std::string create;
+  /** The group nodes entered, outermost first. */
+  Vector<bNode *> path;
+};
+
+NativeNodeTree native_node_tree(bContext *C, const DictionaryValue &query)
+{
+  NativeNodeTree result;
+  const std::string kind = query.lookup_str("tree").value_or("SHADER");
+  Object *object = CTX_data_active_object(C);
+  if (kind == "SHADER") {
+    Material *material = object ? BKE_object_material_get(object, object->actcol) : nullptr;
+    if (material && material->nodetree) {
+      result.root = material->nodetree;
+      result.owner = material->id.name + 2;
+    }
+    else if (object && OB_TYPE_SUPPORT_MATERIAL(object->type)) {
+      result.empty = "No Material";
+      result.create = "New Material";
+    }
+    else {
+      result.empty = object ? "This Object Has No Materials" : "No Active Object";
+    }
+  }
+  else if (kind == "GEOMETRY") {
+    NodesModifierData *nodes_modifier = nullptr;
+    if (object) {
+      ModifierData *active = BKE_object_active_modifier(object);
+      if (active && active->type == eModifierType_Nodes) {
+        nodes_modifier = reinterpret_cast<NodesModifierData *>(active);
+      }
+      else {
+        for (ModifierData &modifier : object->modifiers) {
+          if (modifier.type == eModifierType_Nodes) {
+            nodes_modifier = reinterpret_cast<NodesModifierData *>(&modifier);
+            break;
+          }
+        }
+      }
+    }
+    if (nodes_modifier && nodes_modifier->node_group) {
+      result.root = nodes_modifier->node_group;
+      result.owner = nodes_modifier->modifier.name;
+    }
+    else if (object && ELEM(object->type, OB_MESH, OB_CURVES, OB_POINTCLOUD, OB_VOLUME, OB_GREASE_PENCIL))
+    {
+      result.empty = "No Geometry Nodes";
+      result.create = "New Geometry Nodes";
+    }
+    else {
+      result.empty = object ? "This Object Has No Geometry Nodes" : "No Active Object";
+    }
+  }
+  else if (kind == "COMPOSITOR") {
+    Scene *scene = CTX_data_scene(C);
+    if (scene && scene->compositing_node_group) {
+      result.root = scene->compositing_node_group;
+      result.owner = scene->id.name + 2;
+    }
+    else {
+      result.empty = "No Compositor Nodes";
+      result.create = "New Compositor Nodes";
+    }
+  }
+  result.tree = result.root;
+  if (const ArrayValue *path = query.lookup_array("path")) {
+    for (const auto &item : path->elements()) {
+      const StringValue *name = item->as_string_value();
+      bNode *group = result.tree && name ? bke::node_find_node_by_name(*result.tree, name->value()) :
+                                           nullptr;
+      if (!group || !group->is_group() || !group->id) {
+        break;
+      }
+      result.path.append(group);
+      result.tree = reinterpret_cast<bNodeTree *>(group->id);
+    }
+  }
+  return result;
+}
+
+/**
+ * A node editor showing the tree, for what asks for one: which nodes the Add menu offers (shader
+ * nodes for objects or worlds), nodes' own drawing, and operators.
+ */
+struct NodeSpaceContext {
+  bContext *C;
+  ScrArea *previous_area;
+  ARegion *previous_region;
+  ScrArea area = {};
+
+  NodeSpaceContext(bContext *context, bNodeTree *root, bNodeTree *tree) : C(context)
+  {
+    previous_area = CTX_wm_area(C);
+    previous_region = CTX_wm_region(C);
+    area.spacetype = SPACE_NODE;
+    area.type = BKE_spacetype_from_id(SPACE_NODE);
+    SpaceLink *link = area.type->create(&area, CTX_data_scene(C));
+    BLI_addtail(&area.spacedata, link);
+    std::swap(area.regionbase, link->regionbase);
+    SpaceNode *space = reinterpret_cast<SpaceNode *>(link);
+    space->nodetree = root;
+    space->edittree = tree;
+    if (tree) {
+      STRNCPY(space->tree_idname, tree->idname);
+    }
+    ARegion *region = BKE_area_find_region_type(&area, RGN_TYPE_WINDOW);
+    if (region) {
+      region->runtime->type = BKE_regiontype_from_id(area.type, RGN_TYPE_WINDOW);
+    }
+    CTX_wm_area_set(C, &area);
+    CTX_wm_region_set(C, region);
+  }
+
+  ~NodeSpaceContext()
+  {
+    CTX_wm_area_set(C, previous_area);
+    CTX_wm_region_set(C, previous_region);
+    BKE_screen_area_free(&area);
+  }
+};
+
+const char *node_class_name(const int nclass)
+{
+  switch (nclass) {
+    case NODE_CLASS_INPUT: return "INPUT";
+    case NODE_CLASS_OUTPUT: return "OUTPUT";
+    case NODE_CLASS_OP_COLOR: return "COLOR";
+    case NODE_CLASS_OP_VECTOR: return "VECTOR";
+    case NODE_CLASS_OP_FILTER: return "FILTER";
+    case NODE_CLASS_GROUP: return "GROUP";
+    case NODE_CLASS_CONVERTER: return "CONVERTER";
+    case NODE_CLASS_MATTE: return "MATTE";
+    case NODE_CLASS_DISTORT: return "DISTORT";
+    case NODE_CLASS_PATTERN: return "PATTERN";
+    case NODE_CLASS_TEXTURE: return "TEXTURE";
+    case NODE_CLASS_SCRIPT: return "SCRIPT";
+    case NODE_CLASS_INTERFACE: return "INTERFACE";
+    case NODE_CLASS_SHADER: return "SHADER";
+    case NODE_CLASS_GEOMETRY: return "GEOMETRY";
+    case NODE_CLASS_ATTRIBUTE: return "ATTRIBUTE";
+    case NODE_CLASS_LAYOUT: return "LAYOUT";
+    default: return "OTHER";
+  }
+}
+
+const char *node_class_title(const int nclass)
+{
+  switch (nclass) {
+    case NODE_CLASS_INPUT: return "Input";
+    case NODE_CLASS_OUTPUT: return "Output";
+    case NODE_CLASS_OP_COLOR: return "Color";
+    case NODE_CLASS_OP_VECTOR: return "Vector";
+    case NODE_CLASS_OP_FILTER: return "Filter";
+    case NODE_CLASS_GROUP: return "Group";
+    case NODE_CLASS_CONVERTER: return "Converter";
+    case NODE_CLASS_MATTE: return "Matte";
+    case NODE_CLASS_DISTORT: return "Distort";
+    case NODE_CLASS_PATTERN: return "Pattern";
+    case NODE_CLASS_TEXTURE: return "Texture";
+    case NODE_CLASS_SCRIPT: return "Script";
+    case NODE_CLASS_INTERFACE: return "Interface";
+    case NODE_CLASS_SHADER: return "Shader";
+    case NODE_CLASS_GEOMETRY: return "Geometry";
+    case NODE_CLASS_ATTRIBUTE: return "Attribute";
+    case NODE_CLASS_LAYOUT: return "Layout";
+    default: return "Other";
+  }
+}
+
+std::set<const bNodeSocket *> linked_sockets(const bNodeTree &tree)
+{
+  std::set<const bNodeSocket *> linked;
+  for (const bNodeLink &link : tree.links) {
+    linked.insert(link.fromsock);
+    linked.insert(link.tosock);
+  }
+  return linked;
+}
+
+/** The node's own controls, then the values of its inputs that nothing links, as one block. */
+Block *native_node_block(bContext *C,
+                         bNodeTree &tree,
+                         bNode &node,
+                         const std::set<const bNodeSocket *> &linked)
+{
+  Block *block = block_begin(C, nullptr, "native_node", EmbossType::Emboss);
+  Layout &layout = block_layout(
+      block, LayoutDirection::Vertical, LayoutType::Panel, 0, 0, 320, 20, 0, style_get_dpi());
+  PointerRNA node_ptr = RNA_pointer_create_discrete(&tree.id, RNA_Node, &node);
+  layout.context_ptr_set("node", &node_ptr);
+  if (node.typeinfo->draw_buttons) {
+    node.typeinfo->draw_buttons(layout, C, &node_ptr);
+  }
+  for (bNodeSocket &socket : node.inputs) {
+    if (!socket.is_visible() || linked.count(&socket) || (socket.flag & SOCK_HIDE_VALUE)) {
+      continue;
+    }
+    PointerRNA socket_ptr = RNA_pointer_create_discrete(&tree.id, RNA_NodeSocket, &socket);
+    if (RNA_struct_find_property(&socket_ptr, "default_value")) {
+      layout.prop(&socket_ptr, "default_value", UI_ITEM_NONE, "", ICON_NONE);
+    }
+  }
+  block_end(C, block);
+  return block;
+}
+
+/** Calls `fn` for each value a node's block shows, as the Properties fields go. */
+template<typename Fn> void for_each_node_field(Block &block, Fn fn)
+{
+  std::set<std::string> seen;
+  for (const auto &button : block.buttons) {
+    Button &but = *button;
+    if (!but.rnaprop || !but.rnapoin.data || (but.flag & UI_HIDDEN)) {
+      continue;
+    }
+    const PropertyType type = RNA_property_type(but.rnaprop);
+    if (!ELEM(type, PROP_BOOLEAN, PROP_INT, PROP_FLOAT, PROP_STRING, PROP_ENUM, PROP_POINTER) ||
+        (type == PROP_POINTER && !RNA_struct_is_ID(RNA_property_pointer_type(&but.rnapoin, but.rnaprop))))
+    {
+      continue;
+    }
+    const int length = RNA_property_array_length(&but.rnapoin, but.rnaprop);
+    const bool color = is_color(&but.rnapoin, but.rnaprop);
+    const int begin = !color && length ? std::max(0, but.rnaindex) : -1;
+    const int end = !color && length && but.rnaindex < 0 ? std::min(length, 16) : begin + 1;
+    for (int index = begin; index < end; index++) {
+      const std::string key = property_key(but, index);
+      if (seen.insert(key).second) {
+        fn(but, index, key);
+      }
+    }
+  }
+}
+
+void project_node_socket(const bNodeSocket &socket,
+                         const std::set<const bNodeSocket *> &linked,
+                         DictionaryValue &item)
+{
+  item.append_str("id", socket.identifier);
+  item.append_str("name", ed::space_node::node_socket_get_label(&socket));
+  float color[4] = {0.6f, 0.6f, 0.6f, 1.0f};
+  if (socket.typeinfo && socket.typeinfo->draw_color_simple) {
+    socket.typeinfo->draw_color_simple(socket.typeinfo, color);
+  }
+  auto color_value = item.append_array("color");
+  for (int i = 0; i < 4; i++) {
+    color_value->append_double(color[i]);
+  }
+  item.append_str("shape", ELEM(socket.display_shape, SOCK_DISPLAY_SHAPE_DIAMOND, SOCK_DISPLAY_SHAPE_DIAMOND_DOT) ?
+                               "DIAMOND" :
+                               "CIRCLE");
+  item.append_int("linked", linked.count(&socket) != 0);
+  item.append_int("multi", (socket.flag & SOCK_MULTI_INPUT) != 0);
+  item.append_str("type", socket.typeinfo ? socket.typeinfo->idname : "");
+}
+
+void project_node(bContext *C, bNodeTree &tree, bNode &node, const std::set<const bNodeSocket *> &linked, DictionaryValue &item)
+{
+  item.append_str("name", node.name);
+  item.append_str("title", bke::node_label(tree, node));
+  item.append_str("idname", node.idname);
+  item.append_str("class", node_class_name(node.typeinfo->nclass));
+  item.append_str("kind", node.is_frame()   ? "FRAME" :
+                          node.is_reroute() ? "REROUTE" :
+                          node.is_group()   ? "GROUP" :
+                                              "NODE");
+  item.append_double("x", node.location[0]);
+  item.append_double("y", node.location[1]);
+  item.append_double("width", node.width);
+  item.append_double("height", node.height);
+  item.append_int("selected", (node.flag & NODE_SELECT) != 0);
+  item.append_int("active", (node.flag & NODE_ACTIVE) != 0);
+  item.append_int("muted", (node.flag & NODE_MUTED) != 0);
+  item.append_int("collapsed", (node.flag & NODE_COLLAPSED) != 0);
+  if (node.flag & NODE_CUSTOM_COLOR) {
+    auto color = item.append_array("color");
+    for (int i = 0; i < 3; i++) {
+      color->append_double(node.color[i]);
+    }
+  }
+  if (node.parent) {
+    item.append_str("parent", node.parent->name);
+  }
+  if (node.is_group() && node.id) {
+    item.append_str("group", node.id->name + 2);
+  }
+  auto inputs = item.append_array("inputs");
+  for (const bNodeSocket &socket : node.inputs) {
+    if (socket.is_visible()) {
+      project_node_socket(socket, linked, *inputs->append_dict());
+    }
+  }
+  auto outputs = item.append_array("outputs");
+  for (const bNodeSocket &socket : node.outputs) {
+    if (socket.is_visible()) {
+      project_node_socket(socket, linked, *outputs->append_dict());
+    }
+  }
+  if (node.is_frame() || node.is_reroute()) {
+    return;
+  }
+  auto fields = item.append_array("fields");
+  Block *block = native_node_block(C, tree, node, linked);
+  for_each_node_field(*block, [&](Button &but, const int index, const std::string & /*key*/) {
+    auto field = fields->append_dict();
+    project_property(C, but, index, *field);
+    field->append_str("node", node.name);
+    if (RNA_struct_is_a(but.rnapoin.type, RNA_NodeSocket)) {
+      field->append_str("socket", static_cast<bNodeSocket *>(but.rnapoin.data)->identifier);
+    }
+  });
+  block_free(C, block);
+}
+
+void project_node_add_items(bContext *C, bNodeTree &tree, ArrayValue &items)
+{
+  const Span<int> zone_outputs = bke::all_zone_output_node_types();
+  for (const bke::bNodeType *type : bke::node_types_get()) {
+    const char *disabled_hint = nullptr;
+    if (type->poll && !type->poll(type, &tree, &disabled_hint)) {
+      continue;
+    }
+    if (type->add_ui_poll && !type->add_ui_poll(C)) {
+      continue;
+    }
+    if (type->deprecation_notice || StringRef(type->ui_name).endswith("(Legacy)") ||
+        StringRef(type->idname).endswith("Undefined") || type->nclass == NODE_CLASS_GROUP ||
+        type->idname == "NodeCustomGroup" || zone_outputs.contains(type->type_legacy))
+    {
+      continue;
+    }
+    auto item = items.append_dict();
+    item->append_str("idname", type->idname);
+    item->append_str("name", type->ui_name);
+    item->append_str("description", type->ui_description);
+    item->append_str("category", node_class_title(type->nclass));
+  }
+  /* The tree's own node groups, as the Group category lists them. */
+  Main *bmain = CTX_data_main(C);
+  for (bNodeTree &group : bmain->nodetrees) {
+    if (group.type != tree.type || &group == &tree || group.id.name[2] == '.') {
+      continue;
+    }
+    auto item = items.append_dict();
+    item->append_str("idname", tree.typeinfo->group_idname);
+    item->append_str("name", group.id.name + 2);
+    item->append_str("group", group.id.name + 2);
+    item->append_str("category", "Group");
+  }
+}
+
+bNodeSocket *find_socket(bNode &node, const std::string &identifier, const bool output)
+{
+  for (bNodeSocket &socket : output ? node.outputs : node.inputs) {
+    if (socket.identifier == identifier) {
+      return &socket;
+    }
+  }
+  return nullptr;
+}
+
+/** Links an output to an input, replacing what the input had unless it takes several. */
+void link_sockets(bNodeTree &tree, bNode &from, bNodeSocket &from_socket, bNode &to, bNodeSocket &to_socket)
+{
+  if (!(to_socket.flag & SOCK_MULTI_INPUT)) {
+    bke::node_remove_socket_links(tree, to_socket);
+  }
+  bke::node_add_link(tree, from, from_socket, to, to_socket);
+}
+
+/** Adds a node at a place, a zone's input with its output, or a group's node with its group. */
+bNode *add_native_node(bContext *C, bNodeTree &tree, const DictionaryValue &query)
+{
+  const std::string idname = query.lookup_str("idname").value_or("");
+  if (!bke::node_type_find(idname)) {
+    return nullptr;
+  }
+  const float2 location(float(query.lookup_double("x").value_or(0)),
+                        float(query.lookup_double("y").value_or(0)));
+  for (bNode &node : tree.nodes) {
+    node.flag &= ~(NODE_SELECT | NODE_ACTIVE);
+  }
+  bNode *node = bke::node_add_node(C, tree, idname);
+  if (node == nullptr) {
+    return nullptr;
+  }
+  copy_v2_v2(node->location, location);
+  if (const auto group_name = query.lookup_str("group")) {
+    Main *bmain = CTX_data_main(C);
+    for (bNodeTree &group : bmain->nodetrees) {
+      if (group.id.name + 2 == *group_name && group.type == tree.type) {
+        node->id = &group.id;
+        id_us_plus(&group.id);
+        BKE_ntree_update_tag_node_property(&tree, node);
+        break;
+      }
+    }
+  }
+  if (const bke::bNodeZoneType *zone = bke::zone_type_by_node_type(node->type_legacy)) {
+    if (zone->input_type == node->type_legacy) {
+      bNode *output = bke::node_add_node(C, tree, zone->output_idname);
+      if (output) {
+        copy_v2_v2(output->location, location + float2(300.0f, 0.0f));
+        zone->get_corresponding_output_id(*node) = output->identifier;
+        BKE_ntree_update_tag_node_property(&tree, node);
+        if (tree.type == NTREE_GEOMETRY) {
+          BKE_main_ensure_invariants(*CTX_data_main(C), tree.id);
+          bNodeSocket *from = nullptr, *to = nullptr;
+          for (bNodeSocket &socket : node->outputs) {
+            if (!from && socket.type == SOCK_GEOMETRY) {
+              from = &socket;
+            }
+          }
+          for (bNodeSocket &socket : output->inputs) {
+            if (!to && socket.type == SOCK_GEOMETRY) {
+              to = &socket;
+            }
+          }
+          if (from && to) {
+            link_sockets(tree, *node, *from, *output, *to);
+          }
+        }
+      }
+    }
+  }
+  node->flag |= NODE_SELECT;
+  bke::node_set_active(tree, *node);
+  /* Dropped from a link pulled out of a socket: connect it to the first matching socket. */
+  if (const DictionaryValue *from = query.lookup_dict("connect")) {
+    bNode *other = bke::node_find_node_by_name(tree, from->lookup_str("node").value_or(""));
+    const bool other_output = from->lookup_int("output").value_or(1) != 0;
+    bNodeSocket *other_socket = other ? find_socket(*other, std::string(from->lookup_str("socket").value_or("")), other_output) : nullptr;
+    if (other_socket) {
+      BKE_main_ensure_invariants(*CTX_data_main(C), tree.id);
+      bNodeSocket *best = nullptr;
+      for (bNodeSocket &socket : other_output ? node->inputs : node->outputs) {
+        if (!socket.is_visible()) {
+          continue;
+        }
+        if (socket.type == other_socket->type) {
+          best = &socket;
+          break;
+        }
+        if (!best) {
+          best = &socket;
+        }
+      }
+      if (best) {
+        if (other_output) {
+          link_sockets(tree, *other, *other_socket, *node, *best);
+        }
+        else {
+          link_sockets(tree, *node, *best, *other, *other_socket);
+        }
+      }
+    }
+  }
+  return node;
+}
+
+Vector<bNode *> named_nodes(bNodeTree &tree, const DictionaryValue &query)
+{
+  Vector<bNode *> nodes;
+  if (const ArrayValue *names = query.lookup_array("nodes")) {
+    for (const auto &item : names->elements()) {
+      if (const StringValue *name = item->as_string_value()) {
+        if (bNode *node = bke::node_find_node_by_name(tree, name->value())) {
+          nodes.append(node);
+        }
+      }
+    }
+  }
+  return nodes;
+}
+
+/** Applies one of the canvas's actions to the tree it shows; the undo step's name, or none. */
+std::optional<std::string> apply_node_action(bContext *C, bNodeTree &tree, const DictionaryValue &query)
+{
+  Main *bmain = CTX_data_main(C);
+  const std::string action = query.lookup_str("action").value_or("");
+  bNode *node = bke::node_find_node_by_name(tree, query.lookup_str("node").value_or(""));
+  if (action == "property") {
+    if (!node) {
+      return std::nullopt;
+    }
+    const std::set<const bNodeSocket *> linked = linked_sockets(tree);
+    Block *block = native_node_block(C, tree, *node, linked);
+    const std::string key = query.lookup_str("key").value_or("");
+    bool applied = false;
+    for_each_node_field(*block, [&](Button &but, const int index, const std::string &field_key) {
+      if (!applied && field_key == key) {
+        applied = set_property(C, but, index, query);
+      }
+    });
+    block_free(C, block);
+    /* Undo, keys and updates are the property's own, as from a button. */
+    BKE_ntree_update_tag_node_property(&tree, node);
+    BKE_main_ensure_invariants(*bmain, tree.id);
+    return applied ? std::optional<std::string>("") : std::nullopt;
+  }
+  if (action == "select") {
+    if (!query.lookup_int("extend").value_or(0)) {
+      for (bNode &other : tree.nodes) {
+        other.flag &= ~(NODE_SELECT | NODE_ACTIVE);
+      }
+    }
+    if (node) {
+      node->flag |= NODE_SELECT;
+      bke::node_set_active(tree, *node);
+    }
+    WM_event_add_notifier(C, NC_NODE | NA_SELECTED, &tree);
+    return std::string("");
+  }
+  if (action == "move") {
+    const float2 delta(float(query.lookup_double("dx").value_or(0)),
+                       float(query.lookup_double("dy").value_or(0)));
+    std::set<bNode *> moved;
+    for (bNode *named : named_nodes(tree, query)) {
+      moved.insert(named);
+    }
+    /* A frame takes what it holds along. */
+    for (bNode &other : tree.nodes) {
+      for (bNode *parent = other.parent; parent; parent = parent->parent) {
+        if (moved.count(parent)) {
+          moved.insert(&other);
+          break;
+        }
+      }
+    }
+    for (bNode *moving : moved) {
+      add_v2_v2(moving->location, delta);
+    }
+    WM_event_add_notifier(C, NC_NODE | NA_EDITED, &tree);
+    return std::string("Move Nodes");
+  }
+  if (action == "link" || action == "unlink") {
+    bNode *to = bke::node_find_node_by_name(tree, query.lookup_str("to_node").value_or(""));
+    bNodeSocket *to_socket = to ? find_socket(*to, std::string(query.lookup_str("to_socket").value_or("")), false) : nullptr;
+    if (!to_socket) {
+      return std::nullopt;
+    }
+    if (action == "unlink") {
+      bNode *from = bke::node_find_node_by_name(tree, query.lookup_str("from_node").value_or(""));
+      const std::string from_id = std::string(query.lookup_str("from_socket").value_or(""));
+      for (bNodeLink &link : tree.links.items_mutable()) {
+        if (link.tosock == to_socket && (!from || (link.fromnode == from && from_id == link.fromsock->identifier))) {
+          bke::node_remove_link(&tree, link);
+        }
+      }
+      BKE_main_ensure_invariants(*bmain, tree.id);
+      return std::string("Disconnect");
+    }
+    bNode *from = bke::node_find_node_by_name(tree, query.lookup_str("from_node").value_or(""));
+    bNodeSocket *from_socket = from ? find_socket(*from, std::string(query.lookup_str("from_socket").value_or("")), true) : nullptr;
+    if (!from_socket || from == to) {
+      return std::nullopt;
+    }
+    link_sockets(tree, *from, *from_socket, *to, *to_socket);
+    BKE_main_ensure_invariants(*bmain, tree.id);
+    return std::string("Link Nodes");
+  }
+  if (action == "add") {
+    if (!add_native_node(C, tree, query)) {
+      return std::nullopt;
+    }
+    BKE_main_ensure_invariants(*bmain, tree.id);
+    return std::string("Add Node");
+  }
+  if (action == "delete") {
+    for (bNode *named : named_nodes(tree, query)) {
+      bke::node_remove_node(bmain, tree, *named, true);
+    }
+    BKE_main_ensure_invariants(*bmain, tree.id);
+    return std::string("Delete Nodes");
+  }
+  if (action == "mute" || action == "collapse") {
+    const int flag = action == "mute" ? NODE_MUTED : NODE_COLLAPSED;
+    Vector<bNode *> nodes = named_nodes(tree, query);
+    const bool set = std::any_of(nodes.begin(), nodes.end(), [&](bNode *item) { return !(item->flag & flag); });
+    for (bNode *item : nodes) {
+      SET_FLAG_FROM_TEST(item->flag, set, flag);
+      BKE_ntree_update_tag_node_property(&tree, item);
+    }
+    BKE_main_ensure_invariants(*bmain, tree.id);
+    return std::string(action == "mute" ? "Toggle Node Mute" : "Collapse Nodes");
+  }
+  if (action == "rename" && node) {
+    STRNCPY(node->label, std::string(query.lookup_str("value").value_or("")).c_str());
+    WM_event_add_notifier(C, NC_NODE | NA_EDITED, &tree);
+    return std::string("Rename Node");
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
+std::string native_nodes_query(bContext *C, const std::string &json, const bool execute)
+{
+  auto query_value = decode(json);
+  const auto *query = query_value ? query_value->as_dictionary_value() : nullptr;
+  if (!query || !CTX_data_scene(C)) {
+    return execute ? "This node tree is no longer available." : "null";
+  }
+  NativeNodeTree shown = native_node_tree(C, *query);
+  if (shown.tree) {
+    shown.tree->ensure_topology_cache();
+  }
+  /* Resolved from the viewport's context; edited and drawn in a node editor's. */
+  std::optional<NodeSpaceContext> node_space;
+  if (shown.tree) {
+    node_space.emplace(C, shown.root, shown.tree);
+  }
+  if (execute) {
+    if (!shown.tree) {
+      return "This node tree is no longer available.";
+    }
+    const std::optional<std::string> undo = apply_node_action(C, *shown.tree, *query);
+    if (!undo) {
+      return "This node change could not be made.";
+    }
+    if (!undo->empty()) {
+      ED_undo_push(C, undo->c_str());
+    }
+    WM_event_add_notifier(C, NC_NODE | NA_EDITED, shown.tree);
+    return "";
+  }
+  DictionaryValue result;
+  result.append_str("tree", query->lookup_str("tree").value_or("SHADER"));
+  if (!shown.tree) {
+    result.append_str("empty", shown.empty);
+    result.append_str("create", shown.create);
+    return encode(result);
+  }
+  result.append_str("name", shown.tree->id.name + 2);
+  result.append_str("owner", shown.owner);
+  auto path = result.append_array("path");
+  for (bNode *group : shown.path) {
+    auto item = path->append_dict();
+    item->append_str("name", group->name);
+    item->append_str("title", group->id ? group->id->name + 2 : group->name);
+  }
+  bNodeTree &tree = *shown.tree;
+  const std::set<const bNodeSocket *> linked = linked_sockets(tree);
+  auto nodes = result.append_array("nodes");
+  for (bNode &node : tree.nodes) {
+    project_node(C, tree, node, linked, *nodes->append_dict());
+  }
+  auto links = result.append_array("links");
+  for (const bNodeLink &link : tree.links) {
+    if (!link.fromnode || !link.tonode || !link.fromsock || !link.tosock ||
+        !link.fromsock->is_visible() || !link.tosock->is_visible())
+    {
+      continue;
+    }
+    auto item = links->append_dict();
+    item->append_str("from_node", link.fromnode->name);
+    item->append_str("from_socket", link.fromsock->identifier);
+    item->append_str("to_node", link.tonode->name);
+    item->append_str("to_socket", link.tosock->identifier);
+    item->append_int("valid", (link.flag & NODE_LINK_VALID) != 0);
+    item->append_int("muted", (link.flag & NODE_LINK_MUTED) != 0);
+  }
+  project_node_add_items(C, tree, *result.append_array("add"));
+  return encode(result);
+}
+
+/** \} */
+
 }  // namespace blender::ui
