@@ -341,6 +341,9 @@ struct NodeCanvas: View {
         content
           .scaleEffect(zoom, anchor: .topLeading)
           .offset(pan)
+        minimap
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+          .padding(14)
       }
       .clipped()
       .simultaneousGesture(magnify)
@@ -428,6 +431,53 @@ struct NodeCanvas: View {
 
   private func cardWidth(_ node: JSON) -> CGFloat {
     max(200, CGFloat(node.double("width") ?? 140) * nodeScale)
+  }
+
+  /* -------------------------------------------------------------------- */
+  /* Minimap */
+
+  /** The whole tree small in a corner, with the part in view outlined: tap or drag to go there. */
+  @ViewBuilder
+  private var minimap: some View {
+    let rects = model.nodes.compactMap { node -> (CGRect, Color)? in
+      guard let rect = layout.nodes[node.string("name") ?? ""] else { return nil }
+      return (rect, node.string("kind") == "FRAME" ? Color.secondary.opacity(0.3) : nodeColor(node))
+    }
+    let visible = CGRect(origin: toCanvas(.zero), size: CGSize(width: viewSize.width / zoom, height: viewSize.height / zoom))
+    if rects.count > 1 || !(rects.first.map { visible.contains($0.0) } ?? true) {
+      /* Scaled to the tree alone, so it holds still while the view moves over it. */
+      let bounds = rects.map(\.0).reduce(CGRect.null) { $0.union($1) }.insetBy(dx: -60, dy: -60)
+      let size = CGSize(width: 180, height: max(60, min(140, 180 * bounds.height / max(bounds.width, 1))))
+      let scale = min(size.width / bounds.width, size.height / bounds.height)
+      let place = { (rect: CGRect) in
+        CGRect(x: (rect.minX - bounds.minX) * scale, y: (rect.minY - bounds.minY) * scale,
+               width: rect.width * scale, height: rect.height * scale)
+      }
+      Canvas { context, _ in
+        for (rect, color) in rects {
+          context.fill(Path(roundedRect: place(rect), cornerRadius: 2), with: .color(color.opacity(0.8)))
+        }
+        context.fill(Path(roundedRect: place(visible), cornerRadius: 3), with: .color(.accentColor.opacity(0.08)))
+        context.stroke(Path(roundedRect: place(visible), cornerRadius: 3), with: .color(.accentColor), lineWidth: 1.5)
+      }
+      .frame(width: size.width, height: size.height)
+      .clipped()
+      .padding(6)
+      .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.separator, lineWidth: 0.5))
+      .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+      .contentShape(Rectangle())
+      .gesture(
+        DragGesture(minimumDistance: 0)
+          .onChanged { value in
+            /* The point under the finger, centred in view. */
+            let point = CGPoint(x: (value.location.x - 6) / scale + bounds.minX,
+                                y: (value.location.y - 6) / scale + bounds.minY)
+            pan = CGSize(width: viewSize.width / 2 - point.x * zoom, height: viewSize.height / 2 - point.y * zoom)
+          })
+      .accessibilityLabel("Minimap")
+      .accessibilityHint("Drag to move around the node tree.")
+    }
   }
 
   /* -------------------------------------------------------------------- */
