@@ -474,10 +474,15 @@ struct PropertyRow: View, Equatable {
   var body: some View {
     Group {
       if property.has("slider"), type == "FLOAT" || type == "INT" {
-        VStack(spacing: 2) {
-          labeled { NumberField(store: store, property: property, scrubs: false, significant: 6).equatable() }
-          PropertySlider(store: store, property: property)
-            .equatable()
+        /* The name, the slider, then the number, on one line, as in Keynote. */
+        labeled(width: 0.66) {
+          HStack(spacing: 8) {
+            PropertySlider(store: store, property: property)
+              .equatable()
+            NumberField(store: store, property: property, compact: true, scrubs: false, significant: 6)
+              .equatable()
+              .frame(width: 64)
+          }
         }
       }
       else {
