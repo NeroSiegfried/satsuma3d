@@ -1932,6 +1932,9 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
   if (!query || !CTX_data_scene(C)) {
     return "{}";
   }
+  /* The panels draw their items' previews, such as materials', which need the scene evaluated:
+   * evaluated first, as before Blender's own redraw, since an edit may have just changed it. */
+  CTX_data_ensure_evaluated_depsgraph(C);
   if (execute) {
     const std::string token = query->lookup_str("interaction").value_or("");
     if (!token.empty() && token == native_property_interaction.closed_token) {
