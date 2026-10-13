@@ -453,7 +453,8 @@ struct ListRows: View {
    */
   var body: some View {
     List {
-      ForEach(Array(shown.enumerated()), id: \.element.listIdentity) { position, item in
+      ForEach(Array(zip(Self.identities(shown), shown).enumerated()), id: \.element.0) { position, entry in
+        let item = entry.1
         let index = item.int("index") ?? position
         row(item, position: position)
           .listRowInsets(EdgeInsets(top: 1, leading: 0, bottom: 1, trailing: 0))
@@ -469,9 +470,24 @@ struct ListRows: View {
     .scrollContentBackground(.hidden)
     .environment(\.defaultMinListRowHeight, Self.rowHeight)
     .frame(height: CGFloat(shown.count) * Self.rowHeight)
+    /* Items added or deleted slide in and out, as in Notes: the list animates the change. */
+    .animation(UIAccessibility.isReduceMotionEnabled ? nil : .smooth(duration: 0.3),
+               value: Self.identities(shown))
     /* Blender's list has changed: show it as it is. */
     .onChange(of: rows.map { "\($0["index"] ?? "")|\($0.string("label") ?? "")" }) {
       withTransaction(Self.instant) { pending = nil }
+    }
+  }
+
+  /** Each row's identity, which stays as rows come, go and move: its name, numbered where names
+   * repeat (such as empty material slots). */
+  static func identities(_ rows: [JSON]) -> [String] {
+    var seen: [String: Int] = [:]
+    return rows.map { row in
+      let name = row.string("label") ?? ""
+      let count = seen[name, default: 0]
+      seen[name] = count + 1
+      return "\(name)#\(count)"
     }
   }
 
@@ -494,6 +510,8 @@ struct ListRows: View {
   private func trailingActions(_ index: Int) -> some View {
     if editable && property.dict("remove") != nil {
       Button(role: .destructive) { delete(index) } label: { Label("Delete", systemImage: "trash") }
+        /* The system's red, whatever the form's tint. */
+        .tint(.red)
     }
   }
 
@@ -674,10 +692,6 @@ struct ListRows: View {
   }
 }
 
-private extension Dictionary where Key == String, Value == Any {
-  /** Rows are identified by index and name, so a rename or reorder animates in place. */
-  var listIdentity: String { "\(self["index"] ?? "")" }
-}
 
 /** A control drawn on a list row: an icon toggle (mute, lock) or a compact value. */
 struct RowControl: View {
