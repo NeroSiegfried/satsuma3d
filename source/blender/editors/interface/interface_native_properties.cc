@@ -24,6 +24,7 @@
 #include "BLI_serialize.hh"
 #include "DEG_depsgraph_build.hh"
 #include "DNA_ID.h"
+#include "DNA_curve_types.h"
 #include "DNA_modifier_types.h"
 #include "DNA_object_types.h"
 #include "DNA_space_types.h"
@@ -2959,6 +2960,40 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
   }
   if (execute) {
     return applied ? "" : "This property is no longer available or editable.";
+  }
+  /* A text object's styles, which Blender keeps per character: on all of it out of Edit Mode,
+   * for the Text section's bold, italic and underline. */
+  if (tab_id == "DATA" && object && object->type == OB_FONT) {
+    const Curve *curve = id_cast<const Curve *>(object->data);
+    short flags = curve->curinfo.flag;
+    if (const EditFont *edit = curve->editfont) {
+      int start, end;
+      if (BKE_vfont_select_get(const_cast<Curve *>(curve), &start, &end)) {
+        flags = edit->textbufinfo[start].flag;
+      }
+    }
+    else if (curve->len_char32 > 0) {
+      flags = ~0;
+      for (int i = 0; i < curve->len_char32; i++) {
+        flags &= curve->strinfo[i].flag;
+      }
+    }
+    auto style = result.append_dict("text_style");
+    style->append_int("bold", (flags & CU_CHINFO_BOLD) != 0);
+    style->append_int("italic", (flags & CU_CHINFO_ITALIC) != 0);
+    style->append_int("underline", (flags & CU_CHINFO_UNDERLINE) != 0);
+    style->append_int("small_caps", (flags & CU_CHINFO_SMALLCAPS) != 0);
+    style->append_str("font_file", curve->vfont ? curve->vfont->filepath : "");
+    PointerRNA curve_ptr = RNA_id_pointer_create(const_cast<ID *>(&curve->id));
+    for (const char *identifier : {"align_x", "align_y"}) {
+      PropertyRNA *prop = RNA_struct_find_property(&curve_ptr, identifier);
+      const char *value = "";
+      RNA_property_enum_identifier(C, &curve_ptr, prop, RNA_property_enum_get(&curve_ptr, prop), &value);
+      style->append_str(identifier, value);
+    }
+    for (const char *identifier : {"size", "space_line", "space_character", "space_word"}) {
+      style->append_double(identifier, RNA_float_get(&curve_ptr, identifier));
+    }
   }
   /* Sections of only the active item's own (e.g. a modifier the others lack) leave with their
    * properties. */

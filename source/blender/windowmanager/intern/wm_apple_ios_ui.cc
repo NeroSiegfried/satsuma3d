@@ -516,6 +516,16 @@ static Curve *ios_text_object_edited(bContext *C)
   return curve->editfont ? curve : nullptr;
 }
 
+/** The text object being edited, else the active one, for its style, font and alignment. */
+static Curve *ios_text_object_active(bContext *C)
+{
+  if (Curve *curve = ios_text_object_edited(C)) {
+    return curve;
+  }
+  Object *object = CTX_data_active_object(C);
+  return object && object->type == OB_FONT ? id_cast<Curve *>(object->data) : nullptr;
+}
+
 /** The style the system's formatting panel shows: the selection's, else what typing adds. */
 static std::string ios_text_object_json(bContext *C)
 {
@@ -543,21 +553,34 @@ static std::string ios_text_object_json(bContext *C)
   return json;
 }
 
-/** Sets a style on the selection and on what typing adds next, as Blender's Font panel does. */
+/**
+ * Sets a style on the selection and on what typing adds next, as Blender's Font panel does; out
+ * of Edit Mode, on all of the text, as Keynote styles a text box.
+ */
 static void ios_text_object_style(bContext *C, const std::string &style, const bool on)
 {
-  Curve *curve = ios_text_object_edited(C);
-  const char *format_props[][2] = {{"BOLD", "use_bold"},
-                                   {"ITALIC", "use_italic"},
-                                   {"UNDERLINE", "use_underline"},
-                                   {"SMALL_CAPS", "use_small_caps"}};
-  const char *format_prop = nullptr;
-  for (const auto &item : format_props) {
-    if (style == item[0]) {
-      format_prop = item[1];
-    }
+  Curve *curve = ios_text_object_active(C);
+  const struct {
+    const char *name;
+    const char *format_prop;
+    short flag;
+  } styles[] = {{"BOLD", "use_bold", CU_CHINFO_BOLD},
+                {"ITALIC", "use_italic", CU_CHINFO_ITALIC},
+                {"UNDERLINE", "use_underline", CU_CHINFO_UNDERLINE},
+                {"SMALL_CAPS", "use_small_caps", CU_CHINFO_SMALLCAPS}};
+  const auto *found = std::find_if(
+      std::begin(styles), std::end(styles), [&](const auto &item) { return style == item.name; });
+  if (curve == nullptr || found == std::end(styles)) {
+    return;
   }
-  if (curve == nullptr || format_prop == nullptr) {
+  if (curve->editfont == nullptr) {
+    for (int i = 0; i < curve->len_char32; i++) {
+      SET_FLAG_FROM_TEST(curve->strinfo[i].flag, on, found->flag);
+    }
+    SET_FLAG_FROM_TEST(curve->curinfo.flag, on, found->flag);
+    DEG_id_tag_update(&curve->id, ID_RECALC_GEOMETRY);
+    WM_event_add_notifier(C, NC_GEOM | ND_DATA, curve);
+    ED_undo_push(C, "Set Style");
     return;
   }
   int selection_start, selection_end;
@@ -571,7 +594,7 @@ static void ios_text_object_style(bContext *C, const std::string &style, const b
   }
   PointerRNA curve_ptr = RNA_id_pointer_create(&curve->id);
   PointerRNA format = RNA_pointer_get(&curve_ptr, "edit_format");
-  ios_rna_boolean_set(C, format, format_prop, on);
+  ios_rna_boolean_set(C, format, found->format_prop, on);
   ED_undo_push(C, "Set Style");
 }
 
@@ -579,7 +602,7 @@ static void ios_text_object_style(bContext *C, const std::string &style, const b
  * are packed, as they are only a cache. */
 static void ios_text_object_fonts(bContext *C, const std::string &lines)
 {
-  Curve *curve = ios_text_object_edited(C);
+  Curve *curve = ios_text_object_active(C);
   if (curve == nullptr) {
     return;
   }
@@ -653,7 +676,7 @@ void ios_text_object_edit(bContext *C, const std::string &command)
         C, argument.substr(0, separator), separator != std::string::npos && argument.substr(separator + 1) == "1");
   }
   else if (action == "align") {
-    if (Curve *curve = ios_text_object_edited(C)) {
+    if (Curve *curve = ios_text_object_active(C)) {
       PointerRNA curve_ptr = RNA_id_pointer_create(&curve->id);
       if (PropertyRNA *prop = RNA_struct_find_property(&curve_ptr, "align_x")) {
         RNA_enum_set_identifier(C, &curve_ptr, "align_x", argument.c_str());
@@ -664,6 +687,31 @@ void ios_text_object_edit(bContext *C, const std::string &command)
   }
   else if (action == "font") {
     ios_text_object_fonts(C, argument);
+  }
+  else if (action == "align_y" || action == "value") {
+    /* `align_y:<enum>`, or `value:<size|space_line|space_character|space_word>:<number>`. */
+    Curve *curve = ios_text_object_active(C);
+    if (curve == nullptr) {
+      return;
+    }
+    PointerRNA curve_ptr = RNA_id_pointer_create(&curve->id);
+    const size_t separator = argument.find(':');
+    const std::string name = action == "align_y" ? "align_y" : argument.substr(0, separator);
+    PropertyRNA *prop = RNA_struct_find_property(&curve_ptr, name.c_str());
+    if (prop == nullptr || !ELEM(name, "align_y", "size", "space_line", "space_character", "space_word")) {
+      return;
+    }
+    if (action == "align_y") {
+      RNA_enum_set_identifier(C, &curve_ptr, "align_y", argument.c_str());
+    }
+    else if (separator != std::string::npos) {
+      float minimum, maximum;
+      RNA_property_float_range(&curve_ptr, prop, &minimum, &maximum);
+      const double value = std::atof(argument.c_str() + separator + 1);
+      RNA_property_float_set(&curve_ptr, prop, std::clamp(float(value), minimum, maximum));
+    }
+    RNA_property_update(C, &curve_ptr, prop);
+    ios_rna_undo_push(C, prop);
   }
 }
 
