@@ -21,6 +21,7 @@
 #include "BKE_object.hh"
 #include "BKE_main_invariants.hh"
 #include "BKE_node_tree_zones.hh"
+#include "NOD_node_declaration.hh"
 #include "BKE_node_tree_update.hh"
 #include "BKE_node_runtime.hh"
 #include "BKE_node.hh"
@@ -3313,6 +3314,24 @@ template<typename Fn> void for_each_node_field(Block &block, Fn fn)
   }
 }
 
+/** Which panel of its node each socket is in, by the panels' identifiers. */
+std::map<std::string, int> socket_panels(const bNode &node)
+{
+  std::map<std::string, int> panels;
+  const nodes::NodeDeclaration *declaration = node.declaration();
+  if (!declaration) {
+    return panels;
+  }
+  for (const nodes::PanelDeclaration *panel : declaration->panels) {
+    for (const nodes::ItemDeclaration *item : panel->items) {
+      if (const auto *socket = dynamic_cast<const nodes::SocketDeclaration *>(item)) {
+        panels[(socket->in_out == SOCK_IN ? "i:" : "o:") + socket->identifier] = panel->identifier;
+      }
+    }
+  }
+  return panels;
+}
+
 void project_node_socket(const bNodeSocket &socket,
                          const std::set<const bNodeSocket *> &linked,
                          DictionaryValue &item)
@@ -3365,16 +3384,45 @@ void project_node(bContext *C, bNodeTree &tree, bNode &node, const std::set<cons
   if (node.is_group() && node.id) {
     item.append_str("group", node.id->name + 2);
   }
+  /* Panels, such as a shader's Subsurface and Specular: open or closed, inside another. */
+  const std::map<std::string, int> panel_of = socket_panels(node);
+  if (const nodes::NodeDeclaration *declaration = node.declaration()) {
+    const Span<bNodePanelState> states = node.panel_states();
+    auto panels = item.append_array("panels");
+    for (const nodes::PanelDeclaration *panel : declaration->panels) {
+      auto panel_item = panels->append_dict();
+      panel_item->append_int("id", panel->identifier);
+      panel_item->append_str("name", panel->name);
+      if (panel->parent_panel) {
+        panel_item->append_int("parent", panel->parent_panel->identifier);
+      }
+      bool collapsed = panel->default_collapsed;
+      for (const bNodePanelState &state : states) {
+        if (state.identifier == panel->identifier) {
+          collapsed = state.is_collapsed();
+        }
+      }
+      panel_item->append_int("collapsed", collapsed);
+    }
+  }
   auto inputs = item.append_array("inputs");
   for (const bNodeSocket &socket : node.inputs) {
     if (socket.is_visible()) {
-      project_node_socket(socket, linked, *inputs->append_dict());
+      auto socket_item = inputs->append_dict();
+      project_node_socket(socket, linked, *socket_item);
+      if (const auto found = panel_of.find(std::string("i:") + socket.identifier); found != panel_of.end()) {
+        socket_item->append_int("panel", found->second);
+      }
     }
   }
   auto outputs = item.append_array("outputs");
   for (const bNodeSocket &socket : node.outputs) {
     if (socket.is_visible()) {
-      project_node_socket(socket, linked, *outputs->append_dict());
+      auto socket_item = outputs->append_dict();
+      project_node_socket(socket, linked, *socket_item);
+      if (const auto found = panel_of.find(std::string("o:") + socket.identifier); found != panel_of.end()) {
+        socket_item->append_int("panel", found->second);
+      }
     }
   }
   if (node.is_frame() || node.is_reroute()) {
@@ -3664,6 +3712,18 @@ std::optional<std::string> apply_node_action(bContext *C, bNodeTree &tree, const
     }
     BKE_main_ensure_invariants(*bmain, tree.id);
     return std::string(action == "mute" ? "Toggle Node Mute" : "Collapse Nodes");
+  }
+  if (action == "panel" && node) {
+    /* A panel opened or closed, as its header's arrow does. */
+    const int identifier = int(query.lookup_int("panel").value_or(-1));
+    for (bNodePanelState &state : node->panel_states()) {
+      if (state.identifier == identifier) {
+        state.flag ^= NODE_PANEL_COLLAPSED;
+      }
+    }
+    BKE_ntree_update_tag_node_property(&tree, node);
+    BKE_main_ensure_invariants(*bmain, tree.id);
+    return std::string("");
   }
   if (action == "rename" && node) {
     STRNCPY(node->label, std::string(query.lookup_str("value").value_or("")).c_str());

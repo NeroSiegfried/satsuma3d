@@ -802,8 +802,16 @@ struct NodeCard: View {
               .padding(.horizontal, 12)
               .padding(.vertical, 4)
           }
-          ForEach(node.array("inputs"), id: \.socketID) { socket in
-            input(socket)
+          ForEach(Array(inputGroups.enumerated()), id: \.offset) { _, group in
+            if let panel = group.panel {
+              panelHeader(panel, sockets: group.sockets)
+              if !panel.bool("collapsed") {
+                ForEach(group.sockets, id: \.socketID) { socket in input(socket) }
+              }
+            }
+            else {
+              ForEach(group.sockets, id: \.socketID) { socket in input(socket) }
+            }
           }
         }
         .padding(.vertical, 6)
@@ -859,7 +867,60 @@ struct NodeCard: View {
       topLeadingRadius: 14, bottomLeadingRadius: node.bool("collapsed") ? 14 : 0,
       bottomTrailingRadius: node.bool("collapsed") ? 14 : 0, topTrailingRadius: 14, style: .continuous))
     .contentShape(Rectangle())
-    .gesture(move)
+    .highPriorityGesture(move)
+  }
+
+  /** Inputs in their panels, in order: runs of sockets in the same panel, or in none. */
+  private var inputGroups: [(panel: JSON?, sockets: [JSON])] {
+    let panels = Dictionary(node.array("panels").compactMap { panel in panel.int("id").map { ($0, panel) } },
+                            uniquingKeysWith: { a, _ in a })
+    var groups: [(panel: JSON?, sockets: [JSON])] = []
+    var current: Int?? = .none
+    for socket in node.array("inputs") {
+      let id = socket.int("panel")
+      if case .some(let last) = current, last == id {
+        groups[groups.count - 1].sockets.append(socket)
+      }
+      else {
+        groups.append((id.flatMap { panels[$0] }, [socket]))
+        current = .some(id)
+      }
+    }
+    return groups
+  }
+
+  /** A panel's header, which opens and closes it; closed, its wired sockets sit on it. */
+  private func panelHeader(_ panel: JSON, sockets: [JSON]) -> some View {
+    let collapsed = panel.bool("collapsed")
+    return Button {
+      model.send("panel", ["node": name, "panel": panel.int("id") ?? -1])
+    } label: {
+      HStack(spacing: 6) {
+        Image(systemName: "chevron.right")
+          .font(.caption2.weight(.semibold))
+          .rotationEffect(.degrees(collapsed ? 0 : 90))
+        Text(panel.string("name") ?? "")
+          .font(.callout.weight(.medium))
+        Spacer(minLength: 0)
+      }
+      .foregroundStyle(.secondary)
+      .frame(minHeight: 32)
+      .padding(.horizontal, 12)
+      .padding(.leading, panel["parent"] != nil ? 12 : 0)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .overlay(alignment: .leading) {
+      if collapsed {
+        ZStack {
+          ForEach(sockets.filter { $0.bool("linked") }, id: \.socketID) { socket in
+            dot(socket, output: false)
+          }
+        }
+        .offset(x: -10)
+      }
+    }
+    .accessibilityValue(collapsed ? "Collapsed" : "Expanded")
   }
 
   /** An input: its value's controls when nothing links it, else its name. */
