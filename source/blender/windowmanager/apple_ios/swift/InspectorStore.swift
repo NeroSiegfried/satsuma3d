@@ -146,6 +146,10 @@ final class InspectorStore {
   /** Values the user just set, shown until Blender acknowledges them. Kept once made, so the
    * controls reading them keep observing the same value. */
   @ObservationIgnored private var pendingValues: [String: PendingValue] = [:]
+  /** Every value in the latest accepted snapshot, by key. Rows can still show older data while
+   * a change of layout animates; reading values here keeps them from showing the value from
+   * before an edit for the length of that animation. */
+  @ObservationIgnored private var latestValues: [String: Any] = [:]
   /** Bumped when controls must drop local editing state, e.g. on selection change. */
   private(set) var generation = 0
 
@@ -245,7 +249,20 @@ final class InspectorStore {
   }
 
   func value(_ property: JSON) -> Any? {
-    pendingValue(propertyKey(property)).value ?? property["value"]
+    let key = propertyKey(property)
+    return pendingValue(key).value ?? latestValues[key] ?? property["value"]
+  }
+
+  private func collectValues(_ object: Any, into values: inout [String: Any]) {
+    if let dictionary = object as? JSON {
+      if dictionary["key"] != nil, let value = dictionary["value"] {
+        values[propertyKey(dictionary)] = value
+      }
+      for child in dictionary.values { collectValues(child, into: &values) }
+    }
+    else if let array = object as? [Any] {
+      for child in array { collectValues(child, into: &values) }
+    }
   }
 
   /** The selected items' values differ, until an edit gives them all one. */
@@ -331,6 +348,9 @@ final class InspectorStore {
     if let snapshot, (snapshot as NSDictionary).isEqual(merged as NSDictionary) { return false }
     snapshot = merged
     set(\.status, merged.string("error") ?? "")
+    var values: [String: Any] = [:]
+    collectValues(merged, into: &values)
+    latestValues = values
     for pending in pendingValues.values where pending.value != nil { pending.value = nil }
     guard let raw = merged.dict("inspector") else {
       if merged["inspector"] is NSNull {
