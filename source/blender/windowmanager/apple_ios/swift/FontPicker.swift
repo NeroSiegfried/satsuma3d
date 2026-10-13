@@ -448,7 +448,7 @@ struct TextStyleSection: View {
       card {
         stepperRow("Line Spacing", key: "space_line", step: 0.1, range: 0...10)
         Divider()
-        stepperRow("Character Spacing", key: "space_character", step: 0.1, range: 0...10)
+        stepperRow("Tracking", key: "space_character", step: 0.1, range: 0...10)
         Divider()
         stepperRow("Word Spacing", key: "space_word", step: 0.1, range: 0...10)
       }
@@ -542,12 +542,17 @@ struct TextStyleSection: View {
         .minimumScaleFactor(0.85)
         .layoutPriority(1)
       Spacer(minLength: 4)
-      Text(value.formatted(.number.precision(.fractionLength(2))))
+      /* Tapped, the number takes a typed value, as Keynote's do; the stepper nudges it. */
+      TextField(title, value: Binding(get: { value },
+                                      set: { setNumber(key, min(range.upperBound, max(range.lowerBound, $0))) }),
+                format: .number.precision(.fractionLength(2)))
+        .keyboardType(.decimalPad)
+        .multilineTextAlignment(.trailing)
         .monospacedDigit()
-        .foregroundStyle(field ? .primary : .secondary)
-        .padding(.horizontal, field ? 14 : 0)
-        .frame(minHeight: 36)
-        .background(field ? PanelStyle.field : .clear, in: Capsule())
+        .lineLimit(1)
+        .padding(.horizontal, 12)
+        .frame(width: 84, height: 36)
+        .background(PanelStyle.field, in: Capsule())
       Stepper(title, value: Binding(get: { value }, set: { setNumber(key, min(range.upperBound, max(range.lowerBound, $0))) }),
               in: range, step: step)
         .labelsHidden()
