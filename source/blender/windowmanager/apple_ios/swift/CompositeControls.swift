@@ -504,22 +504,13 @@ struct ListRows: View {
       ForEach(Array(item.array("controls").enumerated()), id: \.offset) { _, control in
         RowControl(store: store, control: listControl(control))
       }
+#if !os(macOS)
       if reorder {
         Image(systemName: "line.3.horizontal")
           .foregroundStyle(.tertiary)
           .frame(width: 36, height: 36)
           .contentShape(Rectangle())
-          .gesture(DragGesture(minimumDistance: 2)
-            .onChanged { value in
-              if dragging == nil {
-                dragging = position
-                Haptics.impact()
-              }
-              let before = targetPosition
-              dragOffset = value.translation.height
-              if targetPosition != before { Haptics.selection() }
-            }
-            .onEnded { _ in finishDrag() })
+          .gesture(reorderDrag(position))
           .accessibilityLabel("Reorder \(label)")
           .accessibilityActions {
             if position + offset > 0 {
@@ -530,6 +521,7 @@ struct ListRows: View {
             }
           }
       }
+#endif
     }
     /* Nested items (bone collections, layer groups) are indented under their parent. */
     .padding(.leading, 10 + CGFloat(item.int("depth") ?? 0) * 16)
@@ -539,6 +531,11 @@ struct ListRows: View {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
         .fill(isActive ? PanelStyle.activeRow : .clear)
     }
+#if os(macOS)
+    /* A Mac list's rows drag anywhere to another place, as Finder's sidebar's do. */
+    .contentShape(Rectangle())
+    .gesture(reorderDrag(position), including: reorder ? .all : .subviews)
+#endif
     .scaleEffect(dragging == position ? 1.02 : 1)
     .shadow(color: .black.opacity(dragging == position ? 0.25 : 0), radius: 8, y: 3)
     .contextMenuPreviewShape(RoundedRectangle(cornerRadius: 8))
@@ -595,6 +592,10 @@ struct ListRows: View {
 
   /** The actions a swipe shows, as the list allows them. */
   private func swipeActions(_ item: JSON, index: Int, _ actions: [String]) -> [SwipeAction] {
+#if os(macOS)
+    /* A Mac's rows drag to reorder; their actions are in the context menu. */
+    return []
+#else
     guard editable else { return [] }
     return actions.compactMap { action in
       switch action {
@@ -613,6 +614,7 @@ struct ListRows: View {
           return nil
       }
     }
+#endif
   }
 
   private func closeSwipe() {
@@ -676,6 +678,20 @@ struct ListRows: View {
       /* Tree items (such as shape keys) are renamed through the tree. */
       store.request(property, extra: ["list_action": "rename", "index": index, "name": name])
     }
+  }
+
+  private func reorderDrag(_ position: Int) -> some Gesture {
+    DragGesture(minimumDistance: 4)
+      .onChanged { value in
+        if dragging == nil {
+          dragging = position
+          Haptics.impact()
+        }
+        let before = targetPosition
+        dragOffset = value.translation.height
+        if targetPosition != before { Haptics.selection() }
+      }
+      .onEnded { _ in finishDrag() }
   }
 
   private func finishDrag() {
