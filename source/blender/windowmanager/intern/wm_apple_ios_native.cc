@@ -54,6 +54,7 @@ namespace ui {
 void native_redo_operator_register(bContext *C, wmOperator *op);
 void native_redo_operator_free(wmOperator *op);
 void native_redo_operator_clear();
+void native_redo_show(bContext *C);
 }  // namespace ui
 
 namespace {
@@ -172,7 +173,6 @@ bool keymap_item_hidden(const wmKeyMapItem *kmi)
       "WM_OT_batch_rename",
       "SCREEN_OT_region_toggle",
       "SCREEN_OT_region_flip",
-      "SCREEN_OT_redo_last",
       "SCREEN_OT_repeat_history",
       "SCREEN_OT_screen_full_area",
       "SCREEN_OT_space_type_set_or_cycle",
@@ -210,6 +210,7 @@ wmNativeInterface native_interface_create()
   native.operator_registered = ui::native_redo_operator_register;
   native.operator_freed = ui::native_redo_operator_free;
   native.redo_cleared = ui::native_redo_operator_clear;
+  native.redo_show = ui::native_redo_show;
   native.fileselect_begin = WM_apple_ios_fileselect_begin;
   native.fileselect_active = WM_apple_ios_fileselect_active;
   native.fileselect_exec = WM_apple_ios_fileselect_exec;

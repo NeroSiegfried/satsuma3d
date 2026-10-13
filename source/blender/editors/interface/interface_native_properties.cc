@@ -1715,6 +1715,8 @@ namespace {
 wmOperator *native_redo_operator = nullptr;
 uint64_t native_redo_generation = 0;
 bool native_redo_dismissed = false;
+/* Counts requests to open Adjust Last Operation, for the interface to notice a new one. */
+int native_redo_show_requests = 0;
 int64_t native_redo_ack = 0;
 std::string native_redo_error;
 std::string native_redo_snapshot = "null";
@@ -1744,6 +1746,14 @@ void native_redo_operator_free(wmOperator *op)
     native_redo_operator = nullptr;
     native_redo_next_snapshot = {};
   }
+}
+
+void native_redo_show(bContext * /*C*/)
+{
+  native_redo_dismissed = false;
+  ++native_redo_show_requests;
+  native_redo_next_snapshot = {};
+  WM_main_add_notifier(NC_WINDOW, nullptr);
 }
 
 void native_redo_operator_clear()
@@ -1797,6 +1807,7 @@ std::string native_operator_redo_query(bContext *C, const std::string &json, boo
   result.append_str("title", WM_operatortype_name(op->type, op->ptr));
   result.append_str("operator", op->type->idname);
   result.append_int("ack", native_redo_ack);
+  result.append_int("show", native_redo_show_requests);
   auto fields = result.append_array("properties");
   Block *block = block_begin(C, nullptr, "native_operator_redo", EmbossType::Emboss);
   Layout &layout = block_layout(

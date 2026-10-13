@@ -1920,6 +1920,13 @@ wmOperatorStatus WM_operator_redo_popup(bContext *C, wmOperator *op)
     return OPERATOR_CANCELLED;
   }
 
+  if (const wmNativeInterface *native = WM_native_interface();
+      native && native->replaces_redo_panel && native->redo_show)
+  {
+    native->redo_show(C);
+    return OPERATOR_CANCELLED;
+  }
+
   /* Operator is stored and kept alive in the window manager. So passing a pointer to the UI is
    * fine, it will remain valid. */
   ui::popup_block_invoke(C, wm_block_create_redo, op, nullptr);

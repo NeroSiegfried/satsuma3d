@@ -72,6 +72,8 @@ struct wmNativeInterface {
   void (*operator_registered)(bContext *C, wmOperator *op) = nullptr;
   void (*operator_freed)(wmOperator *op) = nullptr;
   void (*redo_cleared)() = nullptr;
+  /** Adjust Last Operation was asked for (F9, the Edit menu): opens the interface's own. */
+  void (*redo_show)(bContext *C) = nullptr;
 
   /** Select files with the platform's own browser; true when it took over the operator. */
   bool (*fileselect_begin)(bContext *C, wmOperator *op) = nullptr;

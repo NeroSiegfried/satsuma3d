@@ -233,6 +233,8 @@ struct QuickActionsRow: View {
   @State private var actionsOpen = false
   /** The operation the user opened the strip for; another operation arrives folded. */
   @State private var redoOpenID: String?
+  /** Blender's count of requests to open the strip (F9, the Edit menu), to open it for a new one. */
+  @State private var redoShowRequests: Int?
   @State private var redoError: String?
   @State private var shownError: String?
   /** The strip hugs its settings, measured as they lay out. */
@@ -330,6 +332,15 @@ struct QuickActionsRow: View {
       redoOpenID = nil
     }
     redo.update(snapshot)
+    if let requests = (snapshot?["show"] as? NSNumber)?.intValue {
+      if let seen = redoShowRequests, requests > seen, !redo.properties.isEmpty {
+        withAnimation(animation) {
+          redoOpenID = redo.operation
+          actionsOpen = false
+        }
+      }
+      redoShowRequests = requests
+    }
     redo.close = {
       withAnimation(animation) { redoOpenID = nil }
     }
