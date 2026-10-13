@@ -12,7 +12,7 @@
 
 import AVFoundation
 import AVKit
-#if !os(visionOS)
+#if os(iOS)
 import BackgroundTasks
 #endif
 import CryptoKit
@@ -217,7 +217,18 @@ enum RenderThumbnails {
  * keeps running meanwhile, without drawing, see `GHOST_ios_engine_continue_work`.
  * \{ */
 
-#if os(visionOS)
+#if os(macOS)
+/** A Mac keeps an app running in the background: nothing to ask for. */
+@MainActor
+final class BackgroundRender {
+  static let shared = BackgroundRender()
+  var expired: () -> Void = {}
+
+  func begin(title: String) {}
+  func update(title: String, subtitle: String, fraction: Double) {}
+  func finish(success: Bool) {}
+}
+#elseif os(visionOS)
 /** visionOS keeps an app running while its window is open: only Blender's loop must go on. */
 @MainActor
 final class BackgroundRender {
@@ -381,10 +392,13 @@ struct RenderSheetView: View {
       .navigationTitle(model.rendering ? (model.animation ? "Rendering Animation" : "Rendering Image") : "Renders")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
+#if !os(macOS)
+        /* A Mac's window closes itself. */
         ToolbarItem(placement: .cancellationAction) {
           /* Closing keeps a render going; it lands in the film strip. */
           Button(role: .close, action: model.close)
         }
+#endif
         if let selected {
           ToolbarItem(placement: .primaryAction) {
             ShareLink(item: library.url(selected)) { Image(systemName: "square.and.arrow.up") }
@@ -528,6 +542,7 @@ struct RenderStill: View {
   }
 }
 
+#if !os(macOS)
 /** An image to pinch, pan and double tap into, fitting the page when zoomed out, as in Photos.
  * Zoomed out it leaves sideways swipes to the gallery's paging. Held, it drags out to other apps:
  * its file when it has one, otherwise the image. */
@@ -642,6 +657,7 @@ final class ZoomView: UIScrollView, UIScrollViewDelegate, UIDragInteractionDeleg
                     width: size.width, height: size.height), animated: true)
   }
 }
+#endif
 
 /** A rendered animation, looping while its page is shown. */
 struct RenderVideo: View {
@@ -821,47 +837,40 @@ struct FilmFrame: View {
 /** \name Controller
  * \{ */
 
+/**
+ * A render and its results, whichever window shows them: the iPad's sheet or the Mac's window.
+ * Blender's state arrives in the toolbar snapshot, see #updateStatus.
+ */
 @MainActor
-@objc(WMIOSSwiftRender)
-public final class SwiftRender: NSObject, UIAdaptivePresentationControllerDelegate {
-  private weak var presenter: UIViewController?
-  private var sheet: UIViewController?
-  private let model = RenderModel()
+final class RenderSession {
+  let model = RenderModel()
   /** Where the render in progress is kept: the project it was started in. */
-  private var renderLibrary = RenderLibrary.forDocument(nil)
+  private(set) var renderLibrary = RenderLibrary.forDocument(nil)
   private var lastID: NSNumber?
   private var lastFrame: String?
   private var finishing = false
+  /** Shows the renders. */
+  var present: () -> Void = {}
+  /** Tells why a render could not be completed. */
+  var fail: (String) -> Void = { _ in }
 
-  @objc(initWithPresenter:)
-  public init(presenter: UIViewController) {
-    self.presenter = presenter
-    super.init()
+  init() {
     model.stop = { [weak self] in self?.stop() }
-    model.close = { [weak self] in self?.close() }
     BackgroundRender.shared.expired = { [weak self] in self?.stop() }
   }
 
-  private func present() {
-    guard sheet == nil, let presenter, presenter.presentedViewController == nil else { return }
-    /* The open project's renders; while one renders, the project it belongs to. */
-    let library = model.rendering ? renderLibrary : RenderLibrary.forDocument(wm_apple_ios_document_url())
-    let controller = UIHostingController(rootView: RenderSheetView(model: model, library: library))
-    controller.modalPresentationStyle = .formSheet
-    controller.preferredContentSize = CGSize(width: 760, height: 700)
-    controller.presentationController?.delegate = self
-    sheet = controller
-    presenter.present(controller, animated: true)
+  /** The open project's renders; while one renders, the project it belongs to. */
+  var library: RenderLibrary {
+    model.rendering ? renderLibrary : RenderLibrary.forDocument(wm_apple_ios_document_url())
   }
 
   /** The film strip, without rendering. */
-  @objc public func showRenders() {
+  func showRenders() {
     model.selection = nil
     present()
   }
 
-  @objc(renderAnimation:)
-  public func renderAnimation(_ animation: Bool) {
+  func renderAnimation(_ animation: Bool) {
     /* One render at a time: a second request shows the one in progress. */
     if model.rendering {
       present()
@@ -884,17 +893,6 @@ public final class SwiftRender: NSObject, UIAdaptivePresentationControllerDelega
     present()
   }
 
-  /* The sheet was swiped away; a render goes on. */
-  public func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
-    sheet = nil
-  }
-
-  private func close() {
-    let sheet = self.sheet
-    self.sheet = nil
-    sheet?.dismiss(animated: true)
-  }
-
   private func stop() {
     guard model.rendering else { return }
     Engine.setting("render", "cancel")
@@ -908,8 +906,7 @@ public final class SwiftRender: NSObject, UIAdaptivePresentationControllerDelega
     BackgroundRender.shared.finish(success: success)
   }
 
-  @objc(updateStatus:)
-  public func updateStatus(_ status: Any?) {
+  func updateStatus(_ status: Any?) {
     guard let status = status as? JSON, model.rendering, !finishing,
           !jsonEqual(lastID, status["id"]) else { return }
     lastID = status["id"] as? NSNumber
@@ -931,14 +928,6 @@ public final class SwiftRender: NSObject, UIAdaptivePresentationControllerDelega
       default:
         break
     }
-  }
-
-  private func fail(_ message: String) {
-    let alert = UIAlertController(title: "Unable to Render", message: message, preferredStyle: .alert)
-    alert.addAction(UIAlertAction(title: "OK", style: .default))
-    var top = presenter
-    while let next = top?.presentedViewController, !next.isBeingDismissed { top = next }
-    top?.present(alert, animated: true)
   }
 
   private func estimate() -> String? {
@@ -1023,5 +1012,63 @@ public final class SwiftRender: NSObject, UIAdaptivePresentationControllerDelega
     Haptics.success()
   }
 }
+
+#if !os(macOS)
+/** The iPad's renders, in a sheet over the document. */
+@MainActor
+@objc(WMIOSSwiftRender)
+public final class SwiftRender: NSObject, UIAdaptivePresentationControllerDelegate {
+  private weak var presenter: UIViewController?
+  private var sheet: UIViewController?
+  private let session = RenderSession()
+
+  @objc(initWithPresenter:)
+  public init(presenter: UIViewController) {
+    self.presenter = presenter
+    super.init()
+    session.model.close = { [weak self] in self?.close() }
+    session.present = { [weak self] in self?.present() }
+    session.fail = { [weak self] in self?.fail($0) }
+  }
+
+  private func present() {
+    guard sheet == nil, let presenter, presenter.presentedViewController == nil else { return }
+    let controller = UIHostingController(rootView: RenderSheetView(model: session.model, library: session.library))
+    controller.modalPresentationStyle = .formSheet
+    controller.preferredContentSize = CGSize(width: 760, height: 700)
+    controller.presentationController?.delegate = self
+    sheet = controller
+    presenter.present(controller, animated: true)
+  }
+
+  /** The film strip, without rendering. */
+  @objc public func showRenders() { session.showRenders() }
+
+  @objc(renderAnimation:)
+  public func renderAnimation(_ animation: Bool) { session.renderAnimation(animation) }
+
+  /* The sheet was swiped away; a render goes on. */
+  public func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+    sheet = nil
+  }
+
+  private func close() {
+    let sheet = self.sheet
+    self.sheet = nil
+    sheet?.dismiss(animated: true)
+  }
+
+  @objc(updateStatus:)
+  public func updateStatus(_ status: Any?) { session.updateStatus(status) }
+
+  private func fail(_ message: String) {
+    let alert = UIAlertController(title: "Unable to Render", message: message, preferredStyle: .alert)
+    alert.addAction(UIAlertAction(title: "OK", style: .default))
+    var top = presenter
+    while let next = top?.presentedViewController, !next.isBeingDismissed { top = next }
+    top?.present(alert, animated: true)
+  }
+}
+#endif
 
 /** \} */
