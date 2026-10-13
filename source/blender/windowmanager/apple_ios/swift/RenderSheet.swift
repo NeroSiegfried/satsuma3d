@@ -411,7 +411,7 @@ struct RenderSheetView: View {
   }
 }
 
-/** The renders side by side, a page each, as in Photos: swipe between them, pinch or double tap
+/** The renders side by side, a page each: swipe between them, pinch or double tap
  * to zoom. Picking a frame in the film strip slides the page over. */
 struct RenderGallery: View {
   @ObservedObject var model: RenderModel
@@ -457,7 +457,7 @@ struct RenderGallery: View {
     }
   }
 
-  /** The render itself, filling the page, as a photo does in Photos. */
+  /** The render itself, filling the page. */
   @ViewBuilder
   private func pageView(_ id: String, active: Bool) -> some View {
     ZStack {
@@ -543,7 +543,7 @@ struct RenderStill: View {
 }
 
 #if !os(macOS)
-/** An image to pinch, pan and double tap into, fitting the page when zoomed out, as in Photos.
+/** An image to pinch, pan and double tap into, fitting the page when zoomed out.
  * Zoomed out it leaves sideways swipes to the gallery's paging. Held, it drags out to other apps:
  * its file when it has one, otherwise the image. */
 struct ZoomableImage: UIViewRepresentable {
@@ -690,7 +690,7 @@ struct RenderVideo: View {
   }
 }
 
-/** Every render, oldest first, as the scrubber in Photos: small frames packed together with the
+/** Every render, oldest first, as a scrubber: small frames packed together with the
  * picked one opened out in the middle. Sliding the strip picks the frame that lands in the middle;
  * tapping a frame slides it there. */
 struct FilmStrip: View {
