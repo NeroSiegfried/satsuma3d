@@ -436,6 +436,8 @@ struct ListRows: View {
 
   /** Each row's height: the list is as tall as its rows, inside the scrolling form. */
   static let rowHeight: CGFloat = 44
+  /** The Properties card's horizontal padding, see `InspectorView`. */
+  static let cardInset: CGFloat = 12
 
   private var active: Int? { (store.value(property) as? NSNumber)?.intValue }
   private var editable: Bool { property.bool("editable") }
@@ -464,7 +466,7 @@ struct ListRows: View {
         let item = entry.1
         let index = item.int("index") ?? position
         row(item, position: position)
-          .listRowInsets(EdgeInsets(top: 1, leading: 0, bottom: 1, trailing: 0))
+          .listRowInsets(EdgeInsets(top: 1, leading: Self.cardInset, bottom: 1, trailing: Self.cardInset))
           .listRowSeparator(.hidden)
           .listRowBackground(Color.clear)
           .swipeActions(edge: .trailing, allowsFullSwipe: true) { trailingActions(index) }
@@ -477,6 +479,9 @@ struct ListRows: View {
     .scrollContentBackground(.hidden)
     .environment(\.defaultMinListRowHeight, Self.rowHeight)
     .frame(height: CGFloat(shown.count) * Self.rowHeight)
+    /* The list reaches the card's edges, its rows inset as before: a swiped row slides under the
+     * card's edge rather than being cut off at a line inside it. */
+    .padding(.horizontal, -Self.cardInset)
     /* Items added or deleted slide in and out: the list animates the change. */
     .animation(UIAccessibility.isReduceMotionEnabled ? nil : .smooth(duration: 0.3),
                value: Self.identities(shown))
@@ -516,7 +521,10 @@ struct ListRows: View {
   @ViewBuilder
   private func trailingActions(_ index: Int) -> some View {
     if editable && property.dict("remove") != nil {
-      Button(role: .destructive) { delete(index) } label: { Label("Delete", systemImage: "trash") }
+      /* Icons only: the panel is narrow, and a titled action slides the row's name out of view. */
+      Button(role: .destructive) { delete(index) } label: {
+        Label("Delete", systemImage: "trash").labelStyle(.iconOnly)
+      }
         /* The system's red, whatever the form's tint. */
         .tint(.red)
     }
@@ -525,11 +533,15 @@ struct ListRows: View {
   @ViewBuilder
   private func leadingActions(_ item: JSON, index: Int) -> some View {
     if editable, let duplicate = property.string("duplicate") {
-      Button { run(duplicate, on: index) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+      Button { run(duplicate, on: index) } label: {
+        Label("Duplicate", systemImage: "plus.square.on.square").labelStyle(.iconOnly)
+      }
         .tint(.blue)
     }
     if editable && renamable(item) {
-      Button { startRename(item, index: index) } label: { Label("Rename", systemImage: "pencil") }
+      Button { startRename(item, index: index) } label: {
+        Label("Rename", systemImage: "pencil").labelStyle(.iconOnly)
+      }
         .tint(.gray)
     }
   }
