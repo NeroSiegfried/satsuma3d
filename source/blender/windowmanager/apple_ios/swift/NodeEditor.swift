@@ -35,6 +35,8 @@ final class NodeEditorModel {
   /** The group nodes entered, by name, outermost first. */
   private(set) var path: [String] = []
   private(set) var snapshot: JSON?
+  /** The snapshot as Blender sent it, to tell a new one from the same. */
+  @ObservationIgnored private var raw: JSON?
   private(set) var shown = false
   /** Dragging on the canvas draws a box that selects nodes, instead of panning. */
   var selecting = false
@@ -68,6 +70,7 @@ final class NodeEditorModel {
     self.kind = kind
     path = []
     snapshot = nil
+    raw = nil
     sendState()
     fitRequest += 1
   }
@@ -75,6 +78,7 @@ final class NodeEditorModel {
   func enter(group node: String) {
     path.append(node)
     snapshot = nil
+    raw = nil
     sendState()
     fitRequest += 1
   }
@@ -84,6 +88,7 @@ final class NodeEditorModel {
     guard depth < path.count else { return }
     path = Array(path.prefix(depth))
     snapshot = nil
+    raw = nil
     sendState()
     fitRequest += 1
   }
@@ -102,10 +107,31 @@ final class NodeEditorModel {
       store.requestContext = context
     }
     store.clearPendingValues(ack: ack)
-    if let snapshot, (snapshot as NSDictionary).isEqual(next as NSDictionary) { return }
+    /* The nodes it can add come once for each tree. */
+    var next = next
+    if next["add"] == nil, let add = snapshot?["add"], next["nodes"] != nil { next["add"] = add }
+    if let raw, (raw as NSDictionary).isEqual(next as NSDictionary) { return }
+    raw = next
     let first = snapshot == nil
-    snapshot = next
+    snapshot = Self.resolvingSharedMenus(next)
     if first { fitRequest += 1 }
+  }
+
+  /** Menus several nodes share come once, by reference: each field gets its own copy back. */
+  private static func resolvingSharedMenus(_ snapshot: JSON) -> JSON {
+    guard let sets = snapshot.dict("option_sets"), !sets.isEmpty else { return snapshot }
+    var resolved = snapshot
+    resolved["nodes"] = snapshot.array("nodes").map { node -> JSON in
+      var node = node
+      node["fields"] = node.array("fields").map { field -> JSON in
+        guard let ref = field.string("options_ref"), let options = sets[ref] else { return field }
+        var field = field
+        field["options"] = options
+        return field
+      }
+      return node
+    }
+    return resolved
   }
 
   func send(_ action: String, _ extra: JSON = [:]) {
@@ -344,7 +370,12 @@ struct NodeCanvas: View {
   @State private var layout = NodeCanvasLayout()
   @State private var zoom: CGFloat = 0.7
   @State private var pan: CGSize = .zero
+  /** The zoom and pan a pinch started from. */
   @State private var gestureZoom: (zoom: CGFloat, pan: CGSize)?
+  /** True while a pinch or a pan goes on: the system resets it however the gesture ends, also
+   * when cancelled, which `onEnded` misses. */
+  @GestureState private var pinching = false
+  @GestureState private var panning = false
   @State private var panStart: CGSize?
   @State private var viewSize: CGSize = .zero
   /** Nodes being dragged, and how far, in canvas points. */
@@ -383,6 +414,8 @@ struct NodeCanvas: View {
       }
       .onChange(of: positions) { _, _ in moved.removeAll() }
       .onChange(of: pan) { _, _ in rememberCenter() }
+      .onChange(of: pinching) { _, active in if !active { gestureZoom = nil } }
+      .onChange(of: panning) { _, active in if !active { panStart = nil } }
       .onChange(of: zoom) { _, _ in rememberCenter() }
     }
     .alert("Rename Node", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
@@ -532,6 +565,7 @@ struct NodeCanvas: View {
     .contentShape(Rectangle())
     .gesture(
       DragGesture(minimumDistance: 4)
+        .updating($panning) { _, state, _ in state = true }
         .onChanged { value in
           if model.selecting {
             box = CGRect(x: min(value.startLocation.x, value.location.x),
@@ -546,7 +580,6 @@ struct NodeCanvas: View {
                        height: start.height + value.translation.height)
         }
         .onEnded { _ in
-          panStart = nil
           guard let rect = box else { return }
           box = nil
           /* The nodes the box touches, added to the selection. */
@@ -576,6 +609,7 @@ struct NodeCanvas: View {
 
   private var magnify: some Gesture {
     MagnifyGesture()
+      .updating($pinching) { _, state, _ in state = true }
       .onChanged { value in
         let start = gestureZoom ?? (zoom, pan)
         gestureZoom = start
@@ -585,7 +619,6 @@ struct NodeCanvas: View {
                      height: anchor.y - (anchor.y - start.pan.height) * next / start.zoom)
         zoom = next
       }
-      .onEnded { _ in gestureZoom = nil }
   }
 
   /* -------------------------------------------------------------------- */

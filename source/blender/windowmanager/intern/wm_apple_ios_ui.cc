@@ -238,6 +238,13 @@ std::string ios_properties_state = "{\"tab\":\"OBJECT\"}";
 std::string ios_shading_state = "{\"tab\":\"SHADING\"}";
 /** The node tree the native node editor shows: its kind and the groups entered. */
 std::string ios_nodes_state = "{\"tree\":\"SHADER\"}";
+/* The node tree read last, read again only when something may have changed it: notifiers, the
+ * editor's own commands, or a slow check. Reading a large tree takes a while. */
+bool ios_nodes_dirty = true;
+std::string ios_nodes_json;
+std::chrono::steady_clock::time_point ios_nodes_next_check;
+/** The tree the Add Node list was sent for, sent again only for another. */
+std::string ios_nodes_add_for;
 std::string ios_properties_error;
 int64_t ios_panels_sequence = 0;
 std::atomic<bool> ios_navigation_hover_active{false};
@@ -1142,18 +1149,21 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     return;
   }
   if (command.setting == "native_nodes_state") {
+    ios_nodes_dirty = true;
     ios_nodes_state = command.value;
     ios_panels_next_snapshot = {};
     ios_panels_published.clear();
     return;
   }
   if (command.setting == "native_nodes_visible") {
+    ios_nodes_dirty = true;
     ios_panels_visible = (ios_panels_visible & ~8) | (command.value == "1" ? 8 : 0);
     ios_panels_next_snapshot = {};
     ios_panels_published.clear();
     return;
   }
   if (command.setting == "native_nodes_edit") {
+    ios_nodes_dirty = true;
     std::istringstream stream(command.value);
     auto value = io::serialize::JsonFormatter().deserialize(stream);
     if (const auto *request = value ? value->as_dictionary_value() : nullptr) {
@@ -1167,6 +1177,8 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     return;
   }
   if (command.setting == "native_nodes_create") {
+    ios_nodes_dirty = true;
+    ios_nodes_add_for.clear();
     /* A material, Geometry Nodes or compositor nodes for the node editor to show, as their own
      * buttons make them. */
     const char *imports[] = {"bpy", nullptr};
@@ -2396,11 +2408,19 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
         }
       }
       if (ios_panels_visible & 8) {
-        std::istringstream nodes_stream(ui::native_nodes_query(C, ios_nodes_state, false));
-        auto nodes = JsonFormatter().deserialize(nodes_stream);
-        if (nodes) {
-          merged.append("nodes", std::move(nodes));
+        if (ios_nodes_dirty || now >= ios_nodes_next_check) {
+          ios_nodes_dirty = false;
+          ios_nodes_next_check = now + std::chrono::seconds(2);
+          std::string state = ios_nodes_state;
+          if (state != ios_nodes_add_for) {
+            /* The nodes it can add, once for each tree. */
+            ios_nodes_add_for = state;
+            state.insert(state.size() - 1, ",\"with_add\":1");
+          }
+          ios_nodes_json = ui::native_nodes_query(C, state, false);
         }
+        /* Spliced in as it is below, rather than read and written again: it is large. */
+        merged.append_str("nodes", "@native_nodes_json@");
       }
       if (ios_panels_visible & 4) {
         std::istringstream shading_stream(
@@ -2413,6 +2433,12 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
       std::ostringstream merged_stream;
       JsonFormatter().serialize(merged_stream, merged);
       ios_panels_json = merged_stream.str();
+      if (ios_panels_visible & 8) {
+        const std::string placeholder = "\"@native_nodes_json@\"";
+        if (const size_t at = ios_panels_json.find(placeholder); at != std::string::npos) {
+          ios_panels_json.replace(at, placeholder.size(), ios_nodes_json.empty() ? "null" : ios_nodes_json);
+        }
+      }
       /* Published when it changes: every snapshot wakes UIKit. */
       if (ios_panels_json != ios_panels_published) {
         ios_panels_published = ios_panels_json;
@@ -2862,6 +2888,7 @@ extern "C" void WM_apple_ios_ui_view_roll_enqueue(float angle)
 
 void WM_apple_ios_ui_tag_changed()
 {
+  ios_nodes_dirty = true;
   ios_ui_changed = true;
 }
 

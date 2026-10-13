@@ -514,7 +514,8 @@ bool set_property(bContext *C,
                   Button &but,
                   int index,
                   const DictionaryValue &request,
-                  const bool push_undo = true)
+                  const bool push_undo = true,
+                  const bool with_selected = true)
 {
   PointerRNA *ptr = &but.rnapoin;
   PropertyRNA *prop = but.rnaprop;
@@ -530,7 +531,8 @@ bool set_property(bContext *C,
   const auto phase = request.lookup_str("phase").value_or("");
   const std::string token = request.lookup_str("interaction").value_or("");
   /* Adjust Last Operation edits the operator alone. */
-  const SelectedOthers others = push_undo ? selected_others(C, but) : SelectedOthers();
+  const SelectedOthers others = push_undo && with_selected ? selected_others(C, but) :
+                                                              SelectedOthers();
   if (!others.items.is_empty() && !token.empty() && token != selected_drag.token &&
       ELEM(RNA_property_type(prop), PROP_FLOAT, PROP_INT) && !(array && index < 0))
   {
@@ -907,6 +909,13 @@ std::map<Button *, PropertyPair> property_pairs(const Block &block)
   return pairs;
 }
 
+/** Menus several fields share, while a node tree is read: each one once, by its choices. */
+struct NativeOptionSets {
+  std::set<std::string> keys;
+  std::shared_ptr<DictionaryValue> sets = std::make_shared<DictionaryValue>();
+};
+NativeOptionSets *native_option_sets = nullptr;
+
 void project_property(bContext *C, Button &but, int index, DictionaryValue &field,
                       const PropertyPair *pair = nullptr, const std::string *layout_name = nullptr,
                       const SelectedOthers *others = nullptr)
@@ -1040,7 +1049,11 @@ void project_property(bContext *C, Button &but, int index, DictionaryValue &fiel
     case PROP_ENUM: {
       field.append_str("type", "ENUM");
       const int selected = RNA_property_enum_get(ptr, prop);
-      auto options = field.append_array("options");
+      /* Many nodes share a menu (each Math node's operations): sent once, see #NativeOptionSets. */
+      const bool shared = native_option_sets && !(RNA_property_flag(prop) & PROP_ENUM_FLAG);
+      std::shared_ptr<ArrayValue> shared_options = shared ? std::make_shared<ArrayValue>() : nullptr;
+      auto options = shared ? shared_options : field.append_array("options");
+      std::string shared_key;
       const EnumPropertyItem *items;
       int count;
       bool free;
@@ -1060,12 +1073,25 @@ void project_property(bContext *C, Button &but, int index, DictionaryValue &fiel
         }
         const bool checked = (RNA_property_flag(prop) & PROP_ENUM_FLAG) ?
                                  (selected & item.value) != 0 : selected == item.value;
-        option->append_int("checked", checked);
+        if (shared) {
+          shared_key += item.identifier;
+          shared_key += ',';
+        }
+        else {
+          option->append_int("checked", checked);
+        }
         if (checked) {
           current = item.identifier;
         }
       }
       field.append_str("value", current);
+      if (shared) {
+        const std::string key = std::to_string(std::hash<std::string>{}(shared_key));
+        if (native_option_sets->keys.insert(key).second) {
+          native_option_sets->sets->append(key, shared_options);
+        }
+        field.append_str("options_ref", key);
+      }
       if (free) {
         MEM_delete(items);
       }
@@ -3449,7 +3475,9 @@ void project_node(bContext *C, bNodeTree &tree, bNode &node, const std::set<cons
       *block,
       [&](Button &but, const int index, const std::string & /*key*/) {
         auto field = fields->append_dict();
-        project_property(C, but, index, *field);
+        /* A node's own value: other selected nodes are left alone. */
+        const SelectedOthers none;
+        project_property(C, but, index, *field, nullptr, nullptr, &none);
         field->append_str("node", node.name);
         if (RNA_struct_is_a(but.rnapoin.type, RNA_NodeSocket)) {
           field->append_str("socket", static_cast<bNodeSocket *>(but.rnapoin.data)->identifier);
@@ -3646,7 +3674,7 @@ std::optional<std::string> apply_node_action(bContext *C, bNodeTree &tree, const
         *block,
         [&](Button &but, const int index, const std::string &field_key) {
           if (!applied && field_key == key && !query.lookup_str("id_action")) {
-            applied = set_property(C, but, index, query);
+            applied = set_property(C, but, index, query, true, false);
           }
         },
         [&](PointerRNA &ptr, PropertyRNA *prop) {
@@ -3886,9 +3914,13 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
   bNodeTree &tree = *shown.tree;
   const std::set<const bNodeSocket *> linked = linked_sockets(tree);
   auto nodes = result.append_array("nodes");
+  NativeOptionSets option_sets;
+  native_option_sets = &option_sets;
   for (bNode &node : tree.nodes) {
     project_node(C, tree, node, linked, *nodes->append_dict());
   }
+  native_option_sets = nullptr;
+  result.append("option_sets", option_sets.sets);
   auto links = result.append_array("links");
   for (const bNodeLink &link : tree.links) {
     if (!link.fromnode || !link.tonode || !link.fromsock || !link.tosock ||
@@ -3937,7 +3969,9 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
       item->append_str("kind", output->typeinfo->ui_name);
     }
   }
-  project_node_add_items(C, tree, *result.append_array("add"));
+  if (query->lookup_int("with_add").value_or(0)) {
+    project_node_add_items(C, tree, *result.append_array("add"));
+  }
   return encode(result);
 }
 
