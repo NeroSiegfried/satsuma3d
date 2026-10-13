@@ -629,7 +629,7 @@ struct ToolRails: View {
             .allowsHitTesting(!layout.sidebarTucked)
             .transition(.opacity.combined(with: .scale(scale: 0.9)))
         }
-        railLabel(safe: safe, layout: layout)
+        railLabel(safe: safe, layout: layout, frame: proxy.frame(in: .global), size: proxy.size)
       }
       .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
       .animation(UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: 0.32, dampingFraction: 0.84),
@@ -653,8 +653,12 @@ struct ToolRails: View {
   }
 
   @ViewBuilder
-  private func railLabel(safe: CGRect, layout: RailLayout) -> some View {
+  private func railLabel(safe: CGRect, layout: RailLayout, frame: CGRect, size: CGSize) -> some View {
     if let text = label.text {
+      /* Items' frames are in the window's coordinates; these controls may sit lower and drawn
+       * smaller, as on the Mac. */
+      let itemY = frame.height > 0 ? (label.anchor.midY - frame.minY) * size.height / frame.height :
+                                     label.anchor.midY
       let bounds = safe.insetBy(dx: 8, dy: 8)
       /* Beside the rail, towards the viewport, level with the item, within the window. */
       let brush = label.rail === brushes
@@ -671,7 +675,7 @@ struct ToolRails: View {
         .panelGlass(in: Capsule())
         .frame(maxWidth: width, alignment: toward > 0 ? .leading : .trailing)
         .frame(width: width, alignment: toward > 0 ? .leading : .trailing)
-        .position(x: x + toward * width / 2, y: min(max(label.anchor.midY, bounds.minY + 18), bounds.maxY - 18))
+        .position(x: x + toward * width / 2, y: min(max(itemY, bounds.minY + 18), bounds.maxY - 18))
         .allowsHitTesting(false)
         .accessibilityIdentifier("blender.toolbar.tool-name")
         .transition(.opacity.combined(with: .offset(x: -5 * toward)))
