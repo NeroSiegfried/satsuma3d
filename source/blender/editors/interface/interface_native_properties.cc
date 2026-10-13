@@ -218,6 +218,261 @@ bool is_color(PointerRNA *ptr, PropertyRNA *prop)
          ELEM(RNA_property_array_length(ptr, prop), 3, 4);
 }
 
+/* -------------------------------------------------------------------- */
+/** \name Multiple Selection
+ *
+ * As Blender's buttons do with Alt held (see #ui_selectcontext_begin), a property edits every
+ * selected item that has it. Natively that is always so: only the properties all selected items
+ * have are shown, with a dash where their values differ.
+ * \{ */
+
+struct SelectedOthers {
+  /** The same property of every other selected item. */
+  Vector<std::pair<PointerRNA, PropertyRNA *>> items;
+  /** A selected item doesn't have the property. */
+  bool missing = false;
+};
+
+SelectedOthers selected_others(bContext *C, Button &but)
+{
+  SelectedOthers others;
+  PointerRNA ptr = but.rnapoin;
+  PropertyRNA *prop = but.rnaprop;
+  if (!ptr.data || !prop || !RNA_property_editable(&ptr, prop)) {
+    return others;
+  }
+  const bContextStore *previous = CTX_store_get(C);
+  if (but.context) {
+    CTX_store_set(C, but.context);
+  }
+  Vector<PointerRNA> list;
+  bool use_path_from_id;
+  std::optional<std::string> path;
+  const bool found = context_copy_to_selected_list(C, &ptr, prop, &list, &use_path_from_id, &path);
+  CTX_store_set(C, previous);
+  if (!found) {
+    return others;
+  }
+  const char *path_c = path ? path->c_str() : nullptr;
+  std::set<void *> seen = {ptr.data};
+  for (PointerRNA &link : list) {
+    if (link.data == ptr.data) {
+      continue;
+    }
+    PointerRNA lptr;
+    PropertyRNA *lprop = nullptr;
+    if (context_copy_to_selected_check(&ptr, &link, prop, path_c, use_path_from_id, &lptr, &lprop))
+    {
+      if (seen.insert(lptr.data).second) {
+        others.items.append({lptr, lprop});
+      }
+      continue;
+    }
+    /* Items sharing the data shown (e.g. two objects with one mesh) have it, the rest don't. */
+    PointerRNA resolved = PointerRNA_NULL;
+    PropertyRNA *resolved_prop = nullptr;
+    if (use_path_from_id) {
+      PointerRNA id_ptr = RNA_id_pointer_create(link.owner_id);
+      RNA_path_resolve_property(&id_ptr, path_c, &resolved, &resolved_prop);
+    }
+    else if (path_c) {
+      RNA_path_resolve_property(&link, path_c, &resolved, &resolved_prop);
+    }
+    else {
+      resolved = link;
+    }
+    if (resolved.data != ptr.data) {
+      others.missing = true;
+    }
+  }
+  /* Blender leaves out objects with another type of data (a light's next to a mesh's). */
+  if (ptr.owner_id && GS(ptr.owner_id->name) != ID_OB && OB_DATA_SUPPORT_ID(GS(ptr.owner_id->name)))
+  {
+    for (const PointerRNA &object_ptr : CTX_data_collection_get(C, "selected_editable_objects")) {
+      const ID *data = static_cast<const Object *>(object_ptr.data)->data;
+      if (!data || GS(data->name) != GS(ptr.owner_id->name)) {
+        others.missing = true;
+      }
+    }
+  }
+  return others;
+}
+
+/** Whether another item's value differs from the button's, at \a index or as a whole. */
+bool other_value_differs(PointerRNA *ptr, PropertyRNA *prop, int index, PointerRNA *lptr,
+                         PropertyRNA *lprop)
+{
+  const bool array = RNA_property_array_check(prop);
+  const int length = RNA_property_array_length(ptr, prop);
+  if (array && RNA_property_array_length(lptr, lprop) != length) {
+    return true;
+  }
+  const int begin = !array ? 0 : index >= 0 ? index : 0;
+  const int end = !array ? 1 : index >= 0 ? index + 1 : length;
+  switch (RNA_property_type(prop)) {
+    case PROP_FLOAT:
+      for (int i = begin; i < end; i++) {
+        const float a = array ? RNA_property_float_get_index(ptr, prop, i) :
+                                RNA_property_float_get(ptr, prop);
+        const float b = array ? RNA_property_float_get_index(lptr, lprop, i) :
+                                RNA_property_float_get(lptr, lprop);
+        if (std::abs(a - b) > 1e-6f * std::max(1.0f, std::abs(a))) {
+          return true;
+        }
+      }
+      return false;
+    case PROP_INT:
+      for (int i = begin; i < end; i++) {
+        if ((array ? RNA_property_int_get_index(ptr, prop, i) : RNA_property_int_get(ptr, prop)) !=
+            (array ? RNA_property_int_get_index(lptr, lprop, i) : RNA_property_int_get(lptr, lprop)))
+        {
+          return true;
+        }
+      }
+      return false;
+    case PROP_BOOLEAN:
+      for (int i = begin; i < end; i++) {
+        if ((array ? RNA_property_boolean_get_index(ptr, prop, i) :
+                     RNA_property_boolean_get(ptr, prop)) !=
+            (array ? RNA_property_boolean_get_index(lptr, lprop, i) :
+                     RNA_property_boolean_get(lptr, lprop)))
+        {
+          return true;
+        }
+      }
+      return false;
+    case PROP_ENUM:
+      return RNA_property_enum_get(ptr, prop) != RNA_property_enum_get(lptr, lprop);
+    case PROP_STRING:
+      return RNA_property_string_get(ptr, prop) != RNA_property_string_get(lptr, lprop);
+    case PROP_POINTER:
+      return RNA_property_pointer_get(ptr, prop).data != RNA_property_pointer_get(lptr, lprop).data;
+    default:
+      return false;
+  }
+}
+
+bool others_differ(Button &but, int index, const SelectedOthers &others)
+{
+  for (const auto &[other_ptr, other_prop] : others.items) {
+    PointerRNA lptr = other_ptr;
+    if (other_value_differs(&but.rnapoin, but.rnaprop, index, &lptr, other_prop)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** The other items' values when a drag started, which it moves by as much as the button's. */
+struct SelectedDrag {
+  std::string token;
+  double original = 0;
+  Vector<double> others;
+};
+SelectedDrag selected_drag;
+
+double numeric_get(PointerRNA *ptr, PropertyRNA *prop, int index)
+{
+  const bool array = RNA_property_array_check(prop) && index >= 0;
+  if (RNA_property_type(prop) == PROP_FLOAT) {
+    return array ? RNA_property_float_get_index(ptr, prop, index) : RNA_property_float_get(ptr, prop);
+  }
+  return array ? RNA_property_int_get_index(ptr, prop, index) : RNA_property_int_get(ptr, prop);
+}
+
+void numeric_set(PointerRNA *ptr, PropertyRNA *prop, int index, double value)
+{
+  const bool array = RNA_property_array_check(prop) && index >= 0;
+  if (RNA_property_type(prop) == PROP_FLOAT) {
+    float minimum, maximum;
+    RNA_property_float_range(ptr, prop, &minimum, &maximum);
+    const float clamped = std::clamp(float(value), minimum, maximum);
+    if (array) {
+      RNA_property_float_set_index(ptr, prop, index, clamped);
+    }
+    else {
+      RNA_property_float_set(ptr, prop, clamped);
+    }
+    return;
+  }
+  int minimum, maximum;
+  RNA_property_int_range(ptr, prop, &minimum, &maximum);
+  const int clamped = int(std::clamp(std::round(value), double(minimum), double(maximum)));
+  if (array) {
+    RNA_property_int_set_index(ptr, prop, index, clamped);
+  }
+  else {
+    RNA_property_int_set(ptr, prop, clamped);
+  }
+}
+
+/** Gives the other items the button's new value, or moves them by as much during a drag. */
+void apply_to_others(bContext *C, Button &but, int index, const SelectedOthers &others,
+                     const std::string &token)
+{
+  PointerRNA *ptr = &but.rnapoin;
+  PropertyRNA *prop = but.rnaprop;
+  const PropertyType type = RNA_property_type(prop);
+  const bool array = RNA_property_array_check(prop);
+  const bool by_delta = !token.empty() && token == selected_drag.token &&
+                        selected_drag.others.size() == others.items.size();
+  for (const int i : others.items.index_range()) {
+    PointerRNA lptr = others.items[i].first;
+    PropertyRNA *lprop = others.items[i].second;
+    if (!RNA_property_editable(&lptr, lprop)) {
+      continue;
+    }
+    switch (type) {
+      case PROP_FLOAT:
+      case PROP_INT:
+        if (array && index < 0) {
+          /* A whole color. */
+          const int length = RNA_property_array_length(ptr, prop);
+          if (type == PROP_FLOAT && RNA_property_array_length(&lptr, lprop) == length) {
+            Array<float> values(length);
+            RNA_property_float_get_array(ptr, prop, values.data());
+            RNA_property_float_set_array(&lptr, lprop, values.data());
+          }
+        }
+        else if (by_delta) {
+          numeric_set(&lptr, lprop, index,
+                      selected_drag.others[i] + numeric_get(ptr, prop, index) - selected_drag.original);
+        }
+        else {
+          numeric_set(&lptr, lprop, index, numeric_get(ptr, prop, index));
+        }
+        break;
+      case PROP_BOOLEAN:
+        if (array) {
+          RNA_property_boolean_set_index(&lptr, lprop, index,
+                                         RNA_property_boolean_get_index(ptr, prop, index));
+        }
+        else {
+          RNA_property_boolean_set(&lptr, lprop, RNA_property_boolean_get(ptr, prop));
+        }
+        break;
+      case PROP_ENUM:
+        RNA_property_enum_set(&lptr, lprop, RNA_property_enum_get(ptr, prop));
+        break;
+      case PROP_STRING:
+        RNA_property_string_set(&lptr, lprop, RNA_property_string_get(ptr, prop).c_str());
+        break;
+      case PROP_POINTER: {
+        PointerRNA target = RNA_property_pointer_get(ptr, prop);
+        if (RNA_property_pointer_poll(&lptr, lprop, &target)) {
+          RNA_property_pointer_set(&lptr, lprop, target, nullptr);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+    RNA_property_update(C, &lptr, lprop);
+  }
+}
+
+/** \} */
+
 struct NativePropertyInteraction {
   std::string token;
   std::string undo_name;
@@ -256,6 +511,21 @@ bool set_property(bContext *C,
   const auto number = request.lookup_double("value");
   const auto integer = request.lookup_int("value");
   const double numeric = number.value_or(integer.value_or(0));
+  const auto phase = request.lookup_str("phase").value_or("");
+  const std::string token = request.lookup_str("interaction").value_or("");
+  /* Adjust Last Operation edits the operator alone. */
+  const SelectedOthers others = push_undo ? selected_others(C, but) : SelectedOthers();
+  if (!others.items.is_empty() && !token.empty() && token != selected_drag.token &&
+      ELEM(RNA_property_type(prop), PROP_FLOAT, PROP_INT) && !(array && index < 0))
+  {
+    selected_drag.token = token;
+    selected_drag.original = numeric_get(ptr, prop, index);
+    selected_drag.others.clear();
+    for (auto &[other_ptr, other_prop] : others.items) {
+      PointerRNA lptr = other_ptr;
+      selected_drag.others.append(numeric_get(&lptr, other_prop, index));
+    }
+  }
   switch (RNA_property_type(prop)) {
     case PROP_FLOAT: {
       if (is_color(ptr, prop) && index == -1) {
@@ -299,7 +569,7 @@ bool set_property(bContext *C,
           changed |= std::abs(original[i] - color[i]) >
                      1e-6f * std::max(1.0f, std::abs(original[i]));
         }
-        if (!changed) {
+        if (!changed && others.items.is_empty()) {
           return true;
         }
         RNA_property_float_set_array(ptr, prop, color);
@@ -311,7 +581,7 @@ bool set_property(bContext *C,
       float minimum, maximum;
       RNA_property_float_range(ptr, prop, &minimum, &maximum);
       const float value = std::clamp(float(numeric), minimum, maximum);
-      if (request.lookup_dict("slider") && value == (array ? RNA_property_float_get_index(ptr, prop, index) : RNA_property_float_get(ptr, prop))) {
+      if (request.lookup_dict("slider") && others.items.is_empty() && value == (array ? RNA_property_float_get_index(ptr, prop, index) : RNA_property_float_get(ptr, prop))) {
         return true;
       }
       if (array) {
@@ -329,7 +599,7 @@ bool set_property(bContext *C,
       int minimum, maximum;
       RNA_property_int_range(ptr, prop, &minimum, &maximum);
       const int value = int(std::clamp(numeric, double(minimum), double(maximum)));
-      if (request.lookup_dict("slider") && value == (array ? RNA_property_int_get_index(ptr, prop, index) : RNA_property_int_get(ptr, prop))) {
+      if (request.lookup_dict("slider") && others.items.is_empty() && value == (array ? RNA_property_int_get_index(ptr, prop, index) : RNA_property_int_get(ptr, prop))) {
         return true;
       }
       if (array) {
@@ -413,9 +683,9 @@ bool set_property(bContext *C,
   /* The rest is Blender's own button handling, as for an edit in the button: its callbacks, the
    * RNA update, undo and auto keying. While a drag goes on, undo waits for it to end, see
    * #finish_property_interaction. */
-  const auto phase = request.lookup_str("phase").value_or("");
-  const std::string token = request.lookup_str("interaction").value_or("");
   const bool dragging = !token.empty() && phase == "update";
+  /* Before Blender's handling, so its undo step holds every item's change. */
+  apply_to_others(C, but, index, others, token);
   if (push_undo) {
     const int but_index = but.rnaindex;
     if (array && index >= 0) {
@@ -622,7 +892,8 @@ std::map<Button *, PropertyPair> property_pairs(const Block &block)
 }
 
 void project_property(bContext *C, Button &but, int index, DictionaryValue &field,
-                      const PropertyPair *pair = nullptr, const std::string *layout_name = nullptr)
+                      const PropertyPair *pair = nullptr, const std::string *layout_name = nullptr,
+                      const SelectedOthers *others = nullptr)
 {
   PointerRNA *ptr = &but.rnapoin;
   PropertyRNA *prop = but.rnaprop;
@@ -650,6 +921,10 @@ void project_property(bContext *C, Button &but, int index, DictionaryValue &fiel
       item->append_str("title", action.title);
       item->append_str("icon", action.icon);
     }
+  }
+  const SelectedOthers own_others = others ? SelectedOthers() : selected_others(C, but);
+  if (others_differ(but, is_color(ptr, prop) ? -1 : index, others ? *others : own_others)) {
+    field.append_int("mixed", 1);
   }
   if (is_color(ptr, prop)) {
     float color[4] = {0, 0, 0, 1};
@@ -1671,7 +1946,7 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
     }
   }
   result.append_str("id", identity);
-  auto sections = result.append_array("sections");
+  auto sections = std::make_shared<ArrayValue>();
   const ArrayValue *expanded = query->lookup_array("expanded");
   /* Sub-panel disclosure overrides keyed by panel id; absent ids use the panel type default. */
   const DictionaryValue *subpanel_states = query->lookup_dict("subpanels");
@@ -1690,6 +1965,8 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
   std::map<std::string, int> panel_depths;
   std::map<std::string, std::string> outer_panels;
   std::map<std::string, std::shared_ptr<ArrayValue>> outer_fields;
+  /* Properties of each section the other selected items have, and don't. */
+  std::map<std::string, int> common_sections, missing_sections;
   struct Candidate {
     PanelType *type;
     Panel *instance;
@@ -2398,6 +2675,17 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
       }
       const int length = RNA_property_array_length(&but.rnapoin, but.rnaprop);
       const bool color = is_color(&but.rnapoin, but.rnaprop);
+      /* Only what every selected item has. */
+      const SelectedOthers others = execute ? SelectedOthers() : selected_others(C, but);
+      if (others.missing) {
+        if (is_outer) {
+          missing_sections[candidate.id] += 1;
+        }
+        continue;
+      }
+      if (is_outer) {
+        common_sections[candidate.id] += 1;
+      }
       const int begin = !color && length ? std::max(0, but.rnaindex) : -1;
       const int end = !color && length && but.rnaindex < 0 ? std::min(length, 16) : begin + 1;
       for (int index = begin; index < end; index++) {
@@ -2420,7 +2708,8 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
           const auto pair = pairs.find(&but);
           const auto layout_name = layout_names.find(but.rnaprop);
           project_property(C, but, index, *field, pair == pairs.end() ? nullptr : &pair->second,
-                           layout_name == layout_names.end() ? nullptr : &layout_name->second);
+                           layout_name == layout_names.end() ? nullptr : &layout_name->second,
+                           &others);
           if (but.type == ButtonType::Row && RNA_property_type(but.rnaprop) == PROP_ENUM) {
             /* Authored as an expanded row (e.g. selection mode), not a dropdown. */
             field->append_int("expand", 1);
@@ -2506,6 +2795,16 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
   }
   if (execute) {
     return applied ? "" : "This property is no longer available or editable.";
+  }
+  /* Sections of only the active item's own (e.g. a modifier the others lack) leave with their
+   * properties. */
+  auto common = result.append_array("sections");
+  for (const std::shared_ptr<Value> &section : sections->elements()) {
+    const std::string id = section->as_dictionary_value()->lookup_str("id").value_or("");
+    if (missing_sections.count(id) && !common_sections.count(id)) {
+      continue;
+    }
+    common->append(section);
   }
   return encode(result);
 }
