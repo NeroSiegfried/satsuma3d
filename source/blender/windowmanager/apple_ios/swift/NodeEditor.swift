@@ -24,8 +24,8 @@ final class NodeEditorModel {
     var id: String { rawValue }
     var title: String {
       switch self {
-        case .shader: return "Shader"
-        case .geometry: return "Geometry"
+        case .shader: return "Shader Editor"
+        case .geometry: return "Geometry Nodes"
         case .compositor: return "Compositor"
       }
     }
@@ -111,6 +111,8 @@ final class NodeEditorModel {
     request.merge(extra) { $1 }
     store.send(request)
   }
+
+  func requestFit() { fitRequest += 1 }
 
   func createTree() {
     Engine.setting("native_nodes_create", kind.rawValue)
@@ -224,13 +226,27 @@ struct NodeEditorPanel: View {
 
   private var toolbar: some View {
     HStack(spacing: 12) {
-      Picker("Node Tree", selection: Binding(get: { model.kind }, set: { model.setKind($0) })) {
-        ForEach(NodeEditorModel.Kind.allCases) { kind in Text(kind.title).tag(kind) }
-      }
-      .pickerStyle(.segmented)
-      .fixedSize()
+      Text(model.kind.title)
+        .font(.headline)
       breadcrumbs
       Spacer(minLength: 0)
+      Menu {
+        Button("Select All", systemImage: "checkmark.circle") { model.send("select_all", ["value": 1]) }
+        Button("Deselect All", systemImage: "circle") { model.send("select_all", ["value": 0]) }
+        Divider()
+        Button("Show All", systemImage: "arrow.up.left.and.arrow.down.right") { model.requestFit() }
+        Divider()
+        Button("Delete Selected", systemImage: "trash", role: .destructive) {
+          model.send("delete", ["nodes": model.nodes.filter { $0.bool("selected") }.compactMap { $0.string("name") }])
+        }
+        .disabled(!model.nodes.contains { $0.bool("selected") })
+      } label: {
+        Label("More", systemImage: "ellipsis")
+      }
+      .labelStyle(.iconOnly)
+      .buttonStyle(.bordered)
+      .buttonBorderShape(.circle)
+      .disabled(model.snapshot?["nodes"] == nil)
       Button {
         adding = NodeAddRequest(location: NodeCanvas.lastCenter, connect: nil)
       } label: {
@@ -521,6 +537,9 @@ struct NodeCanvas: View {
       ForEach(model.nodes.filter { $0.string("kind") == "FRAME" }, id: \.nodeName) { frame in
         frameView(frame)
       }
+      ForEach(Array((model.snapshot?.array("zones") ?? []).enumerated()), id: \.offset) { _, zone in
+        zoneView(zone)
+      }
       ForEach(model.nodes.filter { $0.string("kind") != "FRAME" }, id: \.nodeName) { node in
         nodeView(node)
       }
@@ -589,6 +608,30 @@ struct NodeCanvas: View {
       .offset(x: -16, y: -16)
   }
 
+  /** A zone: a tinted region around its input, output and the nodes between, as Blender draws. */
+  @ViewBuilder
+  private func zoneView(_ zone: JSON) -> some View {
+    let names = (zone["nodes"] as? [String]) ?? []
+    let rects = names.compactMap { name -> CGRect? in
+      guard var rect = layout.nodes[name] else { return nil }
+      if let offset = moved[name] { rect = rect.offsetBy(dx: offset.width, dy: offset.height) }
+      if let drag, drag.nodes.contains(name) { rect = rect.offsetBy(dx: drag.offset.width, dy: drag.offset.height) }
+      return rect
+    }
+    if let first = rects.first {
+      let depth = CGFloat(zone.int("depth") ?? 0)
+      let rect = rects.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: -18 + depth * 6, dy: -18 + depth * 6)
+      let tint = (zone.string("kind") ?? "").contains("Simulation") ? Color.pink :
+        (zone.string("kind") ?? "").contains("Repeat") ? Color.purple : Color.teal
+      RoundedRectangle(cornerRadius: 20, style: .continuous)
+        .fill(tint.opacity(0.12))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(tint.opacity(0.4), lineWidth: 1.5))
+        .frame(width: rect.width, height: rect.height)
+        .offset(x: rect.minX, y: rect.minY)
+        .allowsHitTesting(false)
+    }
+  }
+
   private func frameView(_ frame: JSON) -> some View {
     let name = frame.string("name") ?? ""
     let children = model.nodes.filter { $0.string("parent") == name }
@@ -635,7 +678,8 @@ struct NodeCanvas: View {
   @ViewBuilder
   private func menu(_ node: JSON) -> some View {
     let name = node.string("name") ?? ""
-    let targets = selection(including: name)
+    /* The node pressed, as menus act on what they are opened on. */
+    let targets = [name]
     if node.string("kind") == "GROUP" {
       Button("Enter Group", systemImage: "arrow.down.right.square") { model.enter(group: name) }
     }

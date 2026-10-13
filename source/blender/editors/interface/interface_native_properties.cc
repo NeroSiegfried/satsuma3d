@@ -3640,6 +3640,17 @@ std::optional<std::string> apply_node_action(bContext *C, bNodeTree &tree, const
     WM_event_add_notifier(C, NC_NODE | NA_SELECTED, &tree);
     return std::string("");
   }
+  if (action == "select_all") {
+    const bool select = query.lookup_int("value").value_or(1) != 0;
+    for (bNode &other : tree.nodes) {
+      SET_FLAG_FROM_TEST(other.flag, select, NODE_SELECT);
+      if (!select) {
+        other.flag &= ~NODE_ACTIVE;
+      }
+    }
+    WM_event_add_notifier(C, NC_NODE | NA_SELECTED, &tree);
+    return std::string("");
+  }
   if (action == "move") {
     const float2 delta(float(query.lookup_double("dx").value_or(0)),
                        float(query.lookup_double("dy").value_or(0)));
@@ -3800,6 +3811,39 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
     item->append_str("to_socket", link.tosock->identifier);
     item->append_int("valid", (link.flag & NODE_LINK_VALID) != 0);
     item->append_int("muted", (link.flag & NODE_LINK_MUTED) != 0);
+  }
+  /* Zones (repeat, simulation, for each), drawn around their nodes, inner zones on top. */
+  if (const bke::bNodeTreeZones *zones = tree.zones()) {
+    auto zone_items = result.append_array("zones");
+    for (const bke::bNodeTreeZone *zone : zones->zones) {
+      const bNode *input = zone->input_node();
+      const bNode *output = zone->output_node();
+      if (!output) {
+        continue;
+      }
+      auto item = zone_items->append_dict();
+      item->append_int("depth", zone->depth);
+      auto members = item->append_array("nodes");
+      if (input) {
+        members->append_str(input->name);
+      }
+      members->append_str(output->name);
+      for (const bNode *child : zone->child_nodes()) {
+        members->append_str(child->name);
+      }
+      /* Child zones are inside too. */
+      for (const bke::bNodeTreeZone *other : zones->zones) {
+        if (other != zone && zone->contains_zone_recursively(*other)) {
+          if (const bNode *other_output = other->output_node()) {
+            members->append_str(other_output->name);
+          }
+          if (const bNode *other_input = other->input_node()) {
+            members->append_str(other_input->name);
+          }
+        }
+      }
+      item->append_str("kind", output->typeinfo->ui_name);
+    }
   }
   project_node_add_items(C, tree, *result.append_array("add"));
   return encode(result);

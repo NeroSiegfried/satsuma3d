@@ -249,11 +249,6 @@ struct DocumentToolbar: ToolbarContent {
 #if !os(visionOS)
     ToolbarSpacer(.fixed, placement: .topBarTrailing)
 #endif
-    /* The node editor rises over the bottom of the viewport. */
-    ToolbarItem(placement: .topBarTrailing) {
-      panelToggle("Nodes", image: BlenderIcon.image("NODETREE"), isOn: model.nodesShown,
-                  identifier: "blender.nodes") { shell.panels.nodes.toggle() }
-    }
     /* Properties slides in from the window's trailing edge. */
     ToolbarItem(placement: .topBarTrailing) {
       panelToggle("Properties", image: BlenderIcon.image("PROPERTIES"), isOn: model.inspectorShown,
@@ -290,6 +285,27 @@ struct DocumentToolbar: ToolbarContent {
     .accessibilityIdentifier("blender.undo")
   }
 
+  /** The node editors, each opening the node editor on its tree. */
+  @ViewBuilder
+  private var nodeEditorToggles: some View {
+    Section {
+      ForEach([(NodeEditorModel.Kind.shader, "Shader Editor", "NODE_MATERIAL"),
+               (.geometry, "Geometry Nodes", "GEOMETRY_NODES"),
+               (.compositor, "Compositor", "NODE_COMPOSITING")], id: \.0) { kind, title, icon in
+        let nodes = shell.panels.nodes
+        sidebarToggle(title, icon: BlenderIcon.image(icon), isOn: model.nodesShown && nodes.kind == kind) {
+          if model.nodesShown && nodes.kind == kind {
+            nodes.setShown(false)
+          }
+          else {
+            nodes.setKind(kind)
+            nodes.setShown(true)
+          }
+        }
+      }
+    }
+  }
+
   /** The sidebar: its menu chooses what shows beside and below the viewport. */
   private var sidebarMenu: some View {
     Menu {
@@ -301,6 +317,7 @@ struct DocumentToolbar: ToolbarContent {
       sidebarToggle("Asset Browser", icon: BlenderIcon.image("ASSET_MANAGER"), isOn: model.assetsShown) {
         shell.assets.toggle()
       }
+      nodeEditorToggles
     } label: {
       Label("Sidebar", systemImage: "sidebar.leading")
     }
@@ -351,6 +368,7 @@ struct DocumentToolbar: ToolbarContent {
         shell.panels.toggleInspector()
       }
     }
+    nodeEditorToggles
     Section {
       Button("Viewport Shading", systemImage: "circle.lefthalf.filled") { model.shadingOpen = true }
       Menu {
