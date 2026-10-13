@@ -1710,7 +1710,12 @@ void project_tree(bContext *C,
   for (int index = 0; index < int(tree.items.size()); index++) {
     const ButtonViewItem *button = tree.items[index];
     const AbstractTreeViewItem *item = tree_item(*button);
-    if (item->is_active()) {
+    /* What the item says should be active (a shape key: the object's active key), rather than
+     * the view's own flag, which only follows it as Blender's editor redraws. Reading the flag
+     * here showed the previous item after a tap for a moment. */
+    const std::optional<bool> wanted =
+        static_cast<const AbstractViewItem *>(item)->should_be_active();
+    if (wanted.value_or(item->is_active())) {
       active = index;
     }
     auto row = rows->append_dict();
