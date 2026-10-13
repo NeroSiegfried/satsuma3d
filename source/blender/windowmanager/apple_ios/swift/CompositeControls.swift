@@ -423,6 +423,8 @@ struct ListRows: View {
   var offset = 0
   @State private var dragging: Int?
   @State private var dragOffset: CGFloat = 0
+  /** The rows' order after a drag, by position, shown until Blender's list has it too. */
+  @State private var pending: [Int]?
   @State private var rowHeight: CGFloat = 40
   @State private var renaming: Int?
   @State private var renameText = ""
@@ -435,9 +437,22 @@ struct ListRows: View {
   private var editable: Bool { property.bool("editable") }
   private var reorder: Bool { property.bool("reorder") && editable && property.array("rows").count > 1 }
 
+  /** A change shown at once, which the list's own animations leave alone too. */
+  private static var instant: Transaction {
+    var transaction = Transaction(animation: nil)
+    transaction.disablesAnimations = true
+    return transaction
+  }
+
+  /** The rows as they show: in a dropped row's new place until Blender's list follows. */
+  private var shown: [JSON] {
+    guard let pending, pending.count == rows.count else { return rows }
+    return pending.map { rows[$0] }
+  }
+
   var body: some View {
     VStack(spacing: 2) {
-      ForEach(Array(rows.enumerated()), id: \.element.listIdentity) { position, item in
+      ForEach(Array(shown.enumerated()), id: \.element.listIdentity) { position, item in
         let index = item.int("index") ?? position
         SwipeRow(id: "\(index)", swiped: $swiped, offset: $swipeOffset,
                  leading: swipeActions(item, index: index, ["duplicate", "rename"]),
@@ -450,6 +465,10 @@ struct ListRows: View {
       }
     }
     .motionAware(.smooth(duration: 0.2), value: targetPosition)
+    /* Blender's list has changed: show it as it is. */
+    .onChange(of: rows.map { "\($0["index"] ?? "")|\($0.string("label") ?? "")" }) {
+      withTransaction(Self.instant) { pending = nil }
+    }
   }
 
   private var targetPosition: Int? {
@@ -681,7 +700,8 @@ struct ListRows: View {
   }
 
   private func reorderDrag(_ position: Int) -> some Gesture {
-    DragGesture(minimumDistance: 4)
+    /* In the window's coordinates: the row moves with the drag, so its own would follow it. */
+    DragGesture(minimumDistance: 4, coordinateSpace: .global)
       .onChanged { value in
         if dragging == nil {
           dragging = position
@@ -696,9 +716,23 @@ struct ListRows: View {
 
   private func finishDrag() {
     guard let from = dragging, let to = targetPosition else { return }
-    dragging = nil
-    dragOffset = 0
-    if from != to { move(from: from + offset, to: to + offset) }
+    /* The row stays where it was dropped, the others where they made room: the new order at
+     * once, without animating back first. */
+    var order = pending ?? Array(rows.indices)
+    if from != to {
+      order.insert(order.remove(at: from), at: to)
+    }
+    withTransaction(Self.instant) {
+      dragging = nil
+      dragOffset = 0
+      if from != to { pending = order }
+    }
+    guard from != to else { return }
+    move(from: from + offset, to: to + offset)
+    /* Should Blender not move it after all, its own order comes back. */
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+      if pending == order { withMotion { pending = nil } }
+    }
   }
 
   private func move(from: Int, to: Int) {
