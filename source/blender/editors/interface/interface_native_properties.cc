@@ -1986,6 +1986,8 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
     bool enabled = true;
   };
   std::vector<Candidate> candidates;
+  /* Each stack panel's place among the stack's, which reordering them takes. */
+  int stack_index = 0;
   std::set<Panel *> instances;
   for (PanelType &pt : panel_region_type->paneltypes) {
     /* Besides the active tool, the panels `bl_ui.native_panels` writes for the top bar. */
@@ -2074,6 +2076,9 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
       if (panel_active) {
         section->append_int("active", 1);
       }
+      if (candidate.instance && pt.reorder) {
+        section->append_int("stack_index", stack_index++);
+      }
       outer_fields[outer] = section->append_array("properties");
     }
     auto fields = outer_fields[outer];
@@ -2096,6 +2101,17 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
       field->append_int("depth", panel_depths[candidate.id]);
     }
     const bool target_panel = requested_panel && *requested_panel == candidate.id;
+    if (execute && target_panel && candidate.instance && !pt.parent && pt.reorder &&
+        query->lookup_str("panel_action").value_or("") == "reorder")
+    {
+      /* Dragged to another place in the stack, as dragging its header in Blender does. */
+      const int64_t to = query->lookup_int("to").value_or(-1);
+      if (to >= 0) {
+        pt.reorder(C, candidate.instance, int(to));
+        applied = true;
+      }
+      break;
+    }
     const bool instance_container = !candidate.instance &&
         ELEM(tab_id, "MODIFIER", "CONSTRAINT", "BONE_CONSTRAINT", "SHADERFX");
     if ((!execute && !open && !is_outer && !instance_container && !collapsible_subpanel) ||

@@ -88,9 +88,12 @@ struct InspectorSection: Identifiable, Equatable {
   let switchOnly: Bool
   var headerControls: [JSON]
   var rows: [InspectorRow]
+  /** Its place in a stack of panels that can be dragged into another order, such as modifiers. */
+  var stackIndex: Int? = nil
 
   static func == (a: InspectorSection, b: InspectorSection) -> Bool {
     a.id == b.id && a.title == b.title && a.active == b.active && a.headerHidden == b.headerHidden &&
+      a.stackIndex == b.stackIndex &&
       a.icon == b.icon && a.switchOnly == b.switchOnly && a.rows == b.rows &&
       jsonListEqual(a.headerControls, b.headerControls)
   }
@@ -266,6 +269,13 @@ final class InspectorStore {
   func isExpanded(_ section: String) -> Bool {
     guard let expanded = expandedPanels[currentTab] else { return true }
     return expanded.contains(section)
+  }
+
+  /** Move a stack's panel, such as a modifier, to another place in the stack. */
+  func moveSection(_ section: String, to index: Int) {
+    guard let from = sections.first(where: { $0.id == section })?.stackIndex, from != index else { return }
+    request(["panel": section, "tab": currentTab], extra: ["panel_action": "reorder", "to": index])
+    Haptics.impact()
   }
 
   func toggleSection(_ section: String) {
@@ -457,6 +467,7 @@ final class InspectorStore {
         id: sectionID, title: section.string("title") ?? "", active: section.bool("active"),
         headerHidden: section.bool("header_hidden"), icon: section.string("icon"),
         switchOnly: section.bool("switch_only"), headerControls: [], rows: [])
+      model.stackIndex = section.int("stack_index")
       var innerSection: String?
       var headingIndex: Int?
       var vectorIndex: [String: Int] = [:]

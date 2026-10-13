@@ -158,6 +158,8 @@ struct InspectorForm: View {
 struct SectionView: View, Equatable {
   let store: InspectorStore
   let section: InspectorSection
+  /** Another of the stack's panels dragged over this one, which takes its place. */
+  @State private var dropping = false
 
   static func == (a: SectionView, b: SectionView) -> Bool {
     a.store === b.store && a.section == b.section
@@ -167,7 +169,7 @@ struct SectionView: View, Equatable {
     let expanded = section.headerHidden || store.isExpanded(section.id)
     VStack(alignment: .leading, spacing: 0) {
       if !section.headerHidden {
-        header(expanded: expanded)
+        draggableHeader(expanded: expanded)
       }
       let rows = store.visibleRows(section)
       /* The card slides out from under its header: the container clips it as its height animates,
@@ -197,6 +199,40 @@ struct SectionView: View, Equatable {
       .clipped()
     }
     .padding(.top, section.headerHidden ? 8 : 0)
+    .overlay(alignment: .top) {
+      if dropping {
+        Capsule().fill(Color.accentColor).frame(height: 3).offset(y: -2)
+      }
+    }
+    .onDrop(of: [.plainText], isTargeted: section.stackIndex == nil ? .constant(false) : $dropping) { providers in
+      guard let target = section.stackIndex, let provider = providers.first else { return false }
+      _ = provider.loadObject(ofClass: NSString.self) { payload, _ in
+        guard let payload = payload as? String, payload.hasPrefix(Self.dragPrefix) else { return }
+        let dragged = String(payload.dropFirst(Self.dragPrefix.count))
+        DispatchQueue.main.async { store.moveSection(dragged, to: target) }
+      }
+      return true
+    }
+  }
+
+  /** A dragged panel, as text naming it, which only the stack reads. */
+  static let dragPrefix = "blender.panel\n"
+
+  /** A stack's panel drags by its header to another place, as in Blender. */
+  @ViewBuilder
+  private func draggableHeader(expanded: Bool) -> some View {
+    if section.stackIndex != nil {
+      header(expanded: expanded)
+        .onDrag { NSItemProvider(object: (Self.dragPrefix + section.id) as NSString) } preview: {
+          Label(section.title, systemImage: "line.3.horizontal")
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.regularMaterial, in: Capsule())
+        }
+    }
+    else {
+      header(expanded: expanded)
+    }
   }
 
   /** The shading mode picker is already a pill; a card around it nests the shape. */
