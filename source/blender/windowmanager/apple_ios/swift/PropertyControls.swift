@@ -76,11 +76,24 @@ struct NumberField: View, Equatable {
   @State private var interaction = ""
   @State private var lastPreview: CFTimeInterval = 0
   @State private var stepperValue = 0.0
+  /** Under the pointer, which shows the field can be dragged sideways. */
+  @State private var hovering = false
+  /** Whether this field changed the Mac's cursor, so it only restores what it changed. */
+  @State private var cursorPushed = false
   /** The field's UIKit view, for the drag sensitivity indicator. */
   @State private var scrubAnchor = AnchorBox()
   @FocusState private var focused: Bool
 
   private var editable: Bool { property.bool("editable") }
+  private var draggable: Bool { scrubs && editable && !editing }
+
+  private func setResizeCursor(_ shown: Bool) {
+#if os(macOS)
+    guard shown != cursorPushed else { return }
+    if shown { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+    cursorPushed = shown
+#endif
+  }
   private var value: Double { scrubValue ?? numericValue(store.value(property)) }
   /** The selected items' values differ: a dash, until a drag or a typed value sets them. */
   private var mixed: Bool { scrubValue == nil && store.isMixed(property) }
@@ -125,20 +138,28 @@ struct NumberField: View, Equatable {
     .frame(minHeight: height ?? (compact ? 30 : 40))
     .background(background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     .overlay {
-      if scrubValue != nil {
+      /* Arrows at the ends say the number drags sideways: shown under the pointer, and in the
+       * tint while dragging, like Blender's own number fields. */
+      if scrubValue != nil || (hovering && draggable) {
         HStack {
           Image(systemName: "chevron.left")
           Spacer()
           Image(systemName: "chevron.right")
         }
         .font(.caption2.weight(.semibold))
-        .foregroundStyle(.tint)
+        .foregroundStyle(scrubValue != nil ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
         .padding(.horizontal, 3)
         .allowsHitTesting(false)
       }
     }
     .contentShape(RoundedRectangle(cornerRadius: 8))
     .pointerHighlight()
+    .onHover { inside in
+      hovering = inside
+      /* The Mac's left and right resize cursor, as over Blender's own number fields. */
+      setResizeCursor(inside && draggable)
+    }
+    .onDisappear { setResizeCursor(false) }
     .onTapGesture { beginEditing() }
     .background(PresentationAnchor(anchor: scrubAnchor))
     .gesture(ScrubGesture(enabled: scrubs && editable && !editing, anchor: scrubAnchor,
