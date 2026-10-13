@@ -421,17 +421,14 @@ struct ListRows: View {
   let property: JSON
   let rows: [JSON]
   var offset = 0
-  @State private var dragging: Int?
-  @State private var dragOffset: CGFloat = 0
-  /** The rows' order after a drag, by position, shown until Blender's list has it too. */
+  /** The rows' order after a move, by position, shown until Blender's list has it too. */
   @State private var pending: [Int]?
-  @State private var rowHeight: CGFloat = 40
   @State private var renaming: Int?
   @State private var renameText = ""
   @FocusState private var renameFocused: Bool
-  /** The row whose swipe actions show, and how far it is pulled, as in the Outliner. */
-  @State private var swiped: String?
-  @State private var swipeOffset: CGFloat = 0
+
+  /** Each row's height: the list is as tall as its rows, inside the scrolling form. */
+  static let rowHeight: CGFloat = 44
 
   private var active: Int? { (store.value(property) as? NSNumber)?.intValue }
   private var editable: Bool { property.bool("editable") }
@@ -450,38 +447,66 @@ struct ListRows: View {
     return pending.map { rows[$0] }
   }
 
+  /**
+   * The system's own list, so its rows reorder and swipe as every list's do: touch and hold, then
+   * drag, to move a row; swipe for its actions. It doesn't scroll: the form around it does.
+   */
   var body: some View {
-    VStack(spacing: 2) {
+    List {
       ForEach(Array(shown.enumerated()), id: \.element.listIdentity) { position, item in
         let index = item.int("index") ?? position
-        SwipeRow(id: "\(index)", swiped: $swiped, offset: $swipeOffset,
-                 leading: swipeActions(item, index: index, ["duplicate", "rename"]),
-                 trailing: swipeActions(item, index: index, ["delete"])) {
-          row(item, position: position)
-        }
-          .offset(y: offsetFor(position))
-          .zIndex(dragging == position ? 1 : 0)
-          .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowHeight = $0 + 2 }
+        row(item, position: position)
+          .listRowInsets(EdgeInsets(top: 1, leading: 0, bottom: 1, trailing: 0))
+          .listRowSeparator(.hidden)
+          .listRowBackground(Color.clear)
+          .swipeActions(edge: .trailing, allowsFullSwipe: true) { trailingActions(index) }
+          .swipeActions(edge: .leading) { leadingActions(item, index: index) }
       }
+      .onMove(perform: reorder ? moveRows : nil)
     }
-    .motionAware(.smooth(duration: 0.2), value: targetPosition)
+    .listStyle(.plain)
+    .scrollDisabled(true)
+    .scrollContentBackground(.hidden)
+    .environment(\.defaultMinListRowHeight, Self.rowHeight)
+    .frame(height: CGFloat(shown.count) * Self.rowHeight)
     /* Blender's list has changed: show it as it is. */
     .onChange(of: rows.map { "\($0["index"] ?? "")|\($0.string("label") ?? "")" }) {
       withTransaction(Self.instant) { pending = nil }
     }
   }
 
-  private var targetPosition: Int? {
-    guard let dragging else { return nil }
-    return max(0, min(rows.count - 1, dragging + Int((dragOffset / rowHeight).rounded())))
+  /** A row moved in the list: shown in its new place at once, and moved in Blender. */
+  private func moveRows(_ source: IndexSet, _ destination: Int) {
+    guard let from = source.first else { return }
+    let to = destination > from ? destination - 1 : destination
+    guard from != to else { return }
+    var order = pending ?? Array(rows.indices)
+    order.move(fromOffsets: source, toOffset: destination)
+    pending = order
+    move(from: from + offset, to: to + offset)
+    /* Should Blender not move it after all, its own order comes back. */
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+      if pending == order { withMotion { pending = nil } }
+    }
   }
 
-  private func offsetFor(_ position: Int) -> CGFloat {
-    guard let dragging, let target = targetPosition else { return 0 }
-    if position == dragging { return dragOffset }
-    if position > dragging && position <= target { return -rowHeight }
-    if position < dragging && position >= target { return rowHeight }
-    return 0
+  @ViewBuilder
+  private func trailingActions(_ index: Int) -> some View {
+    if editable && property.dict("remove") != nil {
+      Button(role: .destructive) { delete(index) } label: { Label("Delete", systemImage: "trash") }
+    }
+  }
+
+  @ViewBuilder
+  private func leadingActions(_ item: JSON, index: Int) -> some View {
+    if editable, let duplicate = property.string("duplicate") {
+      Button { run(duplicate, on: index) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+        .tint(.blue)
+    }
+    if editable && renamable(item) {
+      Button { startRename(item, index: index) } label: { Label("Rename", systemImage: "pencil") }
+        .tint(.gray)
+    }
   }
 
   @ViewBuilder
@@ -523,40 +548,15 @@ struct ListRows: View {
       ForEach(Array(item.array("controls").enumerated()), id: \.offset) { _, control in
         RowControl(store: store, control: listControl(control))
       }
-#if !os(macOS)
-      if reorder {
-        Image(systemName: "line.3.horizontal")
-          .foregroundStyle(.tertiary)
-          .frame(width: 36, height: 36)
-          .contentShape(Rectangle())
-          .gesture(reorderDrag(position))
-          .accessibilityLabel("Reorder \(label)")
-          .accessibilityActions {
-            if position + offset > 0 {
-              Button("Move Up") { move(from: position + offset, to: position + offset - 1) }
-            }
-            if position + offset < property.array("rows").count - 1 {
-              Button("Move Down") { move(from: position + offset, to: position + offset + 1) }
-            }
-          }
-      }
-#endif
     }
     /* Nested items (bone collections, layer groups) are indented under their parent. */
     .padding(.leading, 10 + CGFloat(item.int("depth") ?? 0) * 16)
-    .padding(.trailing, reorder ? 0 : 10)
-    .frame(minHeight: 40)
+    .padding(.trailing, 10)
+    .frame(maxWidth: .infinity, minHeight: Self.rowHeight - 2, maxHeight: Self.rowHeight - 2)
     .background {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
         .fill(isActive ? PanelStyle.activeRow : .clear)
     }
-#if os(macOS)
-    /* A Mac list's rows drag anywhere to another place, as Finder's sidebar's do. */
-    .contentShape(Rectangle())
-    .gesture(reorderDrag(position), including: reorder ? .all : .subviews)
-#endif
-    .scaleEffect(dragging == position ? 1.02 : 1)
-    .shadow(color: .black.opacity(dragging == position ? 0.25 : 0), radius: 8, y: 3)
     .contextMenuPreviewShape(RoundedRectangle(cornerRadius: 8))
     .contextMenu { rowMenu(item, index: index, position: position + offset, label: label) }
     .accessibilityElement(children: .contain)
@@ -609,40 +609,6 @@ struct ListRows: View {
     item.has("rename_key") || item.bool("rename")
   }
 
-  /** The actions a swipe shows, as the list allows them. */
-  private func swipeActions(_ item: JSON, index: Int, _ actions: [String]) -> [SwipeAction] {
-#if os(macOS)
-    /* A Mac's rows drag to reorder; their actions are in the context menu. */
-    return []
-#else
-    guard editable else { return [] }
-    return actions.compactMap { action in
-      switch action {
-        case "delete" where property.dict("remove") != nil:
-          return SwipeAction(title: "Delete", symbol: "trash", tint: .red) { delete(index) }
-        case "duplicate":
-          guard let duplicate = property.string("duplicate") else { return nil }
-          return SwipeAction(title: "Duplicate", symbol: "plus.square.on.square", tint: .blue) {
-            run(duplicate, on: index)
-          }
-        case "rename" where renamable(item):
-          return SwipeAction(title: "Rename", symbol: "pencil", tint: .gray) {
-            startRename(item, index: index)
-          }
-        default:
-          return nil
-      }
-    }
-#endif
-  }
-
-  private func closeSwipe() {
-    withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .smooth(duration: 0.25)) {
-      swiped = nil
-      swipeOffset = 0
-    }
-  }
-
   /** Blender's list operators act on the active item, so make it active first. */
   private func select(_ index: Int) {
     if index != active { store.edit(property, value: index) }
@@ -650,7 +616,6 @@ struct ListRows: View {
 
   private func delete(_ index: Int) {
     guard let remove = property.dict("remove") else { return }
-    closeSwipe()
     select(index)
     store.request(["key": remove.string("key") ?? "", "panel": property.string("panel") ?? "",
                    "tab": property.string("tab") ?? ""], extra: ["type": "OPERATOR"])
@@ -658,7 +623,6 @@ struct ListRows: View {
   }
 
   private func run(_ operatorName: String, on index: Int) {
-    closeSwipe()
     select(index)
     Engine.operatorCall(operatorName)
     Haptics.selection()
@@ -666,10 +630,6 @@ struct ListRows: View {
 
   private func tap(_ item: JSON, index: Int, isActive: Bool) {
     guard editable else { return }
-    if swiped != nil {
-      closeSwipe()
-      return
-    }
     if isActive {
       if renamable(item) { startRename(item, index: index) }
       return
@@ -696,42 +656,6 @@ struct ListRows: View {
     else if item.bool("rename") {
       /* Tree items (such as shape keys) are renamed through the tree. */
       store.request(property, extra: ["list_action": "rename", "index": index, "name": name])
-    }
-  }
-
-  private func reorderDrag(_ position: Int) -> some Gesture {
-    /* In the window's coordinates: the row moves with the drag, so its own would follow it. */
-    DragGesture(minimumDistance: 4, coordinateSpace: .global)
-      .onChanged { value in
-        if dragging == nil {
-          dragging = position
-          Haptics.impact()
-        }
-        let before = targetPosition
-        dragOffset = value.translation.height
-        if targetPosition != before { Haptics.selection() }
-      }
-      .onEnded { _ in finishDrag() }
-  }
-
-  private func finishDrag() {
-    guard let from = dragging, let to = targetPosition else { return }
-    /* The row stays where it was dropped, the others where they made room: the new order at
-     * once, without animating back first. */
-    var order = pending ?? Array(rows.indices)
-    if from != to {
-      order.insert(order.remove(at: from), at: to)
-    }
-    withTransaction(Self.instant) {
-      dragging = nil
-      dragOffset = 0
-      if from != to { pending = order }
-    }
-    guard from != to else { return }
-    move(from: from + offset, to: to + offset)
-    /* Should Blender not move it after all, its own order comes back. */
-    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-      if pending == order { withMotion { pending = nil } }
     }
   }
 
