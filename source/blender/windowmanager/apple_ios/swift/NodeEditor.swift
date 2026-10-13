@@ -985,8 +985,9 @@ struct NodeCard: View {
         .padding(.vertical, 6)
       }
     }
-    .background(PanelStyle.card.opacity(1), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    .background(Color(uiColor: .systemBackground).opacity(0.9), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    /* Raised from the canvas in either appearance. */
+    .background(Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .tertiarySystemBackground : .systemBackground }),
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 14, style: .continuous)
         .strokeBorder(node.bool("active") ? Color.accentColor : node.bool("selected") ? Color.accentColor.opacity(0.6) : Color.black.opacity(0.15),
