@@ -2440,7 +2440,10 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
         BLI_rctf_union(&tree.rect, &button->rect);
       }
       for (TreeRows &tree : trees) {
-        find_side(tree.rect, tree.side);
+        /* A tree's rows sit inside its box, below the top of the buttons beside it. */
+        rctf box = tree.rect;
+        box.ymax += 0.75f * UI_UNIT_Y;
+        find_side(box, tree.side);
       }
     }
     /* A list with nothing in it yet, such as shape keys before the first: Blender draws no rows,
