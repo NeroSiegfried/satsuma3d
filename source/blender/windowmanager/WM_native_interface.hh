@@ -66,9 +66,10 @@ struct wmNativeInterface {
 
   /**
    * The interface shows the last operation's properties itself: operators are registered for
-   * redo, and Blender's Adjust Last Operation region never opens.
+   * redo, and Blender's Adjust Last Operation region never opens. False while Blender's own
+   * interface is shown instead.
    */
-  bool replaces_redo_panel = false;
+  bool (*replaces_redo_panel)() = nullptr;
   void (*operator_registered)(bContext *C, wmOperator *op) = nullptr;
   void (*operator_freed)(wmOperator *op) = nullptr;
   void (*redo_cleared)() = nullptr;

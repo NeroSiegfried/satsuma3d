@@ -1357,7 +1357,7 @@ static void wm_operator_finished(bContext *C,
     if (hud_status == SET) {
       const wmNativeInterface *native = WM_native_interface();
       ScrArea *area = CTX_wm_area(C);
-      if (native && native->replaces_redo_panel) {
+      if (native && native->replaces_redo_panel && native->replaces_redo_panel()) {
         /* The operator stays registered for redo, shown by the native interface instead. */
         ui::ED_area_type_hud_clear(wm, nullptr);
       }

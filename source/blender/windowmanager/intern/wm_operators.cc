@@ -1921,7 +1921,7 @@ wmOperatorStatus WM_operator_redo_popup(bContext *C, wmOperator *op)
   }
 
   if (const wmNativeInterface *native = WM_native_interface();
-      native && native->replaces_redo_panel && native->redo_show)
+      native && native->replaces_redo_panel && native->replaces_redo_panel() && native->redo_show)
   {
     native->redo_show(C);
     return OPERATOR_CANCELLED;
