@@ -236,6 +236,11 @@ final class InspectorStore {
     pendingValue(propertyKey(property)).value ?? property["value"]
   }
 
+  /** The selected items' values differ, until an edit gives them all one. */
+  func isMixed(_ property: JSON) -> Bool {
+    property.bool("mixed") && pendingValue(propertyKey(property)).value == nil
+  }
+
   /** \} */
 
   /* -------------------------------------------------------------------- */

@@ -82,11 +82,16 @@ struct NumberField: View, Equatable {
 
   private var editable: Bool { property.bool("editable") }
   private var value: Double { scrubValue ?? numericValue(store.value(property)) }
+  /** The selected items' values differ: a dash, until a drag or a typed value sets them. */
+  private var mixed: Bool { scrubValue == nil && store.isMixed(property) }
+  private var shown: String {
+    mixed ? "—" : formatNumber(value, property: property, significant: significant)
+  }
 
   var body: some View {
     ZStack(alignment: .trailing) {
       if editing {
-        TextField("", text: $text)
+        TextField("", text: $text, prompt: store.isMixed(property) ? Text("—") : nil)
           .keyboardType(.numbersAndPunctuation)
           .multilineTextAlignment(.trailing)
           .font(numberFont)
@@ -106,7 +111,7 @@ struct NumberField: View, Equatable {
           }
       }
       else {
-        Text(formatNumber(value, property: property, significant: significant))
+        Text(shown)
           .font(numberFont)
           /* New values just show, even when rows around them animate. */
           .contentTransition(.identity)
@@ -147,7 +152,7 @@ struct NumberField: View, Equatable {
     }
     .accessibilityElement()
     .accessibilityLabel(propertyLabel(property))
-    .accessibilityValue(formatNumber(value, property: property, significant: significant))
+    .accessibilityValue(mixed ? "Mixed" : shown)
     .accessibilityAdjustableAction { direction in
       let step = stepperStep * (property.bool("angle") ? .pi / 180 : 1)
       store.edit(property, value: clamp(value + (direction == .increment ? step : -step)))
@@ -186,7 +191,7 @@ struct NumberField: View, Equatable {
 
   private func beginEditing() {
     guard editable, scrubValue == nil else { return }
-    text = formatNumber(value, property: property, significant: significant)
+    text = mixed ? "" : shown
     stepperValue = value * (property.bool("angle") ? 180.0 / .pi : 1)
     editing = true
     focused = true
@@ -196,7 +201,9 @@ struct NumberField: View, Equatable {
     guard editing else { return }
     editing = false
     focused = false
-    if text == formatNumber(value, property: property, significant: significant) { return }
+    /* A typed value sets every selected item, even one that already has it. */
+    if store.isMixed(property) ? text.trimmingCharacters(in: .whitespaces).isEmpty :
+      text == shown { return }
     guard let number = parseNumber(text, property: property) else {
       store.showStatus("Enter a valid number.")
       return
@@ -535,12 +542,20 @@ struct PropertyToggle: View, Equatable {
   var body: some View {
     /* Read here, so the switch follows the value it shows. */
     let on = (store.value(property) as? NSNumber)?.boolValue ?? false
-    Toggle(propertyLabel(property), isOn: Binding(
-      get: { on },
-      set: { store.edit(property, value: $0) }))
-      .labelsHidden()
-      .switchTint(property.string("anim_state"))
-      .disabled(!property.bool("editable"))
+    let mixed = store.isMixed(property)
+    HStack(spacing: 8) {
+      if mixed {
+        /* Switches have no mixed state: off, with the dash the other controls show. */
+        Text("—").foregroundStyle(.secondary).accessibilityHidden(true)
+      }
+      Toggle(propertyLabel(property), isOn: Binding(
+        get: { on && !mixed },
+        set: { store.edit(property, value: $0) }))
+        .labelsHidden()
+        .switchTint(property.string("anim_state"))
+        .disabled(!property.bool("editable"))
+        .accessibilityValue(mixed ? "Mixed" : "")
+    }
   }
 }
 
@@ -621,7 +636,8 @@ struct TextControl: View {
   @FocusState private var focused: Bool
 
   var body: some View {
-    TextField(property.string("label") ?? "", text: $text)
+    TextField(property.string("label") ?? "", text: $text,
+              prompt: store.isMixed(property) ? Text("—") : nil)
       .multilineTextAlignment(.trailing)
       .autocorrectionDisabled()
       .focused($focused)
@@ -629,16 +645,19 @@ struct TextControl: View {
       .padding(.horizontal, 8)
       .frame(minHeight: 40)
       .disabled(!property.bool("editable"))
-      .onAppear { text = store.value(property) as? String ?? "" }
-      .onChange(of: store.value(property) as? String ?? "") { _, newValue in
+      .onAppear { text = shown }
+      .onChange(of: shown) { _, newValue in
         if !focused { text = newValue }
       }
       .onSubmit { commit() }
       .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
   }
 
+  /** Empty with a dash where the selected items' texts differ. */
+  private var shown: String { store.isMixed(property) ? "" : store.value(property) as? String ?? "" }
+
   private func commit() {
-    if text != store.value(property) as? String ?? "" { store.edit(property, value: text) }
+    if text != shown { store.edit(property, value: text) }
   }
 }
 
@@ -654,7 +673,10 @@ struct ColorSwatch: View {
       ColorPickerSession(property: property, store: store).present(from: anchor, color: color)
     } label: {
       Circle()
-        .fill(Color(uiColor: color))
+        .fill(store.isMixed(property) ? AnyShapeStyle(.quaternary) : AnyShapeStyle(Color(uiColor: color)))
+        .overlay {
+          if store.isMixed(property) { Text("—").foregroundStyle(.secondary) }
+        }
         .overlay(Circle().strokeBorder(.separator, lineWidth: 0.5))
         .overlay {
           if let state = animationStateColor(property.string("anim_state")) {
@@ -668,6 +690,7 @@ struct ColorSwatch: View {
     .buttonStyle(.plain)
     .disabled(!property.bool("editable"))
     .accessibilityLabel(propertyLabel(property))
+    .accessibilityValue(store.isMixed(property) ? "Mixed" : "")
     .accessibilityHint("Opens the color picker.")
   }
 }
@@ -686,7 +709,10 @@ struct EnumControl: View {
   private var options: [JSON] { property.array("options") }
   private var label: String { property.string("toolbar_label") ?? property.string("label") ?? "" }
 
+  private var mixed: Bool { store.isMixed(property) }
+
   private func isChecked(_ option: JSON) -> Bool {
+    if mixed { return false }
     if option.has("checked") { return option.bool("checked") }
     return jsonEqual(option["value"], store.value(property))
   }
@@ -744,7 +770,7 @@ struct EnumControl: View {
           Image(uiImage: icon).resizable().scaledToFit().frame(width: 20, height: 20)
         }
         else {
-          Text(current?.string("label") ?? "—").font(.caption).lineLimit(1)
+          Text(mixed ? "—" : current?.string("label") ?? "—").font(.caption).lineLimit(1)
         }
       }
       .frame(minWidth: 40, minHeight: 26)
@@ -759,11 +785,28 @@ struct EnumControl: View {
         Text(property.string("label") ?? "")
           .lineLimit(2)
           .frame(maxWidth: .infinity, alignment: .leading)
-        Picker(label, selection: chosen) { choices }
-          .pickerStyle(.menu)
-          .labelsHidden()
-          .disabled(!property.bool("editable"))
-          .frame(maxWidth: .infinity, alignment: .trailing)
+        Group {
+          if mixed {
+            /* The menu picker's look, with the dash its selection can't show. */
+            Menu {
+              Picker(label, selection: chosen) { choices }.pickerStyle(.inline)
+            } label: {
+              HStack(spacing: 4) {
+                Text("—")
+                Image(systemName: "chevron.up.chevron.down").imageScale(.small)
+              }
+            }
+            .accessibilityLabel(label)
+            .accessibilityValue("Mixed")
+          }
+          else {
+            Picker(label, selection: chosen) { choices }
+              .pickerStyle(.menu)
+              .labelsHidden()
+          }
+        }
+        .disabled(!property.bool("editable"))
+        .frame(maxWidth: .infinity, alignment: .trailing)
       }
       .frame(minHeight: 44)
     }
@@ -1012,7 +1055,8 @@ struct ToggleGroupRow: View, Equatable {
         .frame(maxWidth: compact ? nil : .infinity, alignment: .leading)
       HStack(spacing: 2) {
         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-          let on = (store.value(item) as? NSNumber)?.boolValue ?? false
+          let mixed = store.isMixed(item)
+          let on = !mixed && (store.value(item) as? NSNumber)?.boolValue ?? false
           Button {
             store.edit(item, value: !on)
             Haptics.selection()
@@ -1021,12 +1065,13 @@ struct ToggleGroupRow: View, Equatable {
               .font(.system(size: compact ? 13 : 15, weight: .semibold, design: .monospaced))
               .foregroundStyle(on ? Color.white : .primary)
               .frame(width: compact ? 28 : 36, height: compact ? 22 : 30)
-              .background(on ? Color.accentColor : .clear,
+              .background(on ? Color.accentColor : mixed ? Color.accentColor.opacity(0.25) : .clear,
                           in: RoundedRectangle(cornerRadius: compact ? 7 : 8, style: .continuous))
           }
           .buttonStyle(.plain)
           .disabled(!item.bool("editable"))
           .accessibilityLabel("\(caption) \(item.string("label") ?? "")")
+          .accessibilityValue(mixed ? "Mixed" : "")
           .accessibilityAddTraits(on ? .isSelected : [])
         }
       }
