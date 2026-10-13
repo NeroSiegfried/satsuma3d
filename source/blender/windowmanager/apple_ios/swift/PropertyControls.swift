@@ -1029,7 +1029,7 @@ struct VectorRow: View, Equatable {
       Text(title)
         .font(.caption)
         .foregroundStyle(.secondary)
-        .frame(minHeight: 28)
+        .frame(height: Self.captionHeight)
         .contentShape(Rectangle())
         .contextMenu {
           if mode.bool("editable") {
@@ -1052,8 +1052,13 @@ struct VectorRow: View, Equatable {
     }
     else {
       Text(title).font(.caption).foregroundStyle(.secondary)
+        .frame(height: Self.captionHeight)
     }
   }
+
+  /** Every caption is as tall, whether or not it has a mode, so Location, Rotation and Scale are
+   * spaced evenly. */
+  private static let captionHeight: CGFloat = 20
 }
 
 /** Toggles shown together, such as Mirror X Y Z: tinted while on. */
