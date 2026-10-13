@@ -91,6 +91,13 @@ struct InspectorSection: Identifiable, Equatable {
   /** Its place in a stack of panels that can be dragged into another order, such as modifiers. */
   var stackIndex: Int? = nil
 
+  /** The same panel under another title. */
+  func titled(_ title: String) -> InspectorSection {
+    InspectorSection(id: id, title: title, active: active, headerHidden: headerHidden, icon: icon,
+                     switchOnly: switchOnly, headerControls: headerControls, rows: rows,
+                     stackIndex: stackIndex)
+  }
+
   static func == (a: InspectorSection, b: InspectorSection) -> Bool {
     a.id == b.id && a.title == b.title && a.active == b.active && a.headerHidden == b.headerHidden &&
       a.stackIndex == b.stackIndex &&
@@ -126,6 +133,8 @@ final class InspectorStore {
   private(set) var tabs: [InspectorTab] = []
   private(set) var selectedTab: String?
   private(set) var title = "Properties"
+  /** A text object's style, size, alignment and spacing, for the Text section; else none. */
+  private(set) var textStyle: JSON?
   private(set) var status = ""
   private(set) var objectID: String?
   private(set) var hasInspector = false
@@ -338,6 +347,10 @@ final class InspectorStore {
     set(\.hasInspector, true)
     set(\.loaded, true)
     set(\.title, inspector.string("name") ?? "Properties")
+    let textStyle = merged.dict("text_style") ?? inspector.dict("text_style")
+    if !jsonEqual(textStyle.map { $0 as NSDictionary }, self.textStyle.map { $0 as NSDictionary }) {
+      self.textStyle = textStyle
+    }
     let newObject = inspector.string("id")
     let replacing = newObject != objectID || sections.isEmpty || inspector.string("tab") != shownTab
     if newObject != objectID {

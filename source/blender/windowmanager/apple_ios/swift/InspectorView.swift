@@ -136,8 +136,26 @@ struct InspectorForm: View {
     /* Spaced like an inset grouped table: a 44 point header right above its card. */
     VStack(alignment: .leading, spacing: 17) {
       ForEach(store.sections) { section in
-        SectionView(store: store, section: section)
-          .equatable()
+        if let style = store.textStyle, section.id == "DATA_PT_font" {
+          /* A text object's text as Keynote shows it; Blender's Font panel stays below for the
+           * rest, such as its bold and italic fonts and text on a curve. */
+          VStack(alignment: .leading, spacing: 0) {
+            Text("Text")
+              .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+              .padding(.leading, 12)
+            TextStyleSection(style: style)
+          }
+          SectionView(store: store, section: section.titled("More Font Options"))
+            .equatable()
+        }
+        else if store.textStyle != nil && section.id == "DATA_PT_paragraph" {
+          /* Its alignment and spacing are in the Text section. */
+          EmptyView()
+        }
+        else {
+          SectionView(store: store, section: section)
+            .equatable()
+        }
       }
       if !store.status.isEmpty {
         Text(store.status)

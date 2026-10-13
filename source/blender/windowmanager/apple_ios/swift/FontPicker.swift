@@ -167,20 +167,27 @@ enum FontFiles {
 @MainActor
 final class FontPickerSession: NSObject {
   static var active: FontPickerSession?
-  let property: JSON
-  weak var store: InspectorStore?
+  /** The font file shown as chosen, and what to do with a choice. */
+  private let current: String?
+  private let pick: (CTFontDescriptor) -> Void
   private var pending: DispatchWorkItem?
 
-  init(property: JSON, store: InspectorStore) {
-    self.property = property
-    self.store = store
+  init(current: String?, pick: @escaping (CTFontDescriptor) -> Void) {
+    self.current = current
+    self.pick = pick
+  }
+
+  convenience init(property: JSON, store: InspectorStore) {
+    self.init(current: property.string("font_file")) { [weak store] descriptor in
+      if let store { FontFiles.choose(descriptor, for: property, store: store) }
+    }
   }
 
   func present(from _: AnchorBox) {
     FontPickerSession.active = self
     let manager = NSFontManager.shared
     manager.target = self
-    if let name = FontFiles.displayName(property), let font = NSFont(name: name, size: 24) {
+    if let font = FontFiles.font(file: current, size: 24) {
       manager.setSelectedFont(font, isMultiple: false)
     }
     manager.orderFrontFontPanel(nil)
@@ -191,8 +198,7 @@ final class FontPickerSession: NSObject {
     let font = manager.convert(manager.selectedFont ?? NSFont.systemFont(ofSize: 24))
     pending?.cancel()
     let work = DispatchWorkItem { [weak self] in
-      guard let self, let store = self.store else { return }
-      FontFiles.choose(font.fontDescriptor as CTFontDescriptor, for: self.property, store: store)
+      self?.pick(font.fontDescriptor as CTFontDescriptor)
     }
     pending = work
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
@@ -209,12 +215,19 @@ final class FontPickerSession: NSObject {
 @MainActor
 final class FontPickerSession: NSObject, UIFontPickerViewControllerDelegate {
   static var active: FontPickerSession?
-  let property: JSON
-  weak var store: InspectorStore?
+  /** The font file shown as chosen, and what to do with a choice. */
+  private let current: String?
+  private let pick: (CTFontDescriptor) -> Void
 
-  init(property: JSON, store: InspectorStore) {
-    self.property = property
-    self.store = store
+  init(current: String?, pick: @escaping (CTFontDescriptor) -> Void) {
+    self.current = current
+    self.pick = pick
+  }
+
+  convenience init(property: JSON, store: InspectorStore) {
+    self.init(current: property.string("font_file")) { [weak store] descriptor in
+      if let store { FontFiles.choose(descriptor, for: property, store: store) }
+    }
   }
 
   func present(from anchor: AnchorBox) {
@@ -222,7 +235,7 @@ final class FontPickerSession: NSObject, UIFontPickerViewControllerDelegate {
     configuration.includeFaces = true
     let picker = UIFontPickerViewController(configuration: configuration)
     picker.delegate = self
-    if let name = FontFiles.displayName(property), let font = UIFont(name: name, size: 17) {
+    if let font = FontFiles.font(file: current, size: 17) {
       picker.selectedFontDescriptor = font.fontDescriptor
     }
     FontPickerSession.active = self
@@ -230,8 +243,8 @@ final class FontPickerSession: NSObject, UIFontPickerViewControllerDelegate {
   }
 
   func fontPickerViewControllerDidPickFont(_ picker: UIFontPickerViewController) {
-    if let descriptor = picker.selectedFontDescriptor, let store {
-      FontFiles.choose(descriptor as CTFontDescriptor, for: property, store: store)
+    if let descriptor = picker.selectedFontDescriptor {
+      pick(descriptor as CTFontDescriptor)
     }
     picker.dismiss(animated: true)
     FontPickerSession.active = nil
@@ -377,6 +390,194 @@ struct FontSlotRow: View {
     .buttonStyle(.plain)
     .disabled(!editable)
     .accessibilityLabel("Typeface, \(styleName(font))")
+  }
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Text Section
+ *
+ * A text object's text as Keynote's Text inspector shows it: its font, bold, italic and underline,
+ * and size; its alignment; its spacing. Out of Edit Mode these style all of the text, while
+ * typing what is selected and what is typed next.
+ * \{ */
+
+struct TextStyleSection: View {
+  let style: JSON
+  private let anchor = AnchorBox()
+  /** Values just set, shown until Blender's snapshot has them. */
+  @State private var local: [String: Double] = [:]
+
+  private var font: UIFont? { FontFiles.font(file: style.string("font_file"), size: 17) }
+
+  private func edit(_ command: String) {
+    Engine.setting("text_object_edit", command)
+  }
+
+  private func number(_ key: String) -> Double {
+    local[key] ?? (style[key] as? NSNumber)?.doubleValue ?? 0
+  }
+
+  private func setNumber(_ key: String, _ value: Double) {
+    local[key] = value
+    edit("value:\(key):\(value)")
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 17) {
+      card {
+        fontRow
+        Divider()
+        stylesRow
+        Divider()
+        stepperRow("Size", key: "size", step: 0.1, range: 0.0001...10000, field: true)
+      }
+      card {
+        alignmentRow(key: "align_x", choices: [
+          ("LEFT", "text.alignleft", "Align Left"), ("CENTER", "text.aligncenter", "Center"),
+          ("RIGHT", "text.alignright", "Align Right"), ("JUSTIFY", "text.justify", "Justify"),
+        ], same: ["FLUSH": "JUSTIFY"])
+        Divider()
+        alignmentRow(key: "align_y", choices: [
+          ("TOP", "arrow.up.to.line", "Align Top"),
+          ("CENTER", "arrow.down.and.line.horizontal.and.arrow.up", "Align Middle"),
+          ("BOTTOM", "arrow.down.to.line", "Align Bottom"),
+        ], same: ["TOP_BASELINE": "TOP", "BOTTOM_BASELINE": "BOTTOM"])
+      }
+      card {
+        stepperRow("Line Spacing", key: "space_line", step: 0.1, range: 0...10)
+        Divider()
+        stepperRow("Character Spacing", key: "space_character", step: 0.1, range: 0...10)
+        Divider()
+        stepperRow("Word Spacing", key: "space_word", step: 0.1, range: 0...10)
+      }
+    }
+    .onChange(of: style.map { "\($0.key)=\($0.value)" }.sorted()) { _, _ in local.removeAll() }
+  }
+
+  private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+    VStack(spacing: 0) { content() }
+      .padding(.horizontal, 12)
+      .background(PanelStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+  }
+
+  /** The family by name, which the system's font picker chooses. */
+  private var fontRow: some View {
+    Button {
+      FontPickerSession(current: style.string("font_file")) { descriptor in
+        /* The family's bold and italic faces along with it, which Blender's styles use. */
+        FontFiles.write(descriptor, family: true) { url, faces in
+          let lines = ["font=" + url.path] + faces.map { "\($0.key)=\($0.value.path)" }
+          Engine.setting("text_object_edit", "font:" + lines.joined(separator: "\n"))
+        }
+      }.present(from: anchor)
+    } label: {
+      HStack(spacing: 8) {
+        Text("Font")
+        Spacer(minLength: 8)
+        Text(font.map(familyName) ?? "Default")
+          .font(font.map { Font($0 as CTFont) } ?? .body)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+        Image(systemName: "chevron.right")
+          .font(.footnote.weight(.semibold))
+          .foregroundStyle(.tertiary)
+      }
+      .frame(minHeight: 48)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .background(PresentationAnchor(anchor: anchor))
+    .accessibilityLabel("Font, \(font.map(familyName) ?? "Default")")
+  }
+
+  /** Bold, italic and underline, with small caps among the rest, as Keynote's row of styles. */
+  private var stylesRow: some View {
+    HStack(spacing: 0) {
+      styleButton("BOLD", key: "bold", symbol: "bold", title: "Bold")
+      styleButton("ITALIC", key: "italic", symbol: "italic", title: "Italic")
+      styleButton("UNDERLINE", key: "underline", symbol: "underline", title: "Underline")
+      Menu {
+        Toggle("Small Caps", isOn: Binding(
+          get: { style.bool("small_caps") },
+          set: { edit("style:SMALL_CAPS:" + ($0 ? "1" : "0")) }))
+      } label: {
+        Image(systemName: "ellipsis")
+          .font(.system(size: 19, weight: .semibold))
+          .frame(maxWidth: .infinity, minHeight: 44)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("More Text Options")
+    }
+    .padding(.vertical, 6)
+  }
+
+  private func styleButton(_ name: String, key: String, symbol: String, title: String) -> some View {
+    let on = style.bool(key)
+    return Button {
+      edit("style:\(name):" + (on ? "0" : "1"))
+    } label: {
+      Image(systemName: symbol)
+        .font(.system(size: 19, weight: .semibold))
+        .frame(maxWidth: .infinity, minHeight: 44)
+        .background(on ? Color.primary.opacity(0.12) : .clear,
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(title)
+    .accessibilityAddTraits(on ? .isSelected : [])
+  }
+
+  /** A value with the system's minus and plus, as Keynote's size. */
+  private func stepperRow(_ title: String, key: String, step: Double, range: ClosedRange<Double>,
+                          field: Bool = false) -> some View
+  {
+    let value = number(key)
+    return HStack(spacing: 10) {
+      Text(title)
+        .lineLimit(1)
+        .minimumScaleFactor(0.85)
+        .layoutPriority(1)
+      Spacer(minLength: 4)
+      Text(value.formatted(.number.precision(.fractionLength(2))))
+        .monospacedDigit()
+        .foregroundStyle(field ? .primary : .secondary)
+        .padding(.horizontal, field ? 14 : 0)
+        .frame(minHeight: 36)
+        .background(field ? PanelStyle.field : .clear, in: Capsule())
+      Stepper(title, value: Binding(get: { value }, set: { setNumber(key, min(range.upperBound, max(range.lowerBound, $0))) }),
+              in: range, step: step)
+        .labelsHidden()
+    }
+    .frame(minHeight: 52)
+  }
+
+  /** Choices as a row of icons, the chosen one filled, as Keynote's alignment. */
+  private func alignmentRow(key: String, choices: [(String, String, String)], same: [String: String]) -> some View {
+    let raw = style.string(key) ?? ""
+    let current = same[raw] ?? raw
+    return HStack(spacing: 6) {
+      ForEach(choices, id: \.0) { value, symbol, title in
+        let chosen = value == current
+        Button {
+          edit((key == "align_x" ? "align:" : "align_y:") + value)
+        } label: {
+          Image(systemName: symbol)
+            .font(.system(size: 19, weight: .medium))
+            .foregroundStyle(chosen ? Color.white : .primary)
+            .frame(maxWidth: .infinity, minHeight: 40)
+            .background(chosen ? Color.accentColor : .clear, in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(chosen ? .isSelected : [])
+      }
+    }
+    .padding(.vertical, 8)
   }
 }
 
