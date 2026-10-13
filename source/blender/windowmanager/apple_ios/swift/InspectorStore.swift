@@ -230,6 +230,8 @@ final class InspectorStore {
       "key": property.string("key") ?? "", "panel": property.string("panel") ?? "",
       "tab": property.string("tab") ?? "",
     ]
+    /* A node's picker names its node. */
+    if let node = property.string("node") { request["node"] = node }
     request.merge(extra) { $1 }
     send(request)
   }

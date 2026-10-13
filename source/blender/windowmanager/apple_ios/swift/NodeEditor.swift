@@ -36,6 +36,8 @@ final class NodeEditorModel {
   private(set) var path: [String] = []
   private(set) var snapshot: JSON?
   private(set) var shown = false
+  /** Dragging on the canvas draws a box that selects nodes, instead of panning. */
+  var selecting = false
   /** Bumped to fit the view to the tree, as when another tree shows. */
   private(set) var fitRequest = 0
   /** The controls on the nodes, which edit through the same store as Properties' controls. */
@@ -230,11 +232,33 @@ struct NodeEditorPanel: View {
         .font(.headline)
       breadcrumbs
       Spacer(minLength: 0)
+      Toggle(isOn: Binding(get: { model.selecting }, set: { model.selecting = $0 })) {
+        Label("Select", systemImage: "rectangle.dashed")
+      }
+      .toggleStyle(.button)
+      .labelStyle(.iconOnly)
+      .buttonBorderShape(.circle)
+      .help("Drag on the canvas to select nodes")
+      .disabled(model.snapshot?["nodes"] == nil)
       Menu {
         Button("Select All", systemImage: "checkmark.circle") { model.send("select_all", ["value": 1]) }
         Button("Deselect All", systemImage: "circle") { model.send("select_all", ["value": 0]) }
         Divider()
         Button("Show All", systemImage: "arrow.up.left.and.arrow.down.right") { model.requestFit() }
+        Divider()
+        let anySelected = model.nodes.contains { $0.bool("selected") }
+        Button("Duplicate Selected", systemImage: "plus.square.on.square") {
+          model.send("operator", ["operator": "NODE_OT_duplicate"])
+        }
+        .disabled(!anySelected)
+        Button("Group Selected", systemImage: "square.on.square.dashed") {
+          model.send("operator", ["operator": "NODE_OT_group_make"])
+        }
+        .disabled(!anySelected)
+        Button("Frame Selected", systemImage: "rectangle.dashed") {
+          model.send("operator", ["operator": "NODE_OT_join"])
+        }
+        .disabled(!anySelected)
         Divider()
         Button("Delete Selected", systemImage: "trash", role: .destructive) {
           model.send("delete", ["nodes": model.nodes.filter { $0.bool("selected") }.compactMap { $0.string("name") }])
@@ -329,6 +353,8 @@ struct NodeCanvas: View {
   @State private var moved: [String: CGSize] = [:]
   @State private var wire: PendingWire?
   @State private var renaming: (node: String, label: String)?
+  /** The selection box being drawn, in view points. */
+  @State private var box: CGRect?
 
   /** The middle of the view in node space, where the Add button puts nodes. */
   static var lastCenter = CGPoint.zero
@@ -507,12 +533,43 @@ struct NodeCanvas: View {
     .gesture(
       DragGesture(minimumDistance: 4)
         .onChanged { value in
+          if model.selecting {
+            box = CGRect(x: min(value.startLocation.x, value.location.x),
+                         y: min(value.startLocation.y, value.location.y),
+                         width: abs(value.location.x - value.startLocation.x),
+                         height: abs(value.location.y - value.startLocation.y))
+            return
+          }
           let start = panStart ?? pan
           panStart = start
           pan = CGSize(width: start.width + value.translation.width,
                        height: start.height + value.translation.height)
         }
-        .onEnded { _ in panStart = nil })
+        .onEnded { _ in
+          panStart = nil
+          guard let rect = box else { return }
+          box = nil
+          /* The nodes the box touches, added to the selection. */
+          let a = toCanvas(rect.origin)
+          let b = toCanvas(CGPoint(x: rect.maxX, y: rect.maxY))
+          let area = CGRect(x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y)
+          let names = model.nodes.compactMap { node -> String? in
+            guard let name = node.string("name"), node.string("kind") != "FRAME",
+                  let frame = layout.nodes[name], frame.intersects(area) else { return nil }
+            return name
+          }
+          model.send("select_nodes", ["nodes": names])
+        })
+    .overlay(alignment: .topLeading) {
+      if let box {
+        Rectangle()
+          .fill(Color.accentColor.opacity(0.12))
+          .overlay(Rectangle().strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 1, dash: [5, 3])))
+          .frame(width: box.width, height: box.height)
+          .offset(x: box.minX, y: box.minY)
+          .allowsHitTesting(false)
+      }
+    }
     .onTapGesture { model.send("select", ["node": ""]) }
     .accessibilityLabel("Node Canvas")
   }
@@ -742,6 +799,17 @@ struct NodeCanvas: View {
         model.send("collapse", ["nodes": targets])
       }
     }
+    Button("Duplicate", systemImage: "plus.square.on.square") { runOnSelection(name, "NODE_OT_duplicate") }
+    Button("Make Group", systemImage: "square.on.square.dashed") { runOnSelection(name, "NODE_OT_group_make") }
+    if node.string("kind") == "GROUP" {
+      Button("Ungroup", systemImage: "square.dashed") { runOnSelection(name, "NODE_OT_group_ungroup") }
+    }
+    Button("Frame Selected", systemImage: "rectangle.dashed") { runOnSelection(name, "NODE_OT_join") }
+    if node.string("parent") != nil {
+      Button("Remove from Frame", systemImage: "rectangle.portrait.and.arrow.right") {
+        runOnSelection(name, "NODE_OT_parent_clear")
+      }
+    }
     Button("Rename…", systemImage: "pencil") {
       renaming = (name, node.string("title") ?? "")
     }
@@ -749,6 +817,12 @@ struct NodeCanvas: View {
     Button("Delete", systemImage: "trash", role: .destructive) {
       model.send("delete", ["nodes": targets])
     }
+  }
+
+  /** Runs a Blender operator on the node a menu was opened on, alone. */
+  private func runOnSelection(_ name: String, _ idname: String) {
+    model.send("select", ["node": name])
+    model.send("operator", ["operator": idname])
   }
 
   /** The selected nodes when `name` is among them, else `name` alone. */

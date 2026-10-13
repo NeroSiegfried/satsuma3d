@@ -3286,13 +3286,28 @@ Block *native_node_block(bContext *C,
   return block;
 }
 
-/** Calls `fn` for each value a node's block shows, as the Properties fields go. */
-template<typename Fn> void for_each_node_field(Block &block, Fn fn)
+/** Calls `fn` for each value a node's block shows, as the Properties fields go, and `id_fn`
+ * for each data-block picker (an image, a node group), whose parts are left out. */
+template<typename Fn, typename IDFn> void for_each_node_field(Block &block, Fn fn, IDFn id_fn)
 {
   std::set<std::string> seen;
   for (const auto &button : block.buttons) {
     Button &but = *button;
-    if (!but.rnaprop || !but.rnapoin.data || (but.flag & UI_HIDDEN)) {
+    PointerRNA template_ptr;
+    PropertyRNA *template_prop;
+    int template_event;
+    if (template_id_property_get(but, template_ptr, template_prop, template_event)) {
+      if (template_event == UI_ID_BROWSE &&
+          seen.insert(id_template_key(template_ptr, template_prop)).second)
+      {
+        id_fn(template_ptr, template_prop);
+      }
+      continue;
+    }
+    if (!but.rnaprop || !but.rnapoin.data || (but.flag & UI_HIDDEN) ||
+        /* A picker's own, in its menu. */
+        STREQ(RNA_property_identifier(but.rnaprop), "use_fake_user"))
+    {
       continue;
     }
     const PropertyType type = RNA_property_type(but.rnaprop);
@@ -3430,14 +3445,21 @@ void project_node(bContext *C, bNodeTree &tree, bNode &node, const std::set<cons
   }
   auto fields = item.append_array("fields");
   Block *block = native_node_block(C, tree, node, linked);
-  for_each_node_field(*block, [&](Button &but, const int index, const std::string & /*key*/) {
-    auto field = fields->append_dict();
-    project_property(C, but, index, *field);
-    field->append_str("node", node.name);
-    if (RNA_struct_is_a(but.rnapoin.type, RNA_NodeSocket)) {
-      field->append_str("socket", static_cast<bNodeSocket *>(but.rnapoin.data)->identifier);
-    }
-  });
+  for_each_node_field(
+      *block,
+      [&](Button &but, const int index, const std::string & /*key*/) {
+        auto field = fields->append_dict();
+        project_property(C, but, index, *field);
+        field->append_str("node", node.name);
+        if (RNA_struct_is_a(but.rnapoin.type, RNA_NodeSocket)) {
+          field->append_str("socket", static_cast<bNodeSocket *>(but.rnapoin.data)->identifier);
+        }
+      },
+      [&](PointerRNA &ptr, PropertyRNA *prop) {
+        auto field = fields->append_dict();
+        project_id_template(C, *block, ptr, prop, *field);
+        field->append_str("node", node.name);
+      });
   block_free(C, block);
 }
 
@@ -3616,11 +3638,41 @@ std::optional<std::string> apply_node_action(bContext *C, bNodeTree &tree, const
     Block *block = native_node_block(C, tree, *node, linked);
     const std::string key = query.lookup_str("key").value_or("");
     bool applied = false;
-    for_each_node_field(*block, [&](Button &but, const int index, const std::string &field_key) {
-      if (!applied && field_key == key) {
-        applied = set_property(C, but, index, query);
+    wmOperatorType *operator_type = nullptr;
+    PointerRNA *operator_properties = nullptr;
+    std::unique_ptr<bContextStore> operator_context;
+    PendingNewID pending;
+    for_each_node_field(
+        *block,
+        [&](Button &but, const int index, const std::string &field_key) {
+          if (!applied && field_key == key && !query.lookup_str("id_action")) {
+            applied = set_property(C, but, index, query);
+          }
+        },
+        [&](PointerRNA &ptr, PropertyRNA *prop) {
+          if (!applied && query.lookup_str("id_action") && id_template_key(ptr, prop) == key) {
+            applied = apply_id_template(C, *block, ptr, prop, query, operator_type,
+                                        operator_properties, operator_context, pending);
+          }
+        });
+    /* New (or a copy), which the picker's own operator makes. */
+    if (operator_type) {
+      const bContextStore *previous = CTX_store_get(C);
+      CTX_store_set(C, operator_context.get());
+      if (WM_operator_poll_context(C, operator_type, wm::OpCallContext::ExecDefault)) {
+        applied = WM_operator_name_call_ptr(C, operator_type, wm::OpCallContext::ExecDefault,
+                                            operator_properties, nullptr) &
+                  OPERATOR_FINISHED;
       }
-    });
+      CTX_store_set(C, previous);
+      if (operator_properties) {
+        WM_operator_properties_free(operator_properties);
+        MEM_delete(operator_properties);
+      }
+      if (applied) {
+        finish_pending_new_id(C, pending);
+      }
+    }
     block_free(C, block);
     /* Undo, keys and updates are the property's own, as from a button. */
     BKE_ntree_update_tag_node_property(&tree, node);
@@ -3636,6 +3688,46 @@ std::optional<std::string> apply_node_action(bContext *C, bNodeTree &tree, const
     if (node) {
       node->flag |= NODE_SELECT;
       bke::node_set_active(tree, *node);
+    }
+    WM_event_add_notifier(C, NC_NODE | NA_SELECTED, &tree);
+    return std::string("");
+  }
+  if (action == "operator") {
+    /* Blender's own operators on the selection, as their keys run them: duplicate, group,
+     * ungroup, frame. */
+    static const std::set<std::string> allowed = {"NODE_OT_duplicate",
+                                                  "NODE_OT_group_make",
+                                                  "NODE_OT_group_ungroup",
+                                                  "NODE_OT_join",
+                                                  "NODE_OT_parent_clear",
+                                                  "NODE_OT_detach"};
+    const std::string idname = std::string(query.lookup_str("operator").value_or(""));
+    wmOperatorType *ot = allowed.count(idname) ? WM_operatortype_find(idname.c_str(), false) :
+                                                 nullptr;
+    if (!ot || !WM_operator_poll(C, ot)) {
+      return std::nullopt;
+    }
+    const wmOperatorStatus status = WM_operator_name_call_ptr(
+        C, ot, wm::OpCallContext::ExecDefault, nullptr, nullptr);
+    if (!(status & OPERATOR_FINISHED)) {
+      return std::nullopt;
+    }
+    if (idname == "NODE_OT_duplicate") {
+      /* Beside the originals, as moving them away right after would. */
+      for (bNode &other : tree.nodes) {
+        if (other.flag & NODE_SELECT) {
+          other.location[0] += 40.0f;
+          other.location[1] -= 40.0f;
+        }
+      }
+    }
+    BKE_main_ensure_invariants(*bmain, tree.id);
+    /* The operators push their own undo steps. */
+    return std::string("");
+  }
+  if (action == "select_nodes") {
+    for (bNode *named : named_nodes(tree, query)) {
+      named->flag |= NODE_SELECT;
     }
     WM_event_add_notifier(C, NC_NODE | NA_SELECTED, &tree);
     return std::string("");
