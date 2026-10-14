@@ -421,9 +421,10 @@ private struct PendingWire {
   var target: (node: String, socket: String)?
 }
 
-/** The cables' slack: a weight at each cable's middle on a spring, which hangs below its ends
- * and lags and sways when they move, as patch cables hang between jacks. Kept in canvas points,
- * so panning and zooming leave the cables still. */
+/** The cables' slack: a weight at each cable's middle on a spring. A cable hangs taut until
+ * one of its ends moves; then it slackens and dangles, lagging and swaying behind, and once its
+ * ends rest it draws tight again, as patch cables do. Kept in canvas points, so panning and
+ * zooming leave the cables still. */
 final class CableMotion {
   static let pending = "\u{1}pending"
 
@@ -434,43 +435,65 @@ final class CableMotion {
   private struct Weight {
     var position: CGPoint
     var velocity: CGVector
+    /** How slack the cable hangs, from taut (0) to dangling (1). */
+    var slack: CGFloat
+    var from: CGPoint
+    var to: CGPoint
+    /** When an end last moved. */
+    var moved: Date
     var seen: Date
   }
 
   private var weights: [String: Weight] = [:]
   private var last: Date?
 
-  /** Where a cable's middle hangs at rest: below its ends, the more the longer it is. */
-  static func rest(from: CGPoint, to: CGPoint) -> CGPoint {
+  /** Where a cable's middle hangs: between its ends when taut, below them when slack, the more
+   * the longer it is. */
+  static func rest(from: CGPoint, to: CGPoint, slack: CGFloat) -> CGPoint {
     let length = hypot(to.x - from.x, to.y - from.y)
-    return CGPoint(x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 + min(110, 8 + length * 0.14))
+    return CGPoint(x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 + slack * min(110, 8 + length * 0.14))
   }
 
-  /** Moves every weight on to `date`; true when all hang still. */
-  func step(to date: Date, ends: [(key: String, from: CGPoint, to: CGPoint)]) -> Bool {
+  /** Moves every weight on to `date`; true when all hang still. A `held` cable, being pulled,
+   * stays slack. */
+  func step(to date: Date, ends: [(key: String, from: CGPoint, to: CGPoint, held: Bool)]) -> Bool {
     let elapsed = min(1.0 / 30, max(0, date.timeIntervalSince(last ?? date)))
     last = date
     let calm = UIAccessibility.isReduceMotionEnabled
     var still = true
     for end in ends {
-      let rest = Self.rest(from: end.from, to: end.to)
       guard var weight = weights[end.key], !calm else {
-        weights[end.key] = Weight(position: rest, velocity: .zero, seen: date)
+        weights[end.key] = Weight(position: Self.rest(from: end.from, to: end.to, slack: 0), velocity: .zero,
+                                  slack: 0, from: end.from, to: end.to, moved: .distantPast, seen: date)
         continue
       }
+      if end.held || hypot(end.from.x - weight.from.x, end.from.y - weight.from.y) > 0.01 ||
+         hypot(end.to.x - weight.to.x, end.to.y - weight.to.y) > 0.01
+      {
+        weight.moved = date
+      }
+      weight.from = end.from
+      weight.to = end.to
+      /* Slackens quickly as an end moves, and draws tight gently a moment after they rest. */
+      let resting = date.timeIntervalSince(weight.moved) > 0.18
+      let target: CGFloat = resting ? 0 : 1
+      let rate: CGFloat = resting ? 3.2 : 9
+      weight.slack += (target - weight.slack) * min(1, rate * elapsed)
+      if resting && weight.slack < 0.002 { weight.slack = 0 }
+      let rest = Self.rest(from: end.from, to: end.to, slack: weight.slack)
       /* Springy and lightly damped, in small steps so it stays steady. */
       let steps = 4
       let dt = elapsed / Double(steps)
       for _ in 0..<steps {
-        let ax = 110 * (rest.x - weight.position.x) - 6.5 * weight.velocity.dx
-        let ay = 110 * (rest.y - weight.position.y) - 6.5 * weight.velocity.dy
+        let ax = 120 * (rest.x - weight.position.x) - 8 * weight.velocity.dx
+        let ay = 120 * (rest.y - weight.position.y) - 8 * weight.velocity.dy
         weight.velocity.dx += ax * dt
         weight.velocity.dy += ay * dt
         weight.position.x += weight.velocity.dx * dt
         weight.position.y += weight.velocity.dy * dt
       }
       weight.seen = date
-      if hypot(weight.velocity.dx, weight.velocity.dy) > 2 ||
+      if weight.slack > 0 || hypot(weight.velocity.dx, weight.velocity.dy) > 2 ||
          hypot(rest.x - weight.position.x, rest.y - weight.position.y) > 0.5
       {
         still = false
@@ -487,12 +510,18 @@ final class CableMotion {
   }
 
   func slack(_ key: String, from: CGPoint, to: CGPoint) -> CGPoint {
-    weights[key]?.position ?? Self.rest(from: from, to: to)
+    weights[key]?.position ?? Self.rest(from: from, to: to, slack: 0)
+  }
+
+  /** A cable's middle and ends, as the next frame draws it, for finding the cable under a point. */
+  func shape(_ key: String) -> (from: CGPoint, slack: CGPoint, to: CGPoint)? {
+    weights[key].map { ($0.from, $0.position, $0.to) }
   }
 
   func kick(_ key: String, by velocity: CGVector) {
     weights[key]?.velocity.dx += velocity.dx
     weights[key]?.velocity.dy += velocity.dy
+    weights[key]?.moved = Date()
   }
 
   /** The loose cable, connected, carries on as the link's own. */
@@ -508,6 +537,8 @@ final class CableMotion {
 /** A socket just plugged into. */
 private struct CablePlug: Identifiable {
   static let duration = 0.45
+  /** How long light takes to run along a cable just connected. */
+  static let flash = 0.5
   let id = UUID()
   let point: CGPoint
   let color: Color
@@ -549,7 +580,9 @@ struct NodeCanvas: View {
    * when cancelled, which `onEnded` misses. */
   @GestureState private var pinching = false
   @GestureState private var panning = false
-  @State private var panStart: CGSize?
+  /** The pan a drag started from, and how far it had gone then, so a drag can pick up again
+   * after a pinch without jumping. */
+  @State private var panStart: (pan: CGSize, translation: CGSize)?
   @State private var viewSize: CGSize = .zero
   /** Nodes being dragged, and how far, in canvas points. */
   @State private var drag: (nodes: Set<String>, offset: CGSize)?
@@ -565,6 +598,16 @@ struct NodeCanvas: View {
   @State private var cables = CableMotion()
   /** While a cable still sways, frames are drawn. */
   @State private var cablesMoving = false
+  /** The node just plugged into, bouncing. */
+  @State private var bounced: String?
+  /** Links just made, a flash of light running along them. */
+  @State private var flashes: [String: Date] = [:]
+  /** Shows a node's actions as the system's edit menu. */
+  @State private var menus = NodeMenuPresenter()
+  /** A tap on a selected node shows its menu, unless a second tap enters it. */
+  @State private var pendingMenu: DispatchWorkItem?
+  /** The link the node being dragged would be put in. */
+  @State private var insertion: (key: String, link: JSON)?
   /** Rings sent out by sockets just connected. */
   @State private var plugs: [CablePlug] = []
   /** Where the canvas is in the window, for feedback at a point. */
@@ -576,6 +619,7 @@ struct NodeCanvas: View {
   var body: some View {
     GeometryReader { proxy in
       ZStack(alignment: .topLeading) {
+        NodeMenuAnchor(presenter: menus)
         background
         if model.backdrop, let path = model.snapshot?.string("backdrop"), let image = NodeImages.image(path) {
           /* The compositor's Viewer, behind the nodes, as Blender's backdrop. */
@@ -811,9 +855,15 @@ struct NodeCanvas: View {
   }
 
   private func panBy(_ translation: CGSize) {
-    let start = panStart ?? pan
+    /* A pinch moves the view itself; a finger left down pans on from where it ends. */
+    guard gestureZoom == nil else {
+      panStart = nil
+      return
+    }
+    let start = panStart ?? (pan, translation)
     panStart = start
-    pan = CGSize(width: start.width + translation.width, height: start.height + translation.height)
+    pan = CGSize(width: start.pan.width + translation.width - start.translation.width,
+                 height: start.pan.height + translation.height - start.translation.height)
   }
 
   /** The nodes the box touches are added to the selection when it is let go. */
@@ -869,6 +919,7 @@ struct NodeCanvas: View {
       node.array("outputs").map { (NodeCanvasLayout.socketKey(node.string("name") ?? "", output: true, $0.string("id") ?? ""), socketColor($0)) }
     }, uniquingKeysWith: { a, _ in a })
     var cablesNow: [(key: String, from: CGPoint, to: CGPoint, color: Color, muted: Bool)] = []
+    var heldKey: String?
     for link in model.links {
       if let detached = wire?.detached, jsonEqual(detached as NSDictionary, link as NSDictionary) { continue }
       let fromKey = NodeCanvasLayout.socketKey(link.string("from_node") ?? "", output: true, link.string("from_socket") ?? "")
@@ -882,12 +933,32 @@ struct NodeCanvas: View {
       if let start = layout.sockets[key] {
         let a = start, b = wire.end
         cablesNow.append((CableMotion.pending, wire.output ? a : b, wire.output ? b : a, wire.color, false))
+        heldKey = CableMotion.pending
       }
     }
-    let still = cables.step(to: date, ends: cablesNow.map { ($0.key, $0.from, $0.to) })
+    var still = cables.step(to: date, ends: cablesNow.map { ($0.key, $0.from, $0.to, $0.key == heldKey) })
     for cable in cablesNow {
-      draw(&context, from: cable.from, to: cable.to, slack: cables.slack(cable.key, from: cable.from, to: cable.to),
-           color: cable.color, muted: cable.muted)
+      let slack = cables.slack(cable.key, from: cable.from, to: cable.to)
+      draw(&context, from: cable.from, to: cable.to, slack: slack, color: cable.color, muted: cable.muted,
+           lit: cable.key == insertion?.key)
+      /* Light running from the source to the socket just plugged into. */
+      if let start = flashes[cable.key] {
+        let t = date.timeIntervalSince(start) / CablePlug.flash
+        if t < 1 {
+          still = false
+          let controls = Self.controls(from: cable.from, to: cable.to, slack: slack)
+          var path = Path()
+          path.move(to: toView(cable.from))
+          path.addCurve(to: toView(cable.to), control1: toView(controls.0), control2: toView(controls.1))
+          let head = min(1, t * 1.3), tail = max(0, head - 0.35)
+          let glow = path.trimmedPath(from: tail, to: head)
+          let width = max(1.5, 3 * zoom)
+          context.stroke(glow, with: .color(cable.color.opacity(0.45 * (1 - t))),
+                         style: StrokeStyle(lineWidth: width + 9, lineCap: .round))
+          context.stroke(glow, with: .color(.white.opacity(0.95 * (1 - t * t))),
+                         style: StrokeStyle(lineWidth: width + 1, lineCap: .round))
+        }
+      }
     }
     /* Frames stop once every cable hangs still, and start again when one is moved. */
     if still == cablesMoving {
@@ -898,26 +969,73 @@ struct NodeCanvas: View {
   /** A cable from one socket to another in canvas points, leaving and entering its sockets
    * sideways and passing through its slack. */
   private func draw(_ context: inout GraphicsContext, from: CGPoint, to: CGPoint, slack: CGPoint, color: Color,
-                    muted: Bool)
+                    muted: Bool, lit: Bool = false)
   {
+    let controls = Self.controls(from: from, to: to, slack: slack)
+    var path = Path()
+    path.move(to: toView(from))
+    path.addCurve(to: toView(to), control1: toView(controls.0), control2: toView(controls.1))
+    let style = StrokeStyle(lineWidth: max(1.5, 3 * zoom), lineCap: .round, dash: muted ? [6, 6] : [])
+    if lit {
+      /* The link a dragged node would be put in. */
+      context.stroke(path, with: .color(.white.opacity(0.9)), style: StrokeStyle(lineWidth: style.lineWidth + 7, lineCap: .round))
+    }
+    context.stroke(path, with: .color(.black.opacity(0.35)), style: StrokeStyle(lineWidth: style.lineWidth + 2, lineCap: .round))
+    context.stroke(path, with: .color(color), style: lit ? StrokeStyle(lineWidth: style.lineWidth + 1.5, lineCap: .round) : style)
+  }
+
+  /** A cable's curve, leaving and entering its sockets sideways and passing through its slack. */
+  private static func controls(from: CGPoint, to: CGPoint, slack: CGPoint) -> (CGPoint, CGPoint) {
     let reach = max(40, abs(to.x - from.x) * 0.5)
     let middle = CGPoint(x: (from.x + to.x) / 2, y: (from.y + to.y) / 2)
     /* A cubic passes its middle at three quarters of its control points' shift. */
     let shift = CGPoint(x: (slack.x - middle.x) / 0.75, y: (slack.y - middle.y) / 0.75)
-    var path = Path()
-    path.move(to: toView(from))
-    path.addCurve(to: toView(to),
-                  control1: toView(CGPoint(x: from.x + reach + shift.x, y: from.y + shift.y)),
-                  control2: toView(CGPoint(x: to.x - reach + shift.x, y: to.y + shift.y)))
-    let style = StrokeStyle(lineWidth: max(1.5, 3 * zoom), lineCap: .round, dash: muted ? [6, 6] : [])
-    context.stroke(path, with: .color(.black.opacity(0.35)), style: StrokeStyle(lineWidth: style.lineWidth + 2, lineCap: .round))
-    context.stroke(path, with: .color(color), style: style)
+    return (CGPoint(x: from.x + reach + shift.x, y: from.y + shift.y),
+            CGPoint(x: to.x - reach + shift.x, y: to.y + shift.y))
+  }
+
+  /** The link a node dragged alone would be put in: one passing under it, when the node has no
+   * links of its own, as Blender's editor offers. */
+  private func insertionLink(for name: String, offset: CGSize) -> (key: String, link: JSON)? {
+    guard let node = model.nodes.first(where: { $0.string("name") == name }), node.string("kind") != "FRAME",
+          !node.array("inputs").isEmpty, !node.array("outputs").isEmpty,
+          !model.links.contains(where: { $0.string("from_node") == name || $0.string("to_node") == name }),
+          var rect = layout.nodes[name]
+    else { return nil }
+    if let moved = moved[name] { rect = rect.offsetBy(dx: moved.width, dy: moved.height) }
+    rect = rect.offsetBy(dx: offset.width, dy: offset.height)
+    let center = CGPoint(x: rect.midX, y: rect.midY)
+    var best: (String, JSON, CGFloat)?
+    for link in model.links {
+      let key = CableMotion.key(link)
+      guard let shape = cables.shape(key) else { continue }
+      let controls = Self.controls(from: shape.from, to: shape.to, slack: shape.slack)
+      for step in 1..<24 {
+        let t = CGFloat(step) / 24, u = 1 - t
+        let a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t
+        let point = CGPoint(x: a * shape.from.x + b * controls.0.x + c * controls.1.x + d * shape.to.x,
+                            y: a * shape.from.y + b * controls.0.y + c * controls.1.y + d * shape.to.y)
+        guard rect.contains(point) else { continue }
+        let distance = hypot(point.x - center.x, point.y - center.y)
+        if distance < (best?.2 ?? .infinity) { best = (key, link, distance) }
+      }
+    }
+    return best.map { ($0.0, $0.1) }
   }
 
   /** A ring going out from each socket just plugged into. */
   private var plugRings: some View {
-    TimelineView(.animation(paused: plugs.isEmpty)) { timeline in
+    TimelineView(.animation(paused: plugs.isEmpty && wire?.target == nil)) { timeline in
       Canvas { context, _ in
+        /* The socket the loose cable has found breathes, ready to take it. */
+        if let wire, wire.target != nil {
+          let center = toView(wire.end)
+          let breath = 0.5 + 0.5 * sin(timeline.date.timeIntervalSinceReferenceDate * 9)
+          let radius = (13 + 4 * breath) * max(zoom, 0.5)
+          let halo = Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+          context.fill(halo, with: .color(wire.color.opacity(0.18 + 0.12 * breath)))
+          context.stroke(halo, with: .color(wire.color.opacity(0.9)), lineWidth: 2)
+        }
         for plug in plugs {
           let t = timeline.date.timeIntervalSince(plug.start) / CablePlug.duration
           guard t >= 0, t < 1 else { continue }
@@ -937,9 +1055,14 @@ struct NodeCanvas: View {
 
   /** The cable just dropped onto a socket: it springs up and settles, the socket sends out a
    * ring, and the Pencil or trackpad gives a click. */
-  private func plugged(into point: CGPoint, color: Color, link: [String: String]) {
+  private func plugged(into point: CGPoint, node: String, color: Color, link: [String: String]) {
     cables.adopt(CableMotion.pending, as: CableMotion.key(link))
     cables.kick(CableMotion.key(link), by: CGVector(dx: 0, dy: -420))
+    flashes[CableMotion.key(link)] = Date()
+    DispatchQueue.main.asyncAfter(deadline: .now() + CablePlug.flash) {
+      flashes = flashes.filter { Date().timeIntervalSince($0.value) < CablePlug.flash }
+    }
+    bounce(node)
     cablesMoving = true
     let plug = CablePlug(point: point, color: color, start: Date())
     plugs.append(plug)
@@ -997,11 +1120,15 @@ struct NodeCanvas: View {
             }
           }
           .frame(width: cardWidth(node))
-          .contextMenu { menu(node) }
-          .onTapGesture(count: 2) {
+          .scaleEffect(bounced == name ? 1.035 : 1)
+          /* Selected at once; tapped again, or held, its actions show above it, as objects on a
+           * canvas do. */
+          .onTapGesture { tapped(node) }
+          .simultaneousGesture(TapGesture(count: 2).onEnded {
+            pendingMenu?.cancel()
             if node.string("kind") == "GROUP" { model.enter(group: name) }
-          }
-          .onTapGesture { model.send("select", ["node": name]) }
+          })
+          .onLongPressGesture(minimumDuration: 0.45) { showMenu(node) }
       }
     }
     .fixedSize(horizontal: false, vertical: true)
@@ -1037,7 +1164,8 @@ struct NodeCanvas: View {
           layout.set(socket: NodeCanvasLayout.socketKey(name, output: true, socket.string("id") ?? ""), center)
         }
       }
-      .contextMenu { menu(node) }
+      .onTapGesture { tapped(node) }
+      .onLongPressGesture(minimumDuration: 0.45) { showMenu(node) }
       .gesture(moveGesture(name))
       .offset(x: -16, y: -16)
   }
@@ -1103,64 +1231,92 @@ struct NodeCanvas: View {
       }
       .frame(width: rect.width, height: rect.height)
       .contentShape(RoundedRectangle(cornerRadius: 18))
-      .contextMenu { menu(frame) }
+      .onTapGesture { tapped(frame, in: rect) }
+      .onLongPressGesture(minimumDuration: 0.45) { showMenu(frame, in: rect) }
       .gesture(moveGesture(name))
-      .onTapGesture { model.send("select", ["node": name]) }
       .offset(x: rect.minX, y: rect.minY)
   }
 
-  @ViewBuilder
-  private func menu(_ node: JSON) -> some View {
+  private func tapped(_ node: JSON, in frame: CGRect? = nil) {
     let name = node.string("name") ?? ""
-    /* The node pressed, as menus act on what they are opened on. */
+    guard node.bool("selected") else {
+      model.send("select", ["node": name])
+      return
+    }
+    pendingMenu?.cancel()
+    let work = DispatchWorkItem { showMenu(node, in: frame) }
+    pendingMenu = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.28, execute: work)
+  }
+
+  /** The node's actions as the system's edit menu, above the node. */
+  private func showMenu(_ node: JSON, in frame: CGRect? = nil) {
+    let name = node.string("name") ?? ""
+    guard var rect = frame ?? layout.nodes[name] else { return }
+    if frame == nil, let offset = moved[name] { rect = rect.offsetBy(dx: offset.width, dy: offset.height) }
+    if !node.bool("selected") { model.send("select", ["node": name]) }
+    let a = toView(rect.origin), b = toView(CGPoint(x: rect.maxX, y: rect.maxY))
+    menus.present(uiMenu(node), around: CGRect(x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y))
+  }
+
+  /** The same actions as `menu`, for the edit menu. */
+  private func uiMenu(_ node: JSON) -> UIMenu {
+    let name = node.string("name") ?? ""
     let targets = [name]
-    if node.string("kind") == "GROUP" {
-      Button("Enter Group", systemImage: "arrow.down.right.square") { model.enter(group: name) }
+    let kind = node.string("kind") ?? ""
+    func action(_ title: String, _ image: String, destructive: Bool = false, _ run: @escaping () -> Void) -> UIAction {
+      UIAction(title: title, image: UIImage(systemName: image), attributes: destructive ? .destructive : []) { _ in run() }
     }
-    Button(node.bool("muted") ? "Unmute" : "Mute", systemImage: node.bool("muted") ? "speaker.wave.2" : "speaker.slash") {
+    var first: [UIMenuElement] = []
+    if kind == "GROUP" {
+      first.append(action("Enter Group", "arrow.down.right.square") { model.enter(group: name) })
+    }
+    first.append(action("Duplicate", "plus.square.on.square") { runOnSelection(name, "NODE_OT_duplicate") })
+    first.append(action("Rename…", "pencil") { renaming = (name, node.string("title") ?? "") })
+    first.append(action(node.bool("muted") ? "Unmute" : "Mute", node.bool("muted") ? "speaker.wave.2" : "speaker.slash") {
       model.send("mute", ["nodes": targets])
-    }
-    if node.string("kind") == "NODE" || node.string("kind") == "GROUP" {
-      Button(node.bool("collapsed") ? "Expand" : "Collapse",
-             systemImage: node.bool("collapsed") ? "rectangle.expand.vertical" : "rectangle.compress.vertical") {
+    })
+    if kind == "NODE" || kind == "GROUP" {
+      first.append(action(node.bool("collapsed") ? "Expand" : "Collapse",
+                          node.bool("collapsed") ? "rectangle.expand.vertical" : "rectangle.compress.vertical") {
         model.send("collapse", ["nodes": targets])
-      }
+      })
     }
-    Button("Duplicate", systemImage: "plus.square.on.square") { runOnSelection(name, "NODE_OT_duplicate") }
-    Button("Make Group", systemImage: "square.on.square.dashed") { runOnSelection(name, "NODE_OT_group_make") }
-    if node.string("kind") == "GROUP" {
-      Button("Ungroup", systemImage: "square.dashed") { runOnSelection(name, "NODE_OT_group_ungroup") }
+    var more: [UIMenuElement] = []
+    if kind != "FRAME" && !node.array("outputs").isEmpty {
+      more.append(action("Connect to Viewer", "eye") { model.send("viewer", ["node": name]) })
     }
-    Button("Frame Selected", systemImage: "rectangle.dashed") { runOnSelection(name, "NODE_OT_join") }
+    if node.bool("can_preview") {
+      more.append(action(node.bool("preview_on") ? "Hide Preview" : "Show Preview", "photo") {
+        model.send("preview", ["node": name])
+      })
+    }
+    more.append(action("Color…", "paintpalette") { coloring = node })
+    if node["color"] != nil {
+      more.append(action("Default Color", "paintpalette.fill") { model.send("color", ["node": name]) })
+    }
+    if kind == "NODE" || kind == "GROUP" {
+      more.append(action("Show Hidden Sockets", "circle.dotted") { model.send("sockets_show", ["node": name]) })
+    }
+    more.append(action("Make Group", "square.on.square.dashed") { runOnSelection(name, "NODE_OT_group_make") })
+    if kind == "GROUP" {
+      more.append(action("Ungroup", "square.dashed") { runOnSelection(name, "NODE_OT_group_ungroup") })
+    }
+    more.append(action("Frame Selected", "rectangle.dashed") { runOnSelection(name, "NODE_OT_join") })
     if node.string("parent") != nil {
-      Button("Remove from Frame", systemImage: "rectangle.portrait.and.arrow.right") {
+      more.append(action("Remove from Frame", "rectangle.portrait.and.arrow.right") {
         runOnSelection(name, "NODE_OT_parent_clear")
-      }
+      })
     }
-    Button("Rename…", systemImage: "pencil") {
-      renaming = (name, node.string("title") ?? "")
-    }
-    Section {
-      if node.string("kind") != "FRAME" && !node.array("outputs").isEmpty {
-        Button("Connect to Viewer", systemImage: "eye") { model.send("viewer", ["node": name]) }
-      }
-      if node.bool("can_preview") {
-        Button(node.bool("preview_on") ? "Hide Preview" : "Show Preview",
-               systemImage: "photo") {
-          model.send("preview", ["node": name])
-        }
-      }
-      Button("Color…", systemImage: "paintpalette") { coloring = node }
-      if node["color"] != nil {
-        Button("Default Color", systemImage: "paintpalette.fill") { model.send("color", ["node": name]) }
-      }
-      if node.string("kind") == "NODE" || node.string("kind") == "GROUP" {
-        Button("Show Hidden Sockets", systemImage: "circle.dotted") { model.send("sockets_show", ["node": name]) }
-      }
-    }
-    Divider()
-    Button("Delete", systemImage: "trash", role: .destructive) {
-      model.send("delete", ["nodes": targets])
+    return UIMenu(children: first + [UIMenu(title: "More", image: UIImage(systemName: "ellipsis.circle"), children: more),
+                                     action("Delete", "trash", destructive: true) { model.send("delete", ["nodes": targets]) }])
+  }
+
+  /** The node bounces, as it takes a cable. */
+  private func bounce(_ name: String) {
+    withAnimation(.spring(response: 0.16, dampingFraction: 0.5)) { bounced = name }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+      withAnimation(.spring(response: 0.35, dampingFraction: 0.45)) { bounced = nil }
     }
   }
 
@@ -1187,14 +1343,37 @@ struct NodeCanvas: View {
           drag = (nodes, .zero)
         }
         drag?.offset = value.translation
+        /* Over a link it could go in, the link lights up, with a tick. */
+        let next = drag?.nodes.count == 1 ? insertionLink(for: name, offset: value.translation) : nil
+        if next?.key != insertion?.key {
+          if let next, let rect = layout.nodes[name] {
+            CableFeedback.snapped(at: windowPoint(CGPoint(x: rect.midX + value.translation.width,
+                                                          y: rect.midY + value.translation.height)))
+            cables.kick(next.key, by: CGVector(dx: 0, dy: 160))
+          }
+          insertion = next
+        }
       }
       .onEnded { value in
         guard let current = drag else { return }
         for node in current.nodes { moved[node] = value.translation }
         drag = nil
-        model.send("move", ["nodes": Array(current.nodes),
-                            "dx": Double(value.translation.width / nodeScale),
-                            "dy": Double(-value.translation.height / nodeScale)])
+        var request: JSON = ["nodes": Array(current.nodes),
+                             "dx": Double(value.translation.width / nodeScale),
+                             "dy": Double(-value.translation.height / nodeScale)]
+        if let insertion {
+          for field in ["from_node", "from_socket", "to_node", "to_socket"] {
+            request["insert_" + field] = insertion.link.string(field) ?? ""
+          }
+          if let rect = layout.nodes[name] {
+            let point = CGPoint(x: rect.midX + value.translation.width, y: rect.midY + value.translation.height)
+            cables.forget(insertion.key)
+            CableFeedback.connected(at: windowPoint(point))
+            bounce(name)
+          }
+          self.insertion = nil
+        }
+        model.send("move", request)
       }
   }
 
@@ -1254,7 +1433,7 @@ struct NodeCanvas: View {
             ["from_node": target.node, "from_socket": target.socket, "to_node": current.node, "to_socket": current.socket]
           model.send("link", link)
           if let place = layout.sockets[NodeCanvasLayout.socketKey(target.node, output: !current.output, target.socket)] {
-            plugged(into: place, color: current.color, link: link)
+            plugged(into: place, node: target.node, color: current.color, link: link)
           }
           return
         }
@@ -1637,6 +1816,62 @@ struct NodeAddSheet: View {
 
 /** \} */
 
+/** Shows a node's actions as the system's edit menu, above the node, as a selected object on a
+ * canvas shows its own. */
+@MainActor
+final class NodeMenuPresenter: NSObject, UIEditMenuInteractionDelegate {
+  private weak var view: UIView?
+  private var interaction: UIEditMenuInteraction?
+  private var menu: UIMenu?
+  private var target: CGRect = .zero
+
+  func attach(to view: UIView) {
+    guard self.view !== view else { return }
+    let interaction = UIEditMenuInteraction(delegate: self)
+    view.addInteraction(interaction)
+    self.view = view
+    self.interaction = interaction
+  }
+
+  /** `around` is the node, in the canvas view's points. */
+  func present(_ menu: UIMenu, around rect: CGRect) {
+    guard let interaction else { return }
+    self.menu = menu
+    target = rect
+    let configuration = UIEditMenuConfiguration(identifier: nil, sourcePoint: CGPoint(x: rect.midX, y: rect.minY))
+    configuration.preferredArrowDirection = .down
+    interaction.presentEditMenu(with: configuration)
+  }
+
+  func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration,
+                           suggestedActions: [UIMenuElement]) -> UIMenu?
+  {
+    menu
+  }
+
+  func editMenuInteraction(_ interaction: UIEditMenuInteraction,
+                           targetRectFor configuration: UIEditMenuConfiguration) -> CGRect
+  {
+    target
+  }
+}
+
+/** The view the node menus are shown from, filling the canvas. */
+struct NodeMenuAnchor: UIViewRepresentable {
+  let presenter: NodeMenuPresenter
+
+  func makeUIView(context: Context) -> UIView {
+    let view = UIView()
+    view.isUserInteractionEnabled = false
+    presenter.attach(to: view)
+    return view
+  }
+
+  func updateUIView(_ view: UIView, context: Context) {
+    presenter.attach(to: view)
+  }
+}
+
 struct NodeCanvasScrolling: ViewModifier {
   let action: (_ state: UIGestureRecognizer.State, _ translation: CGSize) -> Void
 
@@ -1768,13 +2003,17 @@ struct NodeEditorLayer: View {
       .onChange(of: proxy.size.height, initial: true) { _, height in cover(height) }
     }
     .ignoresSafeArea(edges: .bottom)
-    .onDisappear { model.nodesCover = 0 }
+    .onDisappear { withAnimation(.easeOut(duration: 0.42)) { model.nodesCover = 0 } }
   }
 
   /** The viewport ends under the panel's rounded corners, and changes size once a drag ends
    * rather than on every step of it. */
   private func cover(_ height: CGFloat) {
-    model.nodesCover = max(0, height * fraction - 24)
+    /* Eased as the viewport itself is, see `ViewportContainer`. */
+    let cover = max(0, height * fraction - 24)
+    if cover != model.nodesCover {
+      withAnimation(.easeOut(duration: 0.42)) { model.nodesCover = cover }
+    }
   }
 }
 
