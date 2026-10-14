@@ -38,8 +38,6 @@ final class NodeEditorModel {
   /** The snapshot as Blender sent it, to tell a new one from the same. */
   @ObservationIgnored private var raw: JSON?
   private(set) var shown = false
-  /** Dragging on the canvas draws a box that selects nodes, instead of panning. */
-  var selecting = false
   /** Bumped to fit the view to the tree, as when another tree shows. */
   private(set) var fitRequest = 0
   /** The controls on the nodes, which edit through the same store as Properties' controls. */
@@ -302,14 +300,6 @@ struct NodeEditorPanel: View {
         .font(.headline)
       breadcrumbs
       Spacer(minLength: 0)
-      Toggle(isOn: Binding(get: { model.selecting }, set: { model.selecting = $0 })) {
-        Label("Select", systemImage: "rectangle.dashed")
-      }
-      .toggleStyle(.button)
-      .labelStyle(.iconOnly)
-      .buttonBorderShape(.circle)
-      .help("Drag on the canvas to select nodes")
-      .disabled(model.snapshot?["nodes"] == nil)
       Menu {
         Button("Select All", systemImage: "checkmark.circle") { model.send("select_all", ["value": 1]) }
         Button("Deselect All", systemImage: "circle") { model.send("select_all", ["value": 0]) }
@@ -480,6 +470,7 @@ struct NodeCanvas: View {
       }
       .clipped()
       .simultaneousGesture(magnify)
+      .modifier(scrolling)
       .onAppear {
         viewSize = proxy.size
         fit()
@@ -645,36 +636,25 @@ struct NodeCanvas: View {
     }
     .background(Color(uiColor: .secondarySystemBackground))
     .contentShape(Rectangle())
+#if os(visionOS)
     .gesture(
       DragGesture(minimumDistance: 4)
         .updating($panning) { _, state, _ in state = true }
-        .onChanged { value in
-          if model.selecting {
-            box = CGRect(x: min(value.startLocation.x, value.location.x),
-                         y: min(value.startLocation.y, value.location.y),
-                         width: abs(value.location.x - value.startLocation.x),
-                         height: abs(value.location.y - value.startLocation.y))
-            return
-          }
-          let start = panStart ?? pan
-          panStart = start
-          pan = CGSize(width: start.width + value.translation.width,
-                       height: start.height + value.translation.height)
-        }
-        .onEnded { _ in
-          guard let rect = box else { return }
-          box = nil
-          /* The nodes the box touches, added to the selection. */
-          let a = toCanvas(rect.origin)
-          let b = toCanvas(CGPoint(x: rect.maxX, y: rect.maxY))
-          let area = CGRect(x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y)
-          let names = model.nodes.compactMap { node -> String? in
-            guard let name = node.string("name"), node.string("kind") != "FRAME",
-                  let frame = layout.nodes[name], frame.intersects(area) else { return nil }
-            return name
-          }
-          model.send("select_nodes", ["nodes": names])
-        })
+        .onChanged { value in panBy(value.translation) })
+#else
+    /* As canvas apps go: a finger pans, or draws a selection box once held still; a pointer or
+     * the Pencil draws the box right away. */
+    .gesture(NodeCanvasDrag(kind: .finger) { state, start, location in
+      if state == .ended || state == .cancelled || state == .failed {
+        panStart = nil
+      }
+      else {
+        panBy(CGSize(width: location.x - start.x, height: location.y - start.y))
+      }
+    })
+    .gesture(NodeCanvasDrag(kind: .hold) { state, start, location in selectBox(state, start, location) })
+    .gesture(NodeCanvasDrag(kind: .pointer) { state, start, location in selectBox(state, start, location) })
+#endif
     .overlay(alignment: .topLeading) {
       if let box {
         Rectangle()
@@ -687,6 +667,47 @@ struct NodeCanvas: View {
     }
     .onTapGesture { model.send("select", ["node": ""]) }
     .accessibilityLabel("Node Canvas")
+  }
+
+  /** A trackpad's or mouse wheel's scrolling pans, over the nodes too. */
+  private var scrolling: NodeCanvasScrolling {
+    NodeCanvasScrolling { state, translation in
+      if state == .ended || state == .cancelled || state == .failed {
+        panStart = nil
+      }
+      else {
+        panBy(translation)
+      }
+    }
+  }
+
+  private func panBy(_ translation: CGSize) {
+    let start = panStart ?? pan
+    panStart = start
+    pan = CGSize(width: start.width + translation.width, height: start.height + translation.height)
+  }
+
+  /** The nodes the box touches are added to the selection when it is let go. */
+  private func selectBox(_ state: UIGestureRecognizer.State, _ start: CGPoint, _ location: CGPoint) {
+    switch state {
+      case .began, .changed:
+        box = CGRect(x: min(start.x, location.x), y: min(start.y, location.y),
+                     width: abs(location.x - start.x), height: abs(location.y - start.y))
+      case .ended:
+        guard let rect = box else { return }
+        box = nil
+        let a = toCanvas(rect.origin)
+        let b = toCanvas(CGPoint(x: rect.maxX, y: rect.maxY))
+        let area = CGRect(x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y)
+        let names = model.nodes.compactMap { node -> String? in
+          guard let name = node.string("name"), node.string("kind") != "FRAME",
+                let frame = layout.nodes[name], frame.intersects(area) else { return nil }
+          return name
+        }
+        model.send("select_nodes", ["nodes": names])
+      default:
+        box = nil
+    }
   }
 
   private var magnify: some Gesture {
@@ -1418,6 +1439,93 @@ struct NodeAddSheet: View {
 }
 
 /** \} */
+
+struct NodeCanvasScrolling: ViewModifier {
+  let action: (_ state: UIGestureRecognizer.State, _ translation: CGSize) -> Void
+
+  func body(content: Content) -> some View {
+#if os(visionOS)
+    content
+#else
+    content.gesture(NodeCanvasDrag(kind: .scroll) { state, _, location in
+      action(state, CGSize(width: location.x, height: location.y))
+    })
+#endif
+  }
+}
+
+#if !os(visionOS)
+/** One of the canvas's drags, told apart by what makes it, which SwiftUI's own drag can't do.
+ * It reports where it started and where it is, in the view's own points. */
+struct NodeCanvasDrag: UIGestureRecognizerRepresentable {
+  enum Kind {
+    /** A finger dragging. */
+    case finger
+    /** A finger held still, then dragging. */
+    case hold
+    /** A pointer or the Pencil dragging. */
+    case pointer
+    /** A trackpad's or mouse wheel's scrolling. */
+    case scroll
+  }
+
+  let kind: Kind
+  let action: (_ state: UIGestureRecognizer.State, _ start: CGPoint, _ location: CGPoint) -> Void
+
+  final class Coordinator {
+    var start = CGPoint.zero
+  }
+
+  func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+  func makeUIGestureRecognizer(context: Context) -> UIGestureRecognizer {
+    let touches = { (types: [UITouch.TouchType]) in types.map { NSNumber(value: $0.rawValue) } }
+    switch kind {
+      case .finger:
+        let pan = UIPanGestureRecognizer()
+        pan.maximumNumberOfTouches = 1
+        pan.allowedTouchTypes = touches([.direct])
+        return pan
+      case .hold:
+        let hold = UILongPressGestureRecognizer()
+        hold.minimumPressDuration = 0.35
+        hold.allowedTouchTypes = touches([.direct])
+        return hold
+      case .pointer:
+        let pan = UIPanGestureRecognizer()
+        pan.maximumNumberOfTouches = 1
+        pan.allowedTouchTypes = touches([.indirectPointer, .pencil])
+        return pan
+      case .scroll:
+        let pan = UIPanGestureRecognizer()
+        pan.allowedTouchTypes = []
+        pan.allowedScrollTypesMask = .all
+        return pan
+    }
+  }
+
+  func handleUIGestureRecognizerAction(_ recognizer: UIGestureRecognizer, context: Context) {
+    let location = context.converter.localLocation
+    if let pan = recognizer as? UIPanGestureRecognizer {
+      /* From where the drag started, before it moved far enough to begin. */
+      let translation = pan.translation(in: pan.view)
+      if kind == .scroll {
+        /* Scrolling has no location to follow, only how far it has gone. */
+        action(recognizer.state, .zero, translation)
+        return
+      }
+      if recognizer.state == .began {
+        context.coordinator.start = CGPoint(x: location.x - translation.x, y: location.y - translation.y)
+      }
+    }
+    else if recognizer.state == .began {
+      context.coordinator.start = location
+      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+    action(recognizer.state, context.coordinator.start, location)
+  }
+}
+#endif
 
 /* -------------------------------------------------------------------- */
 /** \name Layer
