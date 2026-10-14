@@ -255,9 +255,13 @@ void GHOST_IOSSurface::present()
         float2 p = float2(float(i & 1), float(i >> 1)) * 4.0 - 1.0;
         return {float4(p, 0, 1), p * 0.5 + 0.5};
       }
+      /* Pixel for pixel from the top: a frame drawn at an older size is cropped or runs on
+       * past its edge while the view is resized, never stretched. The frame is stored bottom
+       * row first. */
       fragment float4 fragment_shader(Vertex v [[stage_in]], texture2d<float> t [[texture(0)]]) {
-        constexpr sampler s(filter::linear);
-        return float4(t.sample(s, v.uv).rgb, 1);
+        constexpr sampler s(filter::nearest, address::clamp_to_edge);
+        const float2 size = float2(t.get_width(), t.get_height());
+        return float4(t.sample(s, float2(v.position.x / size.x, 1.0 - v.position.y / size.y)).rgb, 1);
       }
     )msl";
     NSError *error = nil;

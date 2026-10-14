@@ -282,6 +282,8 @@ extension DocumentController: UIEditMenuInteractionDelegate, UIGestureRecognizer
  * panel covers at the bottom so the view centers on what can be seen. */
 final class ViewportContainer: UIView {
   let metalView: MTKView
+  /** Set while the panel's handle is dragged: the cover is followed at once. */
+  var live = false
   var bottomCover: CGFloat = 0 {
     didSet {
       if bottomCover != oldValue { animateCover() }
@@ -304,7 +306,12 @@ final class ViewportContainer: UIView {
   }
 
   private func animateCover() {
-    guard window != nil, !UIAccessibility.isReduceMotionEnabled else {
+    /* Dragging the panel's handle is followed at once, so the viewport keeps up with the
+     * finger; the panel opening or closing is eased alongside it. */
+    guard window != nil, !UIAccessibility.isReduceMotionEnabled, !live else {
+      coverAnimation = nil
+      displayLink?.invalidate()
+      displayLink = nil
       shownCover = bottomCover
       setNeedsLayout()
       return
@@ -344,6 +351,8 @@ final class ViewportContainer: UIView {
     metalView.contentScaleFactor = scale
     metalView.layer.contentsScale = scale
     let size = CGSize(width: max(1, frame.width * scale), height: max(1, frame.height * scale))
+    /* Blender keeps the view's scale while it is shortened, and centers it on what shows. */
+    WM_apple_ios_ui_viewport_cover_set(Float((bounds.height * scale - size.height).rounded()))
     if metalView.drawableSize != size {
       metalView.drawableSize = size
     }
@@ -353,9 +362,11 @@ final class ViewportContainer: UIView {
 struct ViewportView: UIViewRepresentable {
   let container: ViewportContainer
   var bottomCover: CGFloat = 0
+  var live = false
 
   func makeUIView(context: Context) -> ViewportContainer { container }
   func updateUIView(_ view: ViewportContainer, context: Context) {
+    view.live = live
     view.bottomCover = bottomCover
   }
 }
@@ -496,7 +507,7 @@ public struct DocumentWindow: View {
   private var viewportLayers: some View {
     ZStack {
       /* Edge to edge, under a phone's toolbar column too. */
-      ViewportView(container: viewport, bottomCover: viewportCover)
+      ViewportView(container: viewport, bottomCover: viewportCover, live: model.nodesCoverDragging)
         .ignoresSafeArea()
         .onDrop(of: [.data, .image], delegate: FileDrop(model: model) { shell.assets.store.dragged != nil })
       if !model.viewportReady {

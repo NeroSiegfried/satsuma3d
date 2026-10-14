@@ -67,6 +67,7 @@ char *_Nullable WM_apple_ios_ui_timeline_take_json(void);
 char *_Nullable WM_apple_ios_ui_assets_take_json(void);
 /** How much of the window's height, from the bottom, the asset pane and timeline cover. */
 void WM_apple_ios_ui_bottom_tray_set(float fraction);
+void WM_apple_ios_ui_viewport_cover_set(float pixels);
 UIDocument *_Nullable wm_apple_ios_open_document(void);
 /** Choose a template and create a new document, presented from `presenter`. */
 void wm_apple_ios_new_document(UIViewController *_Nonnull presenter);

@@ -65,6 +65,10 @@
 
 namespace blender {
 
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+extern "C" float WM_apple_ios_ui_viewport_cover();
+#endif
+
 /* -------------------------------------------------------------------- */
 /** \name View Data Access Utilities
  * \{ */
@@ -206,7 +210,22 @@ bool ED_view3d_viewplane_get(const Depsgraph *depsgraph,
 
   BKE_camera_params_init(&params);
   BKE_camera_params_from_view3d(&params, depsgraph, v3d, rv3d);
-  BKE_camera_params_compute_viewplane(&params, winx, winy, 1.0f, 1.0f);
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* While a native panel covers the bottom of the window, the view is shortened rather than
+   * refitted: it keeps the scale it has at full height and is centered on what can be seen. */
+  const float cover = WM_apple_ios_ui_viewport_cover();
+  if (cover > 0.0f && rv3d->persp != RV3D_CAMOB) {
+    const int full_winy = winy + int(cover);
+    BKE_camera_params_compute_viewplane(&params, winx, full_winy, 1.0f, 1.0f);
+    const float shorten = float(winy) / float(full_winy);
+    params.viewplane.ymin *= shorten;
+    params.viewplane.ymax *= shorten;
+  }
+  else
+#endif
+  {
+    BKE_camera_params_compute_viewplane(&params, winx, winy, 1.0f, 1.0f);
+  }
 
   if (r_viewplane) {
     *r_viewplane = params.viewplane;

@@ -3221,6 +3221,18 @@ extern "C" void WM_apple_ios_ui_bottom_tray_set(const float fraction)
   }
 }
 
+std::atomic<float> ios_viewport_cover{0.0f};
+
+extern "C" void WM_apple_ios_ui_viewport_cover_set(const float pixels)
+{
+  ios_viewport_cover.store(pixels);
+}
+
+extern "C" float WM_apple_ios_ui_viewport_cover()
+{
+  return ios_viewport_cover.load();
+}
+
 extern "C" int WM_apple_ios_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region)
 {
   /* The navigation gizmo sits above the tray, in region pixels. */

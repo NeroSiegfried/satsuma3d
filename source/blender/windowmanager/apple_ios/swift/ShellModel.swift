@@ -41,6 +41,8 @@ final class ShellModel {
   var nodesShown = false
   /** How much of the window's bottom the node editor covers, which the viewport leaves out. */
   var nodesCover: CGFloat = 0
+  /** While the node editor's handle is dragged, the viewport follows it without easing. */
+  var nodesCoverDragging = false
   /** Blender's navigation gizmo: its center and radius, in fractions of the window's width and
    * height (center) and width (radius). */
   private(set) var navigationGizmo: [Double] = []
