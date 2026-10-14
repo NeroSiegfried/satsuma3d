@@ -417,6 +417,124 @@ private struct PendingWire {
   var end: CGPoint
   /** An input's existing wire, picked up to move it to another input or drop it. */
   var detached: JSON?
+  /** The socket the loose end has snapped to, which letting go connects. */
+  var target: (node: String, socket: String)?
+}
+
+/** The cables' slack: a weight at each cable's middle on a spring, which hangs below its ends
+ * and lags and sways when they move, as patch cables hang between jacks. Kept in canvas points,
+ * so panning and zooming leave the cables still. */
+final class CableMotion {
+  static let pending = "\u{1}pending"
+
+  static func key(_ link: [String: Any]) -> String {
+    ["from_node", "from_socket", "to_node", "to_socket"].map { link[$0] as? String ?? "" }.joined(separator: "\u{1}")
+  }
+
+  private struct Weight {
+    var position: CGPoint
+    var velocity: CGVector
+    var seen: Date
+  }
+
+  private var weights: [String: Weight] = [:]
+  private var last: Date?
+
+  /** Where a cable's middle hangs at rest: below its ends, the more the longer it is. */
+  static func rest(from: CGPoint, to: CGPoint) -> CGPoint {
+    let length = hypot(to.x - from.x, to.y - from.y)
+    return CGPoint(x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 + min(110, 8 + length * 0.14))
+  }
+
+  /** Moves every weight on to `date`; true when all hang still. */
+  func step(to date: Date, ends: [(key: String, from: CGPoint, to: CGPoint)]) -> Bool {
+    let elapsed = min(1.0 / 30, max(0, date.timeIntervalSince(last ?? date)))
+    last = date
+    let calm = UIAccessibility.isReduceMotionEnabled
+    var still = true
+    for end in ends {
+      let rest = Self.rest(from: end.from, to: end.to)
+      guard var weight = weights[end.key], !calm else {
+        weights[end.key] = Weight(position: rest, velocity: .zero, seen: date)
+        continue
+      }
+      /* Springy and lightly damped, in small steps so it stays steady. */
+      let steps = 4
+      let dt = elapsed / Double(steps)
+      for _ in 0..<steps {
+        let ax = 110 * (rest.x - weight.position.x) - 6.5 * weight.velocity.dx
+        let ay = 110 * (rest.y - weight.position.y) - 6.5 * weight.velocity.dy
+        weight.velocity.dx += ax * dt
+        weight.velocity.dy += ay * dt
+        weight.position.x += weight.velocity.dx * dt
+        weight.position.y += weight.velocity.dy * dt
+      }
+      weight.seen = date
+      if hypot(weight.velocity.dx, weight.velocity.dy) > 2 ||
+         hypot(rest.x - weight.position.x, rest.y - weight.position.y) > 0.5
+      {
+        still = false
+      }
+      else {
+        weight.position = rest
+        weight.velocity = .zero
+      }
+      weights[end.key] = weight
+    }
+    /* A cable just connected keeps its sway until Blender's tree has the link. */
+    weights = weights.filter { date.timeIntervalSince($0.value.seen) < 1.5 }
+    return still
+  }
+
+  func slack(_ key: String, from: CGPoint, to: CGPoint) -> CGPoint {
+    weights[key]?.position ?? Self.rest(from: from, to: to)
+  }
+
+  func kick(_ key: String, by velocity: CGVector) {
+    weights[key]?.velocity.dx += velocity.dx
+    weights[key]?.velocity.dy += velocity.dy
+  }
+
+  /** The loose cable, connected, carries on as the link's own. */
+  func adopt(_ key: String, as link: String) {
+    if let weight = weights.removeValue(forKey: key) { weights[link] = weight }
+  }
+
+  func forget(_ key: String) {
+    weights.removeValue(forKey: key)
+  }
+}
+
+/** A socket just plugged into. */
+private struct CablePlug: Identifiable {
+  static let duration = 0.45
+  let id = UUID()
+  let point: CGPoint
+  let color: Color
+  let start: Date
+}
+
+/** Clicks as a cable snaps to a socket and plugs in. An iPad gives them through the Pencil and
+ * a trackpad that can, a phone through its own haptics. */
+@MainActor enum CableFeedback {
+  private static var canvasFeedback: UICanvasFeedbackGenerator? = {
+    guard let view = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first
+    else { return nil }
+    return UICanvasFeedbackGenerator(view: view)
+  }()
+
+  static func snapped(at point: CGPoint) {
+    canvasFeedback?.alignmentOccurred(at: point)
+    UISelectionFeedbackGenerator().selectionChanged()
+  }
+
+  static func connected(at point: CGPoint) {
+    canvasFeedback?.pathCompleted(at: point)
+    UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.07) {
+      UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.6)
+    }
+  }
 }
 
 struct NodeCanvas: View {
@@ -443,6 +561,14 @@ struct NodeCanvas: View {
   @State private var coloring: JSON?
   /** The selection box being drawn, in view points. */
   @State private var box: CGRect?
+  /** The cables' slack, swaying as their ends move. */
+  @State private var cables = CableMotion()
+  /** While a cable still sways, frames are drawn. */
+  @State private var cablesMoving = false
+  /** Rings sent out by sockets just connected. */
+  @State private var plugs: [CablePlug] = []
+  /** Where the canvas is in the window, for feedback at a point. */
+  @State private var canvasFrame: CGRect = .zero
 
   /** The middle of the view in node space, where the Add button puts nodes. */
   static var lastCenter = CGPoint.zero
@@ -464,6 +590,7 @@ struct NodeCanvas: View {
         content
           .scaleEffect(zoom, anchor: .topLeading)
           .offset(pan)
+        plugRings
         minimap
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
           .padding(14)
@@ -473,8 +600,10 @@ struct NodeCanvas: View {
       .modifier(scrolling)
       .onAppear {
         viewSize = proxy.size
+        canvasFrame = proxy.frame(in: .global)
         fit()
       }
+      .onChange(of: proxy.frame(in: .global)) { _, frame in canvasFrame = frame }
       .onChange(of: proxy.size) { _, size in viewSize = size }
       .onChange(of: model.fitRequest) { _, _ in
         DispatchQueue.main.async { fit() }
@@ -728,48 +857,102 @@ struct NodeCanvas: View {
   /* Wires */
 
   private var wires: some View {
-    Canvas { context, _ in
-      let outputs = Dictionary(model.nodes.flatMap { node in
-        node.array("outputs").map { (NodeCanvasLayout.socketKey(node.string("name") ?? "", output: true, $0.string("id") ?? ""), socketColor($0)) }
-      }, uniquingKeysWith: { a, _ in a })
-      for link in model.links {
-        if let detached = wire?.detached, jsonEqual(detached as NSDictionary, link as NSDictionary) { continue }
-        let fromKey = NodeCanvasLayout.socketKey(link.string("from_node") ?? "", output: true, link.string("from_socket") ?? "")
-        let toKey = NodeCanvasLayout.socketKey(link.string("to_node") ?? "", output: false, link.string("to_socket") ?? "")
-        guard let from = layout.sockets[fromKey], let to = layout.sockets[toKey] else { continue }
-        let color = link.bool("valid") ? (outputs[fromKey] ?? .gray) : .red
-        draw(&context, from: toView(adjusted(from, link.string("from_node"))),
-             to: toView(adjusted(to, link.string("to_node"))),
-             color: color, muted: link.bool("muted"))
+    TimelineView(.animation(paused: !cablesMoving)) { timeline in
+      Canvas { context, _ in drawCables(&context, at: timeline.date) }
+    }
+    .allowsHitTesting(false)
+  }
+
+  /** The cables, each hanging and swaying from where its ends are now. */
+  private func drawCables(_ context: inout GraphicsContext, at date: Date) {
+    let outputs = Dictionary(model.nodes.flatMap { node in
+      node.array("outputs").map { (NodeCanvasLayout.socketKey(node.string("name") ?? "", output: true, $0.string("id") ?? ""), socketColor($0)) }
+    }, uniquingKeysWith: { a, _ in a })
+    var cablesNow: [(key: String, from: CGPoint, to: CGPoint, color: Color, muted: Bool)] = []
+    for link in model.links {
+      if let detached = wire?.detached, jsonEqual(detached as NSDictionary, link as NSDictionary) { continue }
+      let fromKey = NodeCanvasLayout.socketKey(link.string("from_node") ?? "", output: true, link.string("from_socket") ?? "")
+      let toKey = NodeCanvasLayout.socketKey(link.string("to_node") ?? "", output: false, link.string("to_socket") ?? "")
+      guard let from = layout.sockets[fromKey], let to = layout.sockets[toKey] else { continue }
+      cablesNow.append((CableMotion.key(link), from, to,
+                        link.bool("valid") ? (outputs[fromKey] ?? .gray) : .red, link.bool("muted")))
+    }
+    if let wire {
+      let key = NodeCanvasLayout.socketKey(wire.node, output: wire.output, wire.socket)
+      if let start = layout.sockets[key] {
+        let a = start, b = wire.end
+        cablesNow.append((CableMotion.pending, wire.output ? a : b, wire.output ? b : a, wire.color, false))
       }
-      if let wire {
-        let key = NodeCanvasLayout.socketKey(wire.node, output: wire.output, wire.socket)
-        if let start = layout.sockets[key] {
-          let a = toView(adjusted(start, wire.node)), b = toView(wire.end)
-          draw(&context, from: wire.output ? a : b, to: wire.output ? b : a, color: wire.color, muted: false)
+    }
+    let still = cables.step(to: date, ends: cablesNow.map { ($0.key, $0.from, $0.to) })
+    for cable in cablesNow {
+      draw(&context, from: cable.from, to: cable.to, slack: cables.slack(cable.key, from: cable.from, to: cable.to),
+           color: cable.color, muted: cable.muted)
+    }
+    /* Frames stop once every cable hangs still, and start again when one is moved. */
+    if still == cablesMoving {
+      DispatchQueue.main.async { cablesMoving = !still }
+    }
+  }
+
+  /** A cable from one socket to another in canvas points, leaving and entering its sockets
+   * sideways and passing through its slack. */
+  private func draw(_ context: inout GraphicsContext, from: CGPoint, to: CGPoint, slack: CGPoint, color: Color,
+                    muted: Bool)
+  {
+    let reach = max(40, abs(to.x - from.x) * 0.5)
+    let middle = CGPoint(x: (from.x + to.x) / 2, y: (from.y + to.y) / 2)
+    /* A cubic passes its middle at three quarters of its control points' shift. */
+    let shift = CGPoint(x: (slack.x - middle.x) / 0.75, y: (slack.y - middle.y) / 0.75)
+    var path = Path()
+    path.move(to: toView(from))
+    path.addCurve(to: toView(to),
+                  control1: toView(CGPoint(x: from.x + reach + shift.x, y: from.y + shift.y)),
+                  control2: toView(CGPoint(x: to.x - reach + shift.x, y: to.y + shift.y)))
+    let style = StrokeStyle(lineWidth: max(1.5, 3 * zoom), lineCap: .round, dash: muted ? [6, 6] : [])
+    context.stroke(path, with: .color(.black.opacity(0.35)), style: StrokeStyle(lineWidth: style.lineWidth + 2, lineCap: .round))
+    context.stroke(path, with: .color(color), style: style)
+  }
+
+  /** A ring going out from each socket just plugged into. */
+  private var plugRings: some View {
+    TimelineView(.animation(paused: plugs.isEmpty)) { timeline in
+      Canvas { context, _ in
+        for plug in plugs {
+          let t = timeline.date.timeIntervalSince(plug.start) / CablePlug.duration
+          guard t >= 0, t < 1 else { continue }
+          let eased = 1 - pow(1 - t, 3)
+          let center = toView(plug.point)
+          let radius = (6 + 22 * eased) * max(zoom, 0.5)
+          let ring = Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+          context.stroke(ring, with: .color(plug.color.opacity(1 - t)), lineWidth: 3 * (1 - t) + 1)
+          let dot = 5 * (1 + 0.6 * sin(.pi * min(1, t * 2))) * max(zoom, 0.5)
+          context.fill(Path(ellipseIn: CGRect(x: center.x - dot, y: center.y - dot, width: dot * 2, height: dot * 2)),
+                       with: .color(plug.color.opacity(1 - t)))
         }
       }
     }
     .allowsHitTesting(false)
   }
 
-  /** A socket's place with its node's move in progress, which its recorded place lacks. */
-  private func adjusted(_ point: CGPoint, _ node: String?) -> CGPoint {
-    guard let name = node, let drag, let item = model.nodes.first(where: { $0.string("name") == name }),
-          drag.nodes.contains(name) || ancestorDragged(item, drag.nodes)
-    else { return point }
-    return CGPoint(x: point.x + drag.offset.width, y: point.y + drag.offset.height)
+  /** The cable just dropped onto a socket: it springs up and settles, the socket sends out a
+   * ring, and the Pencil or trackpad gives a click. */
+  private func plugged(into point: CGPoint, color: Color, link: [String: String]) {
+    cables.adopt(CableMotion.pending, as: CableMotion.key(link))
+    cables.kick(CableMotion.key(link), by: CGVector(dx: 0, dy: -420))
+    cablesMoving = true
+    let plug = CablePlug(point: point, color: color, start: Date())
+    plugs.append(plug)
+    DispatchQueue.main.asyncAfter(deadline: .now() + CablePlug.duration) {
+      plugs.removeAll { $0.id == plug.id }
+    }
+    CableFeedback.connected(at: windowPoint(point))
   }
 
-  private func draw(_ context: inout GraphicsContext, from: CGPoint, to: CGPoint, color: Color, muted: Bool) {
-    var path = Path()
-    path.move(to: from)
-    let bend = max(40 * zoom, abs(to.x - from.x) * 0.5)
-    path.addCurve(to: to, control1: CGPoint(x: from.x + bend, y: from.y),
-                  control2: CGPoint(x: to.x - bend, y: to.y))
-    let style = StrokeStyle(lineWidth: max(1.5, 3 * zoom), lineCap: .round, dash: muted ? [6, 6] : [])
-    context.stroke(path, with: .color(.black.opacity(0.35)), style: StrokeStyle(lineWidth: style.lineWidth + 2, lineCap: .round))
-    context.stroke(path, with: .color(color), style: style)
+  /** A canvas point in the window, where feedback is given. */
+  private func windowPoint(_ point: CGPoint) -> CGPoint {
+    let view = toView(point)
+    return CGPoint(x: canvasFrame.minX + view.x, y: canvasFrame.minY + view.y)
   }
 
   /* -------------------------------------------------------------------- */
@@ -846,15 +1029,12 @@ struct NodeCanvas: View {
         let frame = geometry.frame(in: .named("nodes"))
         return CGPoint(x: frame.midX, y: frame.midY)
       } action: { center in
-        var rest = center
-        if let drag, drag.nodes.contains(name) {
-          rest = CGPoint(x: rest.x - drag.offset.width, y: rest.y - drag.offset.height)
-        }
+        /* Where it is drawn, with any move in progress, as a card's sockets record. */
         for socket in node.array("inputs") {
-          layout.set(socket: NodeCanvasLayout.socketKey(name, output: false, socket.string("id") ?? ""), rest)
+          layout.set(socket: NodeCanvasLayout.socketKey(name, output: false, socket.string("id") ?? ""), center)
         }
         for socket in node.array("outputs") {
-          layout.set(socket: NodeCanvasLayout.socketKey(name, output: true, socket.string("id") ?? ""), rest)
+          layout.set(socket: NodeCanvasLayout.socketKey(name, output: true, socket.string("id") ?? ""), center)
         }
       }
       .contextMenu { menu(node) }
@@ -1042,28 +1222,45 @@ struct NodeCanvas: View {
                                end: value.location, detached: nil)
           }
         }
-        wire?.end = value.location
+        /* Near a socket the loose end snaps onto it, with a tick. */
+        let output = wire?.output ?? output
+        let from = wire?.node ?? nodeName
+        if let target = nearestSocket(to: value.location, output: !output), target.node != from,
+           let place = layout.sockets[NodeCanvasLayout.socketKey(target.node, output: !output, target.socket)]
+        {
+          if wire?.target?.node != target.node || wire?.target?.socket != target.socket {
+            CableFeedback.snapped(at: windowPoint(place))
+          }
+          wire?.target = target
+          wire?.end = place
+        }
+        else {
+          wire?.target = nil
+          wire?.end = value.location
+        }
       }
       .onEnded { value in
         guard let current = wire else { return }
         wire = nil
-        if let target = nearestSocket(to: value.location, output: !current.output), target.node != current.node {
+        if let target = current.target ?? nearestSocket(to: value.location, output: !current.output),
+           target.node != current.node
+        {
           if let detached = current.detached {
             model.send("unlink", ["to_node": detached.string("to_node") ?? "", "to_socket": detached.string("to_socket") ?? "",
                                   "from_node": detached.string("from_node") ?? "", "from_socket": detached.string("from_socket") ?? ""])
           }
-          if current.output {
-            model.send("link", ["from_node": current.node, "from_socket": current.socket,
-                                "to_node": target.node, "to_socket": target.socket])
-          }
-          else {
-            model.send("link", ["from_node": target.node, "from_socket": target.socket,
-                                "to_node": current.node, "to_socket": current.socket])
+          let link = current.output ?
+            ["from_node": current.node, "from_socket": current.socket, "to_node": target.node, "to_socket": target.socket] :
+            ["from_node": target.node, "from_socket": target.socket, "to_node": current.node, "to_socket": current.socket]
+          model.send("link", link)
+          if let place = layout.sockets[NodeCanvasLayout.socketKey(target.node, output: !current.output, target.socket)] {
+            plugged(into: place, color: current.color, link: link)
           }
           return
         }
         if let detached = current.detached {
-          /* Dropped away from any socket: disconnected. */
+          /* Dropped away from any socket: disconnected, and the loose cable falls away. */
+          cables.forget(CableMotion.pending)
           model.send("unlink", ["to_node": detached.string("to_node") ?? "", "to_socket": detached.string("to_socket") ?? "",
                                 "from_node": detached.string("from_node") ?? "", "from_socket": detached.string("from_socket") ?? ""])
           return
