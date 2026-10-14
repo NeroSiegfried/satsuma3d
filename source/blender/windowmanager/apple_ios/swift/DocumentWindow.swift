@@ -299,9 +299,6 @@ final class ViewportContainer: UIView {
     self.metalView = metalView
     super.init(frame: .zero)
     metalView.autoresizingMask = []
-    /* Until Blender draws at a new size, its last frame stays put at the top rather than being
-     * stretched to fit. Layer gravity counts from the bottom, so this is the top on screen. */
-    metalView.layer.contentsGravity = .bottomLeft
     addSubview(metalView)
   }
 
@@ -344,15 +341,15 @@ final class ViewportContainer: UIView {
 
   override func layoutSubviews() {
     super.layoutSubviews()
-    var frame = bounds
-    frame.size.height = max(1, bounds.height - shownCover)
+    /* Full size always: resizing the drawable as a panel slides would drop frames. Blender is
+     * told how much is covered and centers the view on the rest. */
+    let frame = bounds
     metalView.frame = frame
     let scale = max(1, window?.traitCollection.displayScale ?? traitCollection.displayScale)
     metalView.contentScaleFactor = scale
     metalView.layer.contentsScale = scale
     let size = CGSize(width: max(1, frame.width * scale), height: max(1, frame.height * scale))
-    /* Blender keeps the view's scale while it is shortened, and centers it on what shows. */
-    WM_apple_ios_ui_viewport_cover_set(Float((bounds.height * scale - size.height).rounded()))
+    WM_apple_ios_ui_viewport_cover_set(Float((shownCover * scale).rounded()))
     if metalView.drawableSize != size {
       metalView.drawableSize = size
     }

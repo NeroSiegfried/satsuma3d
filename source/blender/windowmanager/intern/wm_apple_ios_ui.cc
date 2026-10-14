@@ -3221,11 +3221,17 @@ extern "C" void WM_apple_ios_ui_bottom_tray_set(const float fraction)
   }
 }
 
+extern "C" void GHOST_ios_engine_wake();
+
 std::atomic<float> ios_viewport_cover{0.0f};
+std::atomic<bool> ios_viewport_cover_changed{false};
 
 extern "C" void WM_apple_ios_ui_viewport_cover_set(const float pixels)
 {
-  ios_viewport_cover.store(pixels);
+  if (ios_viewport_cover.exchange(pixels) != pixels) {
+    ios_viewport_cover_changed.store(true);
+    GHOST_ios_engine_wake();
+  }
 }
 
 extern "C" float WM_apple_ios_ui_viewport_cover()
@@ -3236,7 +3242,8 @@ extern "C" float WM_apple_ios_ui_viewport_cover()
 extern "C" int WM_apple_ios_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region)
 {
   /* The navigation gizmo sits above the tray, in region pixels. */
-  return int(ios_bottom_tray.load() * WM_window_native_pixel_y(win)) - region->winrct.ymin;
+  const int tray = int(ios_bottom_tray.load() * WM_window_native_pixel_y(win));
+  return std::max(tray, int(ios_viewport_cover.load())) - region->winrct.ymin;
 }
 
 static void ios_ui_dispatch_operator(bContext *C, IOSOperatorCommand &command)
@@ -3420,6 +3427,11 @@ extern "C" void WM_apple_ios_ui_flush_commands(bContext *C)
 #endif
   WM_apple_ios_ui_ensure_layout(C);
 
+  if (ios_viewport_cover_changed.exchange(false)) {
+    /* The view is shifted to the part a panel leaves showing, see #ED_view3d_viewplane_get. */
+    WM_main_add_notifier(NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+    ios_navigation_redraw_pending.store(true);
+  }
   if (ios_navigation_redraw_pending.exchange(false)) {
     const IOSContextStore context_store = ios_context_push_view3d(C);
     if (ARegion *region = CTX_wm_region(C)) {
