@@ -232,6 +232,7 @@ final class InspectorStore {
     ]
     /* A node's picker names its node. */
     if let node = property.string("node") { request["node"] = node }
+    if property.bool("header") { request["header"] = 1 }
     request.merge(extra) { $1 }
     send(request)
   }
