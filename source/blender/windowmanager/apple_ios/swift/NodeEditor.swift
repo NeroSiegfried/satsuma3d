@@ -50,7 +50,24 @@ final class NodeEditorModel {
   var links: [JSON] { snapshot?.array("links") ?? [] }
   var addItems: [JSON] { snapshot?.array("add") ?? [] }
 
-  private var context: JSON { ["tree": kind.rawValue, "path": path] }
+  /** The compositor's result behind the nodes, as Blender's backdrop. */
+  var backdrop = UserDefaults.standard.object(forKey: "BlenderNodeBackdrop") as? Bool ?? true {
+    didSet {
+      UserDefaults.standard.set(backdrop, forKey: "BlenderNodeBackdrop")
+      sendState()
+    }
+  }
+  /** How long each node took, above it, as Blender's Timings overlay. */
+  var timings = UserDefaults.standard.bool(forKey: "BlenderNodeTimings") {
+    didSet { UserDefaults.standard.set(timings, forKey: "BlenderNodeTimings") }
+  }
+  /** Blender's keymap asked for the Add menu. */
+  var addRequested = 0
+  @ObservationIgnored private var keyRequestSeen: Int?
+
+  private var context: JSON {
+    ["tree": kind.rawValue, "path": path, "backdrop": backdrop ? 1 : 0, "previews": 1]
+  }
 
   func setShown(_ shown: Bool) {
     guard shown != self.shown else { return }
@@ -107,6 +124,18 @@ final class NodeEditorModel {
       store.requestContext = context
     }
     store.clearPendingValues(ack: ack)
+    /* What a key asked of the editor itself, once. */
+    if let request = next.dict("key_request"), let sequence = request.int("sequence") {
+      if let seen = keyRequestSeen, sequence > seen {
+        switch request.string("action") {
+          case "add": addRequested += 1
+          case "enter": if let node = request.string("node") { enter(group: node) }
+          case "exit": exit(to: max(0, path.count - 1))
+          default: break
+        }
+      }
+      keyRequestSeen = sequence
+    }
     /* The nodes it can add come once for each tree. */
     var next = next
     if next["add"] == nil, let add = snapshot?["add"], next["nodes"] != nil { next["add"] = add }
@@ -132,6 +161,12 @@ final class NodeEditorModel {
       return node
     }
     return resolved
+  }
+
+  /** A hardware key, run as Blender's node editor keymap has it. */
+  func sendKey(_ key: String, shift: Bool, ctrl: Bool, alt: Bool, oskey: Bool) {
+    send("key", ["key": key, "shift": shift ? 1 : 0, "ctrl": ctrl ? 1 : 0, "alt": alt ? 1 : 0,
+                 "oskey": oskey ? 1 : 0])
   }
 
   func send(_ action: String, _ extra: JSON = [:]) {
@@ -214,6 +249,7 @@ private func socketColor(_ socket: JSON) -> Color {
 struct NodeEditorPanel: View {
   let model: NodeEditorModel
   @State private var adding: NodeAddRequest?
+  @State private var editingInterface = false
 
   var body: some View {
     VStack(spacing: 0) {
@@ -238,6 +274,14 @@ struct NodeEditorPanel: View {
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    .background(NodeKeyCapture(model: model))
+    .onChange(of: model.addRequested) { _, _ in
+      adding = NodeAddRequest(location: NodeCanvas.lastCenter, connect: nil)
+    }
+    .sheet(isPresented: $editingInterface) {
+      NodeInterfaceSheet(model: model)
+        .presentationDetents([.medium, .large])
     }
     .sheet(item: $adding) { request in
       NodeAddSheet(items: model.addItems) { item in
@@ -271,6 +315,21 @@ struct NodeEditorPanel: View {
         Button("Deselect All", systemImage: "circle") { model.send("select_all", ["value": 0]) }
         Divider()
         Button("Show All", systemImage: "arrow.up.left.and.arrow.down.right") { model.requestFit() }
+        Section {
+          if model.snapshot?.bool("can_backdrop") == true {
+            Toggle(isOn: Binding(get: { model.backdrop }, set: { model.backdrop = $0 })) {
+              Label("Backdrop", systemImage: "photo")
+            }
+          }
+          if model.kind != .shader {
+            Toggle(isOn: Binding(get: { model.timings }, set: { model.timings = $0 })) {
+              Label("Timings", systemImage: "timer")
+            }
+          }
+          if model.snapshot?["interface"] != nil {
+            Button("Group Inputs & Outputs…", systemImage: "list.bullet.indent") { editingInterface = true }
+          }
+        }
         Divider()
         let anySelected = model.nodes.contains { $0.bool("selected") }
         Button("Duplicate Selected", systemImage: "plus.square.on.square") {
@@ -324,9 +383,15 @@ struct NodeEditorPanel: View {
     let path = model.snapshot?.array("path") ?? []
     return ScrollView(.horizontal, showsIndicators: false) {
       HStack(spacing: 4) {
-        Button(model.snapshot?.string("owner") ?? model.snapshot?.string("name") ?? "") { model.exit(to: 0) }
-          .buttonStyle(.plain)
-          .foregroundStyle(path.isEmpty ? .primary : .secondary)
+        /* The tree's data-block, chosen as in Properties, while no group is entered. */
+        if path.isEmpty, let header = model.snapshot?.array("header_ids").first {
+          DataPicker(store: model.store, property: header, compact: true)
+        }
+        else {
+          Button(model.snapshot?.string("owner") ?? model.snapshot?.string("name") ?? "") { model.exit(to: 0) }
+            .buttonStyle(.plain)
+            .foregroundStyle(path.isEmpty ? .primary : .secondary)
+        }
         ForEach(Array(path.enumerated()), id: \.offset) { index, item in
           Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
           Button(item.string("title") ?? "") { model.exit(to: index + 1) }
@@ -384,6 +449,8 @@ struct NodeCanvas: View {
   @State private var moved: [String: CGSize] = [:]
   @State private var wire: PendingWire?
   @State private var renaming: (node: String, label: String)?
+  /** The node whose color is being chosen. */
+  @State private var coloring: JSON?
   /** The selection box being drawn, in view points. */
   @State private var box: CGRect?
 
@@ -394,6 +461,15 @@ struct NodeCanvas: View {
     GeometryReader { proxy in
       ZStack(alignment: .topLeading) {
         background
+        if model.backdrop, let path = model.snapshot?.string("backdrop"), let image = NodeImages.image(path) {
+          /* The compositor's Viewer, behind the nodes, as Blender's backdrop. */
+          Image(uiImage: image)
+            .resizable()
+            .scaledToFit()
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .allowsHitTesting(false)
+            .accessibilityLabel("Compositor Result")
+        }
         wires
         content
           .scaleEffect(zoom, anchor: .topLeading)
@@ -417,6 +493,12 @@ struct NodeCanvas: View {
       .onChange(of: pinching) { _, active in if !active { gestureZoom = nil } }
       .onChange(of: panning) { _, active in if !active { panStart = nil } }
       .onChange(of: zoom) { _, _ in rememberCenter() }
+    }
+    .sheet(isPresented: Binding(get: { coloring != nil }, set: { if !$0 { coloring = nil } })) {
+      if let node = coloring {
+        NodeColorSheet(model: model, node: node)
+          .presentationDetents([.height(220)])
+      }
     }
     .alert("Rename Node", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
       TextField("Label", text: Binding(get: { renaming?.label ?? "" }, set: { renaming?.label = $0 }))
@@ -699,6 +781,17 @@ struct NodeCanvas: View {
       else {
         NodeCard(model: model, layout: layout, node: node, width: cardWidth(node), wire: wireGesture,
                  move: AnyGesture(moveGesture(name)))
+          .overlay(alignment: .topLeading) {
+            if model.timings, let time = node.double("time_ms") {
+              /* Above the node, as Blender's Timings overlay. */
+              Text(time < 1 ? String(format: "%.2f ms", time) : String(format: "%.1f ms", time))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .fixedSize()
+                .offset(y: -22)
+                .allowsHitTesting(false)
+            }
+          }
           .frame(width: cardWidth(node))
           .contextMenu { menu(node) }
           .onTapGesture(count: 2) {
@@ -846,6 +939,24 @@ struct NodeCanvas: View {
     Button("Rename…", systemImage: "pencil") {
       renaming = (name, node.string("title") ?? "")
     }
+    Section {
+      if node.string("kind") != "FRAME" && !node.array("outputs").isEmpty {
+        Button("Connect to Viewer", systemImage: "eye") { model.send("viewer", ["node": name]) }
+      }
+      if node.bool("can_preview") {
+        Button(node.bool("preview_on") ? "Hide Preview" : "Show Preview",
+               systemImage: "photo") {
+          model.send("preview", ["node": name])
+        }
+      }
+      Button("Color…", systemImage: "paintpalette") { coloring = node }
+      if node["color"] != nil {
+        Button("Default Color", systemImage: "paintpalette.fill") { model.send("color", ["node": name]) }
+      }
+      if node.string("kind") == "NODE" || node.string("kind") == "GROUP" {
+        Button("Show Hidden Sockets", systemImage: "circle.dotted") { model.send("sockets_show", ["node": name]) }
+      }
+    }
     Divider()
     Button("Delete", systemImage: "trash", role: .destructive) {
       model.send("delete", ["nodes": targets])
@@ -984,6 +1095,16 @@ struct NodeCard: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       header
+      if let path = node.string("preview"), let image = NodeImages.image(path) {
+        /* The node's result, as Blender previews it. */
+        Image(uiImage: image)
+          .resizable()
+          .interpolation(.medium)
+          .scaledToFit()
+          .frame(maxWidth: .infinity)
+          .background(Color.black.opacity(0.05))
+          .accessibilityLabel("Preview")
+      }
       if !node.bool("collapsed") {
         VStack(alignment: .leading, spacing: 0) {
           ForEach(node.array("outputs"), id: \.socketID) { socket in
@@ -1060,6 +1181,9 @@ struct NodeCard: View {
       Spacer(minLength: 0)
       if node.bool("muted") {
         Image(systemName: "speaker.slash.fill").font(.caption)
+      }
+      if !node.array("warnings").isEmpty {
+        NodeWarningsButton(warnings: node.array("warnings"))
       }
     }
     .foregroundStyle(.white)
@@ -1174,6 +1298,14 @@ struct NodeCard: View {
       layout.set(socket: key, center)
     }
     .highPriorityGesture(wire(node, socket, output))
+    .contextMenu {
+      if !socket.bool("linked") {
+        /* As Blender's sidebar hides a socket of a node. */
+        Button("Hide Socket", systemImage: "eye.slash") {
+          model.send("socket_hide", ["node": name, "socket": socket.string("id") ?? "", "output": output ? 1 : 0])
+        }
+      }
+    }
     .accessibilityLabel((output ? "Output " : "Input ") + (socket.string("name") ?? ""))
   }
 }
@@ -1315,7 +1447,10 @@ struct NodeEditorLayer: View {
                   dragStart = start
                   fraction = min(0.9, max(0.25, start - value.translation.height / max(proxy.size.height, 1)))
                 }
-                .onEnded { _ in dragStart = nil })
+                .onEnded { _ in
+                  dragStart = nil
+                  cover(proxy.size.height)
+                })
             .accessibilityLabel("Resize Node Editor")
           NodeEditorPanel(model: nodes)
         }
@@ -1325,9 +1460,344 @@ struct NodeEditorLayer: View {
         .padding(.leading, model.sideInsets.left)
         .padding(.trailing, model.sideInsets.right)
       }
+      .onChange(of: proxy.size.height, initial: true) { _, height in cover(height) }
     }
     .ignoresSafeArea(edges: .bottom)
+    .onDisappear { model.nodesCover = 0 }
   }
+
+  /** The viewport ends under the panel's rounded corners, and changes size once a drag ends
+   * rather than on every step of it. */
+  private func cover(_ height: CGFloat) {
+    model.nodesCover = max(0, height * fraction - 24)
+  }
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Hardware Keys
+ *
+ * While the node editor was touched last, a hardware keyboard's keys go to it rather than to the
+ * viewport, and run as Blender's node editor keymap has them: whichever keymap is chosen, with
+ * the user's changes. Touching anywhere else gives the keys back.
+ * \{ */
+
+struct NodeKeyCapture: UIViewRepresentable {
+  let model: NodeEditorModel
+
+  func makeUIView(context: Context) -> NodeKeyCaptureView {
+    let view = NodeKeyCaptureView()
+    view.model = model
+    return view
+  }
+
+  func updateUIView(_ view: NodeKeyCaptureView, context: Context) {
+    view.model = model
+    if !model.shown, view.isFirstResponder {
+      DispatchQueue.main.async { _ = view.resignFirstResponder() }
+    }
+  }
+}
+
+final class NodeKeyCaptureView: UIView, UIKeyInput {
+  weak var model: NodeEditorModel?
+  private var observer: TouchObserver?
+
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    if let observer { observer.view?.removeGestureRecognizer(observer) }
+    observer = nil
+    guard let window else { return }
+    /* Sees every touch in the window without taking any, to tell where focus went. */
+    let touches = TouchObserver { [weak self] point in self?.touched(at: point) }
+    window.addGestureRecognizer(touches)
+    observer = touches
+  }
+
+  /** The editor's panel: this view's superview's bounds, as it fills the panel. */
+  private func touched(at point: CGPoint) {
+    guard let panel = superview, let window else { return }
+    let inside = panel.convert(panel.bounds, to: window).contains(point)
+    if inside, !isFirstResponder, model?.shown == true { _ = becomeFirstResponder() }
+    else if !inside, isFirstResponder { _ = resignFirstResponder() }
+  }
+
+  override var canBecomeFirstResponder: Bool { model?.shown == true }
+
+  /* No on-screen keyboard or shortcuts bar: only hardware keys are wanted. */
+  override var inputView: UIView? { UIView(frame: .zero) }
+  override var inputAssistantItem: UITextInputAssistantItem {
+    let item = super.inputAssistantItem
+    item.leadingBarButtonGroups = []
+    item.trailingBarButtonGroups = []
+    return item
+  }
+
+  var hasText: Bool { false }
+  func insertText(_ text: String) {}
+  func deleteBackward() {}
+
+  override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+    var handled = false
+    for press in presses {
+      guard let key = press.key, let name = Self.blenderKey(key) else { continue }
+      if key.keyCode == .keyboardEscape { continue }
+      let flags = key.modifierFlags
+      model?.sendKey(name, shift: flags.contains(.shift), ctrl: flags.contains(.control),
+                     alt: flags.contains(.alternate), oskey: flags.contains(.command))
+      handled = true
+    }
+    if !handled { super.pressesBegan(presses, with: event) }
+  }
+
+  /** The key as Blender's event types name it. */
+  static func blenderKey(_ key: UIKey) -> String? {
+    let usage = key.keyCode.rawValue
+    switch usage {
+      case 4...29: return String(UnicodeScalar(UInt8(65 + usage - 4)))
+      case 30...38:
+        return ["ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE"][usage - 30]
+      case 39: return "ZERO"
+      case 40: return "RET"
+      case 42: return "BACK_SPACE"
+      case 43: return "TAB"
+      case 44: return "SPACE"
+      case 45: return "MINUS"
+      case 46: return "EQUAL"
+      case 47: return "LEFT_BRACKET"
+      case 48: return "RIGHT_BRACKET"
+      case 49: return "BACK_SLASH"
+      case 51: return "SEMI_COLON"
+      case 52: return "QUOTE"
+      case 53: return "ACCENT_GRAVE"
+      case 54: return "COMMA"
+      case 55: return "PERIOD"
+      case 56: return "SLASH"
+      case 58...69: return "F\(usage - 57)"
+      case 74: return "HOME"
+      case 75: return "PAGE_UP"
+      case 76: return "DEL"
+      case 77: return "END"
+      case 78: return "PAGE_DOWN"
+      case 79: return "RIGHT_ARROW"
+      case 80: return "LEFT_ARROW"
+      case 81: return "DOWN_ARROW"
+      case 82: return "UP_ARROW"
+      default: return nil
+    }
+  }
+}
+
+/** Reports each touch's start in the window, then fails, so the touch goes on as it would. */
+private final class TouchObserver: UIGestureRecognizer {
+  private let began: (CGPoint) -> Void
+
+  init(began: @escaping (CGPoint) -> Void) {
+    self.began = began
+    super.init(target: nil, action: nil)
+    cancelsTouchesInView = false
+    delaysTouchesBegan = false
+    delaysTouchesEnded = false
+  }
+
+  override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+    if let touch = touches.first, let view { began(touch.location(in: view)) }
+    state = .failed
+  }
+
+  override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+  override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Node Details
+ * \{ */
+
+/** Images Blender wrote for previews and the backdrop, read once each. */
+enum NodeImages {
+  private static let cache = NSCache<NSString, UIImage>()
+
+  static func image(_ path: String) -> UIImage? {
+    if let cached = cache.object(forKey: path as NSString) { return cached }
+    guard let image = UIImage(contentsOfFile: path) else { return nil }
+    cache.setObject(image, forKey: path as NSString)
+    return image
+  }
+}
+
+/** A node's errors and warnings from its last evaluation, behind an icon in its header. */
+struct NodeWarningsButton: View {
+  let warnings: [JSON]
+  @State private var shown = false
+
+  private var worst: String {
+    warnings.contains { $0.string("type") == "ERROR" } ? "ERROR" :
+      warnings.contains { $0.string("type") == "WARNING" } ? "WARNING" : "INFO"
+  }
+
+  var body: some View {
+    Button {
+      shown = true
+    } label: {
+      Image(systemName: worst == "INFO" ? "info.circle.fill" : "exclamationmark.triangle.fill")
+        .font(.caption)
+        .symbolRenderingMode(.multicolor)
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(worst == "ERROR" ? "Errors" : worst == "WARNING" ? "Warnings" : "Information")
+    .popover(isPresented: $shown) {
+      VStack(alignment: .leading, spacing: 10) {
+        ForEach(Array(warnings.enumerated()), id: \.offset) { _, warning in
+          Label {
+            Text(warning.string("message") ?? "")
+          } icon: {
+            Image(systemName: warning.string("type") == "ERROR" ? "xmark.octagon.fill" :
+                    warning.string("type") == "WARNING" ? "exclamationmark.triangle.fill" : "info.circle.fill")
+              .foregroundStyle(warning.string("type") == "ERROR" ? .red :
+                                 warning.string("type") == "WARNING" ? .orange : .blue)
+          }
+        }
+      }
+      .padding()
+      .frame(minWidth: 260, maxWidth: 400)
+      .presentationCompactAdaptation(.popover)
+    }
+  }
+}
+
+/** A node's own color, chosen with the system's color picker. */
+struct NodeColorSheet: View {
+  let model: NodeEditorModel
+  let node: JSON
+  @Environment(\.dismiss) private var dismiss
+  @State private var color: Color = .gray
+
+  var body: some View {
+    NavigationStack {
+      Form {
+        ColorPicker("Color", selection: $color, supportsOpacity: false)
+        Button("Default Color") {
+          model.send("color", ["node": node.string("name") ?? ""])
+          dismiss()
+        }
+      }
+      .navigationTitle(node.string("title") ?? "Node Color")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Done") {
+            var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+            UIColor(color).getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+            model.send("color", ["node": node.string("name") ?? "", "value": [red, green, blue].map(Double.init)])
+            dismiss()
+          }
+        }
+      }
+    }
+    .onAppear {
+      if let rgb = node["color"] as? [NSNumber], rgb.count >= 3 {
+        color = Color(red: rgb[0].doubleValue, green: rgb[1].doubleValue, blue: rgb[2].doubleValue)
+      }
+    }
+  }
+}
+
+/** A group's inputs and outputs: renamed, reordered, added and removed, as Blender's Group panel. */
+struct NodeInterfaceSheet: View {
+  let model: NodeEditorModel
+  @Environment(\.dismiss) private var dismiss
+
+  private var items: [JSON] { model.snapshot?.array("interface") ?? [] }
+  private var types: [JSON] { model.snapshot?.array("socket_types") ?? [] }
+
+  var body: some View {
+    NavigationStack {
+      List {
+        section("Inputs", output: false)
+        section("Outputs", output: true)
+      }
+      .environment(\.editMode, .constant(.active))
+      .navigationTitle("Group Inputs & Outputs")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+      }
+    }
+  }
+
+  private func section(_ title: String, output: Bool) -> some View {
+    let entries = items.filter { $0.bool("output") == output }
+    return Section {
+      ForEach(entries, id: \.interfaceID) { item in
+        NodeInterfaceRow(model: model, item: item)
+      }
+      .onDelete { offsets in
+        for offset in offsets {
+          model.send("interface_remove", ["identifier": entries[offset].string("identifier") ?? ""])
+        }
+      }
+      .onMove { source, destination in
+        /* Positions count the whole list, inputs and outputs together, as Blender's do. */
+        guard let from = source.first, let item = entries[safe: from],
+              let base = items.firstIndex(where: { $0.interfaceID == entries.first?.interfaceID })
+        else { return }
+        let target = destination > from ? destination - 1 : destination
+        model.send("interface_move", ["identifier": item.string("identifier") ?? "", "position": base + target])
+      }
+      Menu {
+        ForEach(types, id: \.interfaceType) { type in
+          Button(type.string("name") ?? "") {
+            model.send("interface_add", ["output": output ? 1 : 0, "type": type.string("idname") ?? "",
+                                         "name": type.string("name") ?? (output ? "Output" : "Input")])
+          }
+        }
+      } label: {
+        Label(output ? "Add Output" : "Add Input", systemImage: "plus.circle.fill")
+      }
+    } header: {
+      Text(title)
+    }
+  }
+}
+
+private struct NodeInterfaceRow: View {
+  let model: NodeEditorModel
+  let item: JSON
+  @State private var name = ""
+
+  var body: some View {
+    HStack(spacing: 10) {
+      Circle()
+        .fill(colorOf(item))
+        .frame(width: 10, height: 10)
+      TextField("Name", text: $name)
+        .onSubmit {
+          model.send("interface_rename", ["identifier": item.string("identifier") ?? "", "name": name])
+        }
+      Text(item.string("type")?.replacingOccurrences(of: "NodeSocket", with: "") ?? "")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+    .onAppear { name = item.string("name") ?? "" }
+    .onChange(of: item.string("name") ?? "") { _, newValue in name = newValue }
+  }
+
+  private func colorOf(_ item: JSON) -> Color {
+    let c = (item["color"] as? [NSNumber])?.map(\.doubleValue) ?? [0.6, 0.6, 0.6]
+    return Color(red: c[0], green: c[1], blue: c[2])
+  }
+}
+
+private extension Dictionary where Key == String, Value == Any {
+  var interfaceID: String { string("identifier") ?? "" }
+  var interfaceType: String { string("idname") ?? "" }
+}
+
+private extension Array {
+  subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
 }
 
 /** \} */
