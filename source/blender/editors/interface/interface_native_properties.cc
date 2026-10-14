@@ -3373,8 +3373,28 @@ Block *native_node_block(bContext *C,
   if (node.typeinfo->draw_buttons) {
     node.typeinfo->draw_buttons(layout, C, &node_ptr);
   }
+  /* A socket that draws itself, such as the String node's text, as Blender's editor does. */
+  const auto custom_draw = [&](bNodeSocket &socket) {
+    const nodes::SocketDeclaration *declaration = socket.runtime->declaration;
+    if (!declaration || !declaration->custom_draw_fn) {
+      return false;
+    }
+    PointerRNA socket_ptr = RNA_pointer_create_discrete(&tree.id, RNA_NodeSocket, &socket);
+    nodes::CustomSocketDrawParams params{
+        *C, layout, tree, node, socket, node_ptr, socket_ptr, socket.name};
+    (*declaration->custom_draw_fn)(params);
+    return true;
+  };
+  for (bNodeSocket &socket : node.outputs) {
+    if (socket.is_visible()) {
+      custom_draw(socket);
+    }
+  }
   for (bNodeSocket &socket : node.inputs) {
     if (!socket.is_visible() || linked.count(&socket) || (socket.flag & SOCK_HIDE_VALUE)) {
+      continue;
+    }
+    if (custom_draw(socket)) {
       continue;
     }
     PointerRNA socket_ptr = RNA_pointer_create_discrete(&tree.id, RNA_NodeSocket, &socket);
@@ -3712,29 +3732,96 @@ void project_node(bContext *C,
   block_free(C, block);
 }
 
+/** The colors of a node type's socket types, once each and in order, for the add list. */
+void node_type_socket_colors(const bke::bNodeType &type, const bool output, ArrayValue &colors)
+{
+  const nodes::NodeDeclaration *declaration = type.static_declaration;
+  if (!declaration) {
+    return;
+  }
+  Vector<int> seen;
+  for (const nodes::SocketDeclaration *socket : output ? declaration->outputs : declaration->inputs) {
+    if (socket->socket_type < 0 || seen.contains(int(socket->socket_type)) || seen.size() >= 5) {
+      continue;
+    }
+    seen.append(int(socket->socket_type));
+    float color[4] = {0.6f, 0.6f, 0.6f, 1.0f};
+    if (const bke::bNodeSocketType *socket_type = bke::node_socket_type_find_static(socket->socket_type)) {
+      if (socket_type->draw_color_simple) {
+        socket_type->draw_color_simple(socket_type, color);
+      }
+    }
+    auto value = colors.append_array();
+    for (int c = 0; c < 3; c++) {
+      value->append_double(color[c]);
+    }
+  }
+}
+
+/** The nodes Blender's own Add menu offers here, walking its submenus: each tree, context and
+ * render engine lists only the nodes that apply, as Blender decides it. */
+void collect_add_menu(bContext *C,
+                      MenuType *menu,
+                      const std::string &category,
+                      const int depth,
+                      std::set<std::string> &seen,
+                      ArrayValue &items)
+{
+  if (!menu || depth > 6 || !WM_menutype_poll(C, menu)) {
+    return;
+  }
+  Block *block = block_begin(C, nullptr, __func__, EmbossType::Emboss);
+  Layout &layout = block_layout(
+      block, LayoutDirection::Vertical, LayoutType::Menu, 0, 0, 200, 0, 0, style_get_dpi());
+  menutype_draw(C, menu, &layout);
+  block_end(C, block);
+  for (const auto &button : block->buttons) {
+    Button &but = *button;
+    if (but.flag & (UI_HIDDEN | BUT_DISABLED)) {
+      continue;
+    }
+    if (MenuType *sub = button_menutype_get(&but)) {
+      const std::string name = but.drawstr.substr(0, but.drawstr.find(UI_SEP_CHAR));
+      collect_add_menu(C, sub, depth == 0 ? name : category, depth + 1, seen, items);
+      continue;
+    }
+    if (!but.optype || !but.opptr) {
+      continue;
+    }
+    std::string idname;
+    if (STREQ(but.optype->idname, "NODE_OT_add_node")) {
+      idname = RNA_string_get(but.opptr, "type");
+    }
+    else if (STREQ(but.optype->idname, "NODE_OT_add_zone") ||
+             STREQ(but.optype->idname, "NODE_OT_add_simulation_zone") ||
+             STREQ(but.optype->idname, "NODE_OT_add_repeat_zone") ||
+             STREQ(but.optype->idname, "NODE_OT_add_foreach_geometry_element_zone") ||
+             STREQ(but.optype->idname, "NODE_OT_add_closure_zone"))
+    {
+      if (PropertyRNA *prop = RNA_struct_find_property(but.opptr, "input_node_type")) {
+        idname = RNA_property_string_get(but.opptr, prop);
+      }
+    }
+    const bke::bNodeType *type = idname.empty() ? nullptr : bke::node_type_find(idname);
+    if (!type || !seen.insert(idname).second) {
+      continue;
+    }
+    const std::string label = but.drawstr.substr(0, but.drawstr.find(UI_SEP_CHAR));
+    auto item = items.append_dict();
+    item->append_str("idname", idname);
+    item->append_str("name", label.empty() ? type->ui_name : label);
+    item->append_str("description", type->ui_description);
+    item->append_str("category", category.empty() ? node_class_title(type->nclass) : category);
+    node_type_socket_colors(*type, false, *item->append_array("inputs"));
+    node_type_socket_colors(*type, true, *item->append_array("outputs"));
+  }
+  block_free(C, block);
+}
+
 void project_node_add_items(bContext *C, bNodeTree &tree, ArrayValue &items)
 {
-  const Span<int> zone_outputs = bke::all_zone_output_node_types();
-  for (const bke::bNodeType *type : bke::node_types_get()) {
-    const char *disabled_hint = nullptr;
-    if (type->poll && !type->poll(type, &tree, &disabled_hint)) {
-      continue;
-    }
-    if (type->add_ui_poll && !type->add_ui_poll(C)) {
-      continue;
-    }
-    if (type->deprecation_notice || StringRef(type->ui_name).endswith("(Legacy)") ||
-        StringRef(type->idname).endswith("Undefined") || type->nclass == NODE_CLASS_GROUP ||
-        type->idname == "NodeCustomGroup" || zone_outputs.contains(type->type_legacy))
-    {
-      continue;
-    }
-    auto item = items.append_dict();
-    item->append_str("idname", type->idname);
-    item->append_str("name", type->ui_name);
-    item->append_str("description", type->ui_description);
-    item->append_str("category", node_class_title(type->nclass));
-  }
+  std::set<std::string> seen;
+  collect_add_menu(C, WM_menutype_find("NODE_MT_add", false), "", 0, seen, items);
   /* The tree's own node groups, as the Group category lists them. */
   Main *bmain = CTX_data_main(C);
   for (bNodeTree &group : bmain->nodetrees) {
@@ -3999,13 +4086,23 @@ std::optional<std::string> native_node_key(bContext *C, bNodeTree &tree, const D
     }
     return request("exit", "");
   }
-  wmOperatorType *ot = WM_operatortype_find(item->idname, false);
-  /* Operators that run on the tree as it is; those following the pointer (select, link, cut)
-   * belong to the canvas's own gestures. */
-  if (!ot || (!ot->exec && !(ot->flag & OPTYPE_MACRO)) || !WM_operator_poll(C, ot)) {
+  /* Duplicating moves the copies with the pointer in Blender; here they are placed as the
+   * Duplicate command places them. */
+  wmOperatorType *ot = WM_operatortype_find(
+      idname == "NODE_OT_duplicate_move" ? "NODE_OT_duplicate" : item->idname, false);
+  /* Operators that run on the tree as it is. Those following the pointer (select, link, cut,
+   * grab, rotate, scale and moves chained after another step) belong to the canvas's own
+   * gestures: run without one they would act on wherever the pointer last was. */
+  if (!ot || !ot->exec || ot->modal || (ot->flag & OPTYPE_MACRO) || StringRef(ot->idname).startswith("TRANSFORM_OT") ||
+      !WM_operator_poll(C, ot))
+  {
     return std::nullopt;
   }
-  if (!(WM_operator_name_call_ptr(C, ot, wm::OpCallContext::ExecDefault, item->ptr, nullptr) &
+  if (!(WM_operator_name_call_ptr(C,
+                                  ot,
+                                  wm::OpCallContext::ExecDefault,
+                                  idname == "NODE_OT_duplicate_move" ? nullptr : item->ptr,
+                                  nullptr) &
         OPERATOR_FINISHED))
   {
     return std::nullopt;
