@@ -26,6 +26,8 @@
 #include "BKE_node_runtime.hh"
 #include "BKE_node.hh"
 #include "BKE_material.hh"
+#include "BKE_image.hh"
+#include "DNA_image_types.h"
 #include "BKE_packedFile.hh"
 #include "BKE_scene.hh"
 #include "BKE_screen.hh"
@@ -34,6 +36,7 @@
 #include "BLI_listbase.h"
 #include "BLI_rect.h"
 #include "BLI_serialize.hh"
+#include "DEG_depsgraph.hh"
 #include "DEG_depsgraph_build.hh"
 #include "DNA_ID.h"
 #include "DNA_curve_types.h"
@@ -44,6 +47,11 @@
 #include "DNA_workspace_types.h"
 #include "ED_buttons.hh"
 #include "ED_node.hh"
+#include "BLI_fileops.h"
+#include "BLI_hash_mm2a.hh"
+#include "BKE_scene_runtime.hh"
+#include "NOD_geometry_nodes_log.hh"
+#include "ED_node_preview.hh"
 #include "ED_render.hh"
 #include "ED_undo.hh"
 #include "IMB_colormanagement.hh"
@@ -58,6 +66,7 @@
 #include "WM_api.hh"
 #include "WM_types.hh"
 #include "WM_toolsystem.hh"
+#include "WM_keymap.hh"
 #include "interface_intern.hh"
 #include "wm_event_system.hh"
 
@@ -3109,6 +3118,9 @@ struct NativeNodeTree {
   std::string create;
   /** The group nodes entered, outermost first. */
   Vector<bNode *> path;
+  /** What Blender's node editor names as the tree's owner, and where it comes from. */
+  ID *id = nullptr;
+  ID *from = nullptr;
 };
 
 NativeNodeTree native_node_tree(bContext *C, const DictionaryValue &query)
@@ -3121,6 +3133,8 @@ NativeNodeTree native_node_tree(bContext *C, const DictionaryValue &query)
     if (material && material->nodetree) {
       result.root = material->nodetree;
       result.owner = material->id.name + 2;
+      result.id = &material->id;
+      result.from = &object->id;
     }
     else if (object && OB_TYPE_SUPPORT_MATERIAL(object->type)) {
       result.empty = "No Material";
@@ -3149,6 +3163,10 @@ NativeNodeTree native_node_tree(bContext *C, const DictionaryValue &query)
     if (nodes_modifier && nodes_modifier->node_group) {
       result.root = nodes_modifier->node_group;
       result.owner = nodes_modifier->modifier.name;
+      result.id = &object->id;
+      result.from = &object->id;
+      /* The modifier whose evaluation the editor shows: its timings, warnings and viewers. */
+      BKE_object_modifier_set_active(object, &nodes_modifier->modifier);
     }
     else if (object && ELEM(object->type, OB_MESH, OB_CURVES, OB_POINTCLOUD, OB_VOLUME, OB_GREASE_PENCIL))
     {
@@ -3164,6 +3182,7 @@ NativeNodeTree native_node_tree(bContext *C, const DictionaryValue &query)
     if (scene && scene->compositing_node_group) {
       result.root = scene->compositing_node_group;
       result.owner = scene->id.name + 2;
+      result.id = &scene->id;
     }
     else {
       result.empty = "No Compositor Nodes";
@@ -3190,40 +3209,90 @@ NativeNodeTree native_node_tree(bContext *C, const DictionaryValue &query)
  * A node editor showing the tree, for what asks for one: which nodes the Add menu offers (shader
  * nodes for objects or worlds), nodes' own drawing, and operators.
  */
+/**
+ * The node editor the native one stands in for, as Blender's own would be set up for the tree:
+ * kept for the session, as its previews and the jobs rendering them belong to it.
+ */
+ScrArea *native_node_area(bContext *C)
+{
+  static ScrArea *area = nullptr;
+  if (area == nullptr) {
+    area = MEM_new<ScrArea>("native node editor");
+    area->spacetype = SPACE_NODE;
+    area->type = BKE_spacetype_from_id(SPACE_NODE);
+    SpaceLink *link = area->type->create(area, CTX_data_scene(C));
+    BLI_addtail(&area->spacedata, link);
+    std::swap(area->regionbase, link->regionbase);
+    if (ARegion *region = BKE_area_find_region_type(area, RGN_TYPE_WINDOW)) {
+      region->runtime->type = BKE_regiontype_from_id(area->type, RGN_TYPE_WINDOW);
+    }
+  }
+  return area;
+}
+
+SpaceNode *native_node_space(bContext *C, const NativeNodeTree &shown)
+{
+  SpaceNode *space = static_cast<SpaceNode *>(native_node_area(C)->spacedata.first);
+  /* As #ED_node_tree_start and #ED_node_tree_push set it up, without their notifiers. */
+  for (bNodeTreePath &path : space->treepath.items_mutable()) {
+    MEM_delete(&path);
+  }
+  BLI_listbase_clear(&space->treepath);
+  space->nodetree = shown.root;
+  space->edittree = shown.tree;
+  space->id = shown.id;
+  space->from = shown.from;
+  space->node_tree_sub_type = 0; /* SNODE_GEOMETRY_MODIFIER, SNODE_COMPOSITOR_SCENE. */
+  space->shaderfrom = SNODE_SHADER_OBJECT;
+  space->overlay.flag |= SN_OVERLAY_SHOW_OVERLAYS | SN_OVERLAY_SHOW_PREVIEWS |
+                         SN_OVERLAY_SHOW_TIMINGS;
+  if (shown.root) {
+    STRNCPY(space->tree_idname, shown.root->idname);
+    bNodeTreePath *previous = MEM_new<bNodeTreePath>("node tree path");
+    previous->nodetree = shown.root;
+    previous->parent_key = bke::NODE_INSTANCE_KEY_BASE;
+    BLI_addtail(&space->treepath, previous);
+    for (bNode *group : shown.path) {
+      bNodeTreePath *path = MEM_new<bNodeTreePath>("node tree path");
+      path->nodetree = reinterpret_cast<bNodeTree *>(group->id);
+      path->parent_key = bke::node_instance_key(previous->parent_key, previous->nodetree, group);
+      STRNCPY(path->node_name, group->name);
+      BLI_addtail(&space->treepath, path);
+      previous = path;
+    }
+    /* The compositor computes previews and viewers of the group being looked at, as
+     * #ED_node_set_active_viewer_key records it. */
+    if (shown.root->type == NTREE_COMPOSIT &&
+        shown.root->active_viewer_key.value != previous->parent_key.value)
+    {
+      shown.root->active_viewer_key = previous->parent_key;
+      DEG_id_tag_update(&shown.root->id, ID_RECALC_NTREE_OUTPUT);
+    }
+  }
+  return space;
+}
+
+/** The native node editor's space as the context's area, while the tree is read or edited. */
 struct NodeSpaceContext {
   bContext *C;
   ScrArea *previous_area;
   ARegion *previous_region;
-  ScrArea area = {};
+  SpaceNode *space = nullptr;
 
-  NodeSpaceContext(bContext *context, bNodeTree *root, bNodeTree *tree) : C(context)
+  NodeSpaceContext(bContext *context, const NativeNodeTree &shown) : C(context)
   {
     previous_area = CTX_wm_area(C);
     previous_region = CTX_wm_region(C);
-    area.spacetype = SPACE_NODE;
-    area.type = BKE_spacetype_from_id(SPACE_NODE);
-    SpaceLink *link = area.type->create(&area, CTX_data_scene(C));
-    BLI_addtail(&area.spacedata, link);
-    std::swap(area.regionbase, link->regionbase);
-    SpaceNode *space = reinterpret_cast<SpaceNode *>(link);
-    space->nodetree = root;
-    space->edittree = tree;
-    if (tree) {
-      STRNCPY(space->tree_idname, tree->idname);
-    }
-    ARegion *region = BKE_area_find_region_type(&area, RGN_TYPE_WINDOW);
-    if (region) {
-      region->runtime->type = BKE_regiontype_from_id(area.type, RGN_TYPE_WINDOW);
-    }
-    CTX_wm_area_set(C, &area);
-    CTX_wm_region_set(C, region);
+    space = native_node_space(C, shown);
+    ScrArea *area = native_node_area(C);
+    CTX_wm_area_set(C, area);
+    CTX_wm_region_set(C, BKE_area_find_region_type(area, RGN_TYPE_WINDOW));
   }
 
   ~NodeSpaceContext()
   {
     CTX_wm_area_set(C, previous_area);
     CTX_wm_region_set(C, previous_region);
-    BKE_screen_area_free(&area);
   }
 };
 
@@ -3306,6 +3375,30 @@ Block *native_node_block(bContext *C,
     PointerRNA socket_ptr = RNA_pointer_create_discrete(&tree.id, RNA_NodeSocket, &socket);
     if (RNA_struct_find_property(&socket_ptr, "default_value")) {
       layout.prop(&socket_ptr, "default_value", UI_ITEM_NONE, "", ICON_NONE);
+    }
+  }
+  block_end(C, block);
+  return block;
+}
+
+/** What Blender's node editor header draws for the tree shown, whose data-block picker the
+ * native header shows: the modifier's node group, the material, the world, the scene's
+ * compositor. */
+Block *native_node_header_block(bContext *C)
+{
+  Block *block = block_begin(C, nullptr, "native_node_header", EmbossType::Emboss);
+  Layout &layout = block_layout(
+      block, LayoutDirection::Horizontal, LayoutType::Header, 0, 0, 20, 1, 0, style_get_dpi());
+  SpaceType *space_type = BKE_spacetype_from_id(SPACE_NODE);
+  if (ARegionType *region_type = BKE_regiontype_from_id(space_type, RGN_TYPE_HEADER)) {
+    for (HeaderType &header_type : region_type->headertypes) {
+      if (!header_type.draw || (header_type.poll && !header_type.poll(C, &header_type))) {
+        continue;
+      }
+      Header header = {nullptr};
+      header.type = &header_type;
+      header.layout = &layout;
+      header_type.draw(C, &header);
     }
   }
   block_end(C, block);
@@ -3395,7 +3488,62 @@ void project_node_socket(const bNodeSocket &socket,
   item.append_str("type", socket.typeinfo ? socket.typeinfo->idname : "");
 }
 
-void project_node(bContext *C, bNodeTree &tree, bNode &node, const std::set<const bNodeSocket *> &linked, DictionaryValue &item)
+/** What reading a tree gathers once for all its nodes: timings, warnings and previews. */
+struct NodeReadContext {
+  SpaceNode *space = nullptr;
+  Scene *scene = nullptr;
+  nodes::geo_eval_log::ContextualGeoTreeLogs geo_logs;
+  ed::space_node::NestedTreePreviews *shader_previews = nullptr;
+  Map<bNodeInstanceKey, bke::bNodePreview> *compositor_previews = nullptr;
+  bNodeInstanceKey parent_key = bke::NODE_INSTANCE_KEY_BASE;
+};
+
+/** A preview image as a PNG file for the native interface, written again only when it changes. */
+std::string native_preview_path(const Scene *scene, const ImBuf *ibuf, const std::string &name)
+{
+  if (ibuf == nullptr || ibuf->x <= 0 || ibuf->y <= 0) {
+    return "";
+  }
+  uint64_t hash = uint64_t(ibuf->x) * 31 + ibuf->y;
+  if (ibuf->float_buffer.data) {
+    hash = hash * 1000003 + BLI_hash_mm2(reinterpret_cast<const unsigned char *>(ibuf->float_buffer.data),
+                                         size_t(ibuf->x) * ibuf->y * ibuf->channels * sizeof(float), 0);
+  }
+  else if (ibuf->byte_buffer.data) {
+    hash = hash * 1000003 + BLI_hash_mm2(ibuf->byte_buffer.data, size_t(ibuf->x) * ibuf->y * 4, 0);
+  }
+  static std::map<std::string, std::pair<uint64_t, std::string>> written;
+  auto &entry = written[name];
+  if (entry.first == hash && !entry.second.empty()) {
+    return entry.second;
+  }
+  /* In the scene's view transform, as Blender's own editors show it. */
+  ImBuf *display = IMB_dupImBuf(ibuf);
+  if (display->float_buffer.data) {
+    IMB_colormanagement_imbuf_make_display_space(
+        display, &scene->view_settings, &scene->display_settings);
+    IMB_byte_from_float(display);
+  }
+  display->planes = 32;
+  display->ftype = IMB_FTYPE_PNG;
+  const std::string path = std::string(BKE_tempdir_session()) + "native_node_" + name + "_" +
+                           std::to_string(hash) + ".png";
+  if (IMB_save_image(display, path.c_str(), IB_byte_data)) {
+    if (!entry.second.empty()) {
+      BLI_delete(entry.second.c_str(), false, false);
+    }
+    entry = {hash, path};
+  }
+  IMB_freeImBuf(display);
+  return entry.second;
+}
+
+void project_node(bContext *C,
+                  bNodeTree &tree,
+                  bNode &node,
+                  const std::set<const bNodeSocket *> &linked,
+                  DictionaryValue &item,
+                  NodeReadContext &read)
 {
   item.append_str("name", node.name);
   item.append_str("title", bke::node_label(tree, node));
@@ -3421,6 +3569,69 @@ void project_node(bContext *C, bNodeTree &tree, bNode &node, const std::set<cons
   }
   if (node.parent) {
     item.append_str("parent", node.parent->name);
+  }
+  /* How long it took and what went wrong, as Blender's editor shows above nodes. */
+  std::optional<std::chrono::nanoseconds> time;
+  if (tree.type == NTREE_GEOMETRY) {
+    const bke::bNodeTreeZones *zones = tree.zones();
+    const bke::bNodeTreeZone *zone = zones ? zones->get_zone_by_node(node.identifier) : nullptr;
+    if (zone && ELEM(node.identifier, zone->input_node_id, zone->output_node_id)) {
+      zone = zone->parent_zone;
+    }
+    if (nodes::geo_eval_log::GeoTreeLog *log = read.geo_logs.get_main_tree_log(zone)) {
+      if (node.is_group_output()) {
+        time = log->execution_time;
+      }
+      else if (const nodes::geo_eval_log::GeoNodeLog *node_log = log->nodes.lookup_ptr(node.identifier)) {
+        time = node_log->execution_time;
+        if (!node_log->warnings.is_empty()) {
+          auto warnings = item.append_array("warnings");
+          for (const nodes::geo_eval_log::NodeWarning &warning : node_log->warnings) {
+            auto entry = warnings->append_dict();
+            entry->append_str("message", warning.message);
+            entry->append_str("type", warning.type == nodes::NodeWarningType::Error   ? "ERROR" :
+                                      warning.type == nodes::NodeWarningType::Warning ? "WARNING" :
+                                                                                       "INFO");
+          }
+        }
+      }
+    }
+  }
+  else if (tree.type == NTREE_COMPOSIT && read.scene) {
+    const bNodeInstanceKey key = bke::node_instance_key(read.parent_key, &tree, &node);
+    if (const timeit::Nanoseconds *found =
+            read.scene->runtime->compositor.per_node_execution_time.lookup_ptr(key))
+    {
+      if (found->count() > 0) {
+        time = *found;
+      }
+    }
+  }
+  if (time && !node.is_frame()) {
+    item.append_double("time_ms", double(time->count()) / 1e6);
+  }
+  /* A preview of the node's result, for nodes that have one, while it is turned on. */
+  if (bke::node_preview_used(node)) {
+    item.append_int("can_preview", 1);
+    item.append_int("preview_on", (node.flag & NODE_PREVIEW) != 0);
+    if (node.flag & NODE_PREVIEW) {
+      const std::string name = std::to_string(tree.id.session_uid) + "_" + std::to_string(node.identifier);
+      std::string path;
+      if (read.shader_previews) {
+        ImBuf *ibuf = ed::space_node::node_preview_acquire_ibuf(tree, *read.shader_previews, node);
+        path = native_preview_path(read.scene, ibuf, name);
+        ed::space_node::node_release_preview_ibuf(*read.shader_previews);
+      }
+      else if (read.compositor_previews) {
+        const bNodeInstanceKey key = bke::node_instance_key(read.parent_key, &tree, &node);
+        if (const bke::bNodePreview *preview = read.compositor_previews->lookup_ptr(key)) {
+          path = native_preview_path(read.scene, preview->ibuf, name);
+        }
+      }
+      if (!path.empty()) {
+        item.append_str("preview", path);
+      }
+    }
   }
   if (node.is_group() && node.id) {
     item.append_str("group", node.id->name + 2);
@@ -3671,6 +3882,108 @@ Vector<bNode *> named_nodes(bNodeTree &tree, const DictionaryValue &query)
   return nodes;
 }
 
+/** What a key asked of the native editor itself: the Add menu, or entering or leaving a group. */
+struct NativeNodeKeyRequest {
+  int sequence = 0;
+  std::string action;
+  std::string node;
+};
+NativeNodeKeyRequest native_node_key_request;
+
+bool keymap_modifier_matches(const int8_t item, const bool held)
+{
+  return item == KM_ANY || (item == KM_MOD_HELD) == held;
+}
+
+/**
+ * A hardware key pressed in the native node editor, run as the node editor's keymap has it, the
+ * user's or the selected preset's: Blender's own operators on the tree. The editor's own views
+ * (its Add menu, groups entered) are asked of the native editor.
+ */
+std::optional<std::string> native_node_key(bContext *C, bNodeTree &tree, const DictionaryValue &query)
+{
+  wmWindowManager *wm = CTX_wm_manager(C);
+  const bool shift = query.lookup_int("shift").value_or(0), ctrl = query.lookup_int("ctrl").value_or(0),
+             alt = query.lookup_int("alt").value_or(0), oskey = query.lookup_int("oskey").value_or(0);
+  /* Keys as Blender names them; the Mac's Delete is Backspace, which Blender also takes. */
+  Vector<std::string> names = {std::string(query.lookup_str("key").value_or(""))};
+  if (names[0] == "BACK_SPACE") {
+    names.append("DEL");
+  }
+  auto find = [&](const int type, const bool use_ctrl, const bool use_oskey) -> wmKeyMapItem * {
+    for (const char *keymap_name : {"Node Editor", "Node Generic"}) {
+      wmKeyMap *keymap = WM_keymap_find_all(wm, keymap_name, SPACE_NODE, RGN_TYPE_WINDOW);
+      keymap = keymap ? WM_keymap_active(wm, keymap) : nullptr;
+      if (!keymap) {
+        continue;
+      }
+      for (wmKeyMapItem &item : keymap->items) {
+        if ((item.flag & KMI_INACTIVE) || item.type != type || !ELEM(item.val, KM_PRESS, KM_ANY, KM_CLICK) ||
+            !keymap_modifier_matches(item.shift, shift) || !keymap_modifier_matches(item.ctrl, use_ctrl) ||
+            !keymap_modifier_matches(item.alt, alt) || !keymap_modifier_matches(item.oskey, use_oskey))
+        {
+          continue;
+        }
+        return &item;
+      }
+    }
+    return nullptr;
+  };
+  wmKeyMapItem *item = nullptr;
+  for (const std::string &name : names) {
+    int type;
+    if (!RNA_enum_value_from_identifier(rna_enum_event_type_items, name.c_str(), &type)) {
+      continue;
+    }
+    /* Command for Control, as the iPad's keyboards have it, when the keymap has none. */
+    item = find(type, ctrl, oskey);
+    if (!item && oskey && !ctrl) {
+      item = find(type, true, false);
+    }
+    if (item) {
+      break;
+    }
+  }
+  if (!item) {
+    return std::nullopt;
+  }
+  const StringRef idname = item->idname;
+  auto request = [&](const std::string &action, const std::string &node) {
+    native_node_key_request.sequence++;
+    native_node_key_request.action = action;
+    native_node_key_request.node = node;
+    return std::string("");
+  };
+  if (idname == "WM_OT_call_menu" || idname == "WM_OT_call_menu_pie" || idname == "WM_OT_call_panel") {
+    const std::string menu = item->ptr ? RNA_string_get(item->ptr, "name") : "";
+    if (menu == "NODE_MT_add") {
+      return request("add", "");
+    }
+    return std::nullopt;
+  }
+  if (idname == "NODE_OT_group_edit") {
+    const bool exit = item->ptr && RNA_boolean_get(item->ptr, "exit");
+    const bNode *active = bke::node_get_active(tree);
+    if (!exit && active && active->is_group() && active->id) {
+      return request("enter", active->name);
+    }
+    return request("exit", "");
+  }
+  wmOperatorType *ot = WM_operatortype_find(item->idname, false);
+  /* Operators that run on the tree as it is; those following the pointer (select, link, cut)
+   * belong to the canvas's own gestures. */
+  if (!ot || (!ot->exec && !(ot->flag & OPTYPE_MACRO)) || !WM_operator_poll(C, ot)) {
+    return std::nullopt;
+  }
+  if (!(WM_operator_name_call_ptr(C, ot, wm::OpCallContext::ExecDefault, item->ptr, nullptr) &
+        OPERATOR_FINISHED))
+  {
+    return std::nullopt;
+  }
+  BKE_main_ensure_invariants(*CTX_data_main(C), tree.id);
+  return std::string("");
+}
+
 /** Applies one of the canvas's actions to the tree it shows; the undo step's name, or none. */
 std::optional<std::string> apply_node_action(bContext *C, bNodeTree &tree, const DictionaryValue &query)
 {
@@ -3678,11 +3991,13 @@ std::optional<std::string> apply_node_action(bContext *C, bNodeTree &tree, const
   const std::string action = query.lookup_str("action").value_or("");
   bNode *node = bke::node_find_node_by_name(tree, query.lookup_str("node").value_or(""));
   if (action == "property") {
-    if (!node) {
+    /* A node's value, or the header's data-block. */
+    const bool header = query.lookup_int("header").value_or(0);
+    if (!node && !header) {
       return std::nullopt;
     }
     const std::set<const bNodeSocket *> linked = linked_sockets(tree);
-    Block *block = native_node_block(C, tree, *node, linked);
+    Block *block = header ? native_node_header_block(C) : native_node_block(C, tree, *node, linked);
     const std::string key = query.lookup_str("key").value_or("");
     bool applied = false;
     wmOperatorType *operator_type = nullptr;
@@ -3722,7 +4037,9 @@ std::optional<std::string> apply_node_action(bContext *C, bNodeTree &tree, const
     }
     block_free(C, block);
     /* Undo, keys and updates are the property's own, as from a button. */
-    BKE_ntree_update_tag_node_property(&tree, node);
+    if (node) {
+      BKE_ntree_update_tag_node_property(&tree, node);
+    }
     BKE_main_ensure_invariants(*bmain, tree.id);
     return applied ? std::optional<std::string>("") : std::nullopt;
   }
@@ -3865,6 +4182,201 @@ std::optional<std::string> apply_node_action(bContext *C, bNodeTree &tree, const
     BKE_main_ensure_invariants(*bmain, tree.id);
     return std::string(action == "mute" ? "Toggle Node Mute" : "Collapse Nodes");
   }
+  if (action == "preview" && node) {
+    node->flag ^= NODE_PREVIEW;
+    if (tree.type == NTREE_COMPOSIT) {
+      ED_node_compositor_job(C);
+    }
+    WM_event_add_notifier(C, NC_NODE | NA_EDITED, &tree);
+    return std::string("Toggle Node Preview");
+  }
+  if (action == "color" && node) {
+    /* A color of the node's own, or none for its kind's. */
+    if (const ArrayValue *color = query.lookup_array("value"); color && color->elements().size() >= 3) {
+      for (int i = 0; i < 3; i++) {
+        const auto &component = color->elements()[i];
+        node->color[i] = float(component->as_double_value() ? component->as_double_value()->value() :
+                               component->as_int_value()   ? double(component->as_int_value()->value()) :
+                                                             0.0);
+      }
+      node->flag |= NODE_CUSTOM_COLOR;
+    }
+    else {
+      node->flag &= ~NODE_CUSTOM_COLOR;
+    }
+    WM_event_add_notifier(C, NC_NODE | NA_EDITED, &tree);
+    return std::string("Node Color");
+  }
+  if (action == "socket_hide" && node) {
+    /* An unlinked socket hidden, as its own toggle in Blender's sidebar does. */
+    const bool output = query.lookup_int("output").value_or(0) != 0;
+    bNodeSocket *socket = find_socket(*node, std::string(query.lookup_str("socket").value_or("")), output);
+    if (!socket || socket->is_directly_linked()) {
+      return std::nullopt;
+    }
+    socket->flag |= SOCK_HIDDEN;
+    BKE_ntree_update_tag_node_property(&tree, node);
+    BKE_main_ensure_invariants(*bmain, tree.id);
+    return std::string("Hide Socket");
+  }
+  if (action == "sockets_show" && node) {
+    for (bNodeSocket &socket : node->inputs) {
+      socket.flag &= ~SOCK_HIDDEN;
+    }
+    for (bNodeSocket &socket : node->outputs) {
+      socket.flag &= ~SOCK_HIDDEN;
+    }
+    BKE_ntree_update_tag_node_property(&tree, node);
+    BKE_main_ensure_invariants(*bmain, tree.id);
+    return std::string("Show Sockets");
+  }
+  if (action == "viewer" && node) {
+    /* The node's result viewed, as Ctrl Shift clicking it does: in the viewport for geometry, in
+     * the backdrop for the compositor. */
+    for (bNode &other : tree.nodes) {
+      other.flag &= ~(NODE_SELECT | NODE_ACTIVE);
+    }
+    node->flag |= NODE_SELECT;
+    bke::node_set_active(tree, *node);
+    wmOperatorType *ot = WM_operatortype_find("NODE_OT_link_viewer", false);
+    if (!ot || !WM_operator_poll(C, ot)) {
+      return std::nullopt;
+    }
+    Map<const bNode *, float2> locations;
+    for (const bNode &other : tree.nodes) {
+      locations.add(&other, float2(other.location));
+    }
+    /* It reports itself cancelled when it adds a new viewer, so what it did is read from the
+     * tree. */
+    const wmOperatorStatus status = WM_operator_name_call_ptr(
+        C, ot, wm::OpCallContext::ExecDefault, nullptr, nullptr);
+    /* The operator places the viewer from the bounds Blender's editor draws, which this one
+     * doesn't: keep a viewer that is already right of the node, otherwise place it there. */
+    const auto rough_height = [](const bNode &other) {
+      int sockets = 0;
+      for (const bNodeSocket *socket : other.input_sockets()) {
+        sockets += socket->is_visible();
+      }
+      for (const bNodeSocket *socket : other.output_sockets()) {
+        sockets += socket->is_visible();
+      }
+      return 40.0f + 24.0f * sockets;
+    };
+    tree.ensure_topology_cache();
+    bool viewed = false;
+    for (bNode &viewer : tree.nodes) {
+      if (!viewer.is_type("GeometryNodeViewer") && !viewer.is_type("CompositorNodeViewer")) {
+        continue;
+      }
+      const bool linked = std::any_of(
+          tree.links.begin(), tree.links.end(), [&](const bNodeLink &link) {
+            return link.fromnode == node && link.tonode == &viewer;
+          });
+      if (!linked) {
+        continue;
+      }
+      if (const float2 *previous = locations.lookup_ptr(&viewer)) {
+        copy_v2_v2(viewer.location, *previous);
+        if (viewer.location[0] > node->location[0] + node->width) {
+          viewed = true;
+          break;
+        }
+      }
+      float2 spot(node->location[0] + node->width + 60.0f, node->location[1]);
+      const float height = rough_height(viewer);
+      for (int step = 0; step < 12; step++) {
+        const bool overlaps = std::any_of(
+            tree.nodes.begin(), tree.nodes.end(), [&](const bNode &other) {
+              if (&other == &viewer || other.is_frame()) {
+                return false;
+              }
+              return spot.x < other.location[0] + other.width + 20.0f &&
+                     other.location[0] < spot.x + viewer.width + 20.0f &&
+                     spot.y > other.location[1] - rough_height(other) - 20.0f &&
+                     other.location[1] > spot.y - height - 20.0f;
+            });
+        if (!overlaps) {
+          break;
+        }
+        spot.y -= 80.0f;
+      }
+      copy_v2_v2(viewer.location, spot);
+      viewed = true;
+      break;
+    }
+    if (!viewed) {
+      return std::nullopt;
+    }
+    BKE_main_ensure_invariants(*CTX_data_main(C), tree.id);
+    if (tree.type == NTREE_COMPOSIT) {
+      ED_node_compositor_job(C);
+    }
+    /* Only a finished operator has pushed its own undo step. */
+    return std::string((status & OPERATOR_FINISHED) ? "" : ot->name);
+  }
+  if (action == "interface_add" || action == "interface_remove" || action == "interface_rename" ||
+      action == "interface_move")
+  {
+    /* The group's inputs and outputs, as Blender's Group panel edits them. */
+    bNodeTreeInterface &interface = tree.tree_interface;
+    bNodeTreeInterfaceSocket *item = nullptr;
+    const std::string identifier = std::string(query.lookup_str("identifier").value_or(""));
+    interface.foreach_item([&](bNodeTreeInterfaceItem &candidate) {
+      if (candidate.item_type == NODE_INTERFACE_SOCKET) {
+        auto &socket = reinterpret_cast<bNodeTreeInterfaceSocket &>(candidate);
+        if (socket.identifier && socket.identifier == identifier) {
+          item = &socket;
+          return false;
+        }
+      }
+      return true;
+    });
+    if (action == "interface_add") {
+      const bool output = query.lookup_int("output").value_or(0) != 0;
+      const std::string type = std::string(query.lookup_str("type").value_or("NodeSocketFloat"));
+      bke::bNodeSocketType *socket_type = bke::node_socket_type_find(type);
+      if (!socket_type || (tree.typeinfo->valid_socket_type &&
+                           !tree.typeinfo->valid_socket_type(tree.typeinfo, socket_type)))
+      {
+        return std::nullopt;
+      }
+      const std::string name = std::string(query.lookup_str("name").value_or(output ? "Output" : "Input"));
+      if (!interface.add_socket(name, "", type,
+                                output ? NODE_INTERFACE_SOCKET_OUTPUT : NODE_INTERFACE_SOCKET_INPUT,
+                                nullptr))
+      {
+        return std::nullopt;
+      }
+    }
+    else if (!item) {
+      return std::nullopt;
+    }
+    else if (action == "interface_remove") {
+      interface.remove_item(item->item, true);
+    }
+    else if (action == "interface_rename") {
+      const std::string name = std::string(query.lookup_str("name").value_or(""));
+      if (name.empty()) {
+        return std::nullopt;
+      }
+      MEM_SAFE_DELETE(item->name);
+      item->name = BLI_strdup(name.c_str());
+      interface.tag_item_property_changed();
+    }
+    else {
+      interface.move_item(item->item, int(query.lookup_int("position").value_or(0)));
+    }
+    BKE_main_ensure_invariants(*bmain, tree.id);
+    WM_event_add_notifier(C, NC_NODE | NA_EDITED, &tree);
+    return std::string(action == "interface_add"    ? "Add Group Socket" :
+                       action == "interface_remove" ? "Remove Group Socket" :
+                       action == "interface_rename" ? "Rename Group Socket" :
+                                                      "Move Group Socket");
+  }
+  if (action == "key") {
+    /* A key the keymap has nothing for does nothing, as in Blender. */
+    return native_node_key(C, tree, query).value_or("");
+  }
   if (action == "panel" && node) {
     /* A panel opened or closed, as its header's arrow does. */
     const int identifier = int(query.lookup_int("panel").value_or(-1));
@@ -3887,6 +4399,14 @@ std::optional<std::string> apply_node_action(bContext *C, bNodeTree &tree, const
 
 }  // namespace
 
+/** Composites the scene for the native editor's backdrop and previews, after a read set them. */
+void native_nodes_compositor_job(bContext *C)
+{
+  if (CTX_data_scene(C) && CTX_data_scene(C)->compositing_node_group) {
+    ED_node_compositor_job(C);
+  }
+}
+
 std::string native_nodes_query(bContext *C, const std::string &json, const bool execute)
 {
   auto query_value = decode(json);
@@ -3901,7 +4421,7 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
   /* Resolved from the viewport's context; edited and drawn in a node editor's. */
   std::optional<NodeSpaceContext> node_space;
   if (shown.tree) {
-    node_space.emplace(C, shown.root, shown.tree);
+    node_space.emplace(C, shown);
   }
   if (execute) {
     if (!shown.tree) {
@@ -3915,6 +4435,10 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
       ED_undo_push(C, undo->c_str());
     }
     WM_event_add_notifier(C, NC_NODE | NA_EDITED, shown.tree);
+    if (shown.root->type == NTREE_COMPOSIT && query->lookup_str("phase").value_or("") != "update") {
+      /* The backdrop and previews follow, as in Blender's editor. */
+      ED_node_compositor_job(C);
+    }
     return "";
   }
   DictionaryValue result;
@@ -3935,11 +4459,116 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
   bNodeTree &tree = *shown.tree;
   const std::set<const bNodeSocket *> linked = linked_sockets(tree);
   auto nodes = result.append_array("nodes");
+  NodeReadContext read;
+  read.space = node_space->space;
+  read.scene = CTX_data_scene(C);
+  read.parent_key = static_cast<bNodeTreePath *>(read.space->treepath.last)->parent_key;
+  if (tree.type == NTREE_GEOMETRY) {
+    read.geo_logs = nodes::geo_eval_log::GeoNodesLog::get_contextual_tree_logs(*read.space);
+    read.geo_logs.foreach_tree_log([&](nodes::geo_eval_log::GeoTreeLog &log) {
+      log.ensure_node_warnings(*CTX_data_main(C));
+      log.ensure_execution_times();
+    });
+  }
+  else if (tree.type == NTREE_SHADER && query->lookup_int("previews").value_or(0) &&
+           std::any_of(tree.nodes.begin(), tree.nodes.end(),
+                       [](const bNode &node) { return node.flag & NODE_PREVIEW; }))
+  {
+    read.shader_previews = ed::space_node::get_nested_previews(*C, *read.space);
+  }
+  else if (tree.type == NTREE_COMPOSIT) {
+    read.compositor_previews = &shown.root->runtime->previews;
+  }
   NativeOptionSets option_sets;
   native_option_sets = &option_sets;
   for (bNode &node : tree.nodes) {
-    project_node(C, tree, node, linked, *nodes->append_dict());
+    project_node(C, tree, node, linked, *nodes->append_dict(), read);
   }
+  /* The compositor's Viewer, behind the nodes as Blender's backdrop. */
+  if (tree.type == NTREE_COMPOSIT && query->lookup_int("backdrop").value_or(0)) {
+    Main *bmain = CTX_data_main(C);
+    Image *viewer = BKE_image_ensure_viewer(bmain, IMA_TYPE_COMPOSITE, "Viewer Node");
+    void *lock;
+    ImageUser user = {};
+    ImBuf *ibuf = BKE_image_acquire_ibuf(viewer, &user, &lock);
+    const std::string path = native_preview_path(read.scene, ibuf, "backdrop");
+    BKE_image_release_ibuf(viewer, ibuf, lock);
+    if (!path.empty()) {
+      result.append_str("backdrop", path);
+    }
+  }
+  /* A group's inputs and outputs, which its interface list edits. */
+  if (!shown.path.is_empty() || !(tree.id.flag & ID_FLAG_EMBEDDED_DATA)) {
+    auto interface = result.append_array("interface");
+    tree.tree_interface.foreach_item([&](const bNodeTreeInterfaceItem &candidate) {
+      if (candidate.item_type == NODE_INTERFACE_SOCKET) {
+        const auto &socket = reinterpret_cast<const bNodeTreeInterfaceSocket &>(candidate);
+        auto entry = interface->append_dict();
+        entry->append_str("identifier", socket.identifier ? socket.identifier : "");
+        entry->append_str("name", socket.name ? socket.name : "");
+        entry->append_str("type", socket.socket_type ? socket.socket_type : "");
+        entry->append_int("output", (socket.flag & NODE_INTERFACE_SOCKET_OUTPUT) != 0);
+        if (bke::bNodeSocketType *type = socket.socket_type ? bke::node_socket_type_find(socket.socket_type) : nullptr) {
+          float color[4] = {0.6f, 0.6f, 0.6f, 1.0f};
+          if (type->draw_color_simple) {
+            type->draw_color_simple(type, color);
+          }
+          auto rgb = entry->append_array("color");
+          for (int i = 0; i < 3; i++) {
+            rgb->append_double(color[i]);
+          }
+        }
+      }
+      return true;
+    });
+    /* The kinds of socket the tree can have. */
+    auto types = result.append_array("socket_types");
+    for (const char *idname : {"NodeSocketGeometry", "NodeSocketFloat", "NodeSocketInt", "NodeSocketBool",
+                               "NodeSocketVector", "NodeSocketColor", "NodeSocketRotation", "NodeSocketMatrix",
+                               "NodeSocketString", "NodeSocketMenu", "NodeSocketShader", "NodeSocketObject",
+                               "NodeSocketCollection", "NodeSocketMaterial", "NodeSocketImage", "NodeSocketBundle",
+                               "NodeSocketClosure"})
+    {
+      bke::bNodeSocketType *type = bke::node_socket_type_find(idname);
+      if (type && (!tree.typeinfo->valid_socket_type ||
+                   tree.typeinfo->valid_socket_type(tree.typeinfo, type)))
+      {
+        auto entry = types->append_dict();
+        entry->append_str("idname", idname);
+        entry->append_str("name", type->label.empty() ? idname + 10 : type->label.c_str());
+      }
+    }
+  }
+  if (tree.type == NTREE_COMPOSIT) {
+    result.append_int("can_backdrop", 1);
+  }
+  /* The header's data-block picker, as the Properties editor shows one. */
+  {
+    Block *header = native_node_header_block(C);
+    auto ids = result.append_array("header_ids");
+    for_each_node_field(
+        *header,
+        [](Button & /*but*/, const int /*index*/, const std::string & /*key*/) {},
+        [&](PointerRNA &ptr, PropertyRNA *prop) {
+          auto field = ids->append_dict();
+          project_id_template(C, *header, ptr, prop, *field);
+          field->append_int("header", 1);
+        });
+    block_free(C, header);
+  }
+  if (native_node_key_request.sequence) {
+    auto key = result.append_dict("key_request");
+    key->append_int("sequence", native_node_key_request.sequence);
+    key->append_str("action", native_node_key_request.action);
+    key->append_str("node", native_node_key_request.node);
+  }
+  /* What the compositor computes for this editor: its backdrop and the previews turned on. */
+  ED_node_compositor_native_outputs_set(
+      tree.type == NTREE_COMPOSIT && query->lookup_int("backdrop").value_or(0),
+      tree.type == NTREE_COMPOSIT &&
+          std::any_of(tree.nodes.begin(), tree.nodes.end(), [](const bNode &node) {
+            return node.flag & NODE_PREVIEW;
+          }));
   native_option_sets = nullptr;
   result.append("option_sets", option_sets.sets);
   auto links = result.append_array("links");

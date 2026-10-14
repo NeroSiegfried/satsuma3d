@@ -118,6 +118,7 @@ namespace blender::ui {
 std::string native_menu_query(bContext *C, const std::string &request, bool execute);
 std::string native_properties_query(bContext *C, const std::string &request, bool execute);
 std::string native_nodes_query(bContext *C, const std::string &request, bool execute);
+void native_nodes_compositor_job(bContext *C);
 std::string native_operator_redo_query(bContext *C, const std::string &request, bool execute);
 void native_properties_interaction_finish(bContext *C);
 std::string native_properties_menu_query(bContext *C, const std::string &request, bool execute);
@@ -241,6 +242,8 @@ std::string ios_nodes_state = "{\"tree\":\"SHADER\"}";
 /* The node tree read last, read again only when something may have changed it: notifiers, the
  * editor's own commands, or a slow check. Reading a large tree takes a while. */
 bool ios_nodes_dirty = true;
+/** Composite once the tree is read, for a compositor backdrop just shown. */
+bool ios_nodes_composite = false;
 std::string ios_nodes_json;
 std::chrono::steady_clock::time_point ios_nodes_next_check;
 /** The tree the Add Node list was sent for, sent again only for another. */
@@ -1150,6 +1153,7 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
   }
   if (command.setting == "native_nodes_state") {
     ios_nodes_dirty = true;
+    ios_nodes_composite = command.value.find("COMPOSITOR") != std::string::npos;
     ios_nodes_state = command.value;
     ios_panels_next_snapshot = {};
     ios_panels_published.clear();
@@ -2418,6 +2422,10 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
             state.insert(state.size() - 1, ",\"with_add\":1");
           }
           ios_nodes_json = ui::native_nodes_query(C, state, false);
+          if (ios_nodes_composite) {
+            ios_nodes_composite = false;
+            ui::native_nodes_compositor_job(C);
+          }
         }
         /* Spliced in as it is below, rather than read and written again: it is large. */
         merged.append_str("nodes", "@native_nodes_json@");
