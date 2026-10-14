@@ -278,9 +278,15 @@ extension DocumentController: UIEditMenuInteractionDelegate, UIGestureRecognizer
 /** \name Viewport
  * \{ */
 
-/** Holds GHOST's Metal view, sized to the window at the display's full resolution. */
+/** Holds GHOST's Metal view, sized to the window at the display's full resolution, less what a
+ * panel covers at the bottom so the view centers on what can be seen. */
 final class ViewportContainer: UIView {
   let metalView: MTKView
+  var bottomCover: CGFloat = 0 {
+    didSet {
+      if bottomCover != oldValue { setNeedsLayout() }
+    }
+  }
 
   init(metalView: MTKView) {
     self.metalView = metalView
@@ -294,11 +300,13 @@ final class ViewportContainer: UIView {
 
   override func layoutSubviews() {
     super.layoutSubviews()
-    metalView.frame = bounds
+    var frame = bounds
+    frame.size.height = max(1, bounds.height - bottomCover)
+    metalView.frame = frame
     let scale = max(1, window?.traitCollection.displayScale ?? traitCollection.displayScale)
     metalView.contentScaleFactor = scale
     metalView.layer.contentsScale = scale
-    let size = CGSize(width: max(1, bounds.width * scale), height: max(1, bounds.height * scale))
+    let size = CGSize(width: max(1, frame.width * scale), height: max(1, frame.height * scale))
     if metalView.drawableSize != size {
       metalView.drawableSize = size
     }
@@ -307,9 +315,12 @@ final class ViewportContainer: UIView {
 
 struct ViewportView: UIViewRepresentable {
   let container: ViewportContainer
+  var bottomCover: CGFloat = 0
 
   func makeUIView(context: Context) -> ViewportContainer { container }
-  func updateUIView(_ view: ViewportContainer, context: Context) {}
+  func updateUIView(_ view: ViewportContainer, context: Context) {
+    view.bottomCover = bottomCover
+  }
 }
 
 /** \} */
@@ -440,10 +451,15 @@ public struct DocumentWindow: View {
     }
   }
 
+  /** How much of the window's bottom the viewport leaves to the node editor. */
+  private var viewportCover: CGFloat {
+    controlsShown && model.nodesShown ? model.nodesCover : 0
+  }
+
   private var viewportLayers: some View {
     ZStack {
       /* Edge to edge, under a phone's toolbar column too. */
-      ViewportView(container: viewport)
+      ViewportView(container: viewport, bottomCover: viewportCover)
         .ignoresSafeArea()
         .onDrop(of: [.data, .image], delegate: FileDrop(model: model) { shell.assets.store.dragged != nil })
       if !model.viewportReady {
@@ -454,14 +470,22 @@ public struct DocumentWindow: View {
           .allowsHitTesting(false)
       }
       if controlsShown {
+        /* Over the viewport, which ends above the node editor. */
+        ZStack {
 #if !os(visionOS) /* Ornaments there. */
-        QuickActionsRow(model: model)
-        ToolRails(model: model)
+          QuickActionsRow(model: model)
+          ToolRails(model: model)
 #endif
-        ViewGizmoLayer(model: model)
-        TextObjectKeyboard(model: model)
+          ViewGizmoLayer(model: model)
+          TextObjectKeyboard(model: model)
+        }
+        .padding(.bottom, viewportCover)
       }
       BottomTrayLayer(model: model, timeline: shell.timeline.store, assets: shell.assets.store, shown: controlsShown)
+      if controlsShown && model.nodesShown {
+        NodeEditorLayer(model: model, nodes: shell.panels.nodes)
+          .transition(.move(edge: .bottom).combined(with: .opacity))
+      }
       if let pencilMenu {
         /* Frontmost; it passes touches through while it is closed. */
         PencilMenuView(menu: pencilMenu)

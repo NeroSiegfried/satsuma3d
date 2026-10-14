@@ -117,6 +117,8 @@
 namespace blender::ui {
 std::string native_menu_query(bContext *C, const std::string &request, bool execute);
 std::string native_properties_query(bContext *C, const std::string &request, bool execute);
+std::string native_nodes_query(bContext *C, const std::string &request, bool execute);
+void native_nodes_compositor_job(bContext *C);
 std::string native_operator_redo_query(bContext *C, const std::string &request, bool execute);
 void native_properties_interaction_finish(bContext *C);
 std::string native_properties_menu_query(bContext *C, const std::string &request, bool execute);
@@ -235,6 +237,17 @@ std::string ios_panels_published;
 std::string ios_panels_json = "null";
 std::string ios_properties_state = "{\"tab\":\"OBJECT\"}";
 std::string ios_shading_state = "{\"tab\":\"SHADING\"}";
+/** The node tree the native node editor shows: its kind and the groups entered. */
+std::string ios_nodes_state = "{\"tree\":\"SHADER\"}";
+/* The node tree read last, read again only when something may have changed it: notifiers, the
+ * editor's own commands, or a slow check. Reading a large tree takes a while. */
+bool ios_nodes_dirty = true;
+/** Composite once the tree is read, for a compositor backdrop just shown. */
+bool ios_nodes_composite = false;
+std::string ios_nodes_json;
+std::chrono::steady_clock::time_point ios_nodes_next_check;
+/** The tree the Add Node list was sent for, sent again only for another. */
+std::string ios_nodes_add_for;
 std::string ios_properties_error;
 int64_t ios_panels_sequence = 0;
 std::atomic<bool> ios_navigation_hover_active{false};
@@ -1136,6 +1149,76 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     ios_panels_visible = (ios_panels_visible & ~4) | (command.value == "1" ? 4 : 0);
     ios_panels_next_snapshot = {};
     ios_panels_published.clear();
+    return;
+  }
+  if (command.setting == "native_nodes_state") {
+    ios_nodes_dirty = true;
+    ios_nodes_composite = command.value.find("COMPOSITOR") != std::string::npos;
+    ios_nodes_state = command.value;
+    ios_panels_next_snapshot = {};
+    ios_panels_published.clear();
+    return;
+  }
+  if (command.setting == "native_nodes_visible") {
+    ios_nodes_dirty = true;
+    ios_panels_visible = (ios_panels_visible & ~8) | (command.value == "1" ? 8 : 0);
+    ios_panels_next_snapshot = {};
+    ios_panels_published.clear();
+    return;
+  }
+  if (command.setting == "native_nodes_edit") {
+    ios_nodes_dirty = true;
+    std::istringstream stream(command.value);
+    auto value = io::serialize::JsonFormatter().deserialize(stream);
+    if (const auto *request = value ? value->as_dictionary_value() : nullptr) {
+      ios_panels_sequence = request->lookup_int("sequence").value_or(ios_panels_sequence);
+      preview = request->lookup_str("phase").value_or("") == "update";
+    }
+    if (!preview) {
+      ios_panels_next_snapshot = {};
+    }
+    ios_properties_error = ui::native_nodes_query(C, command.value, true);
+    return;
+  }
+  if (command.setting == "native_nodes_create") {
+    ios_nodes_dirty = true;
+    ios_nodes_add_for.clear();
+    /* A material, Geometry Nodes or compositor nodes for the node editor to show, as their own
+     * buttons make them. */
+    const char *imports[] = {"bpy", nullptr};
+    std::string script;
+    if (command.value == "SHADER") {
+      script =
+          "ob = bpy.context.active_object\n"
+          "if ob is not None:\n"
+          "    m = bpy.data.materials.new('Material')\n"
+          "    if len(ob.material_slots) and ob.material_slots[ob.active_material_index].material is None:\n"
+          "        ob.active_material = m\n"
+          "    else:\n"
+          "        ob.data.materials.append(m)\n"
+          "        ob.active_material_index = len(ob.material_slots) - 1\n";
+    }
+    else if (command.value == "GEOMETRY") {
+      script = "bpy.ops.node.new_geometry_nodes_modifier()\n";
+    }
+    else if (command.value == "COMPOSITOR") {
+      script =
+          "before = set(bpy.data.node_groups)\n"
+          "bpy.ops.node.new_compositing_node_group(name='Compositor Nodes')\n"
+          "made = [g for g in bpy.data.node_groups if g not in before]\n"
+          "if made:\n"
+          "    bpy.context.scene.compositing_node_group = made[0]\n";
+    }
+#ifdef WITH_PYTHON
+    if (!script.empty()) {
+      BPY_run_string_exec(C, imports, script.c_str());
+      ED_undo_push(C, "New Node Tree");
+      WM_main_add_notifier(NC_NODE | NA_ADDED, nullptr);
+    }
+#else
+    UNUSED_VARS(imports);
+#endif
+    ios_panels_next_snapshot = {};
     return;
   }
   if (command.setting == "native_properties_state") {
@@ -2328,6 +2411,25 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
           merged.append("inspector", std::move(properties));
         }
       }
+      if (ios_panels_visible & 8) {
+        if (ios_nodes_dirty || now >= ios_nodes_next_check) {
+          ios_nodes_dirty = false;
+          ios_nodes_next_check = now + std::chrono::seconds(2);
+          std::string state = ios_nodes_state;
+          if (state != ios_nodes_add_for) {
+            /* The nodes it can add, once for each tree. */
+            ios_nodes_add_for = state;
+            state.insert(state.size() - 1, ",\"with_add\":1");
+          }
+          ios_nodes_json = ui::native_nodes_query(C, state, false);
+          if (ios_nodes_composite) {
+            ios_nodes_composite = false;
+            ui::native_nodes_compositor_job(C);
+          }
+        }
+        /* Spliced in as it is below, rather than read and written again: it is large. */
+        merged.append_str("nodes", "@native_nodes_json@");
+      }
       if (ios_panels_visible & 4) {
         std::istringstream shading_stream(
             ui::native_properties_query(C, ios_shading_state, false));
@@ -2339,6 +2441,12 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
       std::ostringstream merged_stream;
       JsonFormatter().serialize(merged_stream, merged);
       ios_panels_json = merged_stream.str();
+      if (ios_panels_visible & 8) {
+        const std::string placeholder = "\"@native_nodes_json@\"";
+        if (const size_t at = ios_panels_json.find(placeholder); at != std::string::npos) {
+          ios_panels_json.replace(at, placeholder.size(), ios_nodes_json.empty() ? "null" : ios_nodes_json);
+        }
+      }
       /* Published when it changes: every snapshot wakes UIKit. */
       if (ios_panels_json != ios_panels_published) {
         ios_panels_published = ios_panels_json;
@@ -2788,6 +2896,7 @@ extern "C" void WM_apple_ios_ui_view_roll_enqueue(float angle)
 
 void WM_apple_ios_ui_tag_changed()
 {
+  ios_nodes_dirty = true;
   ios_ui_changed = true;
 }
 
@@ -3172,7 +3281,10 @@ static void ios_ui_dispatch(bContext *C, IOSUIMessage &message)
                                                 setting->setting != "native_properties_state" &&
                                                 setting->setting != "native_shading_state" &&
                                                 setting->setting != "native_panels" &&
-                                                setting->setting != "native_shading_visible")))
+                                                setting->setting != "native_shading_visible" &&
+                                                setting->setting != "native_nodes_state" &&
+                                                setting->setting != "native_nodes_visible" &&
+                                                setting->setting != "native_nodes_edit")))
   {
     const IOSContextStore context_store = ios_context_push_view3d(C);
     ui::native_properties_interaction_finish(C);
@@ -3183,7 +3295,10 @@ static void ios_ui_dispatch(bContext *C, IOSUIMessage &message)
                                          setting->setting == "native_shading_visible" ||
                                          setting->setting == "native_panel_edit" ||
                                          setting->setting == "native_properties_state" ||
-                                         setting->setting == "native_properties_edit");
+                                         setting->setting == "native_properties_edit" ||
+                                         setting->setting == "native_nodes_state" ||
+                                         setting->setting == "native_nodes_visible" ||
+                                         setting->setting == "native_nodes_edit");
   if (WM_apple_ios_dialog_active(CTX_wm_window(C)) && !panel_message) {
     if (const auto *request = std::get_if<IOSMenuRequest>(&message)) {
       if (!request->execute) {

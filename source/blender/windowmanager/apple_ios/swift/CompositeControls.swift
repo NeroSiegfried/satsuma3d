@@ -98,6 +98,8 @@ func usersText(_ item: JSON) -> String {
 struct DataPicker: View {
   let store: InspectorStore
   let property: JSON
+  /** On one line, for a toolbar: a small preview and the name. */
+  var compact = false
   @State private var browsing = false
   @State private var rename: RenameRequest?
 
@@ -110,20 +112,22 @@ struct DataPicker: View {
       Button {
         browsing = true
       } label: {
-        HStack(spacing: 12) {
+        HStack(spacing: compact ? 8 : 12) {
           PreviewThumbnail(path: property.string("preview"),
-                           fallback: BlenderIcon.image(property.string("icon")), size: 52)
+                           fallback: BlenderIcon.image(property.string("icon")), size: compact ? 26 : 52)
           VStack(alignment: .leading, spacing: 2) {
             Text(has ? property.string("name") ?? "" : "No \(type)")
-              .font(.headline)
+              .font(compact ? .subheadline.weight(.medium) : .headline)
               .lineLimit(1)
               .truncationMode(.middle)
               .foregroundStyle(has ? .primary : .secondary)
-            Text(has ? (usersText(property).isEmpty ? type : usersText(property)) : "Choose or create one")
-              .font(.subheadline)
-              .foregroundStyle(.secondary)
+            if !compact {
+              Text(has ? (usersText(property).isEmpty ? type : usersText(property)) : "Choose or create one")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            }
           }
-          Spacer(minLength: 0)
+          if !compact { Spacer(minLength: 0) }
           Image(systemName: "chevron.up.chevron.down")
             .font(.caption)
             .foregroundStyle(.tertiary)
@@ -153,7 +157,7 @@ struct DataPicker: View {
 
       actionsMenu
     }
-    .frame(minHeight: 64)
+    .frame(minHeight: compact ? 36 : 64)
     .renamePrompt($rename)
   }
 
@@ -211,8 +215,8 @@ struct DataPicker: View {
         }
       } label: {
         Image(systemName: "ellipsis.circle")
-          .font(.title3)
-          .frame(width: 40, height: 44)
+          .font(compact ? .body : .title3)
+          .frame(width: compact ? 32 : 40, height: compact ? 36 : 44)
       }
       .tint(.primary)
       .disabled(!editable)

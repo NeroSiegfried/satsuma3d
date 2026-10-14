@@ -15,6 +15,8 @@ import UIKit
 @MainActor
 final class SwiftScenePanels {
   let inspector = InspectorStore(mode: .properties)
+  /** The native node editor, which Blender's panel snapshots also feed. */
+  let nodes = NodeEditorModel()
   private let shading = InspectorStore(mode: .shading, tab: "SHADING")
   private let toolStrip = InspectorStore(mode: .toolStrip, tab: "TOOL")
   private let toolPopover = InspectorStore(mode: .toolPopover, tab: "TOOL")
@@ -101,6 +103,9 @@ final class SwiftScenePanels {
                                 "inspector": shadingSnapshot])
     }
     let ack = (snapshot["ack"] as? NSNumber)?.uint64Value ?? 0
+    if let nodesSnapshot = snapshot.dict("nodes"), nodes.shown {
+      nodes.update(nodesSnapshot, ack: ack)
+    }
     if ack < inspector.sequence { return }
     if let nodes = snapshot["hierarchy"] as? [Any] {
       hierarchy.update(nodes: nodes.compactMap { $0 as? JSON }, status: snapshot.string("error") ?? "")

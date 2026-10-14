@@ -126,6 +126,8 @@ final class InspectorStore {
     case toolStrip
     /** All tool settings in a popover. */
     case toolPopover
+    /** The controls on a node editor's nodes. */
+    case nodes
   }
 
   let mode: Mode
@@ -154,6 +156,8 @@ final class InspectorStore {
   private(set) var generation = 0
 
   @ObservationIgnored var visible = true
+  /** Sent with every edit: for nodes, which tree the edit is in. */
+  @ObservationIgnored var requestContext: JSON = [:]
   @ObservationIgnored private var snapshot: JSON?
   @ObservationIgnored private var shownTab: String?
   @ObservationIgnored private var inspector: JSON?
@@ -192,7 +196,12 @@ final class InspectorStore {
     InspectorStore.nextSequence += 1
     sequence = InspectorStore.nextSequence
     var payload = request
+    payload.merge(requestContext) { $1 }
     payload["sequence"] = NSNumber(value: sequence)
+    if mode == .nodes {
+      Engine.setting("native_nodes_edit", json: payload)
+      return
+    }
     Engine.setting(request.bool("native") ? "native_properties_edit" : "native_panel_edit",
                    json: payload)
   }
@@ -225,6 +234,9 @@ final class InspectorStore {
       "key": property.string("key") ?? "", "panel": property.string("panel") ?? "",
       "tab": property.string("tab") ?? "",
     ]
+    /* A node's picker names its node. */
+    if let node = property.string("node") { request["node"] = node }
+    if property.bool("header") { request["header"] = 1 }
     request.merge(extra) { $1 }
     send(request)
   }
@@ -263,6 +275,13 @@ final class InspectorStore {
     else if let array = object as? [Any] {
       for child in array { collectValues(child, into: &values) }
     }
+  }
+
+  /** A new snapshot of values not read through `update`, such as a node tree's: what was set is
+   * shown by it now. */
+  func clearPendingValues(ack: UInt64) {
+    guard ack >= sequence else { return }
+    for pending in pendingValues.values where pending.value != nil { pending.value = nil }
   }
 
   /** The selected items' values differ, until an edit gives them all one. */
