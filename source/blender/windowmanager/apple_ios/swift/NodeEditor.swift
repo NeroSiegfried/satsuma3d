@@ -611,6 +611,10 @@ struct NodeCanvas: View {
   @State private var cables = CableMotion()
   /** While a cable still sways, frames are drawn. */
   @State private var cablesMoving = false
+  /** Nodes already on the canvas, to tell a node just added. */
+  @State private var knownNodes: Set<String> = []
+  /** Where a node just landed, in view points, and when, for the ripple it sends out. */
+  @State private var ripple: (center: CGPoint, start: Date)?
   /** The node just plugged into, bouncing. */
   @State private var bounced: String?
   /** Links just made, a flash of light running along them. */
@@ -633,7 +637,9 @@ struct NodeCanvas: View {
     GeometryReader { proxy in
       ZStack(alignment: .topLeading) {
         NodeMenuAnchor(presenter: menus)
+        /* The canvas ripples as a node lands; the cards bob on the same wave, see `bob`. */
         background
+          .modifier(NodeRippleEffect(ripple: ripple))
         if model.backdrop, let path = model.snapshot?.string("backdrop"), let image = NodeImages.image(path) {
           /* The compositor's Viewer, behind the nodes, as Blender's backdrop. */
           Image(uiImage: image)
@@ -644,7 +650,7 @@ struct NodeCanvas: View {
             .accessibilityLabel("Compositor Result")
         }
         wires
-        content
+        nodeLayer
           .scaleEffect(zoom, anchor: .topLeading)
           .offset(pan)
         plugRings
@@ -666,6 +672,7 @@ struct NodeCanvas: View {
         DispatchQueue.main.async { fit() }
       }
       .onChange(of: positions) { _, _ in moved.removeAll() }
+      .onChange(of: model.nodes.map(\.nodeName), initial: true) { _, names in landed(Set(names)) }
       .onChange(of: pan) { _, _ in rememberCenter() }
       .onChange(of: pinching) { _, active in if !active { gestureZoom = nil } }
       .onChange(of: panning) { _, active in if !active { panStart = nil } }
@@ -1094,7 +1101,18 @@ struct NodeCanvas: View {
   /* -------------------------------------------------------------------- */
   /* Nodes */
 
-  private var content: some View {
+  /** The nodes, followed frame by frame while a ripple runs. */
+  @ViewBuilder
+  private var nodeLayer: some View {
+    if ripple != nil {
+      TimelineView(.animation) { timeline in content(timeline.date) }
+    }
+    else {
+      content(nil)
+    }
+  }
+
+  private func content(_ date: Date?) -> some View {
     ZStack(alignment: .topLeading) {
       ForEach(model.nodes.filter { $0.string("kind") == "FRAME" }, id: \.nodeName) { frame in
         frameView(frame)
@@ -1104,10 +1122,26 @@ struct NodeCanvas: View {
       }
       ForEach(model.nodes.filter { $0.string("kind") != "FRAME" }, id: \.nodeName) { node in
         nodeView(node)
+          .offset(bob(node, at: date))
       }
     }
     .frame(width: 1, height: 1, alignment: .topLeading)
     .coordinateSpace(.named("nodes"))
+  }
+
+  /** How far the ripple's wave pushes a node at `date`, as `node_ripple` pushes the canvas. */
+  private func bob(_ node: JSON, at date: Date?) -> CGSize {
+    guard let date, let ripple, !UIAccessibility.isReduceMotionEnabled else { return .zero }
+    let corner = origin(node)
+    let center = toView(CGPoint(x: corner.x + cardWidth(node) / 2, y: corner.y + 40))
+    let offset = CGPoint(x: center.x - ripple.center.x, y: center.y - ripple.center.y)
+    let distance = hypot(offset.x, offset.y)
+    guard distance > 1 else { return .zero }
+    let local = max(0, date.timeIntervalSince(ripple.start) - distance / NodeRippleEffect.speed)
+    let push = NodeRippleEffect.amplitude * sin(NodeRippleEffect.frequency * local) *
+      exp(-NodeRippleEffect.decay * local) * exp(-distance / 600)
+    /* In canvas points, which the zoom scales. */
+    return CGSize(width: push * offset.x / distance / zoom, height: push * offset.y / distance / zoom)
   }
 
   @ViewBuilder
@@ -1323,6 +1357,21 @@ struct NodeCanvas: View {
     }
     return UIMenu(children: first + [UIMenu(title: "More", image: UIImage(systemName: "ellipsis.circle"), children: more),
                                      action("Delete", "trash", destructive: true) { model.send("delete", ["nodes": targets]) }])
+  }
+
+  /** A node new to the tree, other than when another tree shows, sends a ripple across the
+   * canvas from where it landed. */
+  private func landed(_ names: Set<String>) {
+    let added = names.subtracting(knownNodes)
+    let fresh = knownNodes.isEmpty || knownNodes.isDisjoint(with: names)
+    knownNodes = names
+    guard !fresh, let name = added.first, let node = model.nodes.first(where: { $0.string("name") == name })
+    else { return }
+    let corner = origin(node)
+    ripple = (toView(CGPoint(x: corner.x + cardWidth(node) / 2, y: corner.y + 40)), Date())
+    DispatchQueue.main.asyncAfter(deadline: .now() + NodeRippleEffect.duration) {
+      if let ripple, Date().timeIntervalSince(ripple.start) >= NodeRippleEffect.duration { self.ripple = nil }
+    }
   }
 
   /** The node bounces, as it takes a cable. */
@@ -1923,6 +1972,37 @@ struct NodeMenuAnchor: UIViewRepresentable {
 
   func updateUIView(_ view: UIView, context: Context) {
     presenter.attach(to: view)
+  }
+}
+
+/** Water rippling out from a node as it lands, as widgets once did when added: the canvas is
+ * bent by a ring that runs outward and settles within a moment. */
+struct NodeRippleEffect: ViewModifier {
+  static let duration: TimeInterval = 0.75
+  static let amplitude = 9.0
+  static let frequency = 16.0
+  static let decay = 7.0
+  static let speed = 1100.0
+  /** The shaders, built with the app, see `NodeEffects.metal`. */
+  private static let library: ShaderLibrary? = Bundle.main.url(forResource: "NodeEffects", withExtension: "metallib")
+    .map { ShaderLibrary(url: $0) }
+
+  let ripple: (center: CGPoint, start: Date)?
+
+  func body(content: Content) -> some View {
+    if let ripple, let library = Self.library, !UIAccessibility.isReduceMotionEnabled {
+      TimelineView(.animation) { timeline in
+        let time = timeline.date.timeIntervalSince(ripple.start)
+        content.distortionEffect(
+          library.node_ripple(.float2(ripple.center), .float(Float(time)), .float(Float(Self.amplitude)),
+                              .float(Float(Self.frequency)), .float(Float(Self.decay)), .float(Float(Self.speed))),
+          maxSampleOffset: CGSize(width: 10, height: 10),
+          isEnabled: time < Self.duration)
+      }
+    }
+    else {
+      content
+    }
   }
 }
 

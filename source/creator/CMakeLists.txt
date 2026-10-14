@@ -406,8 +406,22 @@ else()
       ${CMAKE_SOURCE_DIR}/release/ios/launcher/blender_logo_mono.svg
     )
 
+    # Shaders for SwiftUI's effects, built into a library the app loads by name. `xcrun` takes
+    # the SDK being built for from Xcode's environment.
+    set(IOS_NODE_EFFECTS_SRC
+      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/NodeEffects.metal
+    )
+    set(IOS_LAUNCHER_METAL ${CMAKE_CURRENT_BINARY_DIR}/NodeEffects.metallib)
+    add_custom_command(
+      OUTPUT ${IOS_LAUNCHER_METAL}
+      COMMAND xcrun metal -c ${IOS_NODE_EFFECTS_SRC} -o ${CMAKE_CURRENT_BINARY_DIR}/NodeEffects.air
+      COMMAND xcrun metallib ${CMAKE_CURRENT_BINARY_DIR}/NodeEffects.air -o ${IOS_LAUNCHER_METAL}
+      DEPENDS ${IOS_NODE_EFFECTS_SRC}
+    )
+    set_source_files_properties(${IOS_LAUNCHER_METAL} PROPERTIES GENERATED TRUE)
+
     add_executable(blender ${EXETYPE} ${SRC} ${storyboards}
-      ${IOS_LAUNCHER_SWIFT} ${IOS_LAUNCHER_RESOURCES}
+      ${IOS_LAUNCHER_SWIFT} ${IOS_LAUNCHER_METAL} ${IOS_LAUNCHER_RESOURCES}
     )
     # Linked as C++ as before. Xcode adds Swift's own libraries, while CMake would otherwise pass
     # the C and C++ compilers' implicit library folders, which may be the host's.
@@ -1863,7 +1877,7 @@ elseif(APPLE)
       ${IOS_ICON_MANIFEST} ${IOS_ICON_EXPORTER} ${IOS_ICON_SOURCES}
     )
     target_sources(blender PRIVATE ${IOS_ICON_MANIFEST})
-    set(allresources ${storyboards} ${IOS_ICON_MANIFEST} ${IOS_LAUNCHER_RESOURCES})
+    set(allresources ${storyboards} ${IOS_ICON_MANIFEST} ${IOS_LAUNCHER_RESOURCES} ${IOS_LAUNCHER_METAL})
     set_target_properties(blender PROPERTIES RESOURCE "${allresources}")
 
     add_custom_command(
