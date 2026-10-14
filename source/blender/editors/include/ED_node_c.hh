@@ -85,6 +85,11 @@ void ED_node_set_active(
  * Launch a compositor job for the scene of the given context.
  */
 void ED_node_compositor_job(const bContext *C);
+/**
+ * The outputs a node editor outside of Blender's screens shows (the backdrop's Viewer and node
+ * previews), which compositor jobs compute along with those of the screens' editors.
+ */
+void ED_node_compositor_native_outputs_set(bool viewer, bool previews);
 
 /* `node_ops.cc` */
 

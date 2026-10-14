@@ -233,9 +233,19 @@ static bool is_compositing_possible(const bContext *C)
 
 /* Returns the compositor outputs that need to be computed because their result is visible to the
  * user or required by the render pipeline. */
+/* Outputs a node editor drawn outside of Blender's screens shows, such as the native one. */
+static bool native_compositor_viewer = false;
+static bool native_compositor_previews = false;
+
 static compositor::NodeGroupOutputTypes get_compositor_needed_outputs(const bContext *C)
 {
   compositor::NodeGroupOutputTypes needed_outputs = compositor::NodeGroupOutputTypes::None;
+  if (native_compositor_viewer) {
+    needed_outputs |= compositor::NodeGroupOutputTypes::ViewerNode;
+  }
+  if (native_compositor_previews) {
+    needed_outputs |= compositor::NodeGroupOutputTypes::NodePreviews;
+  }
 
   Scene *scene = CTX_data_scene(C);
   wmWindowManager *window_manager = CTX_wm_manager(C);
@@ -302,6 +312,12 @@ static compositor::NodeGroupOutputTypes get_compositor_needed_outputs(const bCon
   }
 
   return needed_outputs;
+}
+
+void ED_node_compositor_native_outputs_set(const bool viewer, const bool previews)
+{
+  native_compositor_viewer = viewer;
+  native_compositor_previews = previews;
 }
 
 void ED_node_compositor_job(const bContext *C)
