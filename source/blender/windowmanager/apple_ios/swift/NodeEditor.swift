@@ -554,16 +554,29 @@ private struct CablePlug: Identifiable {
     return UICanvasFeedbackGenerator(view: view)
   }()
 
+  /** Readies the haptics as a cable is picked up, so the first click isn't late. */
+  static func prepare() {
+    _ = canvasFeedback
+    impact.prepare()
+    selection.prepare()
+  }
+
+  private static let impact = UIImpactFeedbackGenerator(style: .rigid)
+  private static let soft = UIImpactFeedbackGenerator(style: .soft)
+  private static let selection = UISelectionFeedbackGenerator()
+
   static func snapped(at point: CGPoint) {
     canvasFeedback?.alignmentOccurred(at: point)
-    UISelectionFeedbackGenerator().selectionChanged()
+    selection.selectionChanged()
+    selection.prepare()
   }
 
   static func connected(at point: CGPoint) {
     canvasFeedback?.pathCompleted(at: point)
-    UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+    impact.impactOccurred()
+    soft.prepare()
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.07) {
-      UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.6)
+      soft.impactOccurred(intensity: 0.6)
     }
   }
 }
@@ -1388,6 +1401,7 @@ struct NodeCanvas: View {
     return AnyGesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("nodes"))
       .onChanged { value in
         if wire == nil {
+          CableFeedback.prepare()
           if !output, let existing = model.links.first(where: { $0.string("to_node") == nodeName && $0.string("to_socket") == socketID }) {
             /* An input's wire is picked up from its source, to plug in elsewhere. */
             let source = model.nodes.first { $0.string("name") == existing.string("from_node") }
@@ -1537,13 +1551,17 @@ struct NodeCard: View {
       }
     }
     /* Raised from the canvas in either appearance. */
-    .background(Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .tertiarySystemBackground : .systemBackground }),
-                in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 14, style: .continuous)
-        .strokeBorder(node.bool("active") ? Color.accentColor : node.bool("selected") ? Color.accentColor.opacity(0.6) : Color.black.opacity(0.15),
-                      lineWidth: node.bool("selected") ? 2.5 : 1)
+    /* The outline under the contents, so the socket dots on the edge cover it. */
+    .background {
+      let card = RoundedRectangle(cornerRadius: 14, style: .continuous)
+      card.fill(Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .tertiarySystemBackground : .systemBackground }))
+        .overlay {
+          card.strokeBorder(node.bool("active") ? Color.accentColor : node.bool("selected") ? Color.accentColor.opacity(0.6) : Color.black.opacity(0.15),
+                            lineWidth: node.bool("selected") ? 2.5 : 1)
+        }
     }
+    /* Faded as one layer, so the outline doesn't show through the dots. */
+    .compositingGroup()
     .opacity(node.bool("muted") ? 0.55 : 1)
     .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
     .overlay(alignment: .topLeading) {
@@ -1981,15 +1999,21 @@ struct NodeEditorLayer: View {
             .frame(maxWidth: .infinity, minHeight: 18)
             .contentShape(Rectangle())
             .gesture(
-              DragGesture()
+              /* Measured in the window: the handle moves with the drag, and measuring from it
+               * would make the panel jitter between two heights. */
+              DragGesture(coordinateSpace: .global)
                 .onChanged { value in
                   let start = dragStart ?? fraction
                   dragStart = start
                   fraction = min(0.9, max(0.25, start - value.translation.height / max(proxy.size.height, 1)))
+                  /* The viewport follows the handle as it moves. */
+                  model.nodesCoverDragging = true
+                  cover(proxy.size.height, live: true)
                 }
                 .onEnded { _ in
                   dragStart = nil
-                  cover(proxy.size.height)
+                  cover(proxy.size.height, live: true)
+                  model.nodesCoverDragging = false
                 })
             .accessibilityLabel("Resize Node Editor")
           NodeEditorPanel(model: nodes)
@@ -2008,11 +2032,16 @@ struct NodeEditorLayer: View {
 
   /** The viewport ends under the panel's rounded corners, and changes size once a drag ends
    * rather than on every step of it. */
-  private func cover(_ height: CGFloat) {
+  private func cover(_ height: CGFloat, live: Bool = false) {
     /* Eased as the viewport itself is, see `ViewportContainer`. */
     let cover = max(0, height * fraction - 24)
     if cover != model.nodesCover {
-      withAnimation(.easeOut(duration: 0.42)) { model.nodesCover = cover }
+      if live {
+        model.nodesCover = cover
+      }
+      else {
+        withAnimation(.easeOut(duration: 0.42)) { model.nodesCover = cover }
+      }
     }
   }
 }
