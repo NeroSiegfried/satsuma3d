@@ -3764,6 +3764,26 @@ bNodeSocket *find_socket(bNode &node, const std::string &identifier, const bool 
  * may take the link their own way, as Blender's editor lets them: an empty socket on a group's
  * input or output, or a zone's, becomes a new socket of the group or zone.
  */
+/** The socket a node put in a link joins it by: the first shown one of the link's type, else the
+ * first shown one, as Blender picks a node's main socket. */
+bNodeSocket *insert_socket(bNode &node, const bool output, const short type)
+{
+  ListBaseT<bNodeSocket> &sockets = output ? node.outputs : node.inputs;
+  bNodeSocket *first = nullptr;
+  for (bNodeSocket &socket : sockets) {
+    if (!socket.is_visible()) {
+      continue;
+    }
+    if (socket.type == type) {
+      return &socket;
+    }
+    if (!first) {
+      first = &socket;
+    }
+  }
+  return first;
+}
+
 bool link_sockets(bNodeTree &tree,
                   bNode &from,
                   bNodeSocket &from_socket,
@@ -4135,6 +4155,31 @@ std::optional<std::string> apply_node_action(bContext *C, bNodeTree &tree, const
     }
     for (bNode *moving : moved) {
       add_v2_v2(moving->location, delta);
+    }
+    /* Dropped onto a link, the node is put in it, as Blender's editor does. */
+    if (const std::optional<StringRefNull> to_name = query.lookup_str("insert_to_node")) {
+      bNode *node_in = moved.size() == 1 ? *moved.begin() : nullptr;
+      bNode *from = bke::node_find_node_by_name(tree, query.lookup_str("insert_from_node").value_or(""));
+      bNode *to = bke::node_find_node_by_name(tree, *to_name);
+      bNodeSocket *from_socket = from ? find_socket(*from, std::string(query.lookup_str("insert_from_socket").value_or("")), true) : nullptr;
+      bNodeSocket *to_socket = to ? find_socket(*to, std::string(query.lookup_str("insert_to_socket").value_or("")), false) : nullptr;
+      if (node_in && from_socket && to_socket && node_in != from && node_in != to) {
+        bNodeSocket *input = insert_socket(*node_in, false, from_socket->type);
+        bNodeSocket *output = insert_socket(*node_in, true, to_socket->type);
+        if (input && output) {
+          for (bNodeLink &link : tree.links.items_mutable()) {
+            if (link.fromsock == from_socket && link.tosock == to_socket) {
+              bke::node_remove_link(&tree, link);
+              break;
+            }
+          }
+          link_sockets(tree, *from, *from_socket, *node_in, *input, C);
+          link_sockets(tree, *node_in, *output, *to, *to_socket, C);
+          BKE_main_ensure_invariants(*bmain, tree.id);
+          WM_event_add_notifier(C, NC_NODE | NA_EDITED, &tree);
+          return std::string("Insert Node");
+        }
+      }
     }
     WM_event_add_notifier(C, NC_NODE | NA_EDITED, &tree);
     return std::string("Move Nodes");
