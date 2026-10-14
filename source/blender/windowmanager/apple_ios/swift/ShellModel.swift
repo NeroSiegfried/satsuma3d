@@ -39,6 +39,8 @@ final class ShellModel {
   private(set) var textObject: JSON?
   /** The native node editor shows over the bottom of the viewport. */
   var nodesShown = false
+  /** How much of the window's bottom the node editor covers, which the viewport leaves out. */
+  var nodesCover: CGFloat = 0
   /** Blender's navigation gizmo: its center and radius, in fractions of the window's width and
    * height (center) and width (radius). */
   private(set) var navigationGizmo: [Double] = []
