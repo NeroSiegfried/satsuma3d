@@ -3611,7 +3611,12 @@ void project_node(bContext *C,
     item.append_double("time_ms", double(time->count()) / 1e6);
   }
   /* A preview of the node's result, for nodes that have one, while it is turned on. */
-  if (bke::node_preview_used(node)) {
+  /* As #node_is_previewable: shader previews are an experimental option in Blender. */
+  const bool previewable = tree.type == NTREE_SHADER ?
+                               USER_EXPERIMENTAL_TEST(&U, use_shader_node_previews) &&
+                                   !node.is_frame() :
+                               bke::node_preview_used(node);
+  if (previewable) {
     item.append_int("can_preview", 1);
     item.append_int("preview_on", (node.flag & NODE_PREVIEW) != 0);
     if (node.flag & NODE_PREVIEW) {
