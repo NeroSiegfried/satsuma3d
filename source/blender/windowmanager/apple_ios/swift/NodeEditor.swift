@@ -1788,6 +1788,38 @@ struct NodeFieldRows: View {
  * \{ */
 
 /** The nodes the tree can have, by category, with search, as Blender's Add menu offers them. */
+/** A node's input and output types at a glance: their socket colors either side of an arrow. */
+struct NodeSocketTypes: View {
+  let inputs: [Any]
+  let outputs: [Any]
+
+  var body: some View {
+    if !inputs.isEmpty || !outputs.isEmpty {
+      HStack(spacing: 5) {
+        dots(inputs)
+        Image(systemName: "arrow.right")
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.tertiary)
+        dots(outputs)
+      }
+      .accessibilityHidden(true)
+    }
+  }
+
+  private func dots(_ colors: [Any]) -> some View {
+    HStack(spacing: 2) {
+      ForEach(Array(colors.enumerated()), id: \.offset) { _, value in
+        let c = (value as? [NSNumber])?.map(\.doubleValue) ?? [0.6, 0.6, 0.6]
+        Circle()
+          .fill(Color(red: c[0], green: c[1], blue: c[2]))
+          .overlay(Circle().strokeBorder(.black.opacity(0.35), lineWidth: 0.5))
+          .frame(width: 9, height: 9)
+      }
+    }
+    .frame(minWidth: 9)
+  }
+}
+
 struct NodeAddSheet: View {
   let items: [JSON]
   let pick: (JSON) -> Void
@@ -1814,11 +1846,15 @@ struct NodeAddSheet: View {
               Button {
                 pick(item)
               } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                  Text(item.string("name") ?? "").foregroundStyle(.primary)
-                  if let description = item.string("description"), !description.isEmpty {
-                    Text(description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                HStack(spacing: 10) {
+                  VStack(alignment: .leading, spacing: 2) {
+                    Text(item.string("name") ?? "").foregroundStyle(.primary)
+                    if let description = item.string("description"), !description.isEmpty {
+                      Text(description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }
                   }
+                  Spacer(minLength: 0)
+                  NodeSocketTypes(inputs: item["inputs"] as? [Any] ?? [], outputs: item["outputs"] as? [Any] ?? [])
                 }
               }
             }
