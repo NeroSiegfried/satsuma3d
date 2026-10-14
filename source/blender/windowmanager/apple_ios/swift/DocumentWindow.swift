@@ -284,15 +284,52 @@ final class ViewportContainer: UIView {
   let metalView: MTKView
   var bottomCover: CGFloat = 0 {
     didSet {
-      if bottomCover != oldValue { setNeedsLayout() }
+      if bottomCover != oldValue { animateCover() }
     }
   }
+  /** The cover as the viewport is shaped now, eased toward `bottomCover` alongside the panel. */
+  private var shownCover: CGFloat = 0
+  private var coverAnimation: (from: CGFloat, start: CFTimeInterval)?
+  private var displayLink: CADisplayLink?
+  private static let coverDuration: CFTimeInterval = 0.42
 
   init(metalView: MTKView) {
     self.metalView = metalView
     super.init(frame: .zero)
     metalView.autoresizingMask = []
+    /* Until Blender draws at a new size, its last frame stays put at the top rather than being
+     * stretched to fit. Layer gravity counts from the bottom, so this is the top on screen. */
+    metalView.layer.contentsGravity = .bottomLeft
     addSubview(metalView)
+  }
+
+  private func animateCover() {
+    guard window != nil, !UIAccessibility.isReduceMotionEnabled else {
+      shownCover = bottomCover
+      setNeedsLayout()
+      return
+    }
+    coverAnimation = (shownCover, CACurrentMediaTime())
+    if displayLink == nil {
+      let link = CADisplayLink(target: self, selector: #selector(stepCover))
+      link.add(to: .main, forMode: .common)
+      displayLink = link
+    }
+  }
+
+  @objc private func stepCover(_ link: CADisplayLink) {
+    guard let animation = coverAnimation else { return }
+    let t = min(1, (CACurrentMediaTime() - animation.start) / Self.coverDuration)
+    /* Eased out, as the panel slides. */
+    let eased = 1 - pow(1 - t, 3)
+    shownCover = animation.from + (bottomCover - animation.from) * eased
+    setNeedsLayout()
+    layoutIfNeeded()
+    if t >= 1 {
+      coverAnimation = nil
+      link.invalidate()
+      displayLink = nil
+    }
   }
 
   @available(*, unavailable)
@@ -301,7 +338,7 @@ final class ViewportContainer: UIView {
   override func layoutSubviews() {
     super.layoutSubviews()
     var frame = bounds
-    frame.size.height = max(1, bounds.height - bottomCover)
+    frame.size.height = max(1, bounds.height - shownCover)
     metalView.frame = frame
     let scale = max(1, window?.traitCollection.displayScale ?? traitCollection.displayScale)
     metalView.contentScaleFactor = scale
