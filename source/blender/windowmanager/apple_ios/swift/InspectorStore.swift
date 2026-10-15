@@ -570,7 +570,7 @@ final class InspectorStore {
         }
         let headerControl = property.bool("header") &&
           ((type == "OPERATOR" && !property.bool("checkbox")) || type == "BOOLEAN" ||
-           (type == "OPERATOR" && property.bool("checkbox")))
+           (type == "OPERATOR" && property.bool("checkbox")) || property.bool("header_name"))
         if headerControl {
           if property.has("section"), let index = headingIndex,
              case .heading(let title, let sub, let disclosure, let open, let depth, var controls) = model.rows[index].kind

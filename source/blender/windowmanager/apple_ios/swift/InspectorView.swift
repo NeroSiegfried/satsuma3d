@@ -276,9 +276,12 @@ struct SectionView: View, Equatable {
           if let icon = BlenderIcon.image(section.icon) {
             Image(uiImage: icon).resizable().scaledToFit().frame(width: 18, height: 18)
           }
-          Text(section.title)
-            .lineLimit(1)
-            .foregroundStyle(section.active ? PanelStyle.tint : .primary)
+          /* A modifier or constraint names itself in its header control instead. */
+          if !section.headerControls.contains(where: { $0.bool("header_name") }) {
+            Text(section.title)
+              .lineLimit(1)
+              .foregroundStyle(section.active ? PanelStyle.tint : .primary)
+          }
           Spacer(minLength: 0)
         }
         .frame(minHeight: 44)
@@ -349,6 +352,75 @@ struct SectionView: View, Equatable {
   }
 }
 
+/** A modifier's or constraint's name and where it applies, as one control: the name, which a
+ * tap renames, beside a strip of switches such as Edit Mode, On Cage, Viewport and Render. */
+struct StackItemHeader: View {
+  let store: InspectorStore
+  let name: JSON
+  let toggles: [JSON]
+  @State private var rename: RenameRequest?
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Button {
+        rename = RenameRequest(title: "Rename", name: store.value(name) as? String ?? "") { text in
+          store.edit(name, value: text)
+        }
+      } label: {
+        Text(store.value(name) as? String ?? "")
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .padding(.horizontal, 10)
+          .frame(minHeight: 30)
+          .background(.quaternary.opacity(0.6), in: Capsule())
+      }
+      .buttonStyle(.plain)
+      .disabled(!name.bool("editable"))
+      .accessibilityLabel("Name")
+      .accessibilityValue(store.value(name) as? String ?? "")
+      .accessibilityHint("Renames it.")
+      if !toggles.isEmpty {
+        HStack(spacing: 0) {
+          ForEach(Array(toggles.enumerated()), id: \.offset) { index, toggle in
+            if index > 0 {
+              Divider().frame(height: 16)
+            }
+            switchButton(toggle)
+          }
+        }
+        .padding(.horizontal, 2)
+        .background(.quaternary.opacity(0.6), in: Capsule())
+      }
+    }
+    .renamePrompt($rename)
+  }
+
+  private func switchButton(_ toggle: JSON) -> some View {
+    let on = store.value(toggle) as? Bool ?? (numericValue(store.value(toggle)) != 0)
+    return Button {
+      store.edit(toggle, value: !on)
+      Haptics.selection()
+    } label: {
+      Group {
+        if let icon = BlenderIcon.image(toggle.string("icon")) {
+          Image(uiImage: icon).resizable().renderingMode(.template).scaledToFit().frame(width: 17, height: 17)
+        }
+        else {
+          Image(systemName: on ? "checkmark.circle.fill" : "circle")
+        }
+      }
+      .foregroundStyle(on ? AnyShapeStyle(PanelStyle.tint) : AnyShapeStyle(.tertiary))
+      .frame(width: 34, height: 30)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .disabled(!toggle.bool("editable"))
+    .propertyActions(store, toggle)
+    .accessibilityLabel(propertyLabel(toggle))
+    .accessibilityAddTraits(on ? .isSelected : [])
+  }
+}
+
 /** A panel header's own switches and operators, such as a modifier's visibility and Remove. */
 struct HeaderControls: View, Equatable {
   let store: InspectorStore
@@ -361,7 +433,11 @@ struct HeaderControls: View, Equatable {
   var body: some View {
     /* A row of their own: through `equatable()` the header would not lay them out side by side. */
     HStack(spacing: 8) {
-      ForEach(Array(controls.enumerated()), id: \.offset) { _, control in
+      if let name = controls.first(where: { $0.bool("header_name") }) {
+        StackItemHeader(store: store, name: name, toggles: controls.filter { $0.bool("header_cluster") })
+      }
+      ForEach(Array(controls.filter { !$0.bool("header_name") && !$0.bool("header_cluster") }.enumerated()),
+              id: \.offset) { _, control in
         Group {
           switch control.string("type") {
             case "BOOLEAN":

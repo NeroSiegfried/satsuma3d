@@ -2799,12 +2799,21 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
         /* Native headers show which item is active as state, not as a button. */
         continue;
       }
+      /* A modifier's or constraint's header: its name and the switches for where it applies,
+       * which the native header gathers into one control. */
       const bool header_toggle = header_buttons.count(&but) && but.rnaprop &&
                                 RNA_property_type(but.rnaprop) == PROP_BOOLEAN &&
                                 !RNA_property_array_check(but.rnaprop) &&
                                 (!RNA_struct_is_a(but.rnapoin.type, RNA_Modifier) ||
-                                 STREQ(RNA_property_identifier(but.rnaprop), "show_viewport"));
-      if (!execute && !open && !header_toggle && !header_operator) {
+                                 STR_ELEM(RNA_property_identifier(but.rnaprop),
+                                          "show_in_editmode",
+                                          "show_on_cage",
+                                          "show_viewport",
+                                          "show_render"));
+      const bool header_name = header_buttons.count(&but) && candidate.instance && but.rnaprop &&
+                               RNA_property_type(but.rnaprop) == PROP_STRING &&
+                               STREQ(RNA_property_identifier(but.rnaprop), "name");
+      if (!execute && !open && !header_toggle && !header_operator && !header_name) {
         continue;
       }
       MenuType *menu = button_menutype_get(&but);
@@ -2955,6 +2964,13 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
           }
           if (header_toggle) {
             field->append_int("header", 1);
+            if (candidate.instance) {
+              field->append_int("header_cluster", 1);
+            }
+          }
+          if (header_name) {
+            field->append_int("header", 1);
+            field->append_int("header_name", 1);
           }
           field->append_str("panel", candidate.id);
           field->append_str("tab", tab_id);
