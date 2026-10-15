@@ -637,6 +637,8 @@ struct NodeCanvas: View {
   var body: some View {
     GeometryReader { proxy in
       ZStack(alignment: .topLeading) {
+        /* As a node lands, the canvas around it ripples; the node itself rests on top. */
+        ZStack(alignment: .topLeading) {
         background
         if model.backdrop, let path = model.snapshot?.string("backdrop"), let image = NodeImages.image(path) {
           /* The compositor's Viewer, behind the nodes, as Blender's backdrop. */
@@ -651,14 +653,21 @@ struct NodeCanvas: View {
         content
           .scaleEffect(zoom, anchor: .topLeading)
           .offset(pan)
+        }
+        .modifier(NodeRippleEffect(ripple: ripple, rect: ripple.map(landedRect)))
+        if let ripple, let node = model.nodes.first(where: { $0.string("name") == ripple.name }) {
+          ZStack(alignment: .topLeading) { nodeView(node) }
+            .frame(width: 1, height: 1, alignment: .topLeading)
+            .coordinateSpace(.named("nodes"))
+            .scaleEffect(zoom, anchor: .topLeading)
+            .offset(pan)
+        }
         plugRings
         minimap
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
           .padding(14)
 
       }
-      /* As a node lands the whole canvas ripples, live. */
-      .modifier(NodeRippleEffect(ripple: ripple))
       .background { NodeMenuAnchor(presenter: menus) }
       .clipped()
       .simultaneousGesture(magnify)
@@ -754,6 +763,15 @@ struct NodeCanvas: View {
     zoom = min(1.2, max(0.25, scale))
     pan = CGSize(width: viewSize.width / 2 - bounds.midX * zoom,
                  height: viewSize.height / 2 - bounds.midY * zoom)
+  }
+
+  /** Where the node a ripple runs from is, in view points, as it lays out. */
+  private func landedRect(_ ripple: NodeRipple) -> CGRect {
+    guard let node = model.nodes.first(where: { $0.string("name") == ripple.name }) else { return .zero }
+    let corner = origin(node)
+    let size = layout.nodes[ripple.name]?.size ?? CGSize(width: cardWidth(node), height: 120)
+    let a = toView(corner), b = toView(CGPoint(x: corner.x + size.width, y: corner.y + size.height))
+    return CGRect(x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y)
   }
 
   /** The canvas shown, in canvas points, with a margin so nodes are ready as they pan in. */
@@ -1150,7 +1168,8 @@ struct NodeCanvas: View {
       /* Only the nodes in view are built, so a tree of hundreds of nodes stays quick; zoomed far
        * out, they are drawn as plain cards. */
       let visible = visibleArea
-      ForEach(model.nodes.filter { $0.string("kind") != "FRAME" && onScreen($0, visible) }, id: \.nodeName) { node in
+      ForEach(model.nodes.filter { $0.string("kind") != "FRAME" && $0.nodeName != ripple?.name && onScreen($0, visible) },
+              id: \.nodeName) { node in
         if zoom < 0.33 && drag == nil {
           overviewCard(node)
         }
@@ -1387,9 +1406,7 @@ struct NodeCanvas: View {
     guard !fresh, let name = added.first, let node = model.nodes.first(where: { $0.string("name") == name })
     else { return }
     guard !UIAccessibility.isReduceMotionEnabled, NodeRippleEffect.library != nil else { return }
-    let corner = origin(node)
-    let center = toView(CGPoint(x: corner.x + cardWidth(node) / 2, y: corner.y + 40))
-    let landing = NodeRipple(center: center, start: Date())
+    let landing = NodeRipple(name: name, start: Date())
     ripple = landing
     DispatchQueue.main.asyncAfter(deadline: .now() + NodeRippleEffect.duration) {
       if ripple?.id == landing.id { ripple = nil }
@@ -1839,6 +1856,8 @@ struct NodeCanvasField: View, Equatable {
   let store: InspectorStore
   let property: JSON
   @State private var editing = false
+  /** Where the color picker points from. */
+  private let anchor = AnchorBox()
 
   static func == (a: NodeCanvasField, b: NodeCanvasField) -> Bool {
     a.store === b.store && jsonDictEqual(a.property, b.property)
@@ -1872,9 +1891,15 @@ struct NodeCanvasField: View, Equatable {
               .fill(Color(uiColor: blenderColor(store.value(property))))
               .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(.separator, lineWidth: 0.5))
               .frame(width: 44, height: 20)
+              .background(PresentationAnchor(anchor: anchor))
           }
           .contentShape(Rectangle())
-          .onTapGesture { if editable { editing = true } }
+          /* The system's color picker, straight away. */
+          .onTapGesture {
+            guard editable else { return }
+            ColorPickerSession(property: property, store: store)
+              .present(from: anchor, color: blenderColor(store.value(property)))
+          }
         default:
           labeled { valueText(summary, chevron: type == "ID" || type == "MENU" || type == "OPERATOR_MENU") }
             .contentShape(Rectangle())
@@ -2136,25 +2161,15 @@ struct NodeFieldRows: View {
  * \{ */
 
 /** The nodes the tree can have, by category, with search, as Blender's Add menu offers them. */
-/** A node's input and output types at a glance: their socket colors either side of an arrow. */
-struct NodeSocketTypes: View {
-  let inputs: [Any]
-  let outputs: [Any]
+/** A node's input or output types at a glance, as their socket colors, in a column of one width
+ * across the add list; `leading` packs them against the name on its right. */
+struct NodeSocketDots: View {
+  let colors: [Any]
+  let leading: Bool
+  /** Room for five types, the most shown. */
+  static let width: CGFloat = 5 * 9 + 4 * 2
 
   var body: some View {
-    if !inputs.isEmpty || !outputs.isEmpty {
-      HStack(spacing: 5) {
-        dots(inputs)
-        Image(systemName: "arrow.right")
-          .font(.caption2.weight(.semibold))
-          .foregroundStyle(.tertiary)
-        dots(outputs)
-      }
-      .accessibilityHidden(true)
-    }
-  }
-
-  private func dots(_ colors: [Any]) -> some View {
     HStack(spacing: 2) {
       ForEach(Array(colors.enumerated()), id: \.offset) { _, value in
         let c = (value as? [NSNumber])?.map(\.doubleValue) ?? [0.6, 0.6, 0.6]
@@ -2164,7 +2179,8 @@ struct NodeSocketTypes: View {
           .frame(width: 9, height: 9)
       }
     }
-    .frame(minWidth: 9)
+    .frame(width: Self.width, alignment: leading ? .leading : .trailing)
+    .accessibilityHidden(true)
   }
 }
 
@@ -2194,15 +2210,18 @@ struct NodeAddSheet: View {
               Button {
                 pick(item)
               } label: {
+                /* Inputs to the left and outputs to the right, in columns of one width, so the
+                 * names line up whatever goes in and out. */
                 HStack(spacing: 10) {
+                  NodeSocketDots(colors: item["inputs"] as? [Any] ?? [], leading: false)
                   VStack(alignment: .leading, spacing: 2) {
                     Text(item.string("name") ?? "").foregroundStyle(.primary)
                     if let description = item.string("description"), !description.isEmpty {
                       Text(description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                     }
                   }
-                  Spacer(minLength: 0)
-                  NodeSocketTypes(inputs: item["inputs"] as? [Any] ?? [], outputs: item["outputs"] as? [Any] ?? [])
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                  NodeSocketDots(colors: item["outputs"] as? [Any] ?? [], leading: true)
                 }
               }
             }
@@ -2277,26 +2296,30 @@ struct NodeMenuAnchor: UIViewRepresentable {
 /** A node landing: where and when. */
 struct NodeRipple: Identifiable {
   let id = UUID()
-  let center: CGPoint
+  let name: String
   let start: Date
 }
 
 /** Water rippling out from a node as it lands, as widgets once did when dropped: rings run
  * outward over the live canvas, bending it and catching the light, and calm within a moment. */
 struct NodeRippleEffect: ViewModifier {
-  static let duration: TimeInterval = 0.9
+  static let duration: TimeInterval = 1.8
   /** The shaders, built with the app, see `NodeEffects.metal`. */
   static let library: ShaderLibrary? = Bundle.main.url(forResource: "NodeEffects", withExtension: "metallib")
     .map { ShaderLibrary(url: $0) }
 
   let ripple: NodeRipple?
+  /** The node it runs from, in view points. */
+  let rect: CGRect?
 
   func body(content: Content) -> some View {
     TimelineView(.animation(paused: ripple == nil)) { timeline in
       let time = ripple.map { Float(timeline.date.timeIntervalSince($0.start)) } ?? 0
+      let r = rect ?? .zero
       content.layerEffect(
         (Self.library ?? ShaderLibrary.default).node_ripple(
-          .float2(ripple?.center ?? .zero), .float(time), .float(7), .float(46), .float(700), .float(3.2)),
+          .float4(Float(r.minX), Float(r.minY), Float(r.width), Float(r.height)), .float(14), .float(time),
+          .float(6), .float(64), .float(260), .float(1.9)),
         maxSampleOffset: CGSize(width: 8, height: 8),
         isEnabled: ripple != nil && Self.library != nil && time < Float(Self.duration))
     }
