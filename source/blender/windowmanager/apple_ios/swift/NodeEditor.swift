@@ -613,8 +613,9 @@ struct NodeCanvas: View {
   @State private var cablesMoving = false
   /** Nodes already on the canvas, to tell a node just added. */
   @State private var knownNodes: Set<String> = []
-  /** Where a node just landed, in view points, and when, for the ripple it sends out. */
-  @State private var ripple: (center: CGPoint, start: Date)?
+  /** Where a node just landed, in view points, when, and the canvas as it was then, for the
+   * ripple it sends out. */
+  @State private var ripple: NodeRipple?
   /** The node just plugged into, bouncing. */
   @State private var bounced: String?
   /** Links just made, a flash of light running along them. */
@@ -636,10 +637,7 @@ struct NodeCanvas: View {
   var body: some View {
     GeometryReader { proxy in
       ZStack(alignment: .topLeading) {
-        NodeMenuAnchor(presenter: menus)
-        /* The canvas ripples as a node lands; the cards bob on the same wave, see `bob`. */
         background
-          .modifier(NodeRippleEffect(ripple: ripple))
         if model.backdrop, let path = model.snapshot?.string("backdrop"), let image = NodeImages.image(path) {
           /* The compositor's Viewer, behind the nodes, as Blender's backdrop. */
           Image(uiImage: image)
@@ -650,14 +648,18 @@ struct NodeCanvas: View {
             .accessibilityLabel("Compositor Result")
         }
         wires
-        nodeLayer
+        content
           .scaleEffect(zoom, anchor: .topLeading)
           .offset(pan)
         plugRings
         minimap
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
           .padding(14)
+
       }
+      /* As a node lands the whole canvas ripples, live. */
+      .modifier(NodeRippleEffect(ripple: ripple))
+      .background { NodeMenuAnchor(presenter: menus) }
       .clipped()
       .simultaneousGesture(magnify)
       .modifier(scrolling)
@@ -752,6 +754,42 @@ struct NodeCanvas: View {
     zoom = min(1.2, max(0.25, scale))
     pan = CGSize(width: viewSize.width / 2 - bounds.midX * zoom,
                  height: viewSize.height / 2 - bounds.midY * zoom)
+  }
+
+  /** The canvas shown, in canvas points, with a margin so nodes are ready as they pan in. */
+  private var visibleArea: CGRect {
+    let a = toCanvas(.zero), b = toCanvas(CGPoint(x: viewSize.width, y: viewSize.height))
+    return CGRect(x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y).insetBy(dx: -300, dy: -300)
+  }
+
+  /** Whether a node is in or near the view; one not yet measured, or being worked on, is kept. */
+  private func onScreen(_ node: JSON, _ visible: CGRect) -> Bool {
+    guard viewSize.width > 0, let name = node.string("name") else { return true }
+    if node.bool("selected") || drag?.nodes.contains(name) == true { return true }
+    let corner = origin(node)
+    let size = layout.nodes[name]?.size ?? CGSize(width: cardWidth(node), height: 200)
+    return visible.intersects(CGRect(origin: corner, size: size))
+  }
+
+  /** A node seen from far: its color, title and outline at the size it lays out at. */
+  private func overviewCard(_ node: JSON) -> some View {
+    let name = node.string("name") ?? ""
+    let point = origin(node)
+    let size = layout.nodes[name]?.size ?? CGSize(width: cardWidth(node), height: 120)
+    let card = RoundedRectangle(cornerRadius: 14, style: .continuous)
+    return card.fill(Color(uiColor: .systemBackground))
+      .overlay(alignment: .top) {
+        nodeColor(node).frame(height: 40)
+          .overlay(Text(node.string("title") ?? "").font(.title3.weight(.semibold)).foregroundStyle(.white)
+            .lineLimit(1).padding(.horizontal, 12), alignment: .leading)
+      }
+      .clipShape(card)
+      .overlay(card.strokeBorder(node.bool("selected") ? Color.accentColor : .black.opacity(0.15),
+                                 lineWidth: node.bool("selected") ? 4 : 1))
+      .frame(width: size.width, height: size.height)
+      .offset(x: point.x, y: point.y)
+      .onTapGesture { model.send("select", ["node": name]) }
+      .gesture(moveGesture(name))
   }
 
   private func cardWidth(_ node: JSON) -> CGFloat {
@@ -1101,18 +1139,7 @@ struct NodeCanvas: View {
   /* -------------------------------------------------------------------- */
   /* Nodes */
 
-  /** The nodes, followed frame by frame while a ripple runs. */
-  @ViewBuilder
-  private var nodeLayer: some View {
-    if ripple != nil {
-      TimelineView(.animation) { timeline in content(timeline.date) }
-    }
-    else {
-      content(nil)
-    }
-  }
-
-  private func content(_ date: Date?) -> some View {
+  private var content: some View {
     ZStack(alignment: .topLeading) {
       ForEach(model.nodes.filter { $0.string("kind") == "FRAME" }, id: \.nodeName) { frame in
         frameView(frame)
@@ -1120,28 +1147,20 @@ struct NodeCanvas: View {
       ForEach(Array((model.snapshot?.array("zones") ?? []).enumerated()), id: \.offset) { _, zone in
         zoneView(zone)
       }
-      ForEach(model.nodes.filter { $0.string("kind") != "FRAME" }, id: \.nodeName) { node in
-        nodeView(node)
-          .offset(bob(node, at: date))
+      /* Only the nodes in view are built, so a tree of hundreds of nodes stays quick; zoomed far
+       * out, they are drawn as plain cards. */
+      let visible = visibleArea
+      ForEach(model.nodes.filter { $0.string("kind") != "FRAME" && onScreen($0, visible) }, id: \.nodeName) { node in
+        if zoom < 0.33 && drag == nil {
+          overviewCard(node)
+        }
+        else {
+          nodeView(node)
+        }
       }
     }
     .frame(width: 1, height: 1, alignment: .topLeading)
     .coordinateSpace(.named("nodes"))
-  }
-
-  /** How far the ripple's wave pushes a node at `date`, as `node_ripple` pushes the canvas. */
-  private func bob(_ node: JSON, at date: Date?) -> CGSize {
-    guard let date, let ripple, !UIAccessibility.isReduceMotionEnabled else { return .zero }
-    let corner = origin(node)
-    let center = toView(CGPoint(x: corner.x + cardWidth(node) / 2, y: corner.y + 40))
-    let offset = CGPoint(x: center.x - ripple.center.x, y: center.y - ripple.center.y)
-    let distance = hypot(offset.x, offset.y)
-    guard distance > 1 else { return .zero }
-    let local = max(0, date.timeIntervalSince(ripple.start) - distance / NodeRippleEffect.speed)
-    let push = NodeRippleEffect.amplitude * sin(NodeRippleEffect.frequency * local) *
-      exp(-NodeRippleEffect.decay * local) * exp(-distance / 600)
-    /* In canvas points, which the zoom scales. */
-    return CGSize(width: push * offset.x / distance / zoom, height: push * offset.y / distance / zoom)
   }
 
   @ViewBuilder
@@ -1367,10 +1386,13 @@ struct NodeCanvas: View {
     knownNodes = names
     guard !fresh, let name = added.first, let node = model.nodes.first(where: { $0.string("name") == name })
     else { return }
+    guard !UIAccessibility.isReduceMotionEnabled, NodeRippleEffect.library != nil else { return }
     let corner = origin(node)
-    ripple = (toView(CGPoint(x: corner.x + cardWidth(node) / 2, y: corner.y + 40)), Date())
+    let center = toView(CGPoint(x: corner.x + cardWidth(node) / 2, y: corner.y + 40))
+    let landing = NodeRipple(center: center, start: Date())
+    ripple = landing
     DispatchQueue.main.asyncAfter(deadline: .now() + NodeRippleEffect.duration) {
-      if let ripple, Date().timeIntervalSince(ripple.start) >= NodeRippleEffect.duration { self.ripple = nil }
+      if ripple?.id == landing.id { ripple = nil }
     }
   }
 
@@ -1580,7 +1602,7 @@ struct NodeCard: View {
           }
           let own = fields.filter { $0.string("socket") == nil }
           if !own.isEmpty {
-            NodeFieldRows(store: model.store, fields: own)
+            NodeCanvasFields(store: model.store, fields: own)
               .padding(.horizontal, 12)
               .padding(.vertical, 4)
           }
@@ -1728,7 +1750,7 @@ struct NodeCard: View {
           .overlay(alignment: .leading) { dot(socket, output: false).offset(x: -10) }
       }
       else {
-        NodeFieldRows(store: model.store, fields: values)
+        NodeCanvasFields(store: model.store, fields: values)
           .padding(.horizontal, 12)
           .overlay(alignment: .topLeading) { dot(socket, output: false).offset(x: -10, y: 12) }
       }
@@ -1779,6 +1801,283 @@ private extension Dictionary where Key == String, Value == Any {
 }
 
 /** A node's controls, laid out as Properties lays out a panel's. */
+/** A node's values, drawn wholly by SwiftUI: light enough for trees of hundreds of nodes, and
+ * bent along with the canvas by its effects, which system controls can't be. Numbers scrub
+ * sideways and take a typed value from a tap, switches flip, menus list their choices, and
+ * anything else opens its Properties control above the node. */
+struct NodeCanvasFields: View {
+  let store: InspectorStore
+  let fields: [JSON]
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      ForEach(NodeFieldRows.rows(fields)) { row in
+        switch row.kind {
+          case .property(let property):
+            NodeCanvasField(store: store, property: property)
+          case .vector(let title, let items):
+            NodeCanvasVector(store: store, title: title, items: items)
+          case .toggles(let caption, let items):
+            if !caption.isEmpty {
+              Text(caption).font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+              NodeCanvasField(store: store, property: item)
+            }
+          case .composite(let property):
+            NodeCanvasField(store: store, property: property)
+          case .heading:
+            EmptyView()
+        }
+      }
+    }
+  }
+}
+
+/** One value on a node: its name, and the value drawn as a field would show it. */
+struct NodeCanvasField: View, Equatable {
+  let store: InspectorStore
+  let property: JSON
+  @State private var editing = false
+
+  static func == (a: NodeCanvasField, b: NodeCanvasField) -> Bool {
+    a.store === b.store && jsonDictEqual(a.property, b.property)
+  }
+
+  private var type: String { property.string("type") ?? "" }
+  private var editable: Bool { property.bool("editable") || type == "ID" }
+
+  var body: some View {
+    Group {
+      switch type {
+        case "LABEL":
+          Text(propertyLabel(property)).font(.callout).foregroundStyle(.secondary)
+        case "BOOLEAN":
+          labeled { NodeCanvasSwitch(on: store.value(property) as? Bool ?? (numericValue(store.value(property)) != 0)) }
+            .contentShape(Rectangle())
+            .onTapGesture {
+              guard editable else { return }
+              let on = store.value(property) as? Bool ?? (numericValue(store.value(property)) != 0)
+              store.edit(property, value: !on)
+            }
+        case "INT", "FLOAT":
+          labeled { NodeCanvasNumber(store: store, property: property, editing: $editing) }
+        case "ENUM":
+          labeled { valueText(enumLabel, chevron: true) }
+            .contentShape(Rectangle())
+            .onTapGesture { if editable { editing = true } }
+        case "COLOR":
+          labeled {
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+              .fill(Color(uiColor: blenderColor(store.value(property))))
+              .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(.separator, lineWidth: 0.5))
+              .frame(width: 44, height: 20)
+          }
+          .contentShape(Rectangle())
+          .onTapGesture { if editable { editing = true } }
+        default:
+          labeled { valueText(summary, chevron: type == "ID" || type == "MENU" || type == "OPERATOR_MENU") }
+            .contentShape(Rectangle())
+            .onTapGesture { if editable { editing = true } }
+      }
+    }
+    .frame(minHeight: 28)
+    .opacity(editable ? 1 : 0.5)
+    .popover(isPresented: $editing) { editor }
+  }
+
+  /** Where the value is changed in full: the Properties control, or the choices of a menu. */
+  @ViewBuilder
+  private var editor: some View {
+    if type == "ENUM" {
+      ScrollView {
+        VStack(alignment: .leading, spacing: 0) {
+          ForEach(Array(property.array("options").enumerated()), id: \.offset) { _, option in
+            Button {
+              store.edit(property, value: option["value"] ?? "")
+              editing = false
+            } label: {
+              HStack {
+                Text(option.string("label") ?? "")
+                Spacer(minLength: 16)
+                if jsonEqual(option["value"], store.value(property)) {
+                  Image(systemName: "checkmark").foregroundStyle(.tint)
+                }
+              }
+              .padding(.horizontal, 16)
+              .frame(minHeight: 44)
+              .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+          }
+        }
+        .padding(.vertical, 6)
+      }
+      .frame(minWidth: 240, maxHeight: 420)
+      .presentationCompactAdaptation(.popover)
+    }
+    else if type == "ID" {
+      DataBrowser(store: store, property: property) { editing = false }
+        .frame(minWidth: 360, minHeight: min(520, 150 + 60 * CGFloat(property.array("options").count)))
+    }
+    else {
+      VStack(alignment: .leading) {
+        switch type {
+          case "LIST", "PREVIEW", "OPERATOR_MENU":
+            CompositeRow(store: store, property: property)
+          default:
+            PropertyRow(store: store, property: property)
+        }
+      }
+      .padding(16)
+      .frame(minWidth: 320)
+      .presentationCompactAdaptation(.popover)
+    }
+  }
+
+  private func labeled<Control: View>(@ViewBuilder _ control: () -> Control) -> some View {
+    HStack(spacing: 8) {
+      Text(propertyLabel(property))
+        .font(.callout)
+        .lineLimit(1)
+        .frame(maxWidth: .infinity, alignment: .leading)
+      control()
+    }
+  }
+
+  private func valueText(_ text: String, chevron: Bool) -> some View {
+    HStack(spacing: 3) {
+      Text(text).lineLimit(1)
+      if chevron {
+        Image(systemName: "chevron.up.chevron.down").font(.caption2)
+      }
+    }
+    .font(.callout)
+    .foregroundStyle(Color.accentColor)
+  }
+
+  private var enumLabel: String {
+    property.array("options").first { jsonEqual($0["value"], store.value(property)) }?.string("label") ?? ""
+  }
+
+  private var summary: String {
+    switch type {
+      case "ID": return property.string("name") ?? "None"
+      case "STRING": return (store.value(property) as? String).map { $0.isEmpty ? "—" : $0 } ?? "—"
+      default: return property.string("value_label") ?? ""
+    }
+  }
+}
+
+/** A switch drawn as one, which flips with a tap on its row. */
+struct NodeCanvasSwitch: View {
+  let on: Bool
+
+  var body: some View {
+    Capsule()
+      .fill(on ? Color.green : Color(uiColor: .systemFill))
+      .frame(width: 38, height: 23)
+      .overlay(alignment: on ? .trailing : .leading) {
+        Circle().fill(.white).shadow(color: .black.opacity(0.2), radius: 1, y: 1).padding(2)
+      }
+      .animation(.spring(response: 0.25, dampingFraction: 0.8), value: on)
+      .accessibilityRepresentation { Toggle("", isOn: .constant(on)) }
+  }
+}
+
+/** A number on a node: dragged sideways it scrubs, tapped it takes a typed value, as the
+ * Properties field does; a slider's share of its range shows as a fill. */
+struct NodeCanvasNumber: View {
+  let store: InspectorStore
+  let property: JSON
+  @Binding var editing: Bool
+  var width: CGFloat = 72
+  @State private var scrub: (start: Double, value: Double, interaction: String, last: CFTimeInterval)?
+
+  private var value: Double { scrub?.value ?? numericValue(store.value(property)) }
+
+  var body: some View {
+    let box = RoundedRectangle(cornerRadius: 6, style: .continuous)
+    ZStack(alignment: .leading) {
+      box.fill(Color(uiColor: .tertiarySystemFill))
+      if property.has("slider") {
+        GeometryReader { proxy in
+          box.fill(Color.accentColor.opacity(0.35))
+            .frame(width: proxy.size.width * SliderScale(property).fraction(value))
+        }
+      }
+      Text(formatNumber(value, property: property, significant: 5))
+        .font(.callout.monospacedDigit())
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.horizontal, 6)
+    }
+    .frame(width: width, height: 24)
+    .contentShape(Rectangle())
+    .onTapGesture { if property.bool("editable") { editing = true } }
+    .gesture(
+      DragGesture(minimumDistance: 4)
+        .onChanged { drag in
+          guard property.bool("editable") else { return }
+          var current = scrub ?? (numericValue(store.value(property)), numericValue(store.value(property)),
+                                  UUID().uuidString, 0)
+          let integer = property.string("type") == "INT"
+          var step = property.double("dragStep") ?? (integer ? 0.5 : 0.01)
+          if property.bool("angle") { step *= 10 * .pi / 180 }
+          var next = current.start + drag.translation.width * scrubSensitivity(drag.translation.height) * step
+          next = min(property.double("max") ?? .greatestFiniteMagnitude,
+                     max(property.double("min") ?? -.greatestFiniteMagnitude, next))
+          if integer { next = next.rounded() }
+          current.value = next
+          if CACurrentMediaTime() - current.last >= 1.0 / 60.0 {
+            store.preview(property, value: next, interaction: current.interaction, phase: "update")
+            current.last = CACurrentMediaTime()
+          }
+          scrub = current
+        }
+        .onEnded { _ in
+          guard let current = scrub else { return }
+          store.preview(property, value: current.value, interaction: current.interaction,
+                        phase: current.value == current.start ? "cancel" : "end")
+          scrub = nil
+        })
+    .accessibilityElement()
+    .accessibilityLabel(propertyLabel(property))
+    .accessibilityValue(formatNumber(value, property: property, significant: 5))
+  }
+}
+
+/** A vector's components side by side under its name. */
+struct NodeCanvasVector: View {
+  let store: InspectorStore
+  let title: String
+  let items: [JSON]
+  @State private var editing: Int?
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      if !title.isEmpty {
+        Text(title).font(.caption).foregroundStyle(.secondary)
+      }
+      HStack(spacing: 4) {
+        ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+          NodeCanvasNumber(store: store, property: item,
+                           editing: Binding(get: { editing == index }, set: { editing = $0 ? index : nil }),
+                           width: 54)
+            .popover(isPresented: Binding(get: { editing == index }, set: { if !$0 { editing = nil } })) {
+              PropertyRow(store: store, property: item)
+                .padding(16)
+                .frame(minWidth: 300)
+                .presentationCompactAdaptation(.popover)
+            }
+        }
+      }
+    }
+    .padding(.vertical, 2)
+  }
+}
+
 struct NodeFieldRows: View {
   let store: InspectorStore
   let fields: [JSON]
@@ -1975,33 +2274,31 @@ struct NodeMenuAnchor: UIViewRepresentable {
   }
 }
 
-/** Water rippling out from a node as it lands, as widgets once did when added: the canvas is
- * bent by a ring that runs outward and settles within a moment. */
+/** A node landing: where and when. */
+struct NodeRipple: Identifiable {
+  let id = UUID()
+  let center: CGPoint
+  let start: Date
+}
+
+/** Water rippling out from a node as it lands, as widgets once did when dropped: rings run
+ * outward over the live canvas, bending it and catching the light, and calm within a moment. */
 struct NodeRippleEffect: ViewModifier {
-  static let duration: TimeInterval = 0.75
-  static let amplitude = 9.0
-  static let frequency = 16.0
-  static let decay = 7.0
-  static let speed = 1100.0
+  static let duration: TimeInterval = 0.9
   /** The shaders, built with the app, see `NodeEffects.metal`. */
-  private static let library: ShaderLibrary? = Bundle.main.url(forResource: "NodeEffects", withExtension: "metallib")
+  static let library: ShaderLibrary? = Bundle.main.url(forResource: "NodeEffects", withExtension: "metallib")
     .map { ShaderLibrary(url: $0) }
 
-  let ripple: (center: CGPoint, start: Date)?
+  let ripple: NodeRipple?
 
   func body(content: Content) -> some View {
-    if let ripple, let library = Self.library, !UIAccessibility.isReduceMotionEnabled {
-      TimelineView(.animation) { timeline in
-        let time = timeline.date.timeIntervalSince(ripple.start)
-        content.distortionEffect(
-          library.node_ripple(.float2(ripple.center), .float(Float(time)), .float(Float(Self.amplitude)),
-                              .float(Float(Self.frequency)), .float(Float(Self.decay)), .float(Float(Self.speed))),
-          maxSampleOffset: CGSize(width: 10, height: 10),
-          isEnabled: time < Self.duration)
-      }
-    }
-    else {
-      content
+    TimelineView(.animation(paused: ripple == nil)) { timeline in
+      let time = ripple.map { Float(timeline.date.timeIntervalSince($0.start)) } ?? 0
+      content.layerEffect(
+        (Self.library ?? ShaderLibrary.default).node_ripple(
+          .float2(ripple?.center ?? .zero), .float(time), .float(7), .float(46), .float(700), .float(3.2)),
+        maxSampleOffset: CGSize(width: 8, height: 8),
+        isEnabled: ripple != nil && Self.library != nil && time < Float(Self.duration))
     }
   }
 }
