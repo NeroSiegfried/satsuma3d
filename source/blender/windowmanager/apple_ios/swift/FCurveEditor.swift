@@ -129,8 +129,11 @@ final class FCurveEditorModel {
   var channelsShown = UserDefaults.standard.object(forKey: "BlenderCurvesChannels") as? Bool ?? true {
     didSet { UserDefaults.standard.set(channelsShown, forKey: "BlenderCurvesChannels") }
   }
-  /** Bumped to fit the view to the curves. */
+  /** Bumped to fit the view to the curves, or only to the selected keys. */
   private(set) var fitRequest = 0
+  @ObservationIgnored private(set) var fitSelected = false
+  /** The last of Blender's requests seen, as framing the view from a key. */
+  @ObservationIgnored private var keyRequest: Int?
   private(set) var shown = false
   @ObservationIgnored private var raw: NSDictionary?
   @ObservationIgnored private var range: [Double] = [1, 250]
@@ -185,6 +188,17 @@ final class FCurveEditorModel {
     if let raw, raw.isEqual(dictionary) { return }
     raw = dictionary
     frame = snapshot.int("frame") ?? frame
+    let request = snapshot.dict("request") ?? [:]
+    if let sequence = request.int("sequence"), sequence != keyRequest {
+      /* Only requests made since the editor opened. */
+      if keyRequest != nil, let action = request.string("action") {
+        requestFit(selected: action == "frame_selected")
+      }
+      keyRequest = sequence
+    }
+    else if keyRequest == nil {
+      keyRequest = 0
+    }
     let next = snapshot.array("curves").enumerated().map { FCurve(index: $0.offset, json: $0.element) }
     if next != curves { curves = next }
     if !received {
@@ -210,7 +224,19 @@ final class FCurveEditorModel {
     send("operator", ["operator": idname, "properties": properties])
   }
 
-  func requestFit() { fitRequest += 1 }
+  func requestFit(selected: Bool = false) {
+    fitSelected = selected
+    fitRequest += 1
+  }
+}
+
+extension FCurveEditorModel: HardwareKeyTarget {
+  var takesKeys: Bool { shown }
+
+  func sendKey(_ key: String, shift: Bool, ctrl: Bool, alt: Bool, oskey: Bool) {
+    send("key", ["key": key, "shift": shift ? 1 : 0, "ctrl": ctrl ? 1 : 0, "alt": alt ? 1 : 0,
+                 "oskey": oskey ? 1 : 0])
+  }
 }
 
 /** \} */
@@ -722,8 +748,9 @@ struct FCurveCanvas: View {
   private func fit() {
     var minFrame = Double.infinity, maxFrame = -Double.infinity
     var minValue = Double.infinity, maxValue = -Double.infinity
+    let selected = model.fitSelected && !model.selectedKeys.isEmpty
     for curve in model.visibleCurves {
-      for key in curve.keys {
+      for key in curve.keys where !selected || key.selected {
         minFrame = min(minFrame, key.frame)
         maxFrame = max(maxFrame, key.frame)
         minValue = min(minValue, key.value, key.left.y, key.right.y)
@@ -1035,13 +1062,15 @@ struct FCurveEditorView: View {
       HStack(spacing: 0) {
         if model.channelsShown {
           FCurveChannels(model: model)
-            .frame(width: 240)
+            .frame(width: 280)
             .transition(.move(edge: .leading).combined(with: .opacity))
           Divider()
         }
         FCurveCanvas(model: model, timeline: timeline)
       }
     }
+    /* A hardware keyboard's keys run as the Graph Editor's keymap has them while it was touched last. */
+    .background(NodeKeyCapture(model: model))
   }
 
   private var toolbar: some View {

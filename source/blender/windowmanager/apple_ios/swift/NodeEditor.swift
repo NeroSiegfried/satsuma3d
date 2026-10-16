@@ -2619,8 +2619,19 @@ struct NodeEditorLayer: View {
  * the user's changes. Touching anywhere else gives the keys back.
  * \{ */
 
+/** An editor that takes a hardware keyboard's keys while it was touched last. */
+@MainActor
+protocol HardwareKeyTarget: AnyObject {
+  var takesKeys: Bool { get }
+  func sendKey(_ key: String, shift: Bool, ctrl: Bool, alt: Bool, oskey: Bool)
+}
+
+extension NodeEditorModel: HardwareKeyTarget {
+  var takesKeys: Bool { shown }
+}
+
 struct NodeKeyCapture: UIViewRepresentable {
-  let model: NodeEditorModel
+  let model: any HardwareKeyTarget
 
   func makeUIView(context: Context) -> NodeKeyCaptureView {
     let view = NodeKeyCaptureView()
@@ -2630,14 +2641,14 @@ struct NodeKeyCapture: UIViewRepresentable {
 
   func updateUIView(_ view: NodeKeyCaptureView, context: Context) {
     view.model = model
-    if !model.shown, view.isFirstResponder {
+    if !model.takesKeys, view.isFirstResponder {
       DispatchQueue.main.async { _ = view.resignFirstResponder() }
     }
   }
 }
 
 final class NodeKeyCaptureView: UIView, UIKeyInput {
-  weak var model: NodeEditorModel?
+  weak var model: (any HardwareKeyTarget)?
   private var observer: TouchObserver?
 
   override func didMoveToWindow() {
@@ -2655,11 +2666,11 @@ final class NodeKeyCaptureView: UIView, UIKeyInput {
   private func touched(at point: CGPoint) {
     guard let panel = superview, let window else { return }
     let inside = panel.convert(panel.bounds, to: window).contains(point)
-    if inside, !isFirstResponder, model?.shown == true { _ = becomeFirstResponder() }
+    if inside, !isFirstResponder, model?.takesKeys == true { _ = becomeFirstResponder() }
     else if !inside, isFirstResponder { _ = resignFirstResponder() }
   }
 
-  override var canBecomeFirstResponder: Bool { model?.shown == true }
+  override var canBecomeFirstResponder: Bool { model?.takesKeys == true }
 
   /* No on-screen keyboard or shortcuts bar: only hardware keys are wanted. */
   override var inputView: UIView? { UIView(frame: .zero) }
