@@ -2303,7 +2303,7 @@ struct NodeRipple: Identifiable {
 /** Water rippling out from a node as it lands, as widgets once did when dropped: rings run
  * outward over the live canvas, bending it and catching the light, and calm within a moment. */
 struct NodeRippleEffect: ViewModifier {
-  static let duration: TimeInterval = 1.8
+  static let duration: TimeInterval = 2.6
   /** The shaders, built with the app, see `NodeEffects.metal`. */
   static let library: ShaderLibrary? = Bundle.main.url(forResource: "NodeEffects", withExtension: "metallib")
     .map { ShaderLibrary(url: $0) }
@@ -2319,7 +2319,7 @@ struct NodeRippleEffect: ViewModifier {
       content.layerEffect(
         (Self.library ?? ShaderLibrary.default).node_ripple(
           .float4(Float(r.minX), Float(r.minY), Float(r.width), Float(r.height)), .float(14), .float(time),
-          .float(6), .float(64), .float(260), .float(1.9)),
+          .float(7), .float(56), .float(210), .float(0.6)),
         maxSampleOffset: CGSize(width: 8, height: 8),
         isEnabled: ripple != nil && Self.library != nil && time < Float(Self.duration))
     }

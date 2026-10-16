@@ -31,7 +31,7 @@ static float outside_rounded_rect(float2 p, float4 rect, float radius)
  * \param amplitude: How far the rings bend the picture, in points.
  * \param wavelength: The distance between rings, in points.
  * \param speed: How fast the rings travel outward, in points per second.
- * \param decay: How quickly the water calms, per second.
+ * \param decay: How quickly the water calms, per second, besides spreading out.
  */
 [[stitchable]] half4 node_ripple(float2 position,
                                  SwiftUI::Layer layer,
@@ -44,13 +44,13 @@ static float outside_rounded_rect(float2 p, float4 rect, float radius)
                                  float decay)
 {
   const float distance = outside_rounded_rect(position, rect, radius);
-  /* The leading ring: nothing beyond it moves yet, and it softens rather than cuts off. */
+  /* A packet of a few rings leaves the node's edge and travels outward: strongest where the
+   * packet is, fading as it spreads over a wider ring, and calming toward the end. */
   const float front = speed * time;
-  const float reached = smoothstep(front, front - wavelength, distance);
-  /* Rising from the node's edge, calmer with time and farther out. */
-  const float envelope = reached * smoothstep(0.0, wavelength * 0.5, distance) * exp(-decay * time) *
-                         exp(-distance / 420.0);
-  if (envelope < 0.001) {
+  const float packet = (distance - front) / (wavelength * 1.1);
+  const float envelope = exp(-packet * packet) * smoothstep(0.0, wavelength * 0.35, distance) /
+                         (1.0 + distance / 180.0) * exp(-decay * time);
+  if (envelope < 0.002) {
     return layer.sample(position);
   }
   /* Outward from the nearest edge, found from how the distance changes. */
