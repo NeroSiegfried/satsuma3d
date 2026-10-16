@@ -17,6 +17,7 @@ set(SRC
   graph_buttons.cc
   graph_draw.cc
   graph_edit.cc
+  graph_native.cc
   graph_ops.cc
   graph_query.cc
   graph_select.cc
