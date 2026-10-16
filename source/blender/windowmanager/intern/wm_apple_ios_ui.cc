@@ -101,6 +101,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <os/log.h>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -1248,6 +1249,9 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     if (wmWindow *window = CTX_wm_window(C)) {
       for (wmEventHandler &handler : window->runtime->modalhandlers) {
         if (handler.type == WM_HANDLER_TYPE_OP) {
+          const wmOperator *op = reinterpret_cast<wmEventHandler_Op &>(handler).op;
+          os_log(OS_LOG_DEFAULT, "BLENDERDIAG properties edit refused, modal %{public}s",
+                 op && op->type ? op->type->idname : "?");
           ios_properties_error = "Finish the current operation before editing properties.";
           return;
         }
@@ -1260,6 +1264,8 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     }
 #endif
     ios_properties_error = ui::native_properties_query(C, command.value, true);
+    os_log(OS_LOG_DEFAULT, "BLENDERDIAG properties edit %{public}s -> %{public}s",
+           command.value.substr(0, 200).c_str(), ios_properties_error.c_str());
     return;
   }
   if (command.setting == "native_panels") {
@@ -2424,7 +2430,13 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
             ios_nodes_add_for = state;
             state.insert(state.size() - 1, ",\"with_add\":1");
           }
+          const auto diag_start = std::chrono::steady_clock::now();
           ios_nodes_json = ui::native_nodes_query(C, state, false);
+          os_log(OS_LOG_DEFAULT, "BLENDERDIAG nodes read %lld ms, %zu bytes: %{public}s",
+                 (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::steady_clock::now() - diag_start)
+                     .count(),
+                 ios_nodes_json.size(), ios_nodes_json.substr(0, 160).c_str());
           if (ios_nodes_composite) {
             ios_nodes_composite = false;
             ui::native_nodes_compositor_job(C);
