@@ -254,6 +254,9 @@ std::atomic<bool> ios_navigation_hover_active{false};
 std::atomic<bool> ios_navigation_redraw_pending{false};
 /** Height of the native bottom tray (the asset pane) as a fraction of the window height. */
 std::atomic<float> ios_bottom_tray{0.0f};
+/** Window pixels a native panel covers at the bottom, which the 3D views leave out. */
+std::atomic<float> ios_viewport_cover{0.0f};
+std::atomic<bool> ios_viewport_cover_changed{false};
 extern "C" int WM_apple_ios_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region);
 struct IOSPencilHoverRequest {
   bool active = false;
@@ -2477,11 +2480,14 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
     if (width > 0 && height > 0) {
       /* Match view3d_gizmo_navigate.cc, in normalized UIKit window coordinates.
        * The native shell can follow the last frame during asynchronous resizing. */
+      /* Over the part of the window a native panel leaves showing, as the native controls
+       * that follow the gizmo are laid out. */
+      const float cover = std::min(ios_viewport_cover.load(), height * 0.9f);
       navigation_json = "[" +
                         std::to_string((region->winrct.xmin + visible.xmax - inset) / width) +
                         "," +
-                        std::to_string(1.0f -
-                                       (region->winrct.ymin + visible.ymin + inset) / height) +
+                        std::to_string(1.0f - (region->winrct.ymin + visible.ymin + inset - cover) /
+                                                  (height - cover)) +
                         "," + std::to_string(radius / width) + "]";
     }
   }
@@ -3223,8 +3229,6 @@ extern "C" void WM_apple_ios_ui_bottom_tray_set(const float fraction)
 
 extern "C" void GHOST_ios_engine_wake();
 
-std::atomic<float> ios_viewport_cover{0.0f};
-std::atomic<bool> ios_viewport_cover_changed{false};
 
 extern "C" void WM_apple_ios_ui_viewport_cover_set(const float pixels)
 {
@@ -3242,8 +3246,7 @@ extern "C" float WM_apple_ios_ui_viewport_cover()
 extern "C" int WM_apple_ios_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region)
 {
   /* The navigation gizmo sits above the tray, in region pixels. */
-  const int tray = int(ios_bottom_tray.load() * WM_window_native_pixel_y(win));
-  return std::max(tray, int(ios_viewport_cover.load())) - region->winrct.ymin;
+  return int(ios_bottom_tray.load() * WM_window_native_pixel_y(win)) - region->winrct.ymin;
 }
 
 static void ios_ui_dispatch_operator(bContext *C, IOSOperatorCommand &command)
@@ -3428,8 +3431,16 @@ extern "C" void WM_apple_ios_ui_flush_commands(bContext *C)
   WM_apple_ios_ui_ensure_layout(C);
 
   if (ios_viewport_cover_changed.exchange(false)) {
-    /* The view is shifted to the part a panel leaves showing, see #ED_view3d_viewplane_get. */
-    WM_main_add_notifier(NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+    /* The 3D views are shortened to the part a panel leaves showing, see #area_calc_totrct. */
+    for (wmWindow &win : CTX_wm_manager(C)->windows) {
+      bScreen *screen = WM_window_get_active_screen(&win);
+      for (ScrArea &area : screen->areabase) {
+        if (area.spacetype == SPACE_VIEW3D) {
+          area.flag |= AREA_FLAG_REGION_SIZE_UPDATE;
+          ED_area_tag_redraw(&area);
+        }
+      }
+    }
     ios_navigation_redraw_pending.store(true);
   }
   if (ios_navigation_redraw_pending.exchange(false)) {
