@@ -690,48 +690,79 @@ struct TextControl: View {
 struct ColorSwatch: View {
   let store: InspectorStore
   let property: JSON
-  /** Kept across redraws, which the picker outlives, so it opens again after an edit. */
-  @State private var anchor = AnchorBox()
 
   var body: some View {
-    let color = blenderColor(store.value(property))
-    Button {
-      guard property.bool("editable") else { return }
-      ColorPickerSession(property: property, store: store).present(from: anchor, color: color)
-    } label: {
-      Circle()
-        .fill(store.isMixed(property) ? AnyShapeStyle(.quaternary) : AnyShapeStyle(Color(uiColor: color)))
-        .overlay {
-          if store.isMixed(property) { Text("—").foregroundStyle(.secondary) }
-        }
-        .overlay(Circle().strokeBorder(.separator, lineWidth: 0.5))
-        .overlay {
-          if let state = animationStateColor(property.string("anim_state")) {
-            Circle().strokeBorder(state, lineWidth: 2.5)
-          }
-        }
-        .frame(width: 32, height: 32)
-        .frame(width: 44, height: 44)
-        .background(PresentationAnchor(anchor: anchor))
+    NativeColorWell(store: store, property: property)
+      .frame(width: 44, height: 44)
+      .disabled(!property.bool("editable"))
+      .accessibilityLabel(propertyLabel(property))
+      .accessibilityValue(store.isMixed(property) ? "Mixed" : "")
+  }
+}
+
+/** The system's color well: it opens the system color picker, and takes and gives colors by
+ * drag and drop. Picking previews live as one interaction, which ends a moment after the color
+ * stops changing, so it is one undo step. */
+struct NativeColorWell: UIViewRepresentable {
+  let store: InspectorStore
+  let property: JSON
+
+  @MainActor final class Coordinator: NSObject {
+    var store: InspectorStore
+    var property: JSON
+    var interaction: String?
+    var lastPreview: CFTimeInterval = 0
+    var pending: [Double]?
+    var finish: DispatchWorkItem?
+
+    init(store: InspectorStore, property: JSON) {
+      self.store = store
+      self.property = property
     }
-    .buttonStyle(.plain)
-    .disabled(!property.bool("editable"))
-    /* A color well: its color drags out, and a color dropped on it is taken. */
-    .onDrag { NSItemProvider(object: blenderColor(store.value(property))) }
-    .onDrop(of: [.data], isTargeted: nil) { providers in
-      guard property.bool("editable"),
-            let provider = providers.first(where: { $0.canLoadObject(ofClass: UIColor.self) })
-      else { return false }
-      _ = provider.loadObject(ofClass: UIColor.self) { color, _ in
-        guard let color = color as? UIColor,
-              let components = colorComponents(color, alpha: property.bool("alpha")) else { return }
-        DispatchQueue.main.async { store.edit(property, value: components) }
+
+    @objc func changed(_ well: UIColorWell) {
+      guard let color = well.selectedColor,
+            let components = colorComponents(color, alpha: property.bool("alpha")) else { return }
+      pending = components
+      if interaction == nil { interaction = UUID().uuidString }
+      if CACurrentMediaTime() - lastPreview >= 1.0 / 60.0 {
+        store.preview(property, value: components, interaction: interaction!, phase: "update")
+        lastPreview = CACurrentMediaTime()
       }
-      return true
+      finish?.cancel()
+      let work = DispatchWorkItem { [weak self] in self?.end() }
+      finish = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
     }
-    .accessibilityLabel(propertyLabel(property))
-    .accessibilityValue(store.isMixed(property) ? "Mixed" : "")
-    .accessibilityHint("Opens the color picker.")
+
+    func end() {
+      guard let interaction, let pending else { return }
+      store.preview(property, value: pending, interaction: interaction, phase: "end")
+      self.interaction = nil
+      self.pending = nil
+    }
+  }
+
+  func makeCoordinator() -> Coordinator { Coordinator(store: store, property: property) }
+
+  func makeUIView(context: Context) -> UIColorWell {
+    let well = UIColorWell()
+    well.supportsAlpha = property.bool("alpha")
+    well.title = property.string("label")
+    well.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
+    well.selectedColor = blenderColor(store.value(property))
+    return well
+  }
+
+  func updateUIView(_ well: UIColorWell, context: Context) {
+    context.coordinator.store = store
+    context.coordinator.property = property
+    /* Blender's value, except while the picker is being used. */
+    if context.coordinator.interaction == nil {
+      let color = blenderColor(store.value(property))
+      if well.selectedColor != color { well.selectedColor = color }
+    }
+    well.isEnabled = property.bool("editable")
   }
 }
 
