@@ -198,6 +198,37 @@ struct KeyRequest {
 };
 KeyRequest key_request;
 
+/** FNV-1a over raw bytes, to tell whether the curves changed since they were last read. */
+struct Fingerprint {
+  uint64_t value = 1469598103934665603ull;
+  void add(const void *data, const size_t size)
+  {
+    const unsigned char *bytes = static_cast<const unsigned char *>(data);
+    for (size_t i = 0; i < size; i++) {
+      value = (value ^ bytes[i]) * 1099511628211ull;
+    }
+  }
+  template<typename T> void add(const T &item)
+  {
+    add(&item, sizeof(T));
+  }
+};
+
+/** A drag of keys or a handle: where what it moves was when it began, to move from. */
+struct Drag {
+  std::string interaction;
+  /** Per curve, its keys as they were, in scene time. */
+  std::map<FCurve *, std::vector<BezTriple>> keys;
+};
+Drag drag;
+
+/** The last read, kept while the curves stay as they were. */
+struct LastRead {
+  uint64_t fingerprint = 0;
+  std::string json;
+};
+LastRead last_read;
+
 std::string read_curves(bContext *C, const DictionaryValue &state)
 {
   DictionaryValue result;
@@ -223,6 +254,40 @@ std::string read_curves(bContext *C, const DictionaryValue &state)
         }
       }
     }
+  }
+  /* Reading thousands of keys out takes a while, and the native interface asks often: the same
+   * curves read as they did. Curves with modifiers are always read, as their shape depends on more
+   * than their keys. */
+  Fingerprint fingerprint;
+  fingerprint.add(range);
+  fingerprint.add(scene ? scene->r.cfra : 0);
+  fingerprint.add(key_request.sequence);
+  fingerprint.add(int(state.lookup_int("normalize").value_or(0)));
+  bool cacheable = true;
+  for (bAnimListElem *ale : curves.items) {
+    const FCurve &fcu = *static_cast<const FCurve *>(ale->key_data);
+    cacheable &= fcu.modifiers.first == nullptr;
+    fingerprint.add(ale->id);
+    if (ale->id) {
+      fingerprint.add(ale->id->name, strlen(ale->id->name));
+    }
+    fingerprint.add(fcu.flag);
+    fingerprint.add(fcu.extend);
+    fingerprint.add(fcu.color);
+    fingerprint.add(fcu.array_index);
+    if (fcu.rna_path) {
+      fingerprint.add(fcu.rna_path, strlen(fcu.rna_path));
+    }
+    fingerprint.add(fcu.totvert);
+    if (fcu.bezt) {
+      fingerprint.add(fcu.bezt, sizeof(BezTriple) * fcu.totvert);
+    }
+  }
+  /* While a drag goes on, the native editor draws it from where it began. */
+  if (!last_read.json.empty() &&
+      (!drag.interaction.empty() || (cacheable && fingerprint.value == last_read.fingerprint)))
+  {
+    return last_read.json;
   }
   auto list = result.append_array("curves");
   for (bAnimListElem *ale : curves.items) {
@@ -282,16 +347,11 @@ std::string read_curves(bContext *C, const DictionaryValue &state)
     request->append_int("sequence", key_request.sequence);
     request->append_str("action", key_request.action);
   }
-  return encode(result);
+  std::string json = encode(result);
+  last_read = {cacheable ? fingerprint.value : 0, json};
+  return json;
 }
 
-/** A drag of keys or a handle: where what it moves was when it began, to move from. */
-struct Drag {
-  std::string interaction;
-  /** Per curve, its keys as they were, in scene time. */
-  std::map<FCurve *, std::vector<BezTriple>> keys;
-};
-Drag drag;
 
 double number(const DictionaryValue &query, const char *key, const double fallback = 0.0)
 {
