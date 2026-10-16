@@ -120,6 +120,11 @@ std::string native_menu_query(bContext *C, const std::string &request, bool exec
 std::string native_properties_query(bContext *C, const std::string &request, bool execute);
 std::string native_nodes_query(bContext *C, const std::string &request, bool execute);
 void native_nodes_compositor_job(bContext *C);
+}  // namespace blender::ui
+namespace blender::ed::graph {
+std::string native_graph_query(bContext *C, const std::string &request, bool execute);
+}  // namespace blender::ed::graph
+namespace blender::ui {
 std::string native_operator_redo_query(bContext *C, const std::string &request, bool execute);
 void native_properties_interaction_finish(bContext *C);
 std::string native_properties_menu_query(bContext *C, const std::string &request, bool execute);
@@ -249,6 +254,11 @@ std::string ios_nodes_json;
 std::chrono::steady_clock::time_point ios_nodes_next_check;
 /** The tree the Add Node list was sent for, sent again only for another. */
 std::string ios_nodes_add_for;
+/** The native curve editor's state, curves and whether they need reading again. */
+std::string ios_graph_state = "{}";
+bool ios_graph_dirty = true;
+std::string ios_graph_json;
+std::chrono::steady_clock::time_point ios_graph_next_check;
 std::string ios_properties_error;
 int64_t ios_panels_sequence = 0;
 std::atomic<bool> ios_navigation_hover_active{false};
@@ -1182,6 +1192,31 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
       ios_panels_next_snapshot = {};
     }
     ios_properties_error = ui::native_nodes_query(C, command.value, true);
+    return;
+  }
+  if (command.setting == "native_graph_state") {
+    ios_graph_dirty = true;
+    ios_graph_state = command.value;
+    ios_panels_next_snapshot = {};
+    ios_panels_published.clear();
+    return;
+  }
+  if (command.setting == "native_graph_visible") {
+    ios_graph_dirty = true;
+    ios_panels_visible = (ios_panels_visible & ~16) | (command.value == "1" ? 16 : 0);
+    ios_panels_next_snapshot = {};
+    ios_panels_published.clear();
+    return;
+  }
+  if (command.setting == "native_graph_edit") {
+    ios_graph_dirty = true;
+    std::istringstream stream(command.value);
+    auto value = io::serialize::JsonFormatter().deserialize(stream);
+    if (const auto *request = value ? value->as_dictionary_value() : nullptr) {
+      ios_panels_sequence = request->lookup_int("sequence").value_or(ios_panels_sequence);
+    }
+    ios_panels_next_snapshot = {};
+    ios_properties_error = ed::graph::native_graph_query(C, command.value, true);
     return;
   }
   if (command.setting == "native_nodes_create") {
@@ -2445,6 +2480,14 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
         /* Spliced in as it is below, rather than read and written again: it is large. */
         merged.append_str("nodes", "@native_nodes_json@");
       }
+      if (ios_panels_visible & 16) {
+        if (ios_graph_dirty || now >= ios_graph_next_check) {
+          ios_graph_dirty = false;
+          ios_graph_next_check = now + std::chrono::seconds(2);
+          ios_graph_json = ed::graph::native_graph_query(C, ios_graph_state, false);
+        }
+        merged.append_str("graph", "@native_graph_json@");
+      }
       if (ios_panels_visible & 4) {
         std::istringstream shading_stream(
             ui::native_properties_query(C, ios_shading_state, false));
@@ -2456,6 +2499,12 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
       std::ostringstream merged_stream;
       JsonFormatter().serialize(merged_stream, merged);
       ios_panels_json = merged_stream.str();
+      if (ios_panels_visible & 16) {
+        const std::string placeholder = "\"@native_graph_json@\"";
+        if (const size_t at = ios_panels_json.find(placeholder); at != std::string::npos) {
+          ios_panels_json.replace(at, placeholder.size(), ios_graph_json.empty() ? "null" : ios_graph_json);
+        }
+      }
       if (ios_panels_visible & 8) {
         const std::string placeholder = "\"@native_nodes_json@\"";
         if (const size_t at = ios_panels_json.find(placeholder); at != std::string::npos) {
@@ -2915,6 +2964,7 @@ extern "C" void WM_apple_ios_ui_view_roll_enqueue(float angle)
 void WM_apple_ios_ui_tag_changed()
 {
   ios_nodes_dirty = true;
+  ios_graph_dirty = true;
   ios_ui_changed = true;
 }
 
@@ -3318,7 +3368,10 @@ static void ios_ui_dispatch(bContext *C, IOSUIMessage &message)
                                                 setting->setting != "native_shading_visible" &&
                                                 setting->setting != "native_nodes_state" &&
                                                 setting->setting != "native_nodes_visible" &&
-                                                setting->setting != "native_nodes_edit")))
+                                                setting->setting != "native_nodes_edit" &&
+                                                setting->setting != "native_graph_state" &&
+                                                setting->setting != "native_graph_visible" &&
+                                                setting->setting != "native_graph_edit")))
   {
     const IOSContextStore context_store = ios_context_push_view3d(C);
     ui::native_properties_interaction_finish(C);
@@ -3332,7 +3385,10 @@ static void ios_ui_dispatch(bContext *C, IOSUIMessage &message)
                                          setting->setting == "native_properties_edit" ||
                                          setting->setting == "native_nodes_state" ||
                                          setting->setting == "native_nodes_visible" ||
-                                         setting->setting == "native_nodes_edit");
+                                         setting->setting == "native_nodes_edit" ||
+                                         setting->setting == "native_graph_state" ||
+                                         setting->setting == "native_graph_visible" ||
+                                         setting->setting == "native_graph_edit");
   if (WM_apple_ios_dialog_active(CTX_wm_window(C)) && !panel_message) {
     if (const auto *request = std::get_if<IOSMenuRequest>(&message)) {
       if (!request->execute) {
