@@ -690,7 +690,8 @@ struct TextControl: View {
 struct ColorSwatch: View {
   let store: InspectorStore
   let property: JSON
-  private let anchor = AnchorBox()
+  /** Kept across redraws, which the picker outlives, so it opens again after an edit. */
+  @State private var anchor = AnchorBox()
 
   var body: some View {
     let color = blenderColor(store.value(property))
@@ -715,6 +716,19 @@ struct ColorSwatch: View {
     }
     .buttonStyle(.plain)
     .disabled(!property.bool("editable"))
+    /* A color well: its color drags out, and a color dropped on it is taken. */
+    .onDrag { NSItemProvider(object: blenderColor(store.value(property))) }
+    .onDrop(of: [.data], isTargeted: nil) { providers in
+      guard property.bool("editable"),
+            let provider = providers.first(where: { $0.canLoadObject(ofClass: UIColor.self) })
+      else { return false }
+      _ = provider.loadObject(ofClass: UIColor.self) { color, _ in
+        guard let color = color as? UIColor,
+              let components = colorComponents(color, alpha: property.bool("alpha")) else { return }
+        DispatchQueue.main.async { store.edit(property, value: components) }
+      }
+      return true
+    }
     .accessibilityLabel(propertyLabel(property))
     .accessibilityValue(store.isMixed(property) ? "Mixed" : "")
     .accessibilityHint("Opens the color picker.")
