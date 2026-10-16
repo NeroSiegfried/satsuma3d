@@ -22,6 +22,7 @@
 #include "BLI_listbase.h"
 #include "BLI_serialize.hh"
 #include "BLI_string.h"
+#include "BLI_string_ref.hh"
 
 #include "DNA_anim_types.h"
 #include "DNA_curve_types.h"
@@ -38,6 +39,7 @@
 #include "ED_undo.hh"
 
 #include "RNA_access.hh"
+#include "RNA_enum_types.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
@@ -189,6 +191,13 @@ std::string encode(const Value &value)
 }
 
 /** The curves as the Graph Editor shows them, see #native_graph_query. */
+/** What a key asked of the native editor itself, such as framing the curves. */
+struct KeyRequest {
+  int sequence = 0;
+  std::string action;
+};
+KeyRequest key_request;
+
 std::string read_curves(bContext *C, const DictionaryValue &state)
 {
   DictionaryValue result;
@@ -267,6 +276,11 @@ std::string read_curves(bContext *C, const DictionaryValue &state)
         samples->append_double((evaluate_fcurve(&fcu, frame) + mapping.offset) * mapping.scale);
       }
     }
+  }
+  if (key_request.sequence) {
+    auto request = result.append_dict("request");
+    request->append_int("sequence", key_request.sequence);
+    request->append_str("action", key_request.action);
   }
   return encode(result);
 }
@@ -440,6 +454,94 @@ bool run_operator(bContext *C, const DictionaryValue &query)
   return status & OPERATOR_FINISHED;
 }
 
+bool keymap_modifier_matches(const int8_t item, const bool held)
+{
+  return item == KM_ANY || (item == KM_MOD_HELD) == held;
+}
+
+/**
+ * A hardware key pressed in the native curve editor, run as the Graph Editor's keymap has it, the
+ * user's or the selected preset's. Framing the view is asked of the native editor; operators that
+ * follow the pointer, or ask which kind with a menu, belong to its own gestures and menus.
+ */
+void run_key(bContext *C, const DictionaryValue &query)
+{
+  wmWindowManager *wm = CTX_wm_manager(C);
+  const bool shift = query.lookup_int("shift").value_or(0), ctrl = query.lookup_int("ctrl").value_or(0),
+             alt = query.lookup_int("alt").value_or(0), oskey = query.lookup_int("oskey").value_or(0);
+  /* Keys as Blender names them; the Mac's Delete is Backspace, which Blender also takes. */
+  std::vector<std::string> names = {std::string(query.lookup_str("key").value_or(""))};
+  if (names[0] == "BACK_SPACE") {
+    names.push_back("DEL");
+  }
+  auto find = [&](const int type, const bool use_ctrl, const bool use_oskey) -> wmKeyMapItem * {
+    for (const char *keymap_name : {"Graph Editor", "Graph Editor Generic", "Animation"}) {
+      wmKeyMap *keymap = WM_keymap_find_all(wm, keymap_name, SPACE_GRAPH, RGN_TYPE_WINDOW);
+      if (!keymap) {
+        keymap = WM_keymap_find_all(wm, keymap_name, SPACE_EMPTY, RGN_TYPE_WINDOW);
+      }
+      keymap = keymap ? WM_keymap_active(wm, keymap) : nullptr;
+      if (!keymap) {
+        continue;
+      }
+      for (wmKeyMapItem &item : keymap->items) {
+        if ((item.flag & KMI_INACTIVE) || item.type != type ||
+            !ELEM(item.val, KM_PRESS, KM_ANY, KM_CLICK) || !keymap_modifier_matches(item.shift, shift) ||
+            !keymap_modifier_matches(item.ctrl, use_ctrl) || !keymap_modifier_matches(item.alt, alt) ||
+            !keymap_modifier_matches(item.oskey, use_oskey))
+        {
+          continue;
+        }
+        return &item;
+      }
+    }
+    return nullptr;
+  };
+  wmKeyMapItem *item = nullptr;
+  for (const std::string &name : names) {
+    int type;
+    if (!RNA_enum_value_from_identifier(rna_enum_event_type_items, name.c_str(), &type)) {
+      continue;
+    }
+    /* Command for Control, as the iPad's keyboards have it, when the keymap has none. */
+    item = find(type, ctrl, oskey);
+    if (!item && oskey && !ctrl) {
+      item = find(type, true, false);
+    }
+    if (item) {
+      break;
+    }
+  }
+  if (!item) {
+    return;
+  }
+  const std::string idname = item->idname;
+  if (ELEM(idname, std::string("GRAPH_OT_view_all"), std::string("GRAPH_OT_view_selected"))) {
+    key_request.sequence++;
+    key_request.action = idname == "GRAPH_OT_view_all" ? "frame_all" : "frame_selected";
+    return;
+  }
+  /* Duplicating moves the copies with the pointer in Blender; here they stay where they were. */
+  wmOperatorType *ot = WM_operatortype_find(
+      idname == "GRAPH_OT_duplicate_move" ? "GRAPH_OT_duplicate" : idname.c_str(), false);
+  if (!ot || !ot->exec || ot->modal || (ot->flag & OPTYPE_MACRO) ||
+      StringRef(ot->idname).startswith("TRANSFORM_OT") || !WM_operator_poll(C, ot))
+  {
+    return;
+  }
+  /* A kind asked for with a menu, which the editor's own menus give instead. */
+  if (ot->invoke == WM_menu_invoke && ot->prop &&
+      !(item->ptr && RNA_property_is_set(item->ptr, ot->prop)))
+  {
+    return;
+  }
+  WM_operator_name_call_ptr(C,
+                            ot,
+                            wm::OpCallContext::ExecDefault,
+                            idname == "GRAPH_OT_duplicate_move" ? nullptr : item->ptr,
+                            nullptr);
+}
+
 /** Applies one of the native editor's edits; the undo step's name, or empty for none. */
 std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
 {
@@ -447,6 +549,11 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
   if (action == "operator") {
     /* Pushes its own undo step. */
     return run_operator(C, query) ? std::optional<std::string>("") : std::nullopt;
+  }
+  if (action == "key") {
+    /* Keys the keymap has nothing for are let go quietly. Operators push their own undo step. */
+    run_key(C, query);
+    return std::string("");
   }
   Curves curves(C);
   if (!curves.valid) {
