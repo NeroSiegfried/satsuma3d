@@ -615,6 +615,8 @@ struct NodeCanvas: View {
   @State private var knownNodes: Set<String> = []
   /** The nodes as they were last drawn, for those just deleted to vanish from. */
   @State private var lastNodes: [String: JSON] = [:]
+  /** A frame just made, drawing itself in. */
+  @State private var framing: (name: String, start: Date)?
   /** Nodes just deleted, drawn a moment longer as they are sucked away. */
   @State private var vanishing: [NodeVanish] = []
   /** Where a node just landed, in view points, when, and the canvas as it was then, for the
@@ -668,7 +670,8 @@ struct NodeCanvas: View {
               .frame(width: 1, height: 1, alignment: .topLeading)
               .coordinateSpace(.named("nodes"))
               .scaleEffect(NodeRippleEffect.bob(timeline.date.timeIntervalSince(ripple.start)),
-                           anchor: UnitPoint(x: corner.x + size.width / 2, y: corner.y + size.height / 2))
+                           anchor: UnitPoint(x: (corner.x + size.width / 2) / max(size.width, 1),
+                                             y: (corner.y + size.height / 2) / max(size.height, 1)))
           }
           .scaleEffect(zoom, anchor: .topLeading)
           .offset(pan)
@@ -678,14 +681,19 @@ struct NodeCanvas: View {
           TimelineView(.animation) { timeline in
             ZStack(alignment: .topLeading) {
               ForEach(vanishing) { gone in
+                /* Dissolving as it collapses into its middle: losing its colour, blurring and
+                 * fading, faster toward the end. */
                 let t = min(1, timeline.date.timeIntervalSince(gone.start) / NodeVanish.duration)
-                let pull = t * t * t
+                let pull = t * t
+                let size = gone.size
+                /* Anchors are fractions of the view, whose layout box sits at the canvas origin. */
+                let anchor = UnitPoint(x: gone.center.x / max(size.width, 1), y: gone.center.y / max(size.height, 1))
                 nodeView(gone.node)
-                  .scaleEffect(x: max(0.001, 1 - pull), y: max(0.001, 1 - pull * 0.92),
-                               anchor: UnitPoint(x: gone.center.x, y: gone.center.y))
-                  .rotationEffect(.degrees(28 * pull), anchor: UnitPoint(x: gone.center.x, y: gone.center.y))
-                  .blur(radius: 6 * pull)
-                  .opacity(1 - pull * pull)
+                  .saturation(1 - t)
+                  .brightness(0.25 * t)
+                  .blur(radius: 9 * pull)
+                  .scaleEffect(x: 1 - 0.85 * pull, y: 1 - 0.95 * pull, anchor: anchor)
+                  .opacity(1 - pow(t, 1.6))
               }
             }
             .frame(width: 1, height: 1, alignment: .topLeading)
@@ -1336,10 +1344,31 @@ struct NodeCanvas: View {
       }
     }
     let tint = frame["color"] != nil ? nodeColor(frame) : Color.secondary
-    return RoundedRectangle(cornerRadius: 18, style: .continuous)
-      .fill(tint.opacity(0.18))
-      .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
-        .strokeBorder(frame.bool("selected") ? Color.accentColor : tint.opacity(0.35), lineWidth: 1.5))
+    let drawing = framing?.name == name ? framing?.start : nil
+    return TimelineView(.animation(paused: drawing == nil)) { timeline in
+      /* A frame just made: its outline traces round from the top, meeting at the bottom, then
+       * its tint fills in. */
+      let t = drawing.map { min(1, timeline.date.timeIntervalSince($0) / 0.55) } ?? 1
+      let trace = 1 - pow(1 - min(1, t / 0.75), 3)
+      let fill = max(0, (t - 0.55) / 0.45)
+      let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+      shape.fill(tint.opacity(0.18 * (drawing == nil ? 1 : fill)))
+        .overlay {
+          if drawing == nil {
+            shape.strokeBorder(frame.bool("selected") ? Color.accentColor : tint.opacity(0.35), lineWidth: 1.5)
+          }
+          else {
+            ZStack {
+              shape.trim(from: 0, to: trace / 2).stroke(tint, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+              shape.trim(from: 1 - trace / 2, to: 1).stroke(tint, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+            }
+            /* Paths start at the right edge's middle; turned so they start at the top. */
+            .rotationEffect(.degrees(-90))
+            .opacity(1 - 0.5 * fill)
+          }
+        }
+        .scaleEffect(drawing == nil ? 1 : 1 + 0.03 * (1 - fill))
+    }
       .overlay(alignment: .topLeading) {
         Text(frame.string("title") ?? "")
           .font(.headline)
@@ -1444,7 +1473,7 @@ struct NodeCanvas: View {
         let corner = origin(node)
         let size = layout.nodes[name]?.size ?? CGSize(width: cardWidth(node), height: 120)
         return NodeVanish(node: node, center: CGPoint(x: corner.x + size.width / 2, y: corner.y + size.height / 2),
-                          start: now)
+                          size: size, start: now)
       }
       if !gone.isEmpty {
         vanishing += gone
@@ -1457,6 +1486,15 @@ struct NodeCanvas: View {
     lastNodes = Dictionary(model.nodes.map { ($0.nodeName, $0) }, uniquingKeysWith: { a, _ in a })
     guard !fresh, let name = added.first, let node = model.nodes.first(where: { $0.string("name") == name })
     else { return }
+    /* A new frame draws its outline around what it holds instead. */
+    if node.string("kind") == "FRAME" {
+      if !UIAccessibility.isReduceMotionEnabled {
+        framing = (name, Date())
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { if framing?.name == name { framing = nil } }
+      }
+      return
+    }
     guard !UIAccessibility.isReduceMotionEnabled, NodeRippleEffect.library != nil else { return }
     let landing = NodeRipple(name: name, start: Date())
     ripple = landing
@@ -1509,7 +1547,11 @@ struct NodeCanvas: View {
       }
       .onEnded { value in
         guard let current = drag else { return }
-        for node in current.nodes { moved[node] = value.translation }
+        /* Held where they were let go until Blender's tree has them there, with what a frame
+         * holds. */
+        for node in model.nodes where current.nodes.contains(node.nodeName) || ancestorDragged(node, current.nodes) {
+          moved[node.nodeName] = value.translation
+        }
         drag = nil
         var request: JSON = ["nodes": Array(current.nodes),
                              "dx": Double(value.translation.width / nodeScale),
@@ -1908,8 +1950,8 @@ struct NodeCanvasField: View, Equatable {
   let store: InspectorStore
   let property: JSON
   @State private var editing = false
-  /** Where the color picker points from. */
-  private let anchor = AnchorBox()
+  /** Where the color picker points from; kept across redraws, which the picker outlives. */
+  @State private var anchor = AnchorBox()
 
   static func == (a: NodeCanvasField, b: NodeCanvasField) -> Bool {
     a.store === b.store && jsonDictEqual(a.property, b.property)
@@ -1951,6 +1993,18 @@ struct NodeCanvasField: View, Equatable {
             guard editable else { return }
             ColorPickerSession(property: property, store: store)
               .present(from: anchor, color: blenderColor(store.value(property)))
+          }
+          /* A color well: its color drags out, and a color dropped on it is taken. */
+          .onDrag { NSItemProvider(object: blenderColor(store.value(property))) }
+          .onDrop(of: [.data], isTargeted: nil) { providers in
+            guard editable, let provider = providers.first(where: { $0.canLoadObject(ofClass: UIColor.self) })
+            else { return false }
+            _ = provider.loadObject(ofClass: UIColor.self) { color, _ in
+              guard let color = color as? UIColor,
+                    let components = colorComponents(color, alpha: property.bool("alpha")) else { return }
+              DispatchQueue.main.async { store.edit(property, value: components) }
+            }
+            return true
           }
         default:
           labeled { valueText(summary, chevron: type == "ID" || type == "MENU" || type == "OPERATOR_MENU") }
@@ -2347,10 +2401,11 @@ struct NodeMenuAnchor: UIViewRepresentable {
 
 /** A node just deleted: as it was, where its middle was on the canvas, and when. */
 struct NodeVanish: Identifiable {
-  static let duration: TimeInterval = 0.34
+  static let duration: TimeInterval = 0.42
   let id = UUID()
   let node: JSON
   let center: CGPoint
+  let size: CGSize
   let start: Date
 }
 
