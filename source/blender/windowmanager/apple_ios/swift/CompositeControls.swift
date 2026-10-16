@@ -121,9 +121,11 @@ struct DataPicker: View {
               .lineLimit(1)
               .truncationMode(.middle)
               .foregroundStyle(has ? .primary : .secondary)
-            if !compact {
+            /* With nothing chosen, the New button beside it says what to do. */
+            if !compact && (has || !property.bool("can_new")) {
               Text(has ? (usersText(property).isEmpty ? type : usersText(property)) : "Choose or create one")
                 .font(.subheadline)
+                .lineLimit(1)
                 .foregroundStyle(.secondary)
             }
           }
@@ -148,6 +150,7 @@ struct DataPicker: View {
           store.request(property, extra: ["id_action": "new"])
         } label: {
           Label("New", systemImage: "plus")
+            .fixedSize()
         }
         .buttonStyle(.bordered)
         .buttonBorderShape(.capsule)
@@ -554,7 +557,9 @@ struct ListRows: View {
   private func row(_ item: JSON, position: Int) -> some View {
     let index = item.int("index") ?? position
     let isActive = index == active
-    let label = (item.string("label") ?? "").isEmpty ? "Unnamed" : item.string("label")!
+    /* An item with no name, such as a material slot with no material yet, as Blender leaves blank. */
+    let empty = (item.string("label") ?? "").isEmpty
+    let label = empty ? "Empty" : item.string("label")!
     HStack(spacing: 10) {
       Group {
         if let preview = PreviewCache.image(item.string("preview")) {
@@ -580,6 +585,7 @@ struct ListRows: View {
         Text(label)
           .lineLimit(1)
           .truncationMode(.middle)
+          .foregroundStyle(empty ? .secondary : .primary)
           .frame(maxWidth: .infinity, alignment: .leading)
           .layoutPriority(1)
           .contentShape(Rectangle())
