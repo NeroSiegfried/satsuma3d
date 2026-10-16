@@ -324,19 +324,35 @@ struct PresentationAnchor: UIViewRepresentable {
 
 final class AnchorBox {
   weak var view: UIView?
+  /** Where to point from in window points, for SwiftUI drawn where no UIKit view can be, such
+   * as under a shader effect. */
+  var windowRect: CGRect?
+
+  private var window: UIWindow? {
+    view?.window ?? UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+  }
 
   var presenter: UIViewController? {
-    var presenter = view?.window?.rootViewController
+    var presenter = window?.rootViewController
     while let next = presenter?.presentedViewController, !next.isBeingDismissed { presenter = next }
     return presenter
   }
 
   func present(_ controller: UIViewController, preferredSize: CGSize? = nil) {
-    guard let presenter, let view else { return }
+    guard let presenter else { return }
     controller.modalPresentationStyle = .popover
     if let preferredSize { controller.preferredContentSize = preferredSize }
-    controller.popoverPresentationController?.sourceView = view
-    controller.popoverPresentationController?.sourceRect = view.bounds
+    if let view, view.window != nil {
+      controller.popoverPresentationController?.sourceView = view
+      controller.popoverPresentationController?.sourceRect = view.bounds
+    }
+    else if let window, let windowRect {
+      controller.popoverPresentationController?.sourceView = window
+      controller.popoverPresentationController?.sourceRect = windowRect
+    }
+    else {
+      return
+    }
     presenter.present(controller, animated: true)
   }
 }

@@ -669,10 +669,13 @@ struct NodeCanvas: View {
             ZStack(alignment: .topLeading) { nodeView(node) }
               .frame(width: 1, height: 1, alignment: .topLeading)
               .coordinateSpace(.named("nodes"))
+              /* Applied to the 1 point box the canvas lays out in, so canvas points are its
+               * fractions. */
               .scaleEffect(NodeRippleEffect.bob(timeline.date.timeIntervalSince(ripple.start)),
-                           anchor: UnitPoint(x: (corner.x + size.width / 2) / max(size.width, 1),
-                                             y: (corner.y + size.height / 2) / max(size.height, 1)))
+                           anchor: UnitPoint(x: corner.x + size.width / 2, y: corner.y + size.height / 2))
           }
+          /* At the canvas's origin, as `content` is, rather than centered in the view. */
+          .frame(width: 1, height: 1, alignment: .topLeading)
           .scaleEffect(zoom, anchor: .topLeading)
           .offset(pan)
         }
@@ -700,6 +703,7 @@ struct NodeCanvas: View {
             .coordinateSpace(.named("nodes"))
             .allowsHitTesting(false)
           }
+          .frame(width: 1, height: 1, alignment: .topLeading)
           .scaleEffect(zoom, anchor: .topLeading)
           .offset(pan)
         }
@@ -1985,7 +1989,8 @@ struct NodeCanvasField: View, Equatable {
               .fill(Color(uiColor: blenderColor(store.value(property))))
               .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(.separator, lineWidth: 0.5))
               .frame(width: 44, height: 20)
-              .background(PresentationAnchor(anchor: anchor))
+              /* Its place on screen: the canvas's effects leave no UIKit view to point from. */
+              .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { anchor.windowRect = $0 }
           }
           .contentShape(Rectangle())
           /* The system's color picker, straight away. */
