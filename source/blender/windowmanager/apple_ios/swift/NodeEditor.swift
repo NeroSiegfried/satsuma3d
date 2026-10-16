@@ -611,8 +611,12 @@ struct NodeCanvas: View {
   @State private var cables = CableMotion()
   /** While a cable still sways, frames are drawn. */
   @State private var cablesMoving = false
-  /** Nodes already on the canvas, to tell a node just added. */
+  /** Nodes already on the canvas, to tell a node just added or removed. */
   @State private var knownNodes: Set<String> = []
+  /** The nodes as they were last drawn, for those just deleted to vanish from. */
+  @State private var lastNodes: [String: JSON] = [:]
+  /** Nodes just deleted, drawn a moment longer as they are sucked away. */
+  @State private var vanishing: [NodeVanish] = []
   /** Where a node just landed, in view points, when, and the canvas as it was then, for the
    * ripple it sends out. */
   @State private var ripple: NodeRipple?
@@ -656,11 +660,40 @@ struct NodeCanvas: View {
         }
         .modifier(NodeRippleEffect(ripple: ripple, rect: ripple.map(landedRect)))
         if let ripple, let node = model.nodes.first(where: { $0.string("name") == ripple.name }) {
-          ZStack(alignment: .topLeading) { nodeView(node) }
+          /* Bobbing on its own waves: dipping as it lands, then rising and settling. */
+          let corner = origin(node)
+          let size = layout.nodes[ripple.name]?.size ?? CGSize(width: cardWidth(node), height: 120)
+          TimelineView(.animation) { timeline in
+            ZStack(alignment: .topLeading) { nodeView(node) }
+              .frame(width: 1, height: 1, alignment: .topLeading)
+              .coordinateSpace(.named("nodes"))
+              .scaleEffect(NodeRippleEffect.bob(timeline.date.timeIntervalSince(ripple.start)),
+                           anchor: UnitPoint(x: corner.x + size.width / 2, y: corner.y + size.height / 2))
+          }
+          .scaleEffect(zoom, anchor: .topLeading)
+          .offset(pan)
+        }
+        if !vanishing.isEmpty {
+          /* Deleted nodes, sucked away into their middle. */
+          TimelineView(.animation) { timeline in
+            ZStack(alignment: .topLeading) {
+              ForEach(vanishing) { gone in
+                let t = min(1, timeline.date.timeIntervalSince(gone.start) / NodeVanish.duration)
+                let pull = t * t * t
+                nodeView(gone.node)
+                  .scaleEffect(x: max(0.001, 1 - pull), y: max(0.001, 1 - pull * 0.92),
+                               anchor: UnitPoint(x: gone.center.x, y: gone.center.y))
+                  .rotationEffect(.degrees(28 * pull), anchor: UnitPoint(x: gone.center.x, y: gone.center.y))
+                  .blur(radius: 6 * pull)
+                  .opacity(1 - pull * pull)
+              }
+            }
             .frame(width: 1, height: 1, alignment: .topLeading)
             .coordinateSpace(.named("nodes"))
-            .scaleEffect(zoom, anchor: .topLeading)
-            .offset(pan)
+            .allowsHitTesting(false)
+          }
+          .scaleEffect(zoom, anchor: .topLeading)
+          .offset(pan)
         }
         plugRings
         minimap
@@ -1401,8 +1434,27 @@ struct NodeCanvas: View {
    * canvas from where it landed. */
   private func landed(_ names: Set<String>) {
     let added = names.subtracting(knownNodes)
+    let removed = knownNodes.subtracting(names)
     let fresh = knownNodes.isEmpty || knownNodes.isDisjoint(with: names)
     knownNodes = names
+    if !fresh, !removed.isEmpty, !UIAccessibility.isReduceMotionEnabled {
+      let now = Date()
+      let gone = removed.prefix(24).compactMap { name -> NodeVanish? in
+        guard let node = lastNodes[name], node.string("kind") != "FRAME" else { return nil }
+        let corner = origin(node)
+        let size = layout.nodes[name]?.size ?? CGSize(width: cardWidth(node), height: 120)
+        return NodeVanish(node: node, center: CGPoint(x: corner.x + size.width / 2, y: corner.y + size.height / 2),
+                          start: now)
+      }
+      if !gone.isEmpty {
+        vanishing += gone
+        UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.8)
+        DispatchQueue.main.asyncAfter(deadline: .now() + NodeVanish.duration) {
+          vanishing.removeAll { Date().timeIntervalSince($0.start) >= NodeVanish.duration }
+        }
+      }
+    }
+    lastNodes = Dictionary(model.nodes.map { ($0.nodeName, $0) }, uniquingKeysWith: { a, _ in a })
     guard !fresh, let name = added.first, let node = model.nodes.first(where: { $0.string("name") == name })
     else { return }
     guard !UIAccessibility.isReduceMotionEnabled, NodeRippleEffect.library != nil else { return }
@@ -2293,6 +2345,15 @@ struct NodeMenuAnchor: UIViewRepresentable {
   }
 }
 
+/** A node just deleted: as it was, where its middle was on the canvas, and when. */
+struct NodeVanish: Identifiable {
+  static let duration: TimeInterval = 0.34
+  let id = UUID()
+  let node: JSON
+  let center: CGPoint
+  let start: Date
+}
+
 /** A node landing: where and when. */
 struct NodeRipple: Identifiable {
   let id = UUID()
@@ -2307,6 +2368,12 @@ struct NodeRippleEffect: ViewModifier {
   /** The shaders, built with the app, see `NodeEffects.metal`. */
   static let library: ShaderLibrary? = Bundle.main.url(forResource: "NodeEffects", withExtension: "metallib")
     .map { ShaderLibrary(url: $0) }
+
+  /** The new node's size as it floats on its waves `time` seconds after landing. */
+  static func bob(_ time: TimeInterval) -> CGFloat {
+    guard time >= 0, time < duration, !UIAccessibility.isReduceMotionEnabled else { return 1 }
+    return 1 - 0.06 * exp(-2.4 * time) * cos(2 * .pi * 1.6 * time)
+  }
 
   let ripple: NodeRipple?
   /** The node it runs from, in view points. */
