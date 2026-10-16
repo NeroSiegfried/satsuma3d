@@ -68,6 +68,17 @@ struct InspectorPanel: View {
 
 struct PropertiesTabs: View {
   let store: InspectorStore
+  /** Whether more tabs lie past the leading and trailing edges, which fade there. */
+  @State private var more = (leading: false, trailing: false)
+  @State private var content = CGRect.zero
+  @State private var container: CGFloat = 0
+
+  private func updateMore() {
+    let next = (leading: content.minX < -1, trailing: content.maxX > container + 1)
+    if next != more {
+      withAnimation(.easeOut(duration: 0.15)) { more = next }
+    }
+  }
 
   var body: some View {
     ScrollViewReader { reader in
@@ -99,8 +110,26 @@ struct PropertiesTabs: View {
             .help(tab.title)
           }
         }
+        /* Where the tabs are in the strip, as they scroll. */
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("tabs")) } action: { frame in
+          content = frame
+          updateMore()
+        }
       }
-      .softHorizontalScrollEdge()
+      .coordinateSpace(.named("tabs"))
+      .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+        container = width
+        updateMore()
+      }
+      .mask {
+        HStack(spacing: 0) {
+          LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
+            .frame(width: more.leading ? 28 : 0)
+          Color.black
+          LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+            .frame(width: more.trailing ? 28 : 0)
+        }
+      }
       .onChange(of: store.selectedTab) { _, tab in
         if let tab { withMotion { reader.scrollTo(tab, anchor: .center) } }
       }
