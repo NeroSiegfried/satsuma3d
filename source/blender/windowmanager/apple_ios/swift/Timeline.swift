@@ -46,9 +46,21 @@ final class TimelineStore {
   var visible = false
   var expanded = false
   var compact = false
+  /** The curve editor grown out of the timeline, see `FCurveEditor.swift`. */
+  var curvesShown = false
+  /** The curve editor's height, its top edge dragged to change it. */
+  var curvesHeight: CGFloat = CGFloat(UserDefaults.standard.object(forKey: "BlenderCurvesHeight") as? Double ?? 380) {
+    didSet { UserDefaults.standard.set(Double(curvesHeight), forKey: "BlenderCurvesHeight") }
+  }
+  let curves = FCurveEditorModel()
+  /** While its handle is dragged; the viewport follows it at once. */
+  var curvesDragging = false
+  /** The tallest the curve editor may be, leaving some viewport above it. */
+  var curvesMaximum: CGFloat = 700
   /** Blender's frame; the knob follows it unless a finger holds the knob. */
   let frame = TimelineFrame()
   @ObservationIgnored var toggleExpanded: () -> Void = {}
+  @ObservationIgnored var toggleCurves: () -> Void = {}
 
   /** Observers redraw on every assignment, even of the same value. */
   func set<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<TimelineStore, Value>, _ value: Value) {
@@ -437,7 +449,7 @@ struct TimelineContent: View {
       /* Collapsed, between the transport and the keyframe button; expanded, across the top. */
       Scrubber(store: store)
         .padding(.leading, expanded ? 8 : 8 + transportWidth + 4)
-        .padding(.trailing, expanded ? 8 : 2 + 44 + 8)
+        .padding(.trailing, expanded ? 8 : 2 + 44 * CGFloat(trailingButtons) + 8)
         .padding(.bottom, expanded ? controlsRowHeight : 0)
       transport
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { transportWidth = $0 }
@@ -448,11 +460,37 @@ struct TimelineContent: View {
           .padding(.leading, 8)
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
       }
-      keysButton
-        .padding(.trailing, 8)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: expanded ? .bottomTrailing : .trailing)
+      HStack(spacing: 0) {
+#if !os(visionOS)
+        curvesButton
+#endif
+        keysButton
+      }
+      .padding(.trailing, 8)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: expanded ? .bottomTrailing : .trailing)
     }
     .foregroundStyle(.primary)
+  }
+
+#if os(visionOS)
+  private let trailingButtons = 1
+#else
+  private let trailingButtons = 2
+#endif
+
+  /** Opens the curve editor out of the timeline, filled while it is open. */
+  private var curvesButton: some View {
+    Button(action: store.toggleCurves) {
+      Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
+        .symbolVariant(store.curvesShown ? .fill : .none)
+        .foregroundStyle(store.curvesShown ? PanelStyle.selection : .primary)
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("Edit Curves")
+    .accessibilityAddTraits(store.curvesShown ? .isSelected : [])
+    .accessibilityIdentifier("blender.timeline.curves-toggle")
   }
 
   private var transport: some View {
@@ -531,18 +569,58 @@ struct TimelineContent: View {
 /** The timeline along the bottom of a SwiftUI window, in the system's glass. */
 struct TimelinePanel: View {
   let store: TimelineStore
+  /** With the curve editor open, the panel rests on the window's bottom edge as the node editor
+   * does, its controls kept clear of the home indicator by this much. */
+  var bottomInset: CGFloat = 0
 
   static func height(expanded: Bool) -> CGFloat {
     expanded ? controlsRowHeight + knobBandHeight + keyAreaHeight : collapsedHeight
   }
 
+  /** With the curve editor open, it and the timeline's row of controls under it. */
+  static func height(_ store: TimelineStore) -> CGFloat {
+    store.curvesShown ? store.curvesHeight + collapsedHeight : height(expanded: store.expanded)
+  }
+
+  /** The handle the curve editor is made taller or shorter by, and its height when the drag began. */
+  @State private var dragStart: CGFloat?
+
   var body: some View {
-    TimelineContent(store: store)
-      .frame(height: Self.height(expanded: store.expanded))
-      .onGeometryChange(for: Bool.self) { $0.size.width < 520 } action: { store.set(\.compact, $0) }
-      .panelGlass(in: RoundedRectangle(cornerRadius: store.expanded ? 24 : collapsedHeight / 2,
-                                       style: .continuous))
-      .accessibilityIdentifier("blender.timeline.panel")
+    VStack(spacing: 0) {
+      if store.curvesShown {
+        Capsule()
+          .fill(.secondary.opacity(0.5))
+          .frame(width: 44, height: 5)
+          .frame(maxWidth: .infinity, minHeight: 16)
+          .contentShape(Rectangle())
+          .gesture(
+            DragGesture(coordinateSpace: .global)
+              .onChanged { value in
+                let start = dragStart ?? store.curvesHeight
+                dragStart = start
+                store.curvesDragging = true
+                store.curvesHeight = min(store.curvesMaximum, max(220, start - value.translation.height))
+              }
+              .onEnded { _ in
+                dragStart = nil
+                store.curvesDragging = false
+              })
+          .accessibilityLabel("Resize Curve Editor")
+        FCurveEditorView(model: store.curves, timeline: store)
+          .frame(height: store.curvesHeight - 16)
+        Divider()
+      }
+      TimelineContent(store: store)
+        .frame(height: store.curvesShown ? collapsedHeight : Self.height(expanded: store.expanded))
+    }
+    .frame(height: Self.height(store))
+    .padding(.bottom, store.curvesShown ? bottomInset : 0)
+    .onGeometryChange(for: Bool.self) { $0.size.width < 520 } action: { store.set(\.compact, $0) }
+    .background(store.curvesShown ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.clear),
+                in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous))
+    .panelGlass(store.curvesShown ? .none : .regular,
+                in: RoundedRectangle(cornerRadius: store.expanded ? 24 : collapsedHeight / 2, style: .continuous))
+    .accessibilityIdentifier("blender.timeline.panel")
   }
 }
 
@@ -557,6 +635,7 @@ final class SwiftTimeline {
 
   init() {
     store.toggleExpanded = { [weak self] in self?.toggleExpanded() }
+    store.toggleCurves = { [weak self] in self?.setCurvesShown(!(self?.store.curvesShown ?? true)) }
 #if os(visionOS)
     Self.current = self
 #endif
@@ -578,7 +657,9 @@ final class SwiftTimeline {
   }
 #endif
 
-  var height: CGFloat { TimelinePanel.height(expanded: store.expanded) }
+  var height: CGFloat { TimelinePanel.height(store) }
+  /** The curve editor opening, for the node editor to make way. */
+  var curvesDidOpen: (() -> Void)?
 
   func updateSnapshot(_ snapshot: Any?) {
     guard let snapshot = snapshot as? NSDictionary, !(self.snapshot?.isEqual(snapshot) ?? false),
@@ -597,7 +678,22 @@ final class SwiftTimeline {
   }
 
   func toggleExpanded() {
-    withAnimation(Self.animation) { store.expanded.toggle() }
+    withAnimation(Self.animation) {
+      store.expanded.toggle()
+      if store.expanded { store.curvesShown = false }
+    }
+    store.curves.setShown(store.curvesShown)
+    visibilityDidChange?()
+  }
+
+  func setCurvesShown(_ shown: Bool) {
+    guard shown != store.curvesShown else { return }
+    withAnimation(Self.animation) {
+      store.curvesShown = shown
+      if shown { store.expanded = false }
+    }
+    store.curves.setShown(shown)
+    if shown { curvesDidOpen?() }
     visibilityDidChange?()
   }
 

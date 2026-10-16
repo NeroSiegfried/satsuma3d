@@ -29,7 +29,14 @@ final class ShellPanels {
     }
     panels.nodes.shownChanged = { [weak self] shown in
       withAnimation(SwiftTimeline.animation) { self?.model.nodesShown = shown }
+      /* One editor along the bottom at a time. */
+      if shown { self?.timeline.setCurvesShown(false) }
     }
+    panels.graphSnapshot = { [weak self] snapshot in
+      guard let self, timeline.store.curvesShown else { return }
+      timeline.store.curves.update(snapshot)
+    }
+    timeline.curvesDidOpen = { [weak self] in self?.panels.nodes.setShown(false) }
     timeline.visibilityDidChange = { [weak self] in
       guard let self else { return }
       model.timelineShown = timeline.visible

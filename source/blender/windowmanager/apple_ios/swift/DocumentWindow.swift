@@ -498,7 +498,7 @@ public struct DocumentWindow: View {
 
   /** How much of the window's bottom the viewport leaves to the node editor. */
   private var viewportCover: CGFloat {
-    controlsShown && model.nodesShown ? model.nodesCover : 0
+    controlsShown ? max(model.nodesShown ? model.nodesCover : 0, model.curvesCover) : 0
   }
 
   private var viewportLayers: some View {
@@ -589,9 +589,23 @@ struct BottomTrayLayer: View {
 #if os(visionOS)
     let timelineTray: CGFloat = 0 /* A window of its own. */
 #else
-    let timelineTray = timeline.visible ? TimelinePanel.height(expanded: timeline.expanded) + 8 : 0
+    let timelineTray = timeline.visible ? TimelinePanel.height(timeline) + 8 : 0
+    if docked {
+      /* On the bottom edge, as the node editor is. */
+      return TimelinePanel.height(timeline) + model.safeAreaInsets.bottom +
+        (assets.visible ? AssetsPanel.height(compact: model.compact) + 8 : 0)
+    }
 #endif
     return timelineTray + (assets.visible ? AssetsPanel.height(compact: model.compact) + 8 : 0)
+  }
+
+  /** The curve editor is open: the timeline is docked to the bottom, edge to edge. */
+  private var docked: Bool {
+#if os(visionOS)
+    false
+#else
+    shown && timeline.visible && timeline.curvesShown
+#endif
   }
 
   var body: some View {
@@ -602,21 +616,28 @@ struct BottomTrayLayer: View {
       VStack(spacing: 8) {
         Spacer(minLength: 0)
         if shown {
+          if docked && assets.visible {
+            /* Floating above the docked timeline. */
+            AssetsPanel(store: assets, compact: model.compact)
+              .padding(.leading, max(0, max(safe.left, edge) - model.sideInsets.left))
+              .padding(.trailing, max(0, max(safe.right, edge) - model.sideInsets.right))
+              .transition(transition)
+          }
 #if !os(visionOS) /* A window of its own there. */
           if timeline.visible {
-            TimelinePanel(store: timeline)
+            TimelinePanel(store: timeline, bottomInset: docked ? safe.bottom : 0)
               .transition(transition)
           }
 #endif
-          if assets.visible {
+          if !docked && assets.visible {
             AssetsPanel(store: assets, compact: model.compact)
               .transition(transition)
           }
         }
       }
-      .padding(.leading, max(safe.left, edge))
-      .padding(.trailing, max(safe.right, edge))
-      .padding(.bottom, edge)
+      .padding(.leading, docked ? model.sideInsets.left : max(safe.left, edge))
+      .padding(.trailing, docked ? model.sideInsets.right : max(safe.right, edge))
+      .padding(.bottom, docked ? 0 : edge)
       .onChange(of: [tray, proxy.size.height], initial: true) { _, values in
         trayChanged(values[0], height: values[1])
       }
@@ -629,6 +650,23 @@ struct BottomTrayLayer: View {
       withAnimation(SwiftTimeline.animation) { model.bottomTray = tray }
     }
     guard height > 0 else { return }
+    /* The curve editor shortens the viewport as the node editor does; the tray goes under. */
+    timeline.curvesMaximum = max(260, height * 0.82)
+    /* Under the panel's rounded corners, as with the node editor. */
+    let cover = docked ? tray - 24 : 0
+    if abs(cover - model.curvesCover) > 0.5 {
+      if timeline.curvesDragging {
+        model.curvesCover = cover
+      }
+      else {
+        withAnimation(.easeOut(duration: 0.42)) { model.curvesCover = cover }
+      }
+    }
+    model.nodesCoverDragging = timeline.curvesDragging
+    if cover > 0 {
+      WM_apple_ios_ui_bottom_tray_set(0)
+      return
+    }
     /* Blender keeps its own overlays, such as the navigation gizmo, above the tray. */
     let top = height - model.safeAreaInsets.bottom - 6 - (tray > 0 ? tray - 8 : 0)
     WM_apple_ios_ui_bottom_tray_set(tray > 0 ? Float((height - top) / height) : 0)

@@ -17,6 +17,8 @@ final class SwiftScenePanels {
   let inspector = InspectorStore(mode: .properties)
   /** The native node editor, which Blender's panel snapshots also feed. */
   let nodes = NodeEditorModel()
+  /** The curve editor's curves, which the timeline shows. */
+  var graphSnapshot: ((JSON) -> Void)?
   private let shading = InspectorStore(mode: .shading, tab: "SHADING")
   private let toolStrip = InspectorStore(mode: .toolStrip, tab: "TOOL")
   private let toolPopover = InspectorStore(mode: .toolPopover, tab: "TOOL")
@@ -103,6 +105,7 @@ final class SwiftScenePanels {
                                 "inspector": shadingSnapshot])
     }
     let ack = (snapshot["ack"] as? NSNumber)?.uint64Value ?? 0
+    if let graph = snapshot.dict("graph") { graphSnapshot?(graph) }
     if let nodesSnapshot = snapshot.dict("nodes"), nodes.shown {
       nodes.update(nodesSnapshot, ack: ack)
     }

@@ -43,6 +43,8 @@ final class ShellModel {
   var nodesCover: CGFloat = 0
   /** While the node editor's handle is dragged, the viewport follows it without easing. */
   var nodesCoverDragging = false
+  /** How much of the window's bottom the curve editor covers, likewise. */
+  var curvesCover: CGFloat = 0
   /** Blender's navigation gizmo: its center and radius, in fractions of the window's width and
    * height (center) and width (radius). */
   private(set) var navigationGizmo: [Double] = []
