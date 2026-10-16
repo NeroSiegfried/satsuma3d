@@ -1483,6 +1483,11 @@ void finish_pending_new_id(bContext *C, PendingNewID &pending)
       RNA_property_pointer_poll(&pending.ptr, pending.prop, &created_ptr))
   {
     RNA_property_pointer_set(&pending.ptr, pending.prop, created_ptr, nullptr);
+    /* The operator made it with a user of its own for the picker to take over, as a template's
+     * button does once it is assigned. */
+    if (created->us > 1) {
+      id_us_min(created);
+    }
     RNA_property_update(C, &pending.ptr, pending.prop);
     ED_undo_push(C, RNA_property_ui_name(pending.prop));
   }
@@ -3781,9 +3786,15 @@ void collect_add_menu(bContext *C,
                       const std::string &category,
                       const int depth,
                       std::set<std::string> &seen,
+                      std::set<const MenuType *> &visited,
                       ArrayValue &items)
 {
-  if (!menu || depth > 6 || !WM_menutype_poll(C, menu)) {
+  /* Each menu once: submenus are shared between categories. Asset catalog menus list the
+   * libraries' node groups, which would load them all, and are left out. */
+  if (!menu || depth > 6 || !visited.insert(menu).second ||
+      StringRef(menu->idname).find("catalog") != StringRef::not_found ||
+      StringRef(menu->idname).find("asset") != StringRef::not_found || !WM_menutype_poll(C, menu))
+  {
     return;
   }
   Block *block = block_begin(C, nullptr, __func__, EmbossType::Emboss);
@@ -3798,7 +3809,7 @@ void collect_add_menu(bContext *C,
     }
     if (MenuType *sub = button_menutype_get(&but)) {
       const std::string name = but.drawstr.substr(0, but.drawstr.find(UI_SEP_CHAR));
-      collect_add_menu(C, sub, depth == 0 ? name : category, depth + 1, seen, items);
+      collect_add_menu(C, sub, depth == 0 ? name : category, depth + 1, seen, visited, items);
       continue;
     }
     if (!but.optype || !but.opptr) {
@@ -3837,7 +3848,8 @@ void collect_add_menu(bContext *C,
 void project_node_add_items(bContext *C, bNodeTree &tree, ArrayValue &items)
 {
   std::set<std::string> seen;
-  collect_add_menu(C, WM_menutype_find("NODE_MT_add", false), "", 0, seen, items);
+  std::set<const MenuType *> visited;
+  collect_add_menu(C, WM_menutype_find("NODE_MT_add", false), "", 0, seen, visited, items);
   /* The tree's own node groups, as the Group category lists them. */
   Main *bmain = CTX_data_main(C);
   for (bNodeTree &group : bmain->nodetrees) {
