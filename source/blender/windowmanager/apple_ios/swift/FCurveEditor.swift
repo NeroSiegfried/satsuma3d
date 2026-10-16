@@ -318,8 +318,18 @@ enum FCurveDrawing {
     else {
       path.move(to: m.point(first.point))
     }
+    /* Only the segments in view: a long curve's others cost time and show nothing. */
+    var broken = false
     for i in 0..<(keys.count - 1) {
       let a = keys[i], b = keys[i + 1]
+      if b.frame < m.frames.lowerBound || a.frame > m.frames.upperBound {
+        broken = true
+        continue
+      }
+      if broken {
+        path.move(to: m.point(a.point))
+        broken = false
+      }
       switch a.interpolation {
         case FCurveInterpolation.constant:
           path.addLine(to: m.point(CGPoint(x: b.frame, y: a.value)))
@@ -333,6 +343,7 @@ enum FCurveDrawing {
     }
     let endX = m.frames.upperBound
     if endX > last.frame {
+      if broken { path.move(to: m.point(last.point)) }
       path.addLine(to: m.point(CGPoint(x: endX, y: extrapolated(last, keys.count > 1 ? keys[keys.count - 2] : nil,
                                                                at: endX, before: false, curve))))
     }
@@ -481,41 +492,62 @@ struct FCurveCanvas: View {
                               dash: curve.locked ? [4, 4] : [])
       context.stroke(path, with: .color(curve.color.opacity(curve.selected ? 1 : 0.55)), style: style)
     }
-    /* Keys, and the handles of selected ones, as the Graph Editor shows by default. */
+    /* Keys, and the handles of selected ones, as the Graph Editor shows by default. Each kind is
+     * one path, so thousands of keys draw as a handful of shapes; keys too close together to
+     * tell apart leave out their handles, then themselves. */
     let accent = Color.orange
+    var handleLines = Path(), handleDots = Path(), selectedDots = Path()
+    var keysShown = Path(), selectedKeys = Path()
     for curve in curves {
+      let inView = curve.keys.reduce(0) { $0 + (m.frames.contains($1.frame) ? 1 : 0) }
+      let spacing = m.size.width / CGFloat(max(1, inView))
+      let showHandles = spacing >= 14, showKeys = spacing >= 4
+      guard showKeys else { continue }
       for (index, key) in curve.keys.enumerated() {
         let d = offset(curve.id, index, 0)
         let point = m.point(CGPoint(x: key.frame + d.width, y: key.value + d.height))
         guard point.x > -20 && point.x < m.size.width + 20 else { continue }
-        if key.selected || key.leftSelected || key.rightSelected,
+        if showHandles, key.selected || key.leftSelected || key.rightSelected,
            key.interpolation == FCurveInterpolation.bezier || (index > 0 && curve.keys[index - 1].interpolation == FCurveInterpolation.bezier)
         {
           for side in [-1, 1] {
             let handle = side < 0 ? key.left : key.right
             let hd = offset(curve.id, index, side) == .zero ? d : offset(curve.id, index, side)
             let h = m.point(CGPoint(x: handle.x + hd.width, y: handle.y + hd.height))
-            var line = Path()
-            line.move(to: point)
-            line.addLine(to: h)
-            context.stroke(line, with: .color(.secondary), lineWidth: 1)
-            let selected = side < 0 ? key.leftSelected : key.rightSelected
-            let dot = Path(ellipseIn: CGRect(x: h.x - 3.5, y: h.y - 3.5, width: 7, height: 7))
-            context.fill(dot, with: .color(selected ? accent : Color(uiColor: .systemBackground)))
-            context.stroke(dot, with: .color(selected ? accent : .secondary), lineWidth: 1)
+            handleLines.move(to: point)
+            handleLines.addLine(to: h)
+            let dot = CGRect(x: h.x - 3.5, y: h.y - 3.5, width: 7, height: 7)
+            if side < 0 ? key.leftSelected : key.rightSelected {
+              selectedDots.addEllipse(in: dot)
+            }
+            else {
+              handleDots.addEllipse(in: dot)
+            }
           }
         }
-        let size: CGFloat = key.selected ? 9 : 7
+        let size: CGFloat = (key.selected ? 9 : 7) / 2 + 1
         let diamond = Path { p in
-          p.move(to: CGPoint(x: point.x, y: point.y - size / 2 - 1))
-          p.addLine(to: CGPoint(x: point.x + size / 2 + 1, y: point.y))
-          p.addLine(to: CGPoint(x: point.x, y: point.y + size / 2 + 1))
-          p.addLine(to: CGPoint(x: point.x - size / 2 - 1, y: point.y))
+          p.move(to: CGPoint(x: point.x, y: point.y - size))
+          p.addLine(to: CGPoint(x: point.x + size, y: point.y))
+          p.addLine(to: CGPoint(x: point.x, y: point.y + size))
+          p.addLine(to: CGPoint(x: point.x - size, y: point.y))
           p.closeSubpath()
         }
-        context.fill(diamond, with: .color(key.selected ? accent : Color(uiColor: .label)))
-        context.stroke(diamond, with: .color(Color(uiColor: .systemBackground)), lineWidth: 1)
+        if key.selected {
+          selectedKeys.addPath(diamond)
+        }
+        else {
+          keysShown.addPath(diamond)
+        }
       }
+    }
+    context.stroke(handleLines, with: .color(.secondary), lineWidth: 1)
+    context.fill(handleDots, with: .color(Color(uiColor: .systemBackground)))
+    context.stroke(handleDots, with: .color(.secondary), lineWidth: 1)
+    context.fill(selectedDots, with: .color(accent))
+    for (shape, color) in [(keysShown, Color(uiColor: .label)), (selectedKeys, accent)] {
+      context.fill(shape, with: .color(color))
+      context.stroke(shape, with: .color(Color(uiColor: .systemBackground)), lineWidth: 1)
     }
     /* The playhead, the timeline's own up through the curves. */
     let x = m.x(Double(timeline.frame.blender))
