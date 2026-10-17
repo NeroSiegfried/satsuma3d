@@ -1151,7 +1151,7 @@ struct FCurveChannels: View {
         }
       }
     }
-    .listStyle(.sidebar)
+    .listStyle(.plain)
     .scrollContentBackground(.hidden)
     .overlay {
       if model.received && model.curves.isEmpty {

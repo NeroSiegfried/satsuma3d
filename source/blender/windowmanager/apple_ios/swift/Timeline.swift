@@ -618,8 +618,11 @@ struct TimelinePanel: View {
     .onGeometryChange(for: Bool.self) { $0.size.width < 520 } action: { store.set(\.compact, $0) }
     .background(store.curvesShown ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.clear),
                 in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous))
+    /* No corners with the curve editor open: the glass's shape would round the curves' corners
+     * too. */
     .panelGlass(store.curvesShown ? .none : .regular,
-                in: RoundedRectangle(cornerRadius: store.expanded ? 24 : collapsedHeight / 2, style: .continuous))
+                in: RoundedRectangle(cornerRadius: store.curvesShown ? 0 : store.expanded ? 24 : collapsedHeight / 2,
+                                     style: .continuous))
     .accessibilityIdentifier("blender.timeline.panel")
   }
 }
