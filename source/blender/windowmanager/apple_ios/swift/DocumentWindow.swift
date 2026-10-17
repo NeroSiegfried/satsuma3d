@@ -646,14 +646,17 @@ struct BottomTrayLayer: View {
   }
 
   private func trayChanged(_ tray: CGFloat, height: CGFloat) {
-    if abs(tray - model.bottomTray) > 0.5 {
-      withAnimation(SwiftTimeline.animation) { model.bottomTray = tray }
+    /* Under the panel's rounded corners, as with the node editor. */
+    let cover = docked ? tray - 24 : 0
+    /* With the curve editor open, the controls already rest on the shortened viewport: they only
+     * keep clear of the corners reaching over it. */
+    let controlsTray = docked ? max(0, tray - cover - model.safeAreaInsets.bottom) : tray
+    if abs(controlsTray - model.bottomTray) > 0.5 {
+      withAnimation(SwiftTimeline.animation) { model.bottomTray = controlsTray }
     }
     guard height > 0 else { return }
     /* The curve editor shortens the viewport as the node editor does; the tray goes under. */
     timeline.curvesMaximum = max(260, height * 0.82)
-    /* Under the panel's rounded corners, as with the node editor. */
-    let cover = docked ? tray - 24 : 0
     if abs(cover - model.curvesCover) > 0.5 {
       if timeline.curvesDragging {
         model.curvesCover = cover
