@@ -137,11 +137,20 @@ ScrArea *render_view_open(bContext *C, int mx, int my, ReportList *reports)
   SpaceImage *sima;
   bool area_was_image = false;
 
-  if (U.render_display_type == USER_RENDER_DISPLAY_NONE) {
+  int display_type = U.render_display_type;
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* The iPad has one window, and a new one would cover it with no way to close it: show the
+   * render full screen, with Back to Previous, instead. */
+  if (display_type == USER_RENDER_DISPLAY_WINDOW) {
+    display_type = USER_RENDER_DISPLAY_SCREEN;
+  }
+#endif
+
+  if (display_type == USER_RENDER_DISPLAY_NONE) {
     return nullptr;
   }
 
-  if (U.render_display_type == USER_RENDER_DISPLAY_WINDOW) {
+  if (display_type == USER_RENDER_DISPLAY_WINDOW) {
     int sizex, sizey;
     BKE_render_resolution(&scene->r, false, &sizex, &sizey);
 
@@ -191,7 +200,7 @@ ScrArea *render_view_open(bContext *C, int mx, int my, ReportList *reports)
       sima->flag |= SI_PREVSPACE;
     }
   }
-  else if (U.render_display_type == USER_RENDER_DISPLAY_SCREEN) {
+  else if (display_type == USER_RENDER_DISPLAY_SCREEN) {
     area = CTX_wm_area(C);
 
     /* If the active screen is already in full-screen mode, skip this and
