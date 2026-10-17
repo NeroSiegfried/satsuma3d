@@ -11,6 +11,7 @@
 
 import SwiftUI
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 
 /* -------------------------------------------------------------------- */
 /** \name Model
@@ -2468,6 +2469,33 @@ struct NodeCanvasScrolling: ViewModifier {
 }
 
 #if !os(visionOS)
+/** A pan that remembers where its first touch came down: a pan begins only once the touch has
+ * moved, and its translation may not count that first movement, so a drag from a node or key
+ * would start some way past it. */
+final class TouchDownPan: UIPanGestureRecognizer {
+  private(set) var touchDown: CGPoint?
+
+  override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+    if touchDown == nil, let touch = touches.first { touchDown = touch.location(in: view) }
+    super.touchesBegan(touches, with: event)
+  }
+
+  override func reset() {
+    super.reset()
+    touchDown = nil
+  }
+
+  /** Where the first touch came down, in the space `location` is measured in. */
+  func start(_ location: CGPoint) -> CGPoint {
+    guard let touchDown else {
+      let translation = translation(in: view)
+      return CGPoint(x: location.x - translation.x, y: location.y - translation.y)
+    }
+    let here = self.location(in: view)
+    return CGPoint(x: location.x - here.x + touchDown.x, y: location.y - here.y + touchDown.y)
+  }
+}
+
 /** One of the canvas's drags, told apart by what makes it, which SwiftUI's own drag can't do.
  * It reports where it started and where it is, in the view's own points. */
 struct NodeCanvasDrag: UIGestureRecognizerRepresentable {
@@ -2483,6 +2511,8 @@ struct NodeCanvasDrag: UIGestureRecognizerRepresentable {
   }
 
   let kind: Kind
+  /** Where locations are measured, when not in the view the gesture is on. */
+  var space: NamedCoordinateSpace?
   let action: (_ state: UIGestureRecognizer.State, _ start: CGPoint, _ location: CGPoint) -> Void
 
   final class Coordinator {
@@ -2495,7 +2525,7 @@ struct NodeCanvasDrag: UIGestureRecognizerRepresentable {
     let touches = { (types: [UITouch.TouchType]) in types.map { NSNumber(value: $0.rawValue) } }
     switch kind {
       case .finger:
-        let pan = UIPanGestureRecognizer()
+        let pan = TouchDownPan()
         pan.maximumNumberOfTouches = 1
         pan.allowedTouchTypes = touches([.direct])
         return pan
@@ -2505,7 +2535,7 @@ struct NodeCanvasDrag: UIGestureRecognizerRepresentable {
         hold.allowedTouchTypes = touches([.direct])
         return hold
       case .pointer:
-        let pan = UIPanGestureRecognizer()
+        let pan = TouchDownPan()
         pan.maximumNumberOfTouches = 1
         pan.allowedTouchTypes = touches([.indirectPointer, .pencil])
         return pan
@@ -2518,7 +2548,7 @@ struct NodeCanvasDrag: UIGestureRecognizerRepresentable {
   }
 
   func handleUIGestureRecognizerAction(_ recognizer: UIGestureRecognizer, context: Context) {
-    let location = context.converter.localLocation
+    let location = space.map { context.converter.location(in: $0) } ?? context.converter.localLocation
     if let pan = recognizer as? UIPanGestureRecognizer {
       /* From where the drag started, before it moved far enough to begin. */
       let translation = pan.translation(in: pan.view)
@@ -2528,7 +2558,8 @@ struct NodeCanvasDrag: UIGestureRecognizerRepresentable {
         return
       }
       if recognizer.state == .began {
-        context.coordinator.start = CGPoint(x: location.x - translation.x, y: location.y - translation.y)
+        context.coordinator.start = (pan as? TouchDownPan)?.start(location) ??
+          CGPoint(x: location.x - translation.x, y: location.y - translation.y)
       }
     }
     else if recognizer.state == .began {
