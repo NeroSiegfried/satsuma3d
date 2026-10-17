@@ -125,7 +125,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
   @objc private func templatePresentation(_ notification: Notification) {
     shell.panels.dismiss()
     let timeline = (notification.userInfo?["timeline"] as? NSNumber)?.boolValue ?? false
-    if shell.timeline.visible != timeline { shell.timeline.toggle() }
+    shell.timeline.setVisible(timeline)
   }
 
   /** The launcher showed or hid the document window. */

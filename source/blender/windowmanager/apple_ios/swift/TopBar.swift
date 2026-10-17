@@ -272,7 +272,12 @@ struct DocumentToolbar: ToolbarContent {
 
   /** A panel in the sidebar menu, with Blender's icon for its editor. */
   private func sidebarToggle(_ title: String, icon: UIImage?, isOn: Bool, toggle: @escaping () -> Void) -> some View {
-    Toggle(isOn: Binding(get: { isOn }, set: { _ in toggle() })) {
+    sidebarToggle(title, icon: icon, isOn: isOn) { (_: Bool) in toggle() }
+  }
+
+  /** `set` is given the state asked for, as the menu may show an older one than the panel's. */
+  private func sidebarToggle(_ title: String, icon: UIImage?, isOn: Bool, set: @escaping (Bool) -> Void) -> some View {
+    Toggle(isOn: Binding(get: { isOn }, set: set)) {
       Label { Text(title) } icon: { iconImage(icon) }
     }
   }
@@ -313,7 +318,7 @@ struct DocumentToolbar: ToolbarContent {
         shell.panels.toggleHierarchy()
       }
       sidebarToggle("Timeline", icon: UIImage(named: "blender.time")?.withRenderingMode(.alwaysTemplate),
-                    isOn: model.timelineShown) { shell.timeline.toggle() }
+                    isOn: model.timelineShown) { shell.timeline.setVisible($0) }
       sidebarToggle("Asset Browser", icon: BlenderIcon.image("ASSET_MANAGER"), isOn: model.assetsShown) {
         shell.assets.toggle()
       }
@@ -363,7 +368,7 @@ struct DocumentToolbar: ToolbarContent {
         shell.panels.toggleHierarchy()
       }
       sidebarToggle("Timeline", icon: UIImage(named: "blender.time")?.withRenderingMode(.alwaysTemplate),
-                    isOn: model.timelineShown) { shell.timeline.toggle() }
+                    isOn: model.timelineShown) { shell.timeline.setVisible($0) }
       sidebarToggle("Properties", icon: BlenderIcon.image("PROPERTIES"), isOn: model.inspectorShown) {
         shell.panels.toggleInspector()
       }

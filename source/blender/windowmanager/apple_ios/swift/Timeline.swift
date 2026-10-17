@@ -702,7 +702,16 @@ final class SwiftTimeline {
     PanelWindows.toggle(.timeline)
     return
 #endif
-    withAnimation(Self.animation) { store.visible.toggle() }
+    setVisible(!store.visible)
+  }
+
+  func setVisible(_ visible: Bool) {
+#if os(visionOS)
+    if visible != store.visible { PanelWindows.toggle(.timeline) }
+    return
+#endif
+    guard visible != store.visible else { return }
+    withAnimation(Self.animation) { store.visible = visible }
     /* Blender lists keyframes only while the timeline shows them. */
     Engine.setting("timeline_visible", visible ? "1" : "0")
     visibilityDidChange?()
