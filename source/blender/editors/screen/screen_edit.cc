@@ -1888,6 +1888,13 @@ ScrArea *ED_screen_state_toggle(bContext *C, wmWindow *win, ScrArea *area, const
 ScrArea *ED_screen_temp_space_open(
     bContext *C, const char *title, eSpace_Type space_type, int display_type, bool dialog)
 {
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* The iPad has one window, and a new one would cover it with no way to close it: open the
+   * editor full screen, with Back to Previous, instead. */
+  if (display_type == USER_TEMP_SPACE_DISPLAY_WINDOW) {
+    display_type = USER_TEMP_SPACE_DISPLAY_FULLSCREEN;
+  }
+#endif
   switch (display_type) {
     case USER_TEMP_SPACE_DISPLAY_WINDOW:
       if (WM_window_open_temp(C, title, space_type, dialog)) {
