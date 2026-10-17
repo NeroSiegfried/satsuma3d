@@ -389,6 +389,10 @@ enum FCurveDrawing {
  * \{ */
 
 struct FCurveCanvas: View {
+  /** The curves' own space, which touches are measured in: a gesture's local space need not be
+   * the view's, and keys under a finger then went unpicked. */
+  static let space = NamedCoordinateSpace.named("FCurveCanvas")
+
   let model: FCurveEditorModel
   let timeline: TimelineStore
   @State private var frames: ClosedRange<Double> = 0...100
@@ -396,6 +400,8 @@ struct FCurveCanvas: View {
   @State private var size: CGSize = .zero
   /** The view a pan or zoom started from. */
   @State private var gestureStart: (frames: ClosedRange<Double>, values: ClosedRange<Double>)?
+  /** The frame and value under the fingers when a pinch began. */
+  @State private var pinchAnchor: (frame: Double, value: Double)?
   /** Keys or a handle being dragged, and how far, in frames and shown values. */
   @State private var drag: (picks: Set<FCurvePick>, handle: FCurvePick?, delta: CGSize, interaction: String,
                             lastSent: CFTimeInterval)?
@@ -435,7 +441,8 @@ struct FCurveCanvas: View {
         }
       }
       .contentShape(Rectangle())
-      .onTapGesture { location in tapped(at: location) }
+      .coordinateSpace(Self.space)
+      .onTapGesture(coordinateSpace: Self.space) { location in tapped(at: location) }
       .modifier(FCurveGestures(began: dragBegan, changed: dragChanged, ended: dragEnded,
                                boxed: boxed, pinched: pinched, scrolled: scrolled))
       .popover(isPresented: Binding(get: { inspecting != nil }, set: { if !$0 { inspecting = nil } }),
@@ -750,20 +757,26 @@ struct FCurveCanvas: View {
     }
   }
 
-  /** Two fingers: spread sideways to zoom time, up and down to zoom values, around their middle. */
+  /** Two fingers: spread sideways to zoom time, up and down to zoom values; the frame and value
+   * first under their middle stay under it as they move. */
   private func pinched(_ phase: UIGestureRecognizer.State, _ scale: CGSize, _ center: CGPoint) {
     switch phase {
       case .began:
         gestureStart = (frames, values)
+        let m = mapping
+        pinchAnchor = (m.frame(center.x), m.value(center.y))
       case .changed:
-        guard let base = gestureStart else { return }
-        let m = FCurveMapping(frames: base.frames, values: base.values, size: size)
-        let f = m.frame(center.x), v = m.value(center.y)
+        guard let base = gestureStart, let anchor = pinchAnchor, size.width > 0, size.height > 0 else { return }
         let sx = max(0.05, Double(scale.width)), sy = max(0.05, Double(scale.height))
-        frames = (f - (f - base.frames.lowerBound) / sx)...(f + (base.frames.upperBound - f) / sx)
-        values = (v - (v - base.values.lowerBound) / sy)...(v + (base.values.upperBound - v) / sy)
+        let frameSpan = (base.frames.upperBound - base.frames.lowerBound) / sx
+        let valueSpan = (base.values.upperBound - base.values.lowerBound) / sy
+        let firstFrame = anchor.frame - Double(center.x / size.width) * frameSpan
+        let firstValue = anchor.value - Double((size.height - center.y) / size.height) * valueSpan
+        frames = firstFrame...(firstFrame + frameSpan)
+        values = firstValue...(firstValue + valueSpan)
       default:
         gestureStart = nil
+        pinchAnchor = nil
     }
   }
 
@@ -831,7 +844,7 @@ struct FCurveGestures: ViewModifier {
       .onEnded { _ in ended(false) })
 #else
     content
-      .gesture(NodeCanvasDrag(kind: .finger) { state, start, location in
+      .gesture(FCurveFingers(dragged: { state, start, location in
         switch state {
           case .began:
             began(start)
@@ -840,43 +853,150 @@ struct FCurveGestures: ViewModifier {
           case .ended: ended(false)
           default: ended(true)
         }
+      }, pinched: pinched))
+      .gesture(NodeCanvasDrag(kind: .hold, space: FCurveCanvas.space) { state, start, location in
+        boxed(state, start, location)
       })
-      .gesture(NodeCanvasDrag(kind: .hold) { state, start, location in boxed(state, start, location) })
-      .gesture(NodeCanvasDrag(kind: .pointer) { state, start, location in boxed(state, start, location) })
+      .gesture(NodeCanvasDrag(kind: .pointer, space: FCurveCanvas.space) { state, start, location in
+        boxed(state, start, location)
+      })
       .gesture(NodeCanvasDrag(kind: .scroll) { state, _, location in
         scrolled(CGSize(width: location.x, height: location.y), state == .ended || state == .cancelled)
       })
-      .gesture(AxisPinch(action: pinched))
 #endif
   }
 }
 
 #if !os(visionOS)
-/** A pinch whose spread is measured along each axis on its own. */
-struct AxisPinch: UIGestureRecognizerRepresentable {
-  let action: (UIGestureRecognizer.State, CGSize, CGPoint) -> Void
+/** One finger dragging, or two pinching and moving the view: one recognizer for both, so a pinch
+ * whose first finger moved a little sooner doesn't turn into a drag. A pan won't do: it waits for
+ * the fingers' middle to move, which a pinch hardly does. */
+final class FCurveTouches: UIGestureRecognizer {
+  private(set) var touches: [UITouch] = []
+  /** Where the first finger came down, in the view: the drag starts there, not where it was
+   * recognized. */
+  private(set) var touchDown: CGPoint?
+  private(set) var pinching = false
+
+  override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+    super.touchesBegan(touches, with: event)
+    self.touches.append(contentsOf: touches)
+    if touchDown == nil { touchDown = touches.first?.location(in: view) }
+    guard self.touches.count >= 2 else { return }
+    pinching = true
+    state = state == .possible ? .began : .changed
+  }
+
+  override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+    super.touchesMoved(touches, with: event)
+    if state != .possible {
+      state = .changed
+    }
+    else if let touchDown, let touch = self.touches.first {
+      let point = touch.location(in: view)
+      if hypot(point.x - touchDown.x, point.y - touchDown.y) > 8 { state = .began }
+    }
+  }
+
+  override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+    super.touchesEnded(touches, with: event)
+    lift(touches, cancelled: false)
+  }
+
+  override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+    super.touchesCancelled(touches, with: event)
+    lift(touches, cancelled: true)
+  }
+
+  private func lift(_ lifted: Set<UITouch>, cancelled: Bool) {
+    touches.removeAll { lifted.contains($0) }
+    if !touches.isEmpty {
+      if state != .possible { state = .changed }
+      return
+    }
+    state = state == .possible ? .failed : cancelled ? .cancelled : .ended
+  }
+
+  override func reset() {
+    super.reset()
+    touches = []
+    touchDown = nil
+    pinching = false
+  }
+
+  /** The fingers' spread along each axis. */
+  var span: CGSize {
+    guard touches.count >= 2 else { return CGSize(width: 1, height: 1) }
+    let a = touches[0].location(in: view), b = touches[1].location(in: view)
+    return CGSize(width: abs(a.x - b.x), height: abs(a.y - b.y))
+  }
+}
+
+struct FCurveFingers: UIGestureRecognizerRepresentable {
+  let dragged: (UIGestureRecognizer.State, CGPoint, CGPoint) -> Void
+  let pinched: (UIGestureRecognizer.State, CGSize, CGPoint) -> Void
 
   final class Coordinator {
+    var start = CGPoint.zero
+    var dragging = false
+    var pinching = false
     var startSpan = CGSize(width: 1, height: 1)
   }
 
   func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
 
-  func makeUIGestureRecognizer(context: Context) -> UIPinchGestureRecognizer { UIPinchGestureRecognizer() }
+  func makeUIGestureRecognizer(context: Context) -> FCurveTouches {
+    let touches = FCurveTouches()
+    touches.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+    return touches
+  }
 
-  func handleUIGestureRecognizerAction(_ recognizer: UIPinchGestureRecognizer, context: Context) {
-    guard recognizer.numberOfTouches >= 2, let view = recognizer.view else {
-      action(recognizer.state, CGSize(width: 1, height: 1), context.converter.localLocation)
+  func handleUIGestureRecognizerAction(_ recognizer: FCurveTouches, context: Context) {
+    let coordinator = context.coordinator
+    /* The fingers' middle. */
+    let location = context.converter.location(in: FCurveCanvas.space)
+    let finished = [.ended, .cancelled, .failed].contains(recognizer.state)
+    if recognizer.pinching {
+      if coordinator.dragging {
+        /* A second finger: what the first was doing gives way to the pinch. */
+        coordinator.dragging = false
+        dragged(.cancelled, coordinator.start, location)
+      }
+      if !coordinator.pinching {
+        guard !finished, recognizer.touches.count >= 2 else { return }
+        coordinator.pinching = true
+        coordinator.startSpan = recognizer.span
+        pinched(.began, CGSize(width: 1, height: 1), location)
+      }
+      else if finished || recognizer.touches.count < 2 {
+        /* With a finger still down, the rest of the touch does nothing. */
+        coordinator.pinching = false
+        pinched(.ended, CGSize(width: 1, height: 1), location)
+      }
+      else {
+        pinched(.changed, recognizer.span.scale(from: coordinator.startSpan), location)
+      }
       return
     }
-    let a = recognizer.location(ofTouch: 0, in: view), b = recognizer.location(ofTouch: 1, in: view)
-    let span = CGSize(width: abs(a.x - b.x), height: abs(a.y - b.y))
-    if recognizer.state == .began { context.coordinator.startSpan = span }
-    let start = context.coordinator.startSpan
-    /* An axis the fingers hardly span stays as it is. */
-    let scale = CGSize(width: start.width > 40 ? span.width / start.width : 1,
-                       height: start.height > 40 ? span.height / start.height : 1)
-    action(recognizer.state, scale, context.converter.localLocation)
+    if !coordinator.dragging {
+      guard !finished else { return }
+      /* From where the finger came down, before it moved far enough to begin. */
+      let here = recognizer.location(in: recognizer.view)
+      let down = recognizer.touchDown ?? here
+      coordinator.start = CGPoint(x: location.x - here.x + down.x, y: location.y - here.y + down.y)
+      coordinator.dragging = true
+      dragged(.began, coordinator.start, location)
+      return
+    }
+    if finished { coordinator.dragging = false }
+    dragged(finished ? recognizer.state : .changed, coordinator.start, location)
+  }
+}
+
+private extension CGSize {
+  /** An axis the fingers hardly span stays as it is. */
+  func scale(from start: CGSize) -> CGSize {
+    CGSize(width: start.width > 40 ? width / start.width : 1, height: start.height > 40 ? height / start.height : 1)
   }
 }
 #endif
