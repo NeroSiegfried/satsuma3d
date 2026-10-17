@@ -140,9 +140,14 @@ final class NodeEditorModel {
     if next["add"] == nil, let add = snapshot?["add"], next["nodes"] != nil { next["add"] = add }
     if let raw, (raw as NSDictionary).isEqual(next as NSDictionary) { return }
     raw = next
-    let first = snapshot == nil
+    /* Another tree, as when another object or material is chosen, is framed as the first was:
+     * where the last one was viewed from it may be out of sight. */
+    let tree = { (snapshot: JSON?) in
+      [snapshot?.string("name"), snapshot?.string("owner"), snapshot?.string("empty")].map { $0 ?? "" }
+    }
+    let another = snapshot == nil || tree(snapshot) != tree(next)
     snapshot = Self.resolvingSharedMenus(next)
-    if first { fitRequest += 1 }
+    if another { fitRequest += 1 }
   }
 
   /** Menus several nodes share come once, by reference: each field gets its own copy back. */
@@ -806,7 +811,8 @@ struct NodeCanvas: View {
     let margin: CGFloat = 40
     let scale = min((viewSize.width - margin * 2) / max(bounds.width, 1),
                     (viewSize.height - margin * 2) / max(bounds.height, 1))
-    zoom = min(1.2, max(0.25, scale))
+    /* As far out as pinching goes, so a large tree fits. */
+    zoom = min(1.2, max(0.15, scale))
     pan = CGSize(width: viewSize.width / 2 - bounds.midX * zoom,
                  height: viewSize.height / 2 - bounds.midY * zoom)
   }
