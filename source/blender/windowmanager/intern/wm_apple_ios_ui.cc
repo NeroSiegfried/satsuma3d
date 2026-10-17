@@ -119,6 +119,7 @@ namespace blender::ui {
 std::string native_menu_query(bContext *C, const std::string &request, bool execute);
 std::string native_properties_query(bContext *C, const std::string &request, bool execute);
 std::string native_nodes_query(bContext *C, const std::string &request, bool execute);
+std::string native_nodes_identity(bContext *C, const std::string &request);
 void native_nodes_compositor_job(bContext *C);
 }  // namespace blender::ui
 namespace blender::ed::graph {
@@ -245,6 +246,8 @@ std::string ios_properties_state = "{\"tab\":\"OBJECT\"}";
 std::string ios_shading_state = "{\"tab\":\"SHADING\"}";
 /** The node tree the native node editor shows: its kind and the groups entered. */
 std::string ios_nodes_state = "{\"tree\":\"SHADER\"}";
+/** The tree last read, to read it again at once when another is chosen. */
+std::string ios_nodes_identity;
 /* The node tree read last, read again only when something may have changed it: notifiers, the
  * editor's own commands, or a slow check. Reading a large tree takes a while. */
 bool ios_nodes_dirty = true;
@@ -2456,17 +2459,26 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
         }
       }
       if (ios_panels_visible & 8) {
+        /* Another object, material or modifier chosen anywhere shows straight away. */
+        std::string identity = ui::native_nodes_identity(C, ios_nodes_state);
+        if (identity != ios_nodes_identity) {
+          ios_nodes_identity = std::move(identity);
+          ios_nodes_dirty = true;
+        }
         if (ios_nodes_dirty || now >= ios_nodes_next_check) {
           ios_nodes_dirty = false;
           ios_nodes_next_check = now + std::chrono::seconds(2);
           std::string state = ios_nodes_state;
-          if (state != ios_nodes_add_for) {
+          const bool with_add = state != ios_nodes_add_for;
+          if (with_add) {
             /* The nodes it can add, once for each tree. */
-            ios_nodes_add_for = state;
             state.insert(state.size() - 1, ",\"with_add\":1");
           }
           const auto diag_start = std::chrono::steady_clock::now();
           ios_nodes_json = ui::native_nodes_query(C, state, false);
+          /* With no tree there is nothing to add to: offered again once there is one. */
+          const bool has_tree = ios_nodes_json.find("\"nodes\"") != std::string::npos;
+          ios_nodes_add_for = has_tree ? (with_add ? ios_nodes_state : ios_nodes_add_for) : "";
           os_log(OS_LOG_DEFAULT, "BLENDERDIAG nodes read %lld ms, %zu bytes: %{public}s",
                  (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
                      std::chrono::steady_clock::now() - diag_start)
