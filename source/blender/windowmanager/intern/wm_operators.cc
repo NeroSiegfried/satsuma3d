@@ -2351,6 +2351,11 @@ static void WM_OT_call_asset_shelf_popover(wmOperatorType *ot)
  */
 static bool wm_operator_winactive_normal(bContext *C)
 {
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* The iPad shows one window: another would cover it, with no way to close it. */
+  UNUSED_VARS(C);
+  return false;
+#endif
   wmWindow *win = CTX_wm_window(C);
   bScreen *screen;
 
@@ -2369,6 +2374,11 @@ static bool wm_operator_winactive_normal(bContext *C)
 
 static bool wm_operator_winactive_not_full(bContext *C)
 {
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* The iPad shows one window: another would cover it, with no way to close it. */
+  UNUSED_VARS(C);
+  return false;
+#endif
   wmWindow *win = CTX_wm_window(C);
   bScreen *screen;
 

@@ -1631,6 +1631,11 @@ static wmOperatorStatus area_dupli_invoke(bContext *C, wmOperator *op, const wmE
 
 static bool area_dupli_poll(bContext *C)
 {
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* The iPad shows one window: a duplicate in a new one would cover it. */
+  UNUSED_VARS(C);
+  return false;
+#endif
   if (!ED_operator_areaactive(C)) {
     return false;
   }
