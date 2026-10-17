@@ -1241,7 +1241,14 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
           "        ob.active_material_index = len(ob.material_slots) - 1\n";
     }
     else if (command.value == "GEOMETRY") {
-      script = "bpy.ops.node.new_geometry_nodes_modifier()\n";
+      /* A Geometry Nodes modifier without a node group gets one, rather than another modifier. */
+      script =
+          "ob = bpy.context.active_object\n"
+          "md = ob.modifiers.active if ob is not None else None\n"
+          "if md is not None and md.type == 'NODES' and md.node_group is None:\n"
+          "    bpy.ops.node.new_geometry_node_group_assign()\n"
+          "else:\n"
+          "    bpy.ops.node.new_geometry_nodes_modifier()\n";
     }
     else if (command.value == "COMPOSITOR") {
       script =
