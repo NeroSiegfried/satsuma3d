@@ -3147,6 +3147,8 @@ struct NativeNodeTree {
   /** What Blender's node editor names as the tree's owner, and where it comes from. */
   ID *id = nullptr;
   ID *from = nullptr;
+  /** The kind of tree, which the editor's header follows even while there is none. */
+  const char *idname = "ShaderNodeTree";
 };
 
 NativeNodeTree native_node_tree(bContext *C, const DictionaryValue &query)
@@ -3155,6 +3157,7 @@ NativeNodeTree native_node_tree(bContext *C, const DictionaryValue &query)
   const std::string kind = query.lookup_str("tree").value_or("SHADER");
   Object *object = CTX_data_active_object(C);
   if (kind == "SHADER") {
+    result.from = object ? &object->id : nullptr;
     Material *material = object ? BKE_object_material_get(object, object->actcol) : nullptr;
     if (material && material->nodetree) {
       result.root = material->nodetree;
@@ -3171,6 +3174,8 @@ NativeNodeTree native_node_tree(bContext *C, const DictionaryValue &query)
     }
   }
   else if (kind == "GEOMETRY") {
+    result.idname = "GeometryNodeTree";
+    result.from = object ? &object->id : nullptr;
     NodesModifierData *nodes_modifier = nullptr;
     if (object) {
       ModifierData *active = BKE_object_active_modifier(object);
@@ -3204,6 +3209,7 @@ NativeNodeTree native_node_tree(bContext *C, const DictionaryValue &query)
     }
   }
   else if (kind == "COMPOSITOR") {
+    result.idname = "CompositorNodeTree";
     Scene *scene = CTX_data_scene(C);
     if (scene && scene->compositing_node_group) {
       result.root = scene->compositing_node_group;
@@ -3272,8 +3278,9 @@ SpaceNode *native_node_space(bContext *C, const NativeNodeTree &shown)
   space->shaderfrom = SNODE_SHADER_OBJECT;
   space->overlay.flag |= SN_OVERLAY_SHOW_OVERLAYS | SN_OVERLAY_SHOW_PREVIEWS |
                          SN_OVERLAY_SHOW_TIMINGS;
+  /* With no tree yet, its header still offers one to pick or make. */
+  STRNCPY(space->tree_idname, shown.root ? shown.root->idname : shown.idname);
   if (shown.root) {
-    STRNCPY(space->tree_idname, shown.root->idname);
     bNodeTreePath *previous = MEM_new<bNodeTreePath>("node tree path");
     previous->nodetree = shown.root;
     previous->parent_key = bke::NODE_INSTANCE_KEY_BASE;
@@ -4139,6 +4146,70 @@ std::optional<std::string> native_node_key(bContext *C, bNodeTree &tree, const D
   return std::string("");
 }
 
+/** A node's value, or the header's data-block, which is there even while there is no tree. */
+std::optional<std::string> apply_node_property(bContext *C,
+                                               bNodeTree *tree,
+                                               bNode *node,
+                                               const DictionaryValue &query)
+{
+  Main *bmain = CTX_data_main(C);
+  const bool header = query.lookup_int("header").value_or(0);
+  if ((!node || !tree) && !header) {
+    return std::nullopt;
+  }
+  Block *block = header ? native_node_header_block(C) :
+                          native_node_block(C, *tree, *node, linked_sockets(*tree));
+  const std::string key = query.lookup_str("key").value_or("");
+  bool applied = false;
+  wmOperatorType *operator_type = nullptr;
+  PointerRNA *operator_properties = nullptr;
+  std::unique_ptr<bContextStore> operator_context;
+  PendingNewID pending;
+  for_each_node_field(
+      *block,
+      [&](Button &but, const int index, const std::string &field_key) {
+        if (!applied && field_key == key && !query.lookup_str("id_action")) {
+          applied = set_property(C, but, index, query, true, false);
+        }
+      },
+      [&](PointerRNA &ptr, PropertyRNA *prop) {
+        if (!applied && query.lookup_str("id_action") && id_template_key(ptr, prop) == key) {
+          applied = apply_id_template(C, *block, ptr, prop, query, operator_type,
+                                      operator_properties, operator_context, pending);
+        }
+      });
+  /* New (or a copy), which the picker's own operator makes. */
+  if (operator_type) {
+    const bContextStore *previous = CTX_store_get(C);
+    CTX_store_set(C, operator_context.get());
+    if (WM_operator_poll_context(C, operator_type, wm::OpCallContext::ExecDefault)) {
+      applied = WM_operator_name_call_ptr(C, operator_type, wm::OpCallContext::ExecDefault,
+                                          operator_properties, nullptr) &
+                OPERATOR_FINISHED;
+    }
+    CTX_store_set(C, previous);
+    if (operator_properties) {
+      WM_operator_properties_free(operator_properties);
+      MEM_delete(operator_properties);
+    }
+    if (applied) {
+      finish_pending_new_id(C, pending);
+    }
+  }
+  block_free(C, block);
+  /* Undo, keys and updates are the property's own, as from a button. */
+  if (node && tree) {
+    BKE_ntree_update_tag_node_property(tree, node);
+  }
+  if (tree) {
+    BKE_main_ensure_invariants(*bmain, tree->id);
+  }
+  else {
+    BKE_main_ensure_invariants(*bmain);
+  }
+  return applied ? std::optional<std::string>("") : std::nullopt;
+}
+
 /** Applies one of the canvas's actions to the tree it shows; the undo step's name, or none. */
 std::optional<std::string> apply_node_action(bContext *C, bNodeTree &tree, const DictionaryValue &query)
 {
@@ -4146,57 +4217,7 @@ std::optional<std::string> apply_node_action(bContext *C, bNodeTree &tree, const
   const std::string action = query.lookup_str("action").value_or("");
   bNode *node = bke::node_find_node_by_name(tree, query.lookup_str("node").value_or(""));
   if (action == "property") {
-    /* A node's value, or the header's data-block. */
-    const bool header = query.lookup_int("header").value_or(0);
-    if (!node && !header) {
-      return std::nullopt;
-    }
-    const std::set<const bNodeSocket *> linked = linked_sockets(tree);
-    Block *block = header ? native_node_header_block(C) : native_node_block(C, tree, *node, linked);
-    const std::string key = query.lookup_str("key").value_or("");
-    bool applied = false;
-    wmOperatorType *operator_type = nullptr;
-    PointerRNA *operator_properties = nullptr;
-    std::unique_ptr<bContextStore> operator_context;
-    PendingNewID pending;
-    for_each_node_field(
-        *block,
-        [&](Button &but, const int index, const std::string &field_key) {
-          if (!applied && field_key == key && !query.lookup_str("id_action")) {
-            applied = set_property(C, but, index, query, true, false);
-          }
-        },
-        [&](PointerRNA &ptr, PropertyRNA *prop) {
-          if (!applied && query.lookup_str("id_action") && id_template_key(ptr, prop) == key) {
-            applied = apply_id_template(C, *block, ptr, prop, query, operator_type,
-                                        operator_properties, operator_context, pending);
-          }
-        });
-    /* New (or a copy), which the picker's own operator makes. */
-    if (operator_type) {
-      const bContextStore *previous = CTX_store_get(C);
-      CTX_store_set(C, operator_context.get());
-      if (WM_operator_poll_context(C, operator_type, wm::OpCallContext::ExecDefault)) {
-        applied = WM_operator_name_call_ptr(C, operator_type, wm::OpCallContext::ExecDefault,
-                                            operator_properties, nullptr) &
-                  OPERATOR_FINISHED;
-      }
-      CTX_store_set(C, previous);
-      if (operator_properties) {
-        WM_operator_properties_free(operator_properties);
-        MEM_delete(operator_properties);
-      }
-      if (applied) {
-        finish_pending_new_id(C, pending);
-      }
-    }
-    block_free(C, block);
-    /* Undo, keys and updates are the property's own, as from a button. */
-    if (node) {
-      BKE_ntree_update_tag_node_property(&tree, node);
-    }
-    BKE_main_ensure_invariants(*bmain, tree.id);
-    return applied ? std::optional<std::string>("") : std::nullopt;
+    return apply_node_property(C, &tree, node, query);
   }
   if (action == "select") {
     if (!query.lookup_int("extend").value_or(0)) {
@@ -4598,13 +4619,18 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
   if (shown.tree) {
     shown.tree->ensure_topology_cache();
   }
-  /* Resolved from the viewport's context; edited and drawn in a node editor's. */
+  /* Resolved from the viewport's context; edited and drawn in a node editor's, whose header
+   * offers a tree to pick or make even while there is none. */
   std::optional<NodeSpaceContext> node_space;
-  if (shown.tree) {
-    node_space.emplace(C, shown);
-  }
+  node_space.emplace(C, shown);
   if (execute) {
     if (!shown.tree) {
+      if (query->lookup_str("action").value_or("") == "property" &&
+          apply_node_property(C, nullptr, nullptr, *query))
+      {
+        WM_event_add_notifier(C, NC_NODE | NA_EDITED, nullptr);
+        return "";
+      }
       return "This node tree is no longer available.";
     }
     const std::optional<std::string> undo = apply_node_action(C, *shown.tree, *query);
@@ -4623,9 +4649,24 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
   }
   DictionaryValue result;
   result.append_str("tree", query->lookup_str("tree").value_or("SHADER"));
+  /* The header's data-block picker, as the Properties editor shows one. */
+  auto append_header_ids = [&]() {
+    Block *header = native_node_header_block(C);
+    auto ids = result.append_array("header_ids");
+    for_each_node_field(
+        *header,
+        [](Button & /*but*/, const int /*index*/, const std::string & /*key*/) {},
+        [&](PointerRNA &ptr, PropertyRNA *prop) {
+          auto field = ids->append_dict();
+          project_id_template(C, *header, ptr, prop, *field);
+          field->append_int("header", 1);
+        });
+    block_free(C, header);
+  };
   if (!shown.tree) {
     result.append_str("empty", shown.empty);
     result.append_str("create", shown.create);
+    append_header_ids();
     return encode(result);
   }
   result.append_str("name", shown.tree->id.name + 2);
@@ -4722,20 +4763,7 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
   if (tree.type == NTREE_COMPOSIT) {
     result.append_int("can_backdrop", 1);
   }
-  /* The header's data-block picker, as the Properties editor shows one. */
-  {
-    Block *header = native_node_header_block(C);
-    auto ids = result.append_array("header_ids");
-    for_each_node_field(
-        *header,
-        [](Button & /*but*/, const int /*index*/, const std::string & /*key*/) {},
-        [&](PointerRNA &ptr, PropertyRNA *prop) {
-          auto field = ids->append_dict();
-          project_id_template(C, *header, ptr, prop, *field);
-          field->append_int("header", 1);
-        });
-    block_free(C, header);
-  }
+  append_header_ids();
   if (native_node_key_request.sequence) {
     auto key = result.append_dict("key_request");
     key->append_int("sequence", native_node_key_request.sequence);
