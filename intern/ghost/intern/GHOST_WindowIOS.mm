@@ -233,6 +233,7 @@ UIWindow *document_window = nil;
   text_field = nil;
   original_text = nil;
   onscreen_keyboard_active = false;
+  free(text_field_string);
   text_field_string = nullptr;
   current_pencil_touch = nil;
   tablet_data = GHOST_TABLET_DATA_NONE;
@@ -2202,7 +2203,7 @@ static UIBezierPath *pointer_move()
       text_field.userInteractionEnabled = NO;
 
       /* Save the input to a c-string */
-      text_field_string = [[text_field text] UTF8String];
+      [self storeKeyboardString:text_field.text];
 
       /* Delete the text field copy of the string */
       text_field.text = nil;
@@ -2210,6 +2211,15 @@ static UIBezierPath *pointer_move()
   }
   IOS_INPUT_LOG(@"Text field value was %s", text_field_string);
   return GHOST_kSuccess;
+}
+
+/** Keep a copy: a pointer into the field's text would dangle once the field is cleared, and
+ * Blender reads the text later, on its own thread. Renames then committed whatever had reused that
+ * memory. */
+- (void)storeKeyboardString:(NSString *)text
+{
+  free(text_field_string);
+  text_field_string = text ? strdup(text.UTF8String) : nullptr;
 }
 
 - (const char *)getLastKeyboardString
@@ -2223,7 +2233,7 @@ static UIBezierPath *pointer_move()
     /* Update text string if one exists */
     if (text_field.text && ![text_field.text isEqualToString:@""]) {
       /* Save the input to a c-string */
-      text_field_string = [[text_field text] UTF8String];
+      [self storeKeyboardString:text_field.text];
     }
   }
   return text_field_string;

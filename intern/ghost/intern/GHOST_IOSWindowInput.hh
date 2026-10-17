@@ -210,7 +210,8 @@ typedef struct UserInputEvent {
   UITextField *text_field;
   NSString *original_text;
   bool onscreen_keyboard_active;
-  const char *text_field_string;
+  /** A copy of the edited text, which Blender reads after the text field is cleared. */
+  char *text_field_string;
   GHOST_KeyboardProperties current_keyboard_properties;
   bool external_keyboard_connected;
 
