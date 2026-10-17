@@ -129,6 +129,10 @@ final class FCurveEditorModel {
   var channelsShown = UserDefaults.standard.object(forKey: "BlenderCurvesChannels") as? Bool ?? true {
     didSet { UserDefaults.standard.set(channelsShown, forKey: "BlenderCurvesChannels") }
   }
+  /** The channel list's width, its edge dragged to change it. */
+  var channelsWidth = CGFloat(UserDefaults.standard.object(forKey: "BlenderCurvesChannelsWidth") as? Double ?? 280) {
+    didSet { UserDefaults.standard.set(Double(channelsWidth), forKey: "BlenderCurvesChannelsWidth") }
+  }
   /** Bumped to fit the view to the curves, or only to the selected keys. */
   private(set) var fitRequest = 0
   @ObservationIgnored private(set) var fitSelected = false
@@ -1207,22 +1211,54 @@ struct FCurveEditorView: View {
   let model: FCurveEditorModel
   let timeline: TimelineStore
 
+  /** The channel list's width when its edge began to be dragged. */
+  @State private var resizeStart: CGFloat?
+
   var body: some View {
     VStack(spacing: 0) {
       toolbar
       Divider()
-      HStack(spacing: 0) {
-        if model.channelsShown {
-          FCurveChannels(model: model)
-            .frame(width: 280)
-            .transition(.move(edge: .leading).combined(with: .opacity))
-          Divider()
+      GeometryReader { proxy in
+        HStack(spacing: 0) {
+          if model.channelsShown {
+            FCurveChannels(model: model)
+              .frame(width: min(model.channelsWidth, maxChannelsWidth(proxy.size.width)))
+              .transition(.move(edge: .leading).combined(with: .opacity))
+            Divider()
+              .overlay { resizeHandle(proxy.size.width) }
+          }
+          FCurveCanvas(model: model, timeline: timeline)
         }
-        FCurveCanvas(model: model, timeline: timeline)
       }
     }
     /* A hardware keyboard's keys run as the Graph Editor's keymap has them while it was touched last. */
     .background(NodeKeyCapture(model: model))
+  }
+
+  private func maxChannelsWidth(_ width: CGFloat) -> CGFloat { max(180, width * 0.6) }
+
+  /** The edge between the channels and the curves, dragged to make the channels wider or
+   * narrower; dragged far enough in, they close, as sidebars do. */
+  private func resizeHandle(_ width: CGFloat) -> some View {
+    Color.clear
+      .frame(width: 20)
+      .contentShape(Rectangle())
+      .gesture(
+        /* Measured in the window: the handle moves with the drag. */
+        DragGesture(minimumDistance: 2, coordinateSpace: .global)
+          .onChanged { value in
+            let start = resizeStart ?? min(model.channelsWidth, maxChannelsWidth(width))
+            resizeStart = start
+            model.channelsWidth = min(maxChannelsWidth(width), max(180, start + value.translation.width))
+          }
+          .onEnded { value in
+            let start = resizeStart ?? model.channelsWidth
+            resizeStart = nil
+            if start + value.translation.width < 110 {
+              withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) { model.channelsShown = false }
+            }
+          })
+      .accessibilityLabel("Resize Channels")
   }
 
   private var toolbar: some View {
