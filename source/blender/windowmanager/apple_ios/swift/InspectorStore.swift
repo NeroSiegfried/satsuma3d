@@ -408,9 +408,17 @@ final class InspectorStore {
     return true
   }
 
-  /** Which sections and rows show, to tell rows coming and going from values changing. */
+  /** Which sections and rows show, to tell rows coming and going from values changing. A list's
+   * items count too: one added or removed changes its height, which the panels below follow. */
   private func layout(_ sections: [InspectorSection]) -> [[String]] {
-    sections.map { [$0.id] + visibleRows($0).map(\.id) }
+    sections.map { section in
+      [section.id] + visibleRows(section).map { row in
+        if case .composite(let property) = row.kind, property.string("type") == "LIST" {
+          return "\(row.id)#\(property.array("rows").count)"
+        }
+        return row.id
+      }
+    }
   }
 
   func clear() {
