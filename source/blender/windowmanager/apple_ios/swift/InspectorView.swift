@@ -229,6 +229,13 @@ struct SectionView: View, Equatable {
             }
             else {
               VStack(alignment: .leading, spacing: 0) {
+                /* A modifier's or constraint's name and the rest of where it applies, open. */
+                if let name = section.headerControls.first(where: { $0.bool("header_name") }) {
+                  StackItemOptions(store: store, name: name,
+                                   toggles: StackItemOptions.secondary(section.headerControls))
+                    .padding(.vertical, 2)
+                  Divider()
+                }
                 ForEach(Array(rows.enumerated()), id: \.element.id) { position, row in
                   if position > 0 { Divider() }
                   rowView(row)
@@ -305,12 +312,9 @@ struct SectionView: View, Equatable {
           if let icon = BlenderIcon.image(section.icon) {
             Image(uiImage: icon).resizable().scaledToFit().frame(width: 18, height: 18)
           }
-          /* A modifier or constraint names itself in its header control instead. */
-          if !section.headerControls.contains(where: { $0.bool("header_name") }) {
-            Text(section.title)
-              .lineLimit(1)
-              .foregroundStyle(section.active ? PanelStyle.tint : .primary)
-          }
+          Text(section.title)
+            .lineLimit(1)
+            .foregroundStyle(section.active ? PanelStyle.tint : .primary)
           Spacer(minLength: 0)
         }
         .frame(minHeight: 44)
@@ -381,44 +385,49 @@ struct SectionView: View, Equatable {
   }
 }
 
-/** A modifier's or constraint's name and where it applies, as one control: the name, which a
- * tap renames, beside a strip of switches such as Edit Mode, On Cage, Viewport and Render. */
-struct StackItemHeader: View {
+/** A modifier's or constraint's name, which a tap renames, and the switches for where else it
+ * applies, such as Edit Mode, On Cage and Render, in the first row of its open panel. Its header
+ * keeps the main one, as Blender's does. */
+struct StackItemOptions: View {
   let store: InspectorStore
   let name: JSON
   let toggles: [JSON]
   @State private var rename: RenameRequest?
 
+  /** The switch the header shows: the viewport's, or a constraint's only one. */
+  static func primary(_ controls: [JSON]) -> JSON? {
+    let cluster = controls.filter { $0.bool("header_cluster") }
+    return cluster.first { $0.string("property") == "show_viewport" } ?? cluster.first
+  }
+
+  static func secondary(_ controls: [JSON]) -> [JSON] {
+    let main = primary(controls)
+    return controls.filter { $0.bool("header_cluster") && !jsonDictEqual($0, main ?? [:]) }
+  }
+
   var body: some View {
-    HStack(spacing: 6) {
+    HStack(spacing: 8) {
       Button {
         rename = RenameRequest(title: "Rename", name: store.value(name) as? String ?? "") { text in
           store.edit(name, value: text)
         }
       } label: {
-        Text(store.value(name) as? String ?? "")
-          .lineLimit(1)
-          .truncationMode(.middle)
-          .padding(.horizontal, 10)
-          .frame(minHeight: 30)
-          .background(.quaternary.opacity(0.6), in: Capsule())
+        HStack(spacing: 6) {
+          Text(store.value(name) as? String ?? "")
+            .lineLimit(1)
+            .truncationMode(.middle)
+          Image(systemName: "pencil").font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+        .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
       .disabled(!name.bool("editable"))
       .accessibilityLabel("Name")
       .accessibilityValue(store.value(name) as? String ?? "")
       .accessibilityHint("Renames it.")
-      if !toggles.isEmpty {
-        HStack(spacing: 0) {
-          ForEach(Array(toggles.enumerated()), id: \.offset) { index, toggle in
-            if index > 0 {
-              Divider().frame(height: 16)
-            }
-            switchButton(toggle)
-          }
-        }
-        .padding(.horizontal, 2)
-        .background(.quaternary.opacity(0.6), in: Capsule())
+      ForEach(Array(toggles.enumerated()), id: \.offset) { _, toggle in
+        switchButton(toggle)
       }
     }
     .renamePrompt($rename)
@@ -432,14 +441,14 @@ struct StackItemHeader: View {
     } label: {
       Group {
         if let icon = BlenderIcon.image(toggle.string("icon")) {
-          Image(uiImage: icon).resizable().renderingMode(.template).scaledToFit().frame(width: 17, height: 17)
+          Image(uiImage: icon).resizable().renderingMode(.template).scaledToFit().frame(width: 18, height: 18)
         }
         else {
           Image(systemName: on ? "checkmark.circle.fill" : "circle")
         }
       }
       .foregroundStyle(on ? AnyShapeStyle(PanelStyle.tint) : AnyShapeStyle(.tertiary))
-      .frame(width: 34, height: 30)
+      .frame(width: 36, height: 36)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
@@ -462,11 +471,13 @@ struct HeaderControls: View, Equatable {
   var body: some View {
     /* A row of their own: through `equatable()` the header would not lay them out side by side. */
     HStack(spacing: 8) {
-      if let name = controls.first(where: { $0.bool("header_name") }) {
-        StackItemHeader(store: store, name: name, toggles: controls.filter { $0.bool("header_cluster") })
+      /* A modifier or constraint keeps its main switch here; its name and other switches are in
+       * its open panel. */
+      let main = StackItemOptions.primary(controls)
+      let shown = controls.filter {
+        !$0.bool("header_name") && (!$0.bool("header_cluster") || jsonDictEqual($0, main ?? [:]))
       }
-      ForEach(Array(controls.filter { !$0.bool("header_name") && !$0.bool("header_cluster") }.enumerated()),
-              id: \.offset) { _, control in
+      ForEach(Array(shown.enumerated()), id: \.offset) { _, control in
         Group {
           switch control.string("type") {
             case "BOOLEAN":
