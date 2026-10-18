@@ -278,6 +278,8 @@ struct NodeEditorPanel: View {
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+      /* Square: the panel's own corners are rounded, not the canvas's inside it. */
+      .containerShape(Rectangle())
     }
     .background(NodeKeyCapture(model: model))
     .onChange(of: model.addRequested) { _, _ in
