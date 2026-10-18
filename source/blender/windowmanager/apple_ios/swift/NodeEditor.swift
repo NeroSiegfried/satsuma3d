@@ -276,6 +276,7 @@ struct NodeEditorPanel: View {
         else {
           ProgressView()
         }
+        NodeTypingField()
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       /* Square: the panel's own corners are rounded, not the canvas's inside it. */
@@ -664,17 +665,19 @@ struct NodeCanvas: View {
             .accessibilityLabel("Compositor Result")
         }
         wires
+        }
+        /* Beneath the nodes: their controls are the system's, which an effect over them would
+         * not draw. */
+        .modifier(NodeRippleEffect(ripple: ripple, rect: ripple.map(landedRect)))
         content
           .scaleEffect(zoom, anchor: .topLeading)
           .offset(pan)
-        }
-        .modifier(NodeRippleEffect(ripple: ripple, rect: ripple.map(landedRect)))
         if let ripple, let node = model.nodes.first(where: { $0.string("name") == ripple.name }) {
           /* Bobbing on its own waves: dipping as it lands, then rising and settling. */
           let corner = origin(node)
           let size = layout.nodes[ripple.name]?.size ?? CGSize(width: cardWidth(node), height: 120)
           TimelineView(.animation) { timeline in
-            ZStack(alignment: .topLeading) { nodeView(node) }
+            ZStack(alignment: .topLeading) { nodeView(node, native: false) }
               .frame(width: 1, height: 1, alignment: .topLeading)
               .coordinateSpace(.named("nodes"))
               /* Applied to the 1 point box the canvas lays out in, so canvas points are its
@@ -699,7 +702,7 @@ struct NodeCanvas: View {
                 let size = gone.size
                 /* Anchors are fractions of the view, whose layout box sits at the canvas origin. */
                 let anchor = UnitPoint(x: gone.center.x / max(size.width, 1), y: gone.center.y / max(size.height, 1))
-                nodeView(gone.node)
+                nodeView(gone.node, native: false)
                   .saturation(1 - t)
                   .brightness(0.25 * t)
                   .blur(radius: 9 * pull)
@@ -737,10 +740,17 @@ struct NodeCanvas: View {
       }
       .onChange(of: positions) { _, _ in moved.removeAll() }
       .onChange(of: model.nodes.map(\.nodeName), initial: true) { _, names in landed(Set(names)) }
-      .onChange(of: pan) { _, _ in rememberCenter() }
+      .onChange(of: pan) { _, _ in
+        rememberCenter()
+        /* A value being typed is done once the canvas moves from under it. */
+        NodeTyping.shared.commit()
+      }
       .onChange(of: pinching) { _, active in if !active { gestureZoom = nil } }
       .onChange(of: panning) { _, active in if !active { panStart = nil } }
-      .onChange(of: zoom) { _, _ in rememberCenter() }
+      .onChange(of: zoom) { _, _ in
+        rememberCenter()
+        NodeTyping.shared.commit()
+      }
     }
     .sheet(isPresented: Binding(get: { coloring != nil }, set: { if !$0 { coloring = nil } })) {
       if let node = coloring {
@@ -1224,11 +1234,13 @@ struct NodeCanvas: View {
       let visible = visibleArea
       ForEach(model.nodes.filter { $0.string("kind") != "FRAME" && $0.nodeName != ripple?.name && onScreen($0, visible) },
               id: \.nodeName) { node in
-        if zoom < 0.33 && drag == nil {
+        if zoom < NodeCard.nativeZoom && drag == nil {
           overviewCard(node)
         }
         else {
-          nodeView(node)
+          /* Wherever values show, they are the system's controls; further out, plain cards keep a
+           * large tree quick as it zooms. */
+          nodeView(node, native: true)
         }
       }
     }
@@ -1237,7 +1249,7 @@ struct NodeCanvas: View {
   }
 
   @ViewBuilder
-  private func nodeView(_ node: JSON) -> some View {
+  private func nodeView(_ node: JSON, native: Bool) -> some View {
     let name = node.string("name") ?? ""
     let point = origin(node)
     Group {
@@ -1245,8 +1257,10 @@ struct NodeCanvas: View {
         rerouteView(node)
       }
       else {
-        NodeCard(model: model, layout: layout, node: node, width: cardWidth(node), wire: wireGesture,
+        NodeCard(model: model, layout: layout, node: node, width: cardWidth(node), native: native,
+                 wire: wireGesture,
                  move: AnyGesture(moveGesture(name)))
+          .equatable()
           .overlay(alignment: .topLeading) {
             if model.timings, let time = node.double("time_ms") {
               /* Above the node, as Blender's Timings overlay. */
@@ -1686,12 +1700,25 @@ private extension Dictionary where Key == String, Value == Any {
 /** \name Node Cards
  * \{ */
 
-struct NodeCard: View {
+/** Equatable by what it shows, so panning and zooming, which rebuild the canvas, leave the cards
+ * and their controls alone. Its gestures read the canvas's state as it is when they run. */
+struct NodeCard: View, Equatable {
+  static func == (a: NodeCard, b: NodeCard) -> Bool {
+    a.model === b.model && a.width == b.width && a.native == b.native && jsonDictEqual(a.node, b.node)
+  }
+
   let model: NodeEditorModel
   let layout: NodeCanvasLayout
   let node: JSON
   let width: CGFloat
+  /** The system's controls for its values, or stand-ins drawn alike inside an effect, which the
+   * system's controls can't be drawn into. */
+  let native: Bool
   let wire: (JSON, JSON, Bool) -> AnyGesture<DragGesture.Value>
+
+  /** The zoom from which nodes show their values, in the system's controls; further out they are
+   * plain cards. */
+  static let nativeZoom: CGFloat = 0.33
   /** Dragging the header moves the node, and the other selected nodes with it. */
   let move: AnyGesture<DragGesture.Value>
 
@@ -1726,7 +1753,7 @@ struct NodeCard: View {
           }
           let own = fields.filter { $0.string("socket") == nil }
           if !own.isEmpty {
-            NodeCanvasFields(store: model.store, fields: own)
+            NodeCanvasFields(store: model.store, fields: own, native: native)
               .padding(.horizontal, 12)
               .padding(.vertical, 4)
           }
@@ -1874,7 +1901,7 @@ struct NodeCard: View {
           .overlay(alignment: .leading) { dot(socket, output: false).offset(x: -10) }
       }
       else {
-        NodeCanvasFields(store: model.store, fields: values)
+        NodeCanvasFields(store: model.store, fields: values, native: native)
           .padding(.horizontal, 12)
           .overlay(alignment: .topLeading) { dot(socket, output: false).offset(x: -10, y: 12) }
       }
@@ -1932,8 +1959,20 @@ private extension Dictionary where Key == String, Value == Any {
 struct NodeCanvasFields: View {
   let store: InspectorStore
   let fields: [JSON]
+  var native = true
 
   var body: some View {
+    if native {
+      /* The Properties editor's own controls, as Blender's node editor uses its buttons. */
+      NodeFieldRows(store: store, fields: fields)
+    }
+    else {
+      standIns
+    }
+  }
+
+  /** Drawn alike, without the system's controls, for a node inside an effect. */
+  private var standIns: some View {
     VStack(alignment: .leading, spacing: 2) {
       ForEach(NodeFieldRows.rows(fields)) { row in
         switch row.kind {
@@ -1987,7 +2026,9 @@ struct NodeCanvasField: View, Equatable {
               store.edit(property, value: !on)
             }
         case "INT", "FLOAT":
-          labeled { NodeCanvasNumber(store: store, property: property, editing: $editing) }
+          labeled { NodeCanvasNumber(store: store, property: property) }
+        case "STRING":
+          labeled { NodeCanvasText(store: store, property: property) }
         case "ENUM":
           labeled { valueText(enumLabel, chevron: true) }
             .contentShape(Rectangle())
@@ -2135,9 +2176,11 @@ struct NodeCanvasSwitch: View {
 struct NodeCanvasNumber: View {
   let store: InspectorStore
   let property: JSON
-  @Binding var editing: Bool
   var width: CGFloat = 72
   @State private var scrub: (start: Double, value: Double, interaction: String, last: CFTimeInterval)?
+  /** Its place on screen, where the field typed in shows over it. */
+  @State private var anchor = AnchorBox()
+  private var typing: Bool { NodeTyping.shared.isTyping(property) }
 
   private var value: Double { scrub?.value ?? numericValue(store.value(property)) }
 
@@ -2157,14 +2200,16 @@ struct NodeCanvasNumber: View {
         .minimumScaleFactor(0.7)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.horizontal, 6)
+        .opacity(typing ? 0 : 1)
     }
     .frame(width: width, height: 24)
+    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { anchor.windowRect = $0 }
     .contentShape(Rectangle())
-    .onTapGesture { if property.bool("editable") { editing = true } }
+    .onTapGesture { beginTyping() }
     .gesture(
       DragGesture(minimumDistance: 4)
         .onChanged { drag in
-          guard property.bool("editable") else { return }
+          guard property.bool("editable"), !typing else { return }
           var current = scrub ?? (numericValue(store.value(property)), numericValue(store.value(property)),
                                   UUID().uuidString, 0)
           let integer = property.string("type") == "INT"
@@ -2191,6 +2236,126 @@ struct NodeCanvasNumber: View {
     .accessibilityLabel(propertyLabel(property))
     .accessibilityValue(formatNumber(value, property: property, significant: 5))
   }
+
+  private func beginTyping() {
+    guard property.bool("editable"), scrub == nil else { return }
+    NodeTyping.shared.begin(store: store, property: property, frame: anchor.windowRect ?? .zero,
+                            text: formatNumber(numericValue(store.value(property)), property: property,
+                                               significant: 6))
+  }
+}
+
+/** Text on a node, typed where it shows. */
+struct NodeCanvasText: View {
+  let store: InspectorStore
+  let property: JSON
+  @State private var anchor = AnchorBox()
+
+  private var stored: String { store.value(property) as? String ?? "" }
+
+  var body: some View {
+    Text(stored)
+      .font(.callout)
+      .lineLimit(1)
+      .frame(minWidth: 72, maxWidth: 160, minHeight: 24, alignment: .trailing)
+      .padding(.horizontal, 6)
+      .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+      .opacity(NodeTyping.shared.isTyping(property) ? 0 : 1)
+      .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { anchor.windowRect = $0 }
+      .contentShape(Rectangle())
+      .onTapGesture {
+        guard property.bool("editable") else { return }
+        NodeTyping.shared.begin(store: store, property: property, frame: anchor.windowRect ?? .zero, text: stored)
+      }
+  }
+}
+
+/**
+ * A value on a node being typed: the canvas draws through its effects, which a system text field
+ * can't be part of, so the field shows above the canvas, over the value, at its size.
+ */
+@MainActor
+@Observable
+final class NodeTyping {
+  static let shared = NodeTyping()
+
+  private(set) var property: JSON?
+  @ObservationIgnored private(set) var store: InspectorStore?
+  private(set) var frame: CGRect = .zero
+  var text = ""
+
+  var numeric: Bool { ["INT", "FLOAT"].contains(property?.string("type") ?? "") }
+
+  func isTyping(_ property: JSON) -> Bool {
+    guard let current = self.property else { return false }
+    return propertyKey(current) == propertyKey(property)
+  }
+
+  func begin(store: InspectorStore, property: JSON, frame: CGRect, text: String) {
+    commit()
+    self.store = store
+    self.property = property
+    self.frame = frame
+    self.text = text
+  }
+
+  /** The typed value set, as a field's own is when it's done. */
+  func commit() {
+    guard let property, let store else { return }
+    let numeric = self.numeric
+    self.property = nil
+    self.store = nil
+    if numeric {
+      let shown = formatNumber(numericValue(store.value(property)), property: property, significant: 6)
+      guard text != shown else { return }
+      guard let number = parseNumber(text, property: property) else {
+        store.showStatus("Enter a valid number.")
+        return
+      }
+      store.edit(property, value: property.string("type") == "INT" ? number.rounded() : number)
+    }
+    else if text != store.value(property) as? String ?? "" {
+      store.edit(property, value: text)
+    }
+  }
+}
+
+/** The field a node's value is typed in, over the value, scaled as the canvas is. */
+struct NodeTypingField: View {
+  let typing = NodeTyping.shared
+  @FocusState private var focused: Bool
+
+  var body: some View {
+    GeometryReader { proxy in
+      if typing.property != nil {
+        let origin = proxy.frame(in: .global).origin
+        let frame = typing.frame
+        let scale = max(0.5, frame.height / 24)
+        TextField("", text: Binding(get: { typing.text }, set: { typing.text = $0 }))
+          .font(.system(size: 15 * scale).monospacedDigit())
+          .multilineTextAlignment(.trailing)
+          .keyboardType(typing.numeric ? .numbersAndPunctuation : .default)
+          .submitLabel(.done)
+          .focused($focused)
+          .onSubmit { typing.commit() }
+          .padding(.horizontal, 6 * scale)
+          .frame(width: max(frame.width, typing.numeric ? 0 : 120 * scale), height: frame.height)
+          .background(Color(uiColor: .systemBackground),
+                      in: RoundedRectangle(cornerRadius: 6 * scale, style: .continuous))
+          .overlay(RoundedRectangle(cornerRadius: 6 * scale, style: .continuous)
+            .strokeBorder(Color.accentColor, lineWidth: 1.5))
+          .position(x: frame.maxX - origin.x - max(frame.width, typing.numeric ? 0 : 120 * scale) / 2,
+                    y: frame.midY - origin.y)
+          .onAppear {
+            focused = true
+            DispatchQueue.main.async {
+              UIApplication.shared.sendAction(#selector(UIResponder.selectAll(_:)), to: nil, from: nil, for: nil)
+            }
+          }
+          .onChange(of: focused) { _, isFocused in if !isFocused { typing.commit() } }
+      }
+    }
+  }
 }
 
 /** A vector's components side by side under its name. */
@@ -2198,7 +2363,6 @@ struct NodeCanvasVector: View {
   let store: InspectorStore
   let title: String
   let items: [JSON]
-  @State private var editing: Int?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 3) {
@@ -2207,15 +2371,7 @@ struct NodeCanvasVector: View {
       }
       HStack(spacing: 4) {
         ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-          NodeCanvasNumber(store: store, property: item,
-                           editing: Binding(get: { editing == index }, set: { editing = $0 ? index : nil }),
-                           width: 54)
-            .popover(isPresented: Binding(get: { editing == index }, set: { if !$0 { editing = nil } })) {
-              PropertyRow(store: store, property: item)
-                .padding(16)
-                .frame(minWidth: 300)
-                .presentationCompactAdaptation(.popover)
-            }
+          NodeCanvasNumber(store: store, property: item, width: 54)
         }
       }
     }
@@ -2233,12 +2389,16 @@ struct NodeFieldRows: View {
         switch row.kind {
           case .property(let property):
             PropertyRow(store: store, property: property)
+              .equatable()
           case .vector(let title, let items):
             VectorRow(store: store, title: title, items: items)
+              .equatable()
           case .toggles(let caption, let items):
             ToggleGroupRow(store: store, caption: caption, items: items)
+              .equatable()
           case .composite(let property):
             CompositeRow(store: store, property: property)
+              .equatable()
           case .heading:
             EmptyView()
         }
