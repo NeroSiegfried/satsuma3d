@@ -841,15 +841,18 @@ struct NodeCanvas: View {
     let point = origin(node)
     let size = layout.nodes[name]?.size ?? CGSize(width: cardWidth(node), height: 120)
     let card = RoundedRectangle(cornerRadius: 14, style: .continuous)
-    return card.fill(Color(uiColor: .systemBackground))
+    /* Colored as the node close up is, see #NodeCard. */
+    return card.fill(NodeCard.background)
       .overlay(alignment: .top) {
-        nodeColor(node).frame(height: 40)
+        nodeColor(node).opacity(0.92).frame(height: 40)
           .overlay(Text(node.string("title") ?? "").font(.title3.weight(.semibold)).foregroundStyle(.white)
             .lineLimit(1).padding(.horizontal, 12), alignment: .leading)
       }
       .clipShape(card)
-      .overlay(card.strokeBorder(node.bool("selected") ? Color.accentColor : .black.opacity(0.15),
+      .overlay(card.strokeBorder(node.bool("active") ? Color.accentColor :
+                                   node.bool("selected") ? Color.accentColor.opacity(0.6) : .black.opacity(0.15),
                                  lineWidth: node.bool("selected") ? 4 : 1))
+      .opacity(node.bool("muted") ? 0.55 : 1)
       .frame(width: size.width, height: size.height)
       .offset(x: point.x, y: point.y)
       .onTapGesture { model.send("select", ["node": name]) }
@@ -1709,6 +1712,9 @@ struct NodeCard: View, Equatable {
   private var name: String { node.string("name") ?? "" }
   private var fields: [JSON] { node.array("fields") }
 
+  /** A node's body: raised from the canvas in either appearance. */
+  static let background = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .tertiarySystemBackground : .systemBackground })
+
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       header
@@ -1760,7 +1766,7 @@ struct NodeCard: View, Equatable {
     /* The outline under the contents, so the socket dots on the edge cover it. */
     .background {
       let card = RoundedRectangle(cornerRadius: 14, style: .continuous)
-      card.fill(Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .tertiarySystemBackground : .systemBackground }))
+      card.fill(Self.background)
         .overlay {
           card.strokeBorder(node.bool("active") ? Color.accentColor : node.bool("selected") ? Color.accentColor.opacity(0.6) : Color.black.opacity(0.15),
                             lineWidth: node.bool("selected") ? 2.5 : 1)
