@@ -2448,21 +2448,61 @@ struct NodeSocketDots: View {
   }
 }
 
+/** A node the Add sheet offers, read once as it opens, with what search matches against. */
+struct NodeAddEntry: Identifiable {
+  let id: String
+  let name: String
+  let description: String
+  let category: String
+  let inputs: [Any]
+  let outputs: [Any]
+  let item: JSON
+  /** The name and description in lower case, matched as typed. */
+  let search: String
+
+  init(_ item: JSON, index: Int) {
+    self.item = item
+    name = item.string("name") ?? ""
+    description = item.string("description") ?? ""
+    category = item.string("category") ?? "Other"
+    inputs = item["inputs"] as? [Any] ?? []
+    outputs = item["outputs"] as? [Any] ?? []
+    /* A node group's entry shares its node type with the other groups. */
+    id = (item.string("idname") ?? "") + "|" + (item.string("group") ?? "") + "|\(index)"
+    search = (name + "\n" + description).lowercased()
+  }
+}
+
 struct NodeAddSheet: View {
   let items: [JSON]
   let pick: (JSON) -> Void
   @State private var query = ""
+  /** Read once as the sheet opens: the tree's updates while it is open leave it alone. */
+  @State private var entries: [NodeAddEntry]?
+  /** Typed in at once, without first tapping the field. */
+  @FocusState private var searching: Bool
 
-  private var categories: [(String, [JSON])] {
-    let filtered = items.filter {
-      query.isEmpty || ($0.string("name") ?? "").localizedCaseInsensitiveContains(query) ||
-        ($0.string("description") ?? "").localizedCaseInsensitiveContains(query)
+  private static let order = ["Input", "Output", "Shader", "Texture", "Color", "Vector", "Converter", "Geometry",
+                              "Attribute", "Filter", "Matte", "Distort", "Pattern", "Group", "Layout", "Interface",
+                              "Script", "Other"]
+
+  private static func prepared(_ items: [JSON]) -> [NodeAddEntry] {
+    items.enumerated().map { NodeAddEntry($0.element, index: $0.offset) }.sorted {
+      let a = order.firstIndex(of: $0.category) ?? 99, b = order.firstIndex(of: $1.category) ?? 99
+      return a != b ? a < b : $0.category != $1.category ? $0.category < $1.category : $0.name < $1.name
     }
-    let grouped = Dictionary(grouping: filtered) { $0.string("category") ?? "Other" }
-    let order = ["Input", "Output", "Shader", "Texture", "Color", "Vector", "Converter", "Geometry", "Attribute",
-                 "Filter", "Matte", "Distort", "Pattern", "Group", "Layout", "Interface", "Script", "Other"]
-    return grouped.sorted { (order.firstIndex(of: $0.key) ?? 99, $0.key) < (order.firstIndex(of: $1.key) ?? 99, $1.key) }
-      .map { ($0.key, $0.value.sorted { ($0.string("name") ?? "") < ($1.string("name") ?? "") }) }
+  }
+
+  private var categories: [(String, [NodeAddEntry])] {
+    let all = entries ?? Self.prepared(items)
+    let words = query.lowercased().split(separator: " ")
+    let filtered = words.isEmpty ? all : all.filter { entry in words.allSatisfy { entry.search.contains($0) } }
+    var result: [(String, [NodeAddEntry])] = []
+    for entry in filtered {
+      if result.last?.0 == entry.category { result[result.count - 1].1.append(entry) }
+      else { result.append((entry.category, [entry])) }
+    }
+    return result
   }
 
   var body: some View {
@@ -2470,22 +2510,22 @@ struct NodeAddSheet: View {
       List {
         ForEach(categories, id: \.0) { category, entries in
           Section(category) {
-            ForEach(Array(entries.enumerated()), id: \.offset) { _, item in
+            ForEach(entries) { entry in
               Button {
-                pick(item)
+                pick(entry.item)
               } label: {
                 /* Inputs to the left and outputs to the right, in columns of one width, so the
                  * names line up whatever goes in and out. */
                 HStack(spacing: 10) {
-                  NodeSocketDots(colors: item["inputs"] as? [Any] ?? [], leading: false)
+                  NodeSocketDots(colors: entry.inputs, leading: false)
                   VStack(alignment: .leading, spacing: 2) {
-                    Text(item.string("name") ?? "").foregroundStyle(.primary)
-                    if let description = item.string("description"), !description.isEmpty {
-                      Text(description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    Text(entry.name).foregroundStyle(.primary)
+                    if !entry.description.isEmpty {
+                      Text(entry.description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                     }
                   }
                   .frame(maxWidth: .infinity, alignment: .leading)
-                  NodeSocketDots(colors: item["outputs"] as? [Any] ?? [], leading: true)
+                  NodeSocketDots(colors: entry.outputs, leading: true)
                 }
               }
             }
@@ -2493,6 +2533,11 @@ struct NodeAddSheet: View {
         }
       }
       .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+      .searchFocused($searching)
+      .onAppear {
+        if entries == nil { entries = Self.prepared(items) }
+        searching = true
+      }
       .navigationTitle("Add Node")
       .navigationBarTitleDisplayMode(.inline)
     }
