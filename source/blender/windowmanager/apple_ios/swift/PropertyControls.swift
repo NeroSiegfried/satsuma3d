@@ -813,9 +813,9 @@ struct EnumControl: View {
       .disabled(!property.bool("editable"))
     }
     else if options.contains(where: { !($0.string("preview") ?? "").isEmpty }) {
-      PreviewEnumButton(store: store, property: property)
+      PreviewEnumButton(store: store, property: property, compact: compact)
     }
-    else if property.bool("expand") && (2...6).contains(options.count) {
+    else if property.bool("expand") && (2...6).contains(options.count) && (!compact || Self.segmentsFit(property)) {
       /* Choices Blender draws as a row (a brush's Add and Subtract, the selection modes): one tap
        * each, with the system's sliding selection. */
       if compact {
@@ -901,6 +901,14 @@ struct EnumControl: View {
     }
   }
 
+  /** Whether a row of choices fits a narrow strip: as icons, or as short names. Longer ones,
+   * such as Material and Color Attribute, are a menu there instead. */
+  static func segmentsFit(_ property: JSON) -> Bool {
+    let options = property.array("options")
+    return options.allSatisfy { BlenderIcon.image($0.string("icon")) != nil } ||
+      options.allSatisfy { ($0.string("label") ?? "").count <= 5 }
+  }
+
   private var segmented: some View {
     /* Icons only when every choice has one, so none is left as a blank segment. */
     let icons = options.allSatisfy { BlenderIcon.image($0.string("icon")) != nil }
@@ -920,24 +928,40 @@ struct EnumControl: View {
 struct PreviewEnumButton: View {
   let store: InspectorStore
   let property: JSON
+  /** Small, for the tool settings strip. */
+  var compact = false
   @State private var showing = false
 
   var body: some View {
     let options = property.array("options")
     let current = options.first { jsonEqual($0["value"], store.value(property)) }
+    let name = current?.string("label") ?? (store.value(property) as? String ?? "")
     Button {
       showing = true
     } label: {
       /* The current choice's preview and name, as a plain button. */
-      HStack(spacing: 12) {
-        PreviewThumbnail(path: current?.string("preview"), size: 56, cornerRadius: 8)
-        Text(current?.string("label") ?? (store.value(property) as? String ?? ""))
-          .foregroundStyle(.primary)
-        Spacer(minLength: 0)
+      if compact {
+        HStack(spacing: 6) {
+          PreviewThumbnail(path: current?.string("preview"), size: 20, cornerRadius: 5)
+          Text(name).font(.caption).lineLimit(1).foregroundStyle(.primary)
+        }
+        .padding(.leading, 4)
+        .padding(.trailing, 8)
+        .frame(minHeight: 26)
+        .panelGlass(in: Capsule())
+        .contentShape(Capsule())
       }
-      .padding(.vertical, 4)
-      .frame(minHeight: 64)
-      .contentShape(Rectangle())
+      else {
+        HStack(spacing: 12) {
+          PreviewThumbnail(path: current?.string("preview"), size: 56, cornerRadius: 8)
+          Text(name)
+            .foregroundStyle(.primary)
+          Spacer(minLength: 0)
+        }
+        .padding(.vertical, 4)
+        .frame(minHeight: 64)
+        .contentShape(Rectangle())
+      }
     }
     .buttonStyle(.plain)
     .disabled(!property.bool("editable"))

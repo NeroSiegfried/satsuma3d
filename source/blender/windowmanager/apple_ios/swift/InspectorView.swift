@@ -544,8 +544,10 @@ struct StripColumn: View, Equatable {
     if type == "COLOR" { return 52 }
     if type == "BOOLEAN" || (type == "OPERATOR" && property.bool("checkbox")) { return 72 }
     if type == "ENUM" {
+      /* A preview and its name. */
+      if property.array("options").contains(where: { !($0.string("preview") ?? "").isEmpty }) { return 150 }
       let options = property.array("options").count
-      if property.bool("expand") && (2...6).contains(options) {
+      if property.bool("expand") && (2...6).contains(options) && EnumControl.segmentsFit(property) {
         return CGFloat(options) * 42 + 8  /* A segmented control. */
       }
       return 108
