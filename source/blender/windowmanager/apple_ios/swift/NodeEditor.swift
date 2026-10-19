@@ -543,6 +543,105 @@ final class CableMotion {
   }
 }
 
+/** Cables let go away from any socket. Each snaps as a stretched cord does: the broken end
+ * whips back and the cord reels into the socket it hangs from, swinging under its own weight,
+ * while sparks fly from where it broke. A rope of points, in canvas points. */
+final class CableSnaps {
+  static let duration: TimeInterval = 0.7
+  /** How long the reeling cord takes to vanish into its socket. */
+  static let reel: TimeInterval = 0.5
+
+  struct Spark {
+    var position: CGPoint
+    var velocity: CGVector
+  }
+
+  struct Snap {
+    let color: Color
+    let start: Date
+    var points: [CGPoint]
+    var previous: [CGPoint]
+    let segment: CGFloat
+    var sparks: [Spark]
+  }
+
+  private(set) var snaps: [Snap] = []
+  private var last: Date?
+  private static let step: CGFloat = 1.0 / 120
+
+  var isEmpty: Bool { snaps.isEmpty }
+
+  /** `curve` runs from the socket the cord hangs from to where it broke. */
+  func snap(along curve: [CGPoint], color: Color) {
+    guard curve.count > 2 else { return }
+    var length: CGFloat = 0
+    for i in 1..<curve.count { length += hypot(curve[i].x - curve[i - 1].x, curve[i].y - curve[i - 1].y) }
+    /* The stretched cord springs back along itself, hardest at the break. */
+    var previous = curve
+    for i in 1..<curve.count {
+      let t = CGFloat(i) / CGFloat(curve.count - 1)
+      let dx = curve[i - 1].x - curve[i].x, dy = curve[i - 1].y - curve[i].y
+      let d = max(0.001, hypot(dx, dy))
+      let speed = (300 + min(900, length * 1.6)) * t * t * Self.step
+      previous[i] = CGPoint(x: curve[i].x - dx / d * speed, y: curve[i].y - dy / d * speed)
+    }
+    let tip = curve[curve.count - 1]
+    let sparks = (0..<14).map { _ -> Spark in
+      let angle = CGFloat.random(in: 0..<(2 * .pi))
+      let speed = CGFloat.random(in: 140...520)
+      return Spark(position: tip, velocity: CGVector(dx: cos(angle) * speed, dy: sin(angle) * speed - 160))
+    }
+    snaps.append(Snap(color: color, start: Date(), points: curve, previous: previous,
+                      segment: length / CGFloat(curve.count - 1), sparks: sparks))
+  }
+
+  /** Moves every snapping cord on to `date`, dropping those done. */
+  func advance(to date: Date) {
+    let elapsed = min(1.0 / 20, max(0, date.timeIntervalSince(last ?? date)))
+    last = snaps.isEmpty ? nil : date
+    snaps.removeAll { date.timeIntervalSince($0.start) > Self.duration }
+    let steps = Int((CGFloat(elapsed) / Self.step).rounded(.up))
+    for index in snaps.indices {
+      var snap = snaps[index]
+      let anchor = snap.points[0]
+      let t = CGFloat(date.timeIntervalSince(snap.start) / Self.reel)
+      /* Reeled in, faster and faster, as a tape measure's blade. */
+      let rest = snap.segment * max(0.01, 1 - min(1, t) * min(1, t))
+      for _ in 0..<steps {
+        for i in 1..<snap.points.count {
+          let p = snap.points[i], q = snap.previous[i]
+          snap.previous[i] = p
+          snap.points[i] = CGPoint(x: p.x + (p.x - q.x) * 0.985,
+                                   y: p.y + (p.y - q.y) * 0.985 + 900 * Self.step * Self.step)
+        }
+        for _ in 0..<6 {
+          snap.points[0] = anchor
+          for i in 1..<snap.points.count {
+            let a = snap.points[i - 1], b = snap.points[i]
+            let dx = b.x - a.x, dy = b.y - a.y
+            let d = max(0.001, hypot(dx, dy))
+            let push = (d - rest) / d
+            if i == 1 {
+              snap.points[i] = CGPoint(x: b.x - dx * push, y: b.y - dy * push)
+            }
+            else {
+              snap.points[i - 1] = CGPoint(x: a.x + dx * push * 0.5, y: a.y + dy * push * 0.5)
+              snap.points[i] = CGPoint(x: b.x - dx * push * 0.5, y: b.y - dy * push * 0.5)
+            }
+          }
+        }
+      }
+      for i in snap.sparks.indices {
+        snap.sparks[i].velocity.dy += 1100 * CGFloat(elapsed)
+        snap.sparks[i].velocity.dx *= 0.97
+        snap.sparks[i].position.x += snap.sparks[i].velocity.dx * CGFloat(elapsed)
+        snap.sparks[i].position.y += snap.sparks[i].velocity.dy * CGFloat(elapsed)
+      }
+      snaps[index] = snap
+    }
+  }
+}
+
 /** A socket just plugged into. */
 private struct CablePlug: Identifiable {
   static let duration = 0.45
@@ -578,6 +677,21 @@ private struct CablePlug: Identifiable {
     canvasFeedback?.alignmentOccurred(at: point)
     selection.selectionChanged()
     selection.prepare()
+  }
+
+  /** A cable snapping: a sharp crack, then the cord's whip. */
+  static func broke(at point: CGPoint) {
+    impact.impactOccurred(intensity: 1)
+    soft.prepare()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+      soft.impactOccurred(intensity: 0.5)
+    }
+  }
+
+  /** The snapped cord reeled into its socket. */
+  static func reeled(at point: CGPoint) {
+    canvasFeedback?.alignmentOccurred(at: point)
+    soft.impactOccurred(intensity: 0.7)
   }
 
   static func connected(at point: CGPoint) {
@@ -618,6 +732,12 @@ struct NodeCanvas: View {
   @State private var box: CGRect?
   /** The cables' slack, swaying as their ends move. */
   @State private var cables = CableMotion()
+  /** Cables just let go, snapping back into their sockets. */
+  @State private var snaps = CableSnaps()
+  /** Links just taken out, not drawn while Blender's tree still has them. */
+  @State private var unlinked: [String: Date] = [:]
+  /** While one snaps, frames are drawn. */
+  @State private var snapping = false
   /** While a cable still sways, frames are drawn. */
   @State private var cablesMoving = false
   /** Nodes already on the canvas, to tell a node just added or removed. */
@@ -701,6 +821,7 @@ struct NodeCanvas: View {
           .offset(pan)
         }
         plugRings
+        snapLayer
         minimap
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
           .padding(14)
@@ -1047,6 +1168,7 @@ struct NodeCanvas: View {
     var heldKey: String?
     for link in model.links {
       if let detached = wire?.detached, jsonEqual(detached as NSDictionary, link as NSDictionary) { continue }
+      if let gone = unlinked[CableMotion.key(link)], date.timeIntervalSince(gone) < 1.5 { continue }
       let fromKey = NodeCanvasLayout.socketKey(link.string("from_node") ?? "", output: true, link.string("from_socket") ?? "")
       let toKey = NodeCanvasLayout.socketKey(link.string("to_node") ?? "", output: false, link.string("to_socket") ?? "")
       guard let from = layout.sockets[fromKey], let to = layout.sockets[toKey] else { continue }
@@ -1176,6 +1298,88 @@ struct NodeCanvas: View {
       }
     }
     .allowsHitTesting(false)
+  }
+
+  /** Cables snapping back into their sockets, and their sparks. */
+  private var snapLayer: some View {
+    TimelineView(.animation(paused: !snapping)) { timeline in
+      Canvas { context, _ in
+        let date = timeline.date
+        snaps.advance(to: date)
+        for snap in snaps.snaps {
+          let age = date.timeIntervalSince(snap.start)
+          let fade = 1 - max(0, (age - CableSnaps.reel) / (CableSnaps.duration - CableSnaps.reel))
+          let points = snap.points.map(toView)
+          var path = Path()
+          path.move(to: points[0])
+          for i in 1..<points.count - 1 {
+            let middle = CGPoint(x: (points[i].x + points[i + 1].x) / 2, y: (points[i].y + points[i + 1].y) / 2)
+            path.addQuadCurve(to: middle, control: points[i])
+          }
+          path.addLine(to: points[points.count - 1])
+          let width = max(1.5, 3 * zoom)
+          context.stroke(path, with: .color(.black.opacity(0.35 * fade)),
+                         style: StrokeStyle(lineWidth: width + 2, lineCap: .round, lineJoin: .round))
+          context.stroke(path, with: .color(snap.color.opacity(fade)),
+                         style: StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round))
+          /* The broken end glows white-hot a moment. */
+          let heat = max(0, 1 - age / 0.25)
+          if heat > 0, let tip = points.last {
+            let r = (4 + 6 * heat) * max(zoom, 0.5)
+            context.fill(Path(ellipseIn: CGRect(x: tip.x - r, y: tip.y - r, width: r * 2, height: r * 2)),
+                         with: .color(.white.opacity(0.85 * heat)))
+          }
+          /* Sparks: short streaks along their flight, cooling from white to the cable's color. */
+          let life = max(0, 1 - age / 0.45)
+          guard life > 0 else { continue }
+          for spark in snap.sparks {
+            let head = toView(spark.position)
+            let tail = toView(CGPoint(x: spark.position.x - spark.velocity.dx * 0.025,
+                                      y: spark.position.y - spark.velocity.dy * 0.025))
+            var streak = Path()
+            streak.move(to: tail)
+            streak.addLine(to: head)
+            context.stroke(streak, with: .color(snap.color.opacity(0.8 * life)),
+                           style: StrokeStyle(lineWidth: 3 * max(zoom, 0.5), lineCap: .round))
+            context.stroke(streak, with: .color(.white.opacity(life * life)),
+                           style: StrokeStyle(lineWidth: 1.2 * max(zoom, 0.5), lineCap: .round))
+          }
+        }
+        if snaps.isEmpty && snapping {
+          DispatchQueue.main.async { snapping = false }
+        }
+      }
+    }
+    .allowsHitTesting(false)
+  }
+
+  /** The cable let go away from any socket snaps from the socket it hangs from. */
+  private func snapCable(_ wire: PendingWire) {
+    guard let anchor = layout.sockets[NodeCanvasLayout.socketKey(wire.node, output: wire.output, wire.socket)] else {
+      return
+    }
+    let from = wire.output ? anchor : wire.end, to = wire.output ? wire.end : anchor
+    let slack = cables.slack(CableMotion.pending, from: from, to: to)
+    let controls = Self.controls(from: from, to: to, slack: slack)
+    var curve: [CGPoint] = (0...28).map { step in
+      let t = CGFloat(step) / 28, u = 1 - t
+      let a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t
+      return CGPoint(x: a * from.x + b * controls.0.x + c * controls.1.x + d * to.x,
+                     y: a * from.y + b * controls.0.y + c * controls.1.y + d * to.y)
+    }
+    if !wire.output { curve.reverse() }
+    snaps.snap(along: curve, color: wire.color)
+    snapping = true
+    CableFeedback.broke(at: windowPoint(wire.end))
+    /* The cord whips into its socket, which takes it with a small ring. */
+    DispatchQueue.main.asyncAfter(deadline: .now() + CableSnaps.reel * 0.85) {
+      let plug = CablePlug(point: anchor, color: wire.color, start: Date())
+      plugs.append(plug)
+      DispatchQueue.main.asyncAfter(deadline: .now() + CablePlug.duration) {
+        plugs.removeAll { $0.id == plug.id }
+      }
+      CableFeedback.reeled(at: windowPoint(anchor))
+    }
   }
 
   /** The cable just dropped onto a socket: it springs up and settles, the socket sends out a
@@ -1635,29 +1839,39 @@ struct NodeCanvas: View {
            target.node != current.node
         {
           if let detached = current.detached {
-            model.send("unlink", ["to_node": detached.string("to_node") ?? "", "to_socket": detached.string("to_socket") ?? "",
-                                  "from_node": detached.string("from_node") ?? "", "from_socket": detached.string("from_socket") ?? ""])
+            unlink(detached)
           }
           let link = current.output ?
             ["from_node": current.node, "from_socket": current.socket, "to_node": target.node, "to_socket": target.socket] :
             ["from_node": target.node, "from_socket": target.socket, "to_node": current.node, "to_socket": current.socket]
           model.send("link", link)
+          unlinked[CableMotion.key(link)] = nil
           if let place = layout.sockets[NodeCanvasLayout.socketKey(target.node, output: !current.output, target.socket)] {
             plugged(into: place, node: target.node, color: current.color, link: link)
           }
           return
         }
         if let detached = current.detached {
-          /* Dropped away from any socket: disconnected, and the loose cable falls away. */
+          /* Dropped away from any socket: disconnected, and the loose cable snaps. */
+          snapCable(current)
           cables.forget(CableMotion.pending)
-          model.send("unlink", ["to_node": detached.string("to_node") ?? "", "to_socket": detached.string("to_socket") ?? "",
-                                "from_node": detached.string("from_node") ?? "", "from_socket": detached.string("from_socket") ?? ""])
+          unlink(detached)
           return
         }
         let location = CGPoint(x: value.location.x / nodeScale, y: -value.location.y / nodeScale)
         adding = NodeAddRequest(location: current.output ? location : CGPoint(x: location.x - 160, y: location.y),
                                 connect: ["node": current.node, "socket": current.socket, "output": current.output ? 1 : 0])
       })
+  }
+
+  /** Takes a link out, no longer drawn from now on rather than once Blender's tree has lost it. */
+  private func unlink(_ link: JSON) {
+    unlinked[CableMotion.key(link)] = Date()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+      unlinked = unlinked.filter { Date().timeIntervalSince($0.value) < 1.5 }
+    }
+    model.send("unlink", ["to_node": link.string("to_node") ?? "", "to_socket": link.string("to_socket") ?? "",
+                          "from_node": link.string("from_node") ?? "", "from_socket": link.string("from_socket") ?? ""])
   }
 
   /** The socket of the other direction nearest a point, within reach of a finger. */
