@@ -305,7 +305,8 @@ struct Rail: View {
           /* The selection slides to a new tool or brush, however it was chosen. */
           .animation(animation, value: active)
         }
-        .scrollDisabled(!state.listVisible)
+        /* Not while a hold slides along it: the scroll view would take the finger. */
+        .scrollDisabled(!state.listVisible || state.pressSelecting)
         .scrollBounceBehavior(.basedOnSize)
         .onChange(of: state.listVisible) { _, visible in
           if visible { scroller.scrollTo(active, anchor: .center) }
@@ -320,7 +321,7 @@ struct Rail: View {
      * slides to another. An open list scrolls instead. */
     /* Only on the closed rail: on an open list, even a drag that does nothing takes the finger
      * from the scroll view, which then cannot scroll. */
-    .simultaneousGesture(dockDrag, including: state.listVisible ? .subviews : .all)
+    .simultaneousGesture(dockDrag, including: state.listVisible && !state.pressSelecting ? .subviews : .all)
     .accessibilityIdentifier(brush ? "blender.brushbar" : "blender.toolbar")
   }
 
@@ -330,7 +331,8 @@ struct Rail: View {
                         emphasized: state.listVisible && state.hovered == item.id,
                         showsTitle: state.expanded, brush: brush, namespace: namespace)
       .onTapGesture { tap(item) }
-      .simultaneousGesture(pressSelect(item), including: state.listVisible ? .subviews : .all)
+      /* Kept while a hold slides on: the list opening under the finger would otherwise end it. */
+      .simultaneousGesture(pressSelect(item), including: state.listVisible && !state.pressSelecting ? .subviews : .all)
       .accessibilityAddTraits(.isButton)
       .accessibilityAction { tap(item) }
     /* The system's own highlight under a hovering Pencil or pointer. */
