@@ -12,6 +12,8 @@
 @protocol WMIOSLauncherModelView
 - (instancetype)initWithModelURL:(NSURL *)url;
 - (void)placeModelWithCenter:(CGPoint)center size:(CGFloat)size;
+/** The document browser, in front of the model's lower part, whose touches stay its own. */
+@property(nonatomic, weak) UIView *browserView;
 @end
 
 @protocol WMIOSLauncherLogoView
@@ -245,6 +247,7 @@ static void launcherStyle(UIDocumentViewControllerLaunchOptions *launch)
   if (model_url && model_class) {
     UIView<WMIOSLauncherModelView> *model = [[[model_class alloc] initWithModelURL:model_url]
         autorelease];
+    model.browserView = launch.browserViewController.view;
     launch.backgroundAccessoryView = [[[WMIOSLauncherModelStage alloc] initWithModel:model]
         autorelease];
   }

@@ -222,16 +222,19 @@ struct LauncherScene: View {
   private let state: LauncherSceneState
   private var host: UIHostingController<LauncherScene>?
   private var lastTranslation = CGPoint.zero
+  /** On the window rather than the model: the launcher's own views lie in front of her, and which
+   * of them take touches changes from one system release to the next. */
+  private let pan = UIPanGestureRecognizer()
+  @objc public weak var browserView: UIView?
 
   @objc public init(modelURL: URL) {
     state = LauncherSceneState(model: LauncherModel(url: modelURL))
     super.init(frame: .zero)
-    let pan = UIPanGestureRecognizer(target: self, action: #selector(pan(_:)))
+    pan.addTarget(self, action: #selector(pan(_:)))
     pan.delegate = self
     /* Fingers, and the pointer of a trackpad or mouse. */
     pan.allowedTouchTypes = [UITouch.TouchType.direct, .indirect, .indirectPointer, .pencil]
       .map { NSNumber(value: $0.rawValue) }
-    addGestureRecognizer(pan)
   }
 
   required init?(coder: NSCoder) {
@@ -245,6 +248,8 @@ struct LauncherScene: View {
   public override func didMoveToWindow() {
     super.didMoveToWindow()
     NotificationCenter.default.removeObserver(self)
+    pan.view?.removeGestureRecognizer(pan)
+    window?.addGestureRecognizer(pan)
     guard window != nil else {
       /* Opening a document takes the whole launcher out of its window. */
       setShown(false)
@@ -339,11 +344,24 @@ struct LauncherScene: View {
     }
   }
 
-  /** Turning the model wins over the launcher's own drags, which wait for it. */
+  /** A touch on the model, unless it is on a button or the document browser in front of her. */
+  public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+    guard host != nil, point(inside: touch.location(in: self), with: nil) else { return false }
+    var view = touch.view
+    while let current = view, current !== self {
+      if current is UIControl || current === browserView || current.accessibilityTraits.contains(.button) {
+        return false
+      }
+      view = current.superview
+    }
+    return true
+  }
+
+  /** Turning the model wins over the scrolling of the launcher's title in front of her. */
   public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                 shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool
   {
-    other.view !== self
+    other !== pan && other.view is UIScrollView && other.view?.isDescendant(of: browserView ?? self) == false
   }
 }
 
