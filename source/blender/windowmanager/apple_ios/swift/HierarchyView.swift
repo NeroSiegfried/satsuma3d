@@ -289,9 +289,6 @@ struct OutlineList: View {
   @State private var dropTarget: String?
   /** Rows are open until closed, as in Blender's Outliner. */
   @State private var collapsed = Set<String>()
-  /** The row whose swipe actions show, and how far it is pulled. */
-  @State private var swiped: String?
-  @State private var swipeOffset: CGFloat = 0
 
   private static func selected(_ nodes: [JSON]) -> Set<String> {
     Set(nodes.filter { $0.string("kind") == "object" && $0.bool("selected") }.compactMap { $0.string("key") })
@@ -309,68 +306,50 @@ struct OutlineList: View {
     return result
   }
 
-  var body: some View {
-    let children = self.children
-    ScrollView {
-      LazyVStack(spacing: 2) {
-        ForEach(children[""] ?? [], id: \.keyString) { node in
-          branch(node, children)
-        }
+  /** The rows as they show, in outline order: those under a closed row are left out. */
+  private func shownRows(_ children: [String: [JSON]]) -> [JSON] {
+    var result: [JSON] = []
+    func add(_ nodes: [JSON]) {
+      for node in nodes {
+        result.append(node)
+        let key = node.keyString
+        if !store.query.isEmpty || !collapsed.contains(key), let rows = children[key] { add(rows) }
       }
-      .padding(.horizontal, 8)
-      .padding(.vertical, 4)
     }
+    add(children[""] ?? [])
+    return result
+  }
+
+  /**
+   * The system's own list, so its rows swipe as every list's do: the actions uncover as the row
+   * slides, and a long swipe runs the outermost.
+   */
+  var body: some View {
+    List {
+      ForEach(shownRows(children), id: \.keyString) { node in
+        row(node)
+          .listRowInsets(EdgeInsets(top: 1, leading: 8, bottom: 1, trailing: 8))
+          .listRowSeparator(.hidden)
+          .listRowBackground(Color.clear)
+          .swipeActions(edge: .trailing, allowsFullSwipe: true) { swipeButtons(node, ["delete", "visibility"]) }
+          .swipeActions(edge: .leading) { swipeButtons(node, ["duplicate", "rename"]) }
+      }
+    }
+    .listStyle(.plain)
+    .scrollContentBackground(.hidden)
+    .environment(\.defaultMinListRowHeight, 42)
 #if !os(visionOS)
     .scrollDismissesKeyboard(.immediately)
 #endif
     /* Published before it changes: the new nodes are the value sent. */
     .onReceive(store.$nodes) { nodes in selection = Self.selected(nodes) }
-    .onChange(of: store.editing) { closeSwipe() }
     .accessibilityIdentifier("blender.hierarchy.outline")
-  }
-
-  /** A row and the rows under it, which slide out from under it as it opens, clipped so they
-   * never pass over it, as the Properties panels' sections do. */
-  private func branch(_ node: JSON, _ children: [String: [JSON]]) -> AnyView {
-    let key = node.keyString
-    let open = !store.query.isEmpty || !collapsed.contains(key)
-    return AnyView(VStack(spacing: 2) {
-      SwipeRow(id: key, swiped: $swiped, offset: $swipeOffset,
-               leading: swipeActions(node, ["duplicate", "rename"]),
-               trailing: swipeActions(node, ["delete", "visibility"])) {
-        row(node)
-      }
-      .zIndex(1)
-      VStack(spacing: 2) {
-        if open, let rows = children[key] {
-          VStack(spacing: 2) {
-            ForEach(rows, id: \.keyString) { child in
-              branch(child, children)
-            }
-          }
-          .transition(.opacity.combined(with: .move(edge: .top)))
-        }
-      }
-      .frame(maxWidth: .infinity, alignment: .top)
-      .clipped()
-    })
   }
 
   private var animation: Animation? { UIAccessibility.isReduceMotionEnabled ? nil : .smooth(duration: 0.25) }
 
-  private func closeSwipe() {
-    withAnimation(animation) {
-      swiped = nil
-      swipeOffset = 0
-    }
-  }
-
   /** A tap selects the object; in Select mode it adds it to or takes it from the selection. */
   private func tap(_ node: JSON) {
-    if swiped != nil {
-      closeSwipe()
-      return
-    }
     let key = node.keyString
     guard node.string("kind") == "object", node.bool("enabled"), let id = node.string("id") else { return }
     if store.editing {
@@ -496,24 +475,30 @@ struct OutlineList: View {
     .accessibilityIdentifier("blender.hierarchy." + (node.string("id") ?? ""))
   }
 
-  /** The actions a swipe shows, as Blender allows them for the row now. */
-  private func swipeActions(_ node: JSON, _ actions: [String]) -> [SwipeAction] {
+  /** The actions a swipe shows, as Blender allows them for the row now, outermost first. */
+  @ViewBuilder
+  private func swipeButtons(_ node: JSON, _ actions: [String]) -> some View {
     let node = store.byKey[node.keyString] ?? node
     let hidden = node.bool("hidden")
-    return actions.filter { store.allow([node], $0) }.map { action in
+    ForEach(actions.filter { store.allow([node], $0) }, id: \.self) { action in
       switch action {
         case "delete":
-          return SwipeAction(title: "Delete", symbol: "trash", tint: .red) { delete([node]) }
+          /* Red as a delete is, without the destructive role: the row stays until it is confirmed. */
+          Button { delete([node]) } label: { Label("Delete", systemImage: "trash") }
+            .tint(.red)
         case "duplicate":
-          return SwipeAction(title: "Duplicate", symbol: "plus.square.on.square", tint: .blue) {
-            store.act("duplicate", [node])
+          Button { store.act("duplicate", [node]) } label: {
+            Label("Duplicate", systemImage: "plus.square.on.square")
           }
+          .tint(.blue)
         case "visibility":
-          return SwipeAction(title: hidden ? "Show" : "Hide", symbol: hidden ? "eye" : "eye.slash", tint: .gray) {
-            store.act("visibility", [node], value: !hidden)
+          Button { store.act("visibility", [node], value: !hidden) } label: {
+            Label(hidden ? "Show" : "Hide", systemImage: hidden ? "eye" : "eye.slash")
           }
+          .tint(.gray)
         default:
-          return SwipeAction(title: "Rename", symbol: "pencil", tint: .gray) { rename(node) }
+          Button { rename(node) } label: { Label("Rename", systemImage: "pencil") }
+            .tint(.orange)
       }
     }
   }
@@ -542,135 +527,6 @@ struct OutlineList: View {
         Label(several ? "Delete \(nodes.count) Objects" : "Delete", systemImage: "trash")
       }
     }
-  }
-}
-
-struct SwipeAction {
-  let title: String
-  let symbol: String
-  let tint: Color
-  let run: () -> Void
-}
-
-/** A row that a sideways swipe slides aside to uncover its actions, as a list's rows do: the
- * actions widen with the swipe, and a long one stretches the outermost over the row and runs it
- * on release. Actions are listed outermost first. One row is open at a time. */
-struct SwipeRow<Content: View>: View {
-  let id: String
-  @Binding var swiped: String?
-  @Binding var offset: CGFloat
-  let leading: [SwipeAction]
-  let trailing: [SwipeAction]
-  @ViewBuilder let content: Content
-  @State private var dragStart: CGFloat?
-  @State private var width: CGFloat = 0
-
-  private let buttonWidth: CGFloat = 64
-  private let settle = Animation.snappy(duration: 0.3)
-
-  private var shown: CGFloat { swiped == id ? offset : 0 }
-
-  private func actions(_ trailing: Bool) -> [SwipeAction] { trailing ? self.trailing : leading }
-
-  private func openWidth(_ actions: [SwipeAction]) -> CGFloat { CGFloat(actions.count) * buttonWidth }
-
-  /** How far a swipe goes before the outermost action takes the whole row. */
-  private func fullSwipe(_ actions: [SwipeAction]) -> CGFloat {
-    max(width * 0.6, openWidth(actions) + buttonWidth)
-  }
-
-  private var stretched: Bool { shown != 0 && abs(shown) > fullSwipe(actions(shown < 0)) }
-
-  var body: some View {
-    content
-      .offset(x: shown)
-      .background {
-        ZStack {
-          side(leading, revealed: max(shown, 0), trailing: false)
-          side(trailing, revealed: max(-shown, 0), trailing: true)
-        }
-      }
-      .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-      .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-      .simultaneousGesture(swipe)
-#if !os(visionOS)
-      .sensoryFeedback(.impact(weight: .medium), trigger: stretched) { _, now in now }
-#endif
-  }
-
-  /** One side's actions, sharing the width uncovered so far, outermost at the row's edge. */
-  private func side(_ actions: [SwipeAction], revealed: CGFloat, trailing: Bool) -> some View {
-    let full = revealed > fullSwipe(actions)
-    let ordered = Array(actions.enumerated())
-    return HStack(spacing: 0) {
-      ForEach(trailing ? ordered.reversed() : ordered, id: \.offset) { index, action in
-        let share = full ? (index == 0 ? revealed : 0) : revealed / CGFloat(actions.count)
-        Button { run(action) } label: {
-          Image(systemName: action.symbol)
-            .font(.body.weight(.semibold))
-            .foregroundStyle(.white)
-            .frame(width: buttonWidth)
-            /* The symbol keeps to the row's side, as the button stretches away from it. */
-            .frame(width: share, alignment: trailing ? .leading : .trailing)
-            .frame(maxHeight: .infinity)
-            .background(action.tint)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(action.title)
-      }
-    }
-    .animation(settle, value: full)
-    .frame(width: revealed)
-    .clipped()
-    .frame(maxWidth: .infinity, alignment: trailing ? .trailing : .leading)
-  }
-
-  private func run(_ action: SwipeAction) {
-    withAnimation(settle) {
-      swiped = nil
-      offset = 0
-    }
-    action.run()
-  }
-
-  private var swipe: some Gesture {
-    DragGesture(minimumDistance: 18)
-      .onChanged { value in
-        /* Sideways only; an upward or downward drag scrolls the list. */
-        guard dragStart != nil || abs(value.translation.width) > abs(value.translation.height) * 1.5 else { return }
-        if dragStart == nil {
-          dragStart = shown
-          if swiped != id {
-            swiped = id
-            offset = 0
-          }
-        }
-        let wanted = (dragStart ?? 0) + value.translation.width
-        /* A side without actions only gives a little, with resistance. */
-        if actions(wanted < 0).isEmpty {
-          offset = wanted / 8
-        }
-        else {
-          offset = max(-width, min(width, wanted))
-        }
-      }
-      .onEnded { value in
-        guard let start = dragStart else { return }
-        dragStart = nil
-        let trailing = offset < 0
-        let list = actions(trailing)
-        if let outermost = list.first, abs(offset) > fullSwipe(list) {
-          run(outermost)
-          return
-        }
-        /* A flick counts by where it was heading. */
-        let heading = start + value.predictedEndTranslation.width
-        let open = !list.isEmpty && (heading < 0) == trailing && abs(heading) > openWidth(list) / 2
-        withAnimation(settle) {
-          offset = open ? (trailing ? -openWidth(list) : openWidth(list)) : 0
-          if !open { swiped = nil }
-        }
-      }
   }
 }
 
