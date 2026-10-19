@@ -672,24 +672,6 @@ struct NodeCanvas: View {
         content
           .scaleEffect(zoom, anchor: .topLeading)
           .offset(pan)
-        if let ripple, let node = model.nodes.first(where: { $0.string("name") == ripple.name }) {
-          /* Bobbing on its own waves: dipping as it lands, then rising and settling. */
-          let corner = origin(node)
-          let size = layout.nodes[ripple.name]?.size ?? CGSize(width: cardWidth(node), height: 120)
-          TimelineView(.animation) { timeline in
-            ZStack(alignment: .topLeading) { nodeView(node, native: false) }
-              .frame(width: 1, height: 1, alignment: .topLeading)
-              .coordinateSpace(.named("nodes"))
-              /* Applied to the 1 point box the canvas lays out in, so canvas points are its
-               * fractions. */
-              .scaleEffect(NodeRippleEffect.bob(timeline.date.timeIntervalSince(ripple.start)),
-                           anchor: UnitPoint(x: corner.x + size.width / 2, y: corner.y + size.height / 2))
-          }
-          /* At the canvas's origin, as `content` is, rather than centered in the view. */
-          .frame(width: 1, height: 1, alignment: .topLeading)
-          .scaleEffect(zoom, anchor: .topLeading)
-          .offset(pan)
-        }
         if !vanishing.isEmpty {
           /* Deleted nodes, sucked away into their middle. */
           TimelineView(.animation) { timeline in
@@ -1232,7 +1214,7 @@ struct NodeCanvas: View {
       /* Only the nodes in view are built, so a tree of hundreds of nodes stays quick; zoomed far
        * out, they are drawn as plain cards. */
       let visible = visibleArea
-      ForEach(model.nodes.filter { $0.string("kind") != "FRAME" && $0.nodeName != ripple?.name && onScreen($0, visible) },
+      ForEach(model.nodes.filter { $0.string("kind") != "FRAME" && onScreen($0, visible) },
               id: \.nodeName) { node in
         if zoom < NodeCard.nativeZoom && drag == nil {
           overviewCard(node)
@@ -1240,7 +1222,7 @@ struct NodeCanvas: View {
         else {
           /* Wherever values show, they are the system's controls; further out, plain cards keep a
            * large tree quick as it zooms. */
-          nodeView(node, native: true)
+          nodeView(node, native: true, landed: node.nodeName == ripple?.name ? ripple?.start : nil)
         }
       }
     }
@@ -1249,7 +1231,7 @@ struct NodeCanvas: View {
   }
 
   @ViewBuilder
-  private func nodeView(_ node: JSON, native: Bool) -> some View {
+  private func nodeView(_ node: JSON, native: Bool, landed: Date? = nil) -> some View {
     let name = node.string("name") ?? ""
     let point = origin(node)
     Group {
@@ -1273,6 +1255,8 @@ struct NodeCanvas: View {
             }
           }
           .frame(width: cardWidth(node))
+          /* Bobbing on its own waves as it lands: the node itself, so it can be dragged at once. */
+          .modifier(NodeBob(start: landed))
           .scaleEffect(bounced == name ? 1.035 : 1)
           /* Selected at once; tapped again, or held, its actions show above it, as objects on a
            * canvas do. */
@@ -2618,6 +2602,18 @@ struct NodeRippleEffect: ViewModifier {
           .float(7), .float(56), .float(210), .float(0.6)),
         maxSampleOffset: CGSize(width: 8, height: 8),
         isEnabled: ripple != nil && Self.library != nil && time < Float(Self.duration))
+    }
+  }
+}
+
+/** A node dipping as it lands, then rising and settling. The same views throughout, landed or
+ * not, so a drag already on the node carries on as the bob ends. */
+struct NodeBob: ViewModifier {
+  let start: Date?
+
+  func body(content: Content) -> some View {
+    TimelineView(.animation(paused: start == nil)) { timeline in
+      content.scaleEffect(start.map { NodeRippleEffect.bob(timeline.date.timeIntervalSince($0)) } ?? 1)
     }
   }
 }
