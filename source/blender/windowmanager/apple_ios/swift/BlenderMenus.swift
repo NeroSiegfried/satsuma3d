@@ -25,6 +25,18 @@ struct BlenderMenuItem: Identifiable, Equatable {
   let checked: Bool
   /** A new section starts at this item. */
   let sectionStart: Bool
+  /** Deletes or removes something: shown in red with a bin, as the system's menus do. */
+  let destructive: Bool
+}
+
+/** Whether a command deletes or removes, by its operator, such as `OBJECT_OT_delete` or
+ * `OBJECT_OT_material_slot_remove`, or by its title where it has none, such as a Delete submenu. */
+func isDestructive(operator idname: String?, title: String) -> Bool {
+  if let idname, let range = idname.range(of: "_OT_") {
+    let words = idname[range.upperBound...].split(separator: "_")
+    return words.contains("delete") || words.last == "remove"
+  }
+  return title.hasPrefix("Delete") || title.hasPrefix("Remove")
 }
 
 @MainActor
@@ -117,7 +129,9 @@ final class BlenderMenus {
       result.append(BlenderMenuItem(title: title, icon: item.string("icon") ?? "",
                                     route: encode(route), submenu: item.bool("submenu"),
                                     disabled: item.bool("disabled"), checked: item.bool("checked"),
-                                    sectionStart: sectionStart))
+                                    sectionStart: sectionStart,
+                                    destructive: isDestructive(operator: item.string("operator").flatMap { $0.isEmpty ? nil : $0 },
+                                                               title: title)))
       sectionStart = false
     }
     return result
@@ -173,7 +187,7 @@ struct BlenderMenuItems: View {
         .disabled(item.disabled)
     }
     else {
-      Button { menus.run(item) } label: { label(item) }
+      Button(role: item.destructive ? .destructive : nil) { menus.run(item) } label: { label(item) }
         .disabled(item.disabled)
     }
   }
@@ -182,7 +196,10 @@ struct BlenderMenuItems: View {
     Label {
       Text(item.title)
     } icon: {
-      if !item.icon.isEmpty, item.icon != "NONE", item.icon != "BLANK1", let image = BlenderIcon.image(item.icon) {
+      if item.destructive {
+        Image(systemName: "trash")
+      }
+      else if !item.icon.isEmpty, item.icon != "NONE", item.icon != "BLANK1", let image = BlenderIcon.image(item.icon) {
         Image(uiImage: image)
       }
     }

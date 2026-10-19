@@ -379,13 +379,16 @@ struct ListToolbar: View {
           if hasMenu {
             Menu {
               ForEach(Array(extras.enumerated()), id: \.offset) { _, op in
-                Button {
+                let destructive = isDestructive(operator: op.string("operator").flatMap { $0.isEmpty ? nil : $0 },
+                                                title: op.string("label") ?? "")
+                Button(role: destructive ? .destructive : nil) {
                   runOperator(op)
                 } label: {
                   Label {
                     Text(op.string("label") ?? "")
                   } icon: {
-                    if let image = BlenderIcon.image(op.string("icon")) { Image(uiImage: image) }
+                    if destructive { Image(systemName: "trash") }
+                    else if let image = BlenderIcon.image(op.string("icon")) { Image(uiImage: image) }
                   }
                 }
               }

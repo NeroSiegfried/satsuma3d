@@ -1627,6 +1627,7 @@ void project_list_side(bContext *C,
         entry->append_str("label", but->str.empty() ? WM_operatortype_name(but->optype, but->opptr) :
                                                       but->str);
         entry->append_str("icon", icon_name(button_icon(but)));
+        entry->append_str("operator", but->optype ? but->optype->idname : "");
       }
     }
   }
