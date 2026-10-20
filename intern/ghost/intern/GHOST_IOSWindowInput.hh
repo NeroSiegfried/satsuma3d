@@ -164,8 +164,6 @@ typedef struct UserInputEvent {
   GHOSTUITapGestureRecognizer *tap4f_gesture_recognizer;
   GHOSTUIPanGestureRecognizer *pan_gesture_recognizer;
   GHOSTUIPanGestureRecognizer *pan2f_gesture_recognizer;
-  /* Three fingers pan the view, with one finger on the tool. */
-  GHOSTUIPanGestureRecognizer *pan3f_gesture_recognizer;
   GHOSTUIPinchGestureRecognizer *zoom_gesture_recognizer;
   UIRotationGestureRecognizer *rotation_gesture_recognizer;
   GHOSTUIHoverGestureRecognizer *hover_gesture_recognizer;
@@ -206,6 +204,10 @@ typedef struct UserInputEvent {
   CGPoint orbit_remainder;
   CFTimeInterval orbit_timestamp;
   uint64_t orbit_gesture_id;
+  /* How many fingers a navigation drag had at its last update: it orbits or pans by their count,
+   * and goes on from where it is when that changes. */
+  NSUInteger navigation_touches;
+  bool navigation_orbits;
 
   /* Keyboard handling. */
   /** Text is edited by Blender from hardware key events, not in #text_field. */

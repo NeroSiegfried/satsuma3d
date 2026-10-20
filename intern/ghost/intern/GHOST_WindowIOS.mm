@@ -401,9 +401,9 @@ UIWindow *document_window = nil;
               action:@selector(handlePan:)];
   pan_gesture_recognizer.delegate = self;
   pan_gesture_recognizer.cancelsTouchesInView = false;
-  /* Allow scrolling only with a single finger. */
+  /* One finger orbits; more pan, going from one to the other as fingers come and go. */
   pan_gesture_recognizer.minimumNumberOfTouches = 1;
-  pan_gesture_recognizer.maximumNumberOfTouches = 1;
+  pan_gesture_recognizer.maximumNumberOfTouches = 3;
   pan_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypeDirect) ];
   [window->getView() addGestureRecognizer:pan_gesture_recognizer];
 
@@ -413,22 +413,12 @@ UIWindow *document_window = nil;
               action:@selector(handlePan2f:)];
   pan2f_gesture_recognizer.delegate = self;
   pan2f_gesture_recognizer.cancelsTouchesInView = false;
-  /* Two finger gestures only.  */
+  /* With one finger on the tool: two orbit, three pan. */
   pan2f_gesture_recognizer.minimumNumberOfTouches = 2;
-  pan2f_gesture_recognizer.maximumNumberOfTouches = 2;
+  pan2f_gesture_recognizer.maximumNumberOfTouches = 3;
   pan2f_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypeDirect) ];
   [window->getView() addGestureRecognizer:pan2f_gesture_recognizer];
 
-  /* Three fingers pan, whichever input uses the tool. */
-  pan3f_gesture_recognizer = [[GHOSTUIPanGestureRecognizer alloc]
-      initWithTarget:self
-              action:@selector(handlePan3f:)];
-  pan3f_gesture_recognizer.delegate = self;
-  pan3f_gesture_recognizer.cancelsTouchesInView = false;
-  pan3f_gesture_recognizer.minimumNumberOfTouches = 3;
-  pan3f_gesture_recognizer.maximumNumberOfTouches = 3;
-  pan3f_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypeDirect) ];
-  [window->getView() addGestureRecognizer:pan3f_gesture_recognizer];
 
   /* Pinch/Zoom gesture recognizer. */
   zoom_gesture_recognizer = [[GHOSTUIPinchGestureRecognizer alloc]
@@ -673,12 +663,12 @@ UIWindow *document_window = nil;
   {
     return YES;
   }
-  const BOOL is_navigation = gestureRecognizer == pan2f_gesture_recognizer ||
-                             gestureRecognizer == pan3f_gesture_recognizer ||
+  const BOOL is_navigation = gestureRecognizer == pan_gesture_recognizer ||
+                             gestureRecognizer == pan2f_gesture_recognizer ||
                              gestureRecognizer == zoom_gesture_recognizer ||
                              gestureRecognizer == rotation_gesture_recognizer;
-  const BOOL other_is_navigation = otherGestureRecognizer == pan2f_gesture_recognizer ||
-                                   otherGestureRecognizer == pan3f_gesture_recognizer ||
+  const BOOL other_is_navigation = otherGestureRecognizer == pan_gesture_recognizer ||
+                                   otherGestureRecognizer == pan2f_gesture_recognizer ||
                                    otherGestureRecognizer == zoom_gesture_recognizer ||
                                    otherGestureRecognizer == rotation_gesture_recognizer;
   return gestureRecognizer != otherGestureRecognizer && is_navigation && other_is_navigation;
@@ -704,7 +694,6 @@ UIWindow *document_window = nil;
       gestureRecognizer == tap4f_gesture_recognizer ||
       gestureRecognizer == pan_gesture_recognizer ||
       gestureRecognizer == pan2f_gesture_recognizer ||
-      gestureRecognizer == pan3f_gesture_recognizer ||
       gestureRecognizer == zoom_gesture_recognizer ||
       gestureRecognizer == rotation_gesture_recognizer ||
 #if !defined(APPLE_TARGET_VISIONOS)
@@ -1585,20 +1574,41 @@ static UIBezierPath *pointer_move()
 
 - (void)handlePan:(GHOSTUIPanGestureRecognizer *)sender
 {
+  /* With the Pencil on the tool: one finger orbits, two or three pan. */
+  if (finger_tool_enabled) {
+    return;
+  }
+  [self handleNavigationDrag:sender orbitingFingers:1];
+}
+
+/**
+ * A drag that navigates the view: with `orbiting_fingers` it orbits, with more it pans. A finger
+ * coming or going changes which, smoothly: the drag goes on from where it is, without a jump, as
+ * the fingers' middle moves when their count changes.
+ */
+- (void)handleNavigationDrag:(GHOSTUIPanGestureRecognizer *)sender
+             orbitingFingers:(NSUInteger)orbiting_fingers
+{
   CGPoint touch_point = [sender getScaledTouchPoint:window];
   CGPoint translation = [sender getScaledTranslation:window];
   UserInputEvent event_info(&touch_point, nullptr, nullptr, false);
+  const NSUInteger touches = sender.numberOfTouches;
 
   if (sender.state == UIGestureRecognizerStateBegan ||
       sender.state == UIGestureRecognizerStateChanged)
   {
-    if (sender.state == UIGestureRecognizerStateBegan) {
+    const bool orbits = touches <= orbiting_fingers;
+    if (sender.state == UIGestureRecognizerStateBegan || touches != navigation_touches) {
       [self stopOrbitMomentum];
-      /* UIKit delivers gestures on the main thread. IDs are unique across windows, and
-       * remain attached to queued events even if the next drag has already begun. */
-      static uint64_t next_orbit_gesture_id = 0;
-      orbit_gesture_id = ++next_orbit_gesture_id;
+      if (orbits && (sender.state == UIGestureRecognizerStateBegan || !navigation_orbits)) {
+        /* UIKit delivers gestures on the main thread. IDs are unique across windows, and
+         * remain attached to queued events even if the next drag has already begun. */
+        static uint64_t next_orbit_gesture_id = 0;
+        orbit_gesture_id = ++next_orbit_gesture_id;
+      }
       [sender setCachedTranslation:translation];
+      navigation_touches = touches;
+      navigation_orbits = orbits;
     }
 
     /* Calculate translation change since last begin/change event */
@@ -1606,10 +1616,16 @@ static UIBezierPath *pointer_move()
     /* Update cached translation */
     [sender setCachedTranslation:translation];
 
-    /* A single finger drag navigates the viewport. Apple Pencil remains the active-tool input. */
     if (!CGPointEqualToPoint(relative_translation, CGPointMake(0.0f, 0.0f))) {
-      event_info.translation = CGPointMake(-relative_translation.x, -relative_translation.y);
-      event_info.add_event(UserInputEvent::EventTypes::ORBIT_GESTURE);
+      if (orbits) {
+        event_info.translation = CGPointMake(-relative_translation.x, -relative_translation.y);
+        event_info.add_event(UserInputEvent::EventTypes::ORBIT_GESTURE);
+      }
+      else {
+        UserInputEvent pan(&touch_point, &relative_translation, nullptr, false);
+        pan.add_event(UserInputEvent::EventTypes::PAN_GESTURE_TWO_FINGERS);
+        [self generateUserInputEvents:pan];
+      }
     }
   }
   else if (sender.state == UIGestureRecognizerStateEnded ||
@@ -1617,7 +1633,11 @@ static UIBezierPath *pointer_move()
            sender.state == UIGestureRecognizerStateFailed)
   {
     [sender setCachedTranslation:CGPointMake(0.0f, 0.0f)];
-    if (sender.state == UIGestureRecognizerStateEnded && !pencil_button_active) {
+    const bool was_orbiting = navigation_orbits;
+    navigation_touches = 0;
+    navigation_orbits = false;
+    /* Spinning on only from an orbit. */
+    if (sender.state == UIGestureRecognizerStateEnded && !pencil_button_active && was_orbiting) {
       CGPoint velocity = [sender velocityInView:window->getView()];
       const CGFloat speed = hypot(velocity.x, velocity.y);
       if (speed >= 80.0) {
@@ -1697,49 +1717,10 @@ static UIBezierPath *pointer_move()
 
 - (void)handlePan2f:(GHOSTUIPanGestureRecognizer *)sender
 {
-  /* One finger uses the tool: two orbit, as one does with a Pencil, and three pan. */
+  /* One finger uses the tool: two orbit, as one does with a Pencil, and three pan. Otherwise one
+   * finger's drag navigates, with as many fingers as it has, see #handlePan. */
   if (finger_tool_enabled) {
-    [self handlePan:sender];
-    return;
-  }
-  [self handleViewPan:sender];
-}
-
-- (void)handlePan3f:(GHOSTUIPanGestureRecognizer *)sender
-{
-  [self handleViewPan:sender];
-}
-
-/** Pan the view by a drag of several fingers. */
-- (void)handleViewPan:(GHOSTUIPanGestureRecognizer *)sender
-{
-  /* Translation can be non-zero on begin event */
-  if (sender.state == UIGestureRecognizerStateBegan ||
-      sender.state == UIGestureRecognizerStateChanged)
-  {
-    CGPoint translation = [sender getScaledTranslation:window];
-
-    /* Calculate translation relative to previous cached value. */
-    CGPoint relative_translation = [sender getRelativeTranslation:translation];
-
-    /* Cache new translation. */
-    [sender setCachedTranslation:translation];
-
-    /* Generate pan event if translation is non zero. */
-    if (!CGPointEqualToPoint(relative_translation, CGPointMake(0.0f, 0.0f))) {
-      CGPoint touch_point = [sender getScaledTouchPoint:window];
-      bool pencil_pan = current_pencil_touch ? true : false;
-      UserInputEvent event_info(&touch_point, &relative_translation, nullptr, pencil_pan);
-      event_info.add_event(UserInputEvent::EventTypes::PAN_GESTURE_TWO_FINGERS);
-      [self generateUserInputEvents:event_info];
-    }
-  }
-  else if (sender.state == UIGestureRecognizerStateEnded ||
-           sender.state == UIGestureRecognizerStateCancelled ||
-           sender.state == UIGestureRecognizerStateFailed)
-  {
-    /* Set translation back to zero. */
-    [sender setCachedTranslation:CGPointMake(0.0f, 0.0f)];
+    [self handleNavigationDrag:sender orbitingFingers:2];
   }
 }
 
