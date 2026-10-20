@@ -100,7 +100,7 @@ static void transdata_elem_translate(const TransInfo *t,
       const TranslateCustomData *custom_data = static_cast<const TranslateCustomData *>(
           t->custom.mode.data);
       /* Rolling the Pencil clockwise, seen from its end, turns things clockwise on screen. */
-      axis_angle_normalized_to_mat3(mat, t->viewinv[2], -custom_data->roll.angle);
+      axis_angle_normalized_to_mat3(mat, t->viewinv[2], custom_data->roll.angle);
     }
     else {
       BLI_assert(rotate_mode == TRANSLATE_ROTATE_ON);
