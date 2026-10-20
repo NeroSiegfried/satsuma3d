@@ -453,6 +453,9 @@ public struct DocumentWindow: View {
         }
         .toolbar(controlsShown ? .visible : .hidden, for: .navigationBar)
         .toolbarTitleDisplayMode(.inline)
+        /* As an editor's: the tool's settings are the bar's middle items, which the system lays
+         * out in the room there is, the rest in its overflow menu. */
+        .toolbarRole(.editor)
     }
     .onChange(of: sizeClass, initial: true) { _, size in model.compact = size == .compact }
   }

@@ -278,7 +278,7 @@ struct DocumentToolbar: ToolbarContent {
 
   @ToolbarContentBuilder
   private var regularTrailing: some ToolbarContent {
-    ToolbarItem(placement: .principal) { centerSettings }
+    ToolbarItemGroup(placement: .secondaryAction) { centerItems }
     ToolbarItem(placement: .topBarTrailing) { shadingButton }
 #if !os(visionOS)
     ToolbarSpacer(.fixed, placement: .topBarTrailing)
@@ -566,6 +566,50 @@ struct DocumentToolbar: ToolbarContent {
 
   /* -------------------------------------------------------------------- */
   /* Tool settings */
+
+  /** The tool's settings as the bar's middle items, see #ToolSettingsItems: the transform tools'
+   * orientation, pivot, snapping and proportional editing, or the active tool's own. */
+  @ViewBuilder
+  private var centerItems: some View {
+    if transformTools.contains(model.activeTool) {
+      if model.activeTool == "builtin.select" {
+        TweakDragMenu()
+      }
+      ForEach(TransformSetting.all, id: \.key) { setting in
+        let value = model.transformSettings[setting.key]
+        let selected = setting.options.first { $0.value == value }
+        Menu {
+          Picker(setting.title, selection: Binding(
+            get: { value ?? "" },
+            set: { Engine.setting(setting.key, $0) })) {
+            ForEach(setting.options, id: \.value) { option in
+              Label { Text(option.title) } icon: { iconImage(setting.image(option)) }
+                .tag(option.value)
+            }
+          }
+        } label: {
+          Label {
+            Text(setting.title)
+          } icon: {
+            iconImage(selected.flatMap { setting.image($0) } ??
+                      (setting.key == "snap" && value == "mixed" ? wm_apple_ios_icon("control.Snapping", "magnet") :
+                       wm_apple_ios_icon("control.\(setting.title)", setting.symbol)))
+          }
+        }
+        .accessibilityValue(selected?.title ?? "")
+        .accessibilityIdentifier("blender.setting.\(setting.title)")
+      }
+      if hasMirror {
+        Menu { mirrorToggles } label: {
+          Label { Text("Mirror") } icon: { iconImage(BlenderIcon.image("MOD_MIRROR")) }
+        }
+        .accessibilityIdentifier("blender.setting.Mirror")
+      }
+    }
+    else if model.toolSettingsShown {
+      ToolSettingsItems(store: shell.panels.toolStripStore, popouts: shell.panels.toolPopoverStore)
+    }
+  }
 
   @ViewBuilder
   private var centerSettings: some View {

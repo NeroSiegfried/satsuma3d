@@ -540,6 +540,172 @@ struct ToolStrip: View {
   }
 }
 
+/**
+ * The tool's settings as the top bar's own items, each a system control: as many as there is room
+ * for show in the bar, and the system puts the rest in its overflow menu, each as a menu item
+ * there. Choices are pickers, switches toggles, Blender's menus menus; values to drag or type, a
+ * color and groups of settings such as Remesh open in a popover.
+ */
+struct ToolSettingsItems: View {
+  let store: InspectorStore
+  /** Where a pop-out section's controls come from, laid out in full. */
+  var popouts: InspectorStore?
+
+  var body: some View {
+    ForEach(store.sections) { section in
+      if section.id.hasSuffix("_popout_settings") {
+        ToolSettingPopover(title: section.title, icon: section.icon, systemImage: "slider.horizontal.3") {
+          let full = (popouts ?? store).sections.first { $0.id == section.id } ?? section
+          SectionView(store: popouts ?? store, section: InspectorSection(
+            id: full.id, title: full.title, active: full.active, headerHidden: true, icon: full.icon,
+            switchOnly: full.switchOnly, headerControls: full.headerControls, rows: full.rows))
+        }
+      }
+      else {
+        ForEach(section.rows) { row in
+          switch row.kind {
+            case .property(let property):
+              ToolSettingItem(store: store, property: property)
+            case .toggles(let caption, let items):
+              /* A row of toggles, such as Mirror's axes: a menu of them. */
+              Menu {
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                  Toggle(item.string("label") ?? "", isOn: Binding(
+                    get: { (store.value(item) as? NSNumber)?.boolValue ?? false },
+                    set: { store.edit(item, value: $0) }))
+                }
+              } label: {
+                Text(caption)
+              }
+            default:
+              EmptyView()
+          }
+        }
+      }
+    }
+  }
+}
+
+/** One of the tool's settings as a top bar item, see #ToolSettingsItems. */
+struct ToolSettingItem: View {
+  let store: InspectorStore
+  let property: JSON
+
+  private var type: String { property.string("type") ?? "" }
+  private var title: String { property.string("toolbar_label") ?? propertyLabel(property) }
+
+  var body: some View {
+    switch type {
+      case "BOOLEAN":
+        Toggle(isOn: Binding(
+          get: { (store.value(property) as? NSNumber)?.boolValue ?? false },
+          set: { store.edit(property, value: $0) }))
+        {
+          label(systemImage: "checkmark.circle")
+        }
+        .disabled(!property.bool("editable"))
+      case "OPERATOR" where property.bool("checkbox"):
+        Toggle(isOn: Binding(get: { property.bool("value") }, set: { _ in store.runOperator(property) })) {
+          label(systemImage: "checkmark.circle")
+        }
+        .disabled(!property.bool("editable"))
+      case "OPERATOR":
+        Button { store.runOperator(property) } label: { label(systemImage: "play") }
+          .disabled(!property.bool("editable"))
+      case "MENU":
+        if let menu = property.string("menu") {
+          Menu {
+            BlenderMenuItems(route: BlenderMenus.route(menu, tab: property.string("tab")))
+          } label: {
+            label(systemImage: "ellipsis.circle")
+          }
+          .prefetchingBlenderMenu(BlenderMenus.route(menu, tab: property.string("tab")))
+          .disabled(!property.bool("editable"))
+        }
+      case "ENUM":
+        let options = property.array("options")
+        Menu {
+          Picker(title, selection: Binding(
+            get: { store.value(property) as? String ?? "" },
+            set: { store.edit(property, value: $0) }))
+          {
+            ForEach(Array(options.enumerated()), id: \.offset) { _, option in
+              Label {
+                Text(option.string("label") ?? option.string("name") ?? "")
+              } icon: {
+                IconView(name: option.string("icon"))
+              }
+              .tag(option.string("value") ?? "")
+            }
+          }
+        } label: {
+          /* The choice made, as the bar has room to name it. */
+          let current = options.first { jsonEqual($0["value"], store.value(property)) }
+          Label {
+            Text(current.flatMap { $0.string("label") ?? $0.string("name") } ?? title)
+          } icon: {
+            IconView(name: current?.string("icon") ?? property.string("icon"))
+          }
+        }
+        .disabled(!property.bool("editable"))
+      default:
+        /* A value to drag or type, or a color: named with its value, set in a popover. */
+        ToolSettingPopover(title: valueTitle, icon: property.string("icon"),
+                           systemImage: type == "COLOR" ? "paintpalette" : "slider.horizontal.below.rectangle")
+        {
+          PropertyRow(store: store, property: property)
+        }
+        .disabled(!property.bool("editable"))
+    }
+  }
+
+  private var valueTitle: String {
+    guard type == "INT" || type == "FLOAT", let value = store.value(property) as? NSNumber else { return title }
+    let number = type == "INT" ? String(value.intValue) : String(format: "%.3g", value.doubleValue)
+    return "\(title) \(number)\(property.string("unit_suffix") ?? "")"
+  }
+
+  /** Blender's icon where it has one, as the bar shows icons; otherwise the name, as a text item. */
+  @ViewBuilder
+  private func label(systemImage: String) -> some View {
+    /* A checkbox is what Blender draws a toggle with, which the bar's toggle shows itself. */
+    if let icon = property.string("icon"), !icon.hasPrefix("CHECKBOX"), BlenderIcon.image(icon) != nil {
+      Label { Text(title) } icon: { IconView(name: icon) }
+    }
+    else {
+      Text(title)
+    }
+  }
+}
+
+/** A top bar item that opens a popover with controls: the bar names it, its overflow menu too. */
+struct ToolSettingPopover<Content: View>: View {
+  let title: String
+  let icon: String?
+  let systemImage: String
+  @ViewBuilder let content: () -> Content
+  @State private var open = false
+
+  var body: some View {
+    Button {
+      open = true
+    } label: {
+      if let icon, BlenderIcon.image(icon) != nil {
+        Label { Text(title) } icon: { IconView(name: icon) }
+      }
+      else {
+        Text(title)
+      }
+    }
+    .popover(isPresented: $open) {
+      ScrollView { content().padding() }
+        .frame(idealWidth: 320, idealHeight: 380)
+        .presentationCompactAdaptation(.popover)
+        .tint(PanelStyle.tint)
+    }
+  }
+}
+
 /** A compact capsule naming what it opens, with a chevron: the strip's menus and pop-outs. */
 struct StripCapsuleLabel: View {
   let title: String
