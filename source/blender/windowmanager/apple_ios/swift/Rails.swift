@@ -1271,14 +1271,23 @@ struct RailLayout: Equatable {
     let below = pill && tools.listVisible
     let reserve = below ? sidebar.height + gap : 0
     let height = max(0, safe.height - tray - reserve)
-    let maxList = min(max(64, (safe.height - reserve) * 0.58), max(64, safe.height - reserve - 112))
+    /* The size and strength sliders share the tool rail's edge: an open tool list leaves room for
+     * them above it rather than pushing them aside, scrolling within what is left. */
+    let shareEdge = sidebarLeading && !pill && (sidebar.size || sidebar.strength)
+    let sidebarRoom = shareEdge ? sidebar.height + gap + 18 : 0
+    var maxList = min(max(64, (safe.height - reserve) * 0.58), max(64, safe.height - reserve - 112))
+    if shareEdge {
+      maxList = max(compact * 2, min(maxList, height - topInset - bottomInset - sidebarRoom))
+    }
     toolWidth = tools.expanded ? expandedWidth : compact
     /* As tall as its tools (the handle, then 52 points each, 12 apart), as the room allows: a
      * mode with few tools leaves no empty space below them. */
     let toolList = 44 + 12 + CGFloat(toolCount) * 52 + CGFloat(max(0, toolCount - 1)) * 12
     toolHeight = tools.listVisible ? max(compact, min(toolList, maxList)) : compact
-    /* Docking centers the rail; otherwise it rests at the bottom. */
-    let bottom = (tools.docked ? max(bottomInset, (height - toolHeight) / 2) : bottomInset) + tray + reserve
+    /* Docking centers the rail, unless the sliders need the room above it; otherwise it rests at
+     * the bottom. */
+    let centered = tools.docked && !shareEdge
+    let bottom = (centered ? max(bottomInset, (height - toolHeight) / 2) : bottomInset) + tray + reserve
     toolTop = safe.maxY - bottom - toolHeight
     /* The middle resting place of a compact tool rail, measured from the bottom one. */
     dockDistance = max(0, (safe.height - tray - compact) / 2 - bottomInset)
