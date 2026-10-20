@@ -540,8 +540,65 @@ class VIEW3D_PT_native_brush_settings(bpy.types.Panel):
         _draw_mirror(layout, context)
 
 
+class VIEW3D_PT_native_tweak_settings(bpy.types.Panel):
+    """Tweak's settings for the native iPadOS top bar: what a drag does, and how things move."""
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Tool"
+    bl_label = "Tweak"
+
+    @classmethod
+    def register(cls):
+        # What a drag with Tweak does: moving things, and turning them as an Apple Pencil Pro rolls
+        # or tilts. Read by the move itself, see `transform_mode_translate.cc`.
+        wm = bpy.types.WindowManager
+        wm.native_tweak_move = bpy.props.BoolProperty(
+            name="Move", description="Dragging with Tweak moves things", default=True)
+        wm.native_tweak_roll = bpy.props.BoolProperty(
+            name="Rotate", description="Rolling the Pencil while dragging turns things on screen",
+            default=True)
+        wm.native_tweak_tilt = bpy.props.BoolProperty(
+            name="Trackball", description="Tilting the Pencil while dragging turns things over",
+            default=True)
+
+    @classmethod
+    def unregister(cls):
+        wm = bpy.types.WindowManager
+        del wm.native_tweak_move
+        del wm.native_tweak_roll
+        del wm.native_tweak_tilt
+
+    @classmethod
+    def poll(cls, context):
+        region = context.region
+        if region is None or region.type != 'WINDOW':
+            return False
+        if context.mode not in {'OBJECT', 'EDIT_MESH', 'EDIT_CURVE', 'EDIT_ARMATURE', 'POSE'}:
+            return False
+        tool = context.workspace.tools.from_space_view3d_mode(context.mode, create=False)
+        return tool is not None and tool.idname == "builtin.select"
+
+    def draw(self, context):
+        layout = self.layout
+        wm = context.window_manager
+        tool_settings = context.tool_settings
+        row = layout.row(align=True)
+        row.label(text="Drag")
+        row.prop(wm, "native_tweak_move", toggle=True)
+        row.prop(wm, "native_tweak_roll", toggle=True)
+        row.prop(wm, "native_tweak_tilt", toggle=True)
+        layout.prop(context.scene.transform_orientation_slots[0], "type", text="Orientation")
+        layout.prop(tool_settings, "transform_pivot_point", text="Pivot")
+        layout.prop(tool_settings, "use_snap", text="Snap")
+        if context.mode == 'OBJECT':
+            layout.prop(tool_settings, "use_proportional_edit_objects", text="Proportional")
+        else:
+            layout.prop(tool_settings, "use_proportional_edit", text="Proportional")
+
+
 classes = (
     WM_OT_native_panel_edit,
+    VIEW3D_PT_native_tweak_settings,
     VIEW3D_PT_native_sculpt_settings,
     VIEW3D_PT_native_sculpt_remesh_popout_settings,
     VIEW3D_PT_native_brush_settings,

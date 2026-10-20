@@ -19,6 +19,7 @@
 #include "BLI_string_utils.hh"
 #include "BLI_task.hh"
 
+#include "BKE_context.hh"
 #include "BKE_image.hh"
 #include "BKE_report.hh"
 #include "BKE_unit.hh"
@@ -30,7 +31,12 @@
 #include "UI_interface_types.hh"
 #include "UI_view2d.hh"
 
+#include "WM_api.hh"
 #include "WM_native_interface.hh"
+#include "WM_toolsystem.hh"
+
+#include "RNA_access.hh"
+#include "RNA_prototypes.hh"
 
 #include "transform.hh"
 #include "transform_convert.hh"
@@ -76,6 +82,11 @@ struct TranslateCustomData {
     /** What turns things this move: decided by what the Pencil clearly does first, rolling or
      * tilting, as each moves the other's reading a little. */
     enum { UNDECIDED, ROLLING, TILTING } turns;
+    /** What a drag with Tweak does, as its settings have it: move things, and turn them as the
+     * Pencil rolls or tilts. */
+    bool move;
+    bool rolls;
+    bool tilts;
   } roll;
 
   float3 snap_target_grid;
@@ -436,9 +447,12 @@ static bool translate_snap_increment(const TransInfo *t, float *r_val)
 /** \name Transform (Translation)
  * \{ */
 
-static void applyTranslationValue(TransInfo *t, const float vec[3])
+static void applyTranslationValue(TransInfo *t, const float vec_moved[3])
 {
   TranslateCustomData *custom_data = static_cast<TranslateCustomData *>(t->custom.mode.data);
+  /* Tweak set only to turn things: they stay where they are. */
+  const float stay[3] = {0.0f, 0.0f, 0.0f};
+  const float *vec = custom_data->roll.move ? vec_moved : stay;
 
   enum eTranslateRotateMode rotate_mode = TRANSLATE_ROTATE_OFF;
 
@@ -470,10 +484,10 @@ static void applyTranslationValue(TransInfo *t, const float vec[3])
       }
     }
     if (roll.turns == roll.UNDECIDED) {
-      if (fabsf(roll.angle) > DEG2RADF(8.0f)) {
+      if (roll.rolls && fabsf(roll.angle) > DEG2RADF(8.0f)) {
         roll.turns = roll.ROLLING;
       }
-      else if (tilt_target.x != 0.0f || tilt_target.y != 0.0f) {
+      else if (roll.tilts && (tilt_target.x != 0.0f || tilt_target.y != 0.0f)) {
         roll.turns = roll.TILTING;
       }
     }
@@ -722,6 +736,24 @@ static void initTranslation(TransInfo *t, wmOperator * /*op*/)
     custom_data->roll.active = true;
     custom_data->roll.last = pencil_roll;
     custom_data->roll.tilt_start = pencil_tilt;
+  }
+  custom_data->roll.move = true;
+  custom_data->roll.rolls = true;
+  custom_data->roll.tilts = true;
+  /* With Tweak, its settings say which of these a drag does, however it drags. */
+  const bToolRef *tool = t->spacetype == SPACE_VIEW3D ? WM_toolsystem_ref_from_context(t->context) :
+                                                        nullptr;
+  if (tool && STREQ(tool->idname, "builtin.select")) {
+    if (wmWindowManager *wm = CTX_wm_manager(t->context)) {
+      PointerRNA wm_ptr = RNA_id_pointer_create(&wm->id);
+      const auto setting = [&](const char *name) {
+        PropertyRNA *prop = RNA_struct_find_property(&wm_ptr, name);
+        return prop == nullptr || RNA_property_boolean_get(&wm_ptr, prop);
+      };
+      custom_data->roll.move = setting("native_tweak_move");
+      custom_data->roll.rolls = setting("native_tweak_roll");
+      custom_data->roll.tilts = setting("native_tweak_tilt");
+    }
   }
   t->custom.mode.data = custom_data;
   t->custom.mode.use_free = true;
