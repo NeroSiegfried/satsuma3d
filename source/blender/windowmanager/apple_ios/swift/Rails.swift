@@ -1056,6 +1056,8 @@ final class RollDial {
   @ObservationIgnored private var choose: ((RailItem) -> Void)?
   /** Chosen as the Pencil lifted: shown a moment, then the dial goes. */
   private(set) var confirmed: Int?
+  /** Grown out of the button the Pencil holds, to its full size. */
+  private(set) var grown = false
   /** Where the chosen item lands as the dial folds into what it came from, in the window. */
   private(set) var landed: CGRect?
   @ObservationIgnored private var landingFrame: ((RailItem) -> CGRect?)?
@@ -1091,7 +1093,12 @@ final class RollDial {
     origin = PencilRoll.shared.turned
     self.choose = choose
     Haptics.impact(.light)
-    withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) { center = point }
+    /* Out of the button the Pencil holds: there first, then grown to its size. */
+    grown = false
+    center = point
+    DispatchQueue.main.async {
+      withAnimation(.spring(response: 0.34, dampingFraction: 0.84)) { self.grown = true }
+    }
   }
 
   /** Felt through the Pencil itself, as it clicks from one item to the next, and as one is
@@ -1179,11 +1186,10 @@ struct RollDialLayer: View {
       let origin = proxy.frame(in: .global).origin
       ZStack {
         if let center = dial.center {
-          Color.black.opacity(dial.landed == nil ? 0.18 : 0)
+          Color.black.opacity(dial.landed == nil && dial.grown ? 0.18 : 0)
             .transition(.opacity)
           dialBody(local: CGPoint(x: center.x - origin.x, y: center.y - origin.y), size: proxy.size,
                    origin: origin)
-            .transition(.opacity.combined(with: .scale(scale: 0.6)))
         }
       }
       .frame(width: proxy.size.width, height: proxy.size.height)
@@ -1213,16 +1219,17 @@ struct RollDialLayer: View {
         .stroke(.thinMaterial, lineWidth: 76)
         .frame(width: radius * 2, height: radius * 2)
         .shadow(color: .black.opacity(0.12), radius: 12)
-        .scaleEffect(landing == nil ? 1 : 0.15)
-        .opacity(landing == nil ? 1 : 0)
+        .scaleEffect(landing == nil && dial.grown ? 1 : 0.15)
+        .opacity(landing == nil && dial.grown ? 1 : 0)
         .position(landing ?? local)
       /* Where the chosen one sits, still as the items turn under it. */
       Circle()
         .fill(Color.accentColor)
         .frame(width: 66, height: 66)
         .scaleEffect(landing != nil ? landingScale * 0.9 : dial.confirmed != nil ? 1.1 : 1)
-        .opacity(landing == nil ? 1 : 0)
-        .position(landing ?? CGPoint(x: local.x + radius * cos(toward), y: local.y + radius * sin(toward)))
+        .opacity(landing == nil && dial.grown ? 1 : 0)
+        .position(landing ?? (dial.grown ? CGPoint(x: local.x + radius * cos(toward),
+                                                   y: local.y + radius * sin(toward)) : local))
       ForEach(Array(dial.items.enumerated()), id: \.element.id) { index, item in
         let offset = Double(index) - position
         if abs(offset) <= 4.5 {
@@ -1233,8 +1240,9 @@ struct RollDialLayer: View {
             .scaleEffect(landing != nil ? (front ? landingScale : 0.3) :
                          front ? (dial.confirmed == index ? 1.15 : 1.05) : max(0.75, 1 - abs(offset) * 0.06))
             .animation(.spring(response: 0.24, dampingFraction: 0.78), value: front)
-            .opacity(landing != nil && !front ? 0 : max(0, 1 - max(0, abs(offset) - 3) * 0.7))
-            .position(landing ?? place)
+            .opacity(landing != nil && !front ? 0 :
+                     dial.grown || front ? max(0, 1 - max(0, abs(offset) - 3) * 0.7) : 0)
+            .position(landing ?? (dial.grown ? place : local))
         }
       }
       if dial.items.indices.contains(dial.selected) {
@@ -1257,7 +1265,7 @@ struct RollDialLayer: View {
         .panelGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .fixedSize()
         .position(x: local.x + (radius + 150) * cos(toward), y: local.y + (radius + 110) * sin(toward))
-        .opacity(landing == nil ? 1 : 0)
+        .opacity(landing == nil && dial.grown ? 1 : 0)
         .contentTransition(.opacity)
       }
     }
