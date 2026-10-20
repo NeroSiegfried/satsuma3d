@@ -29,9 +29,11 @@ static void ios_pencil_roll(UITouch *touch)
   if (@available(iOS 17.5, *)) {
     angle = float(touch.rollAngle);
   }
+  /* Blender turns what the Pencil moves only while that is on, see the iPad page of Settings. */
+  NSNumber *tweak = [NSUserDefaults.standardUserDefaults objectForKey:@"BlenderPencilRollTweak"];
   if (const GHOST_IOSNativeInterface *native = GHOST_ios_native_interface()) {
     if (native->pencil_roll) {
-      native->pencil_roll(down, angle);
+      native->pencil_roll(down && (!tweak || tweak.boolValue), angle);
     }
   }
   /* Where it touches, in the window, so a rail under it can turn its dial at once. */
