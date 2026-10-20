@@ -221,6 +221,7 @@ wmNativeInterface native_interface_create()
   native.confirm = confirm;
   native.pointer_hovering = WM_apple_ios_pencil_hover_active;
   native.pencil_roll = WM_apple_ios_pencil_roll;
+  native.tweak_drag = WM_apple_ios_tweak_drag;
   native.direct_gizmo_press = true;
   native.hide_gizmo_tooltips = true;
   native.operator_input_adjust = WM_apple_ios_ui_operator_input_adjust;

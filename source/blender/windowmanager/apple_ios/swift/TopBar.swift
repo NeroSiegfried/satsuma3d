@@ -101,9 +101,43 @@ final class ShellCommands {
  * \{ */
 
 /** The transform tools, whose settings are the orientation, pivot, snapping and proportional
- * editing menus. */
+ * editing menus; Tweak moves things as they do. */
 private let transformTools: Set<String> = ["builtin.move", "builtin.rotate", "builtin.scale", "builtin.scale_cage",
-                                           "builtin.transform", "builtin.shear"]
+                                           "builtin.transform", "builtin.shear", "builtin.select"]
+
+/** What a drag with Tweak does, in the transform settings while it is the tool: move things, and
+ * turn them as Apple Pencil Pro rolls or tilts. Kept with the iPad's settings, and given to Blender,
+ * which reads it as a drag begins. */
+private struct TweakDragMenu: View {
+  @AppStorage("BlenderTweakDrag") private var drag = "mrt"
+
+  private func binding(_ letter: Character) -> Binding<Bool> {
+    Binding(get: { drag.contains(letter) }, set: { on in
+      var letters = drag.filter { $0 != letter }
+      if on { letters.append(letter) }
+      drag = String("mrt".filter { letters.contains($0) })
+    })
+  }
+
+  var body: some View {
+    Menu {
+      Section("Dragging with Tweak") {
+        Toggle(isOn: binding("m")) { Label("Move", systemImage: "arrow.up.and.down.and.arrow.left.and.right") }
+        Toggle(isOn: binding("r")) { Label("Rotate by Rolling", systemImage: "rotate.right") }
+        Toggle(isOn: binding("t")) { Label("Turn Over by Tilting", systemImage: "rotate.3d") }
+      }
+    } label: {
+      Image(systemName: drag == "m" ? "arrow.up.and.down.and.arrow.left.and.right" : "rotate.3d")
+        .font(.system(size: 17, weight: .medium))
+        .frame(width: 44, height: 44)
+    }
+    .onChange(of: drag, initial: true) { _, drag in Engine.setting("tweak_drag", drag) }
+    .accessibilityLabel("Tweak Drag")
+    .accessibilityValue([drag.contains("m") ? "Move" : nil, drag.contains("r") ? "Rotate" : nil,
+                         drag.contains("t") ? "Turn Over" : nil].compactMap { $0 }.joined(separator: ", "))
+    .accessibilityIdentifier("blender.setting.TweakDrag")
+  }
+}
 
 private struct SettingOption {
   let title: String
@@ -576,6 +610,9 @@ struct DocumentToolbar: ToolbarContent {
 
   private var transformSettings: some View {
     HStack(spacing: 0) {
+      if model.activeTool == "builtin.select" {
+        TweakDragMenu()
+      }
       ForEach(TransformSetting.all, id: \.key) { setting in
         let value = model.transformSettings[setting.key]
         let selected = setting.options.first { $0.value == value }

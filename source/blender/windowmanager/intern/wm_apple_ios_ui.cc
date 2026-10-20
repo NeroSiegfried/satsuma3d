@@ -1186,8 +1186,20 @@ static void ios_preferences_save_when_changed(bContext *C,
   }
 }
 
+/* What a drag with Tweak does, from the top bar's Drag menu: move, roll, tilt. */
+static std::atomic<bool> ios_tweak_move = true;
+static std::atomic<bool> ios_tweak_roll = true;
+static std::atomic<bool> ios_tweak_tilt = true;
+
 void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
 {
+  if (command.setting == "tweak_drag") {
+    /* The letters of what is on: "m" move, "r" roll, "t" tilt. */
+    ios_tweak_move = command.value.find('m') != std::string::npos;
+    ios_tweak_roll = command.value.find('r') != std::string::npos;
+    ios_tweak_tilt = command.value.find('t') != std::string::npos;
+    return;
+  }
   bool preview = false;
   if (ios_volume_command(C, command.setting, command.value)) {
     return;
@@ -2947,6 +2959,13 @@ extern "C" void WM_apple_ios_ui_pencil_roll_set(bool down, float angle, float ti
   ios_pencil_tilt_x = tilt_x;
   ios_pencil_tilt_y = tilt_y;
   ios_pencil_roll_down = down;
+}
+
+void WM_apple_ios_tweak_drag(bool *r_move, bool *r_roll, bool *r_tilt)
+{
+  *r_move = ios_tweak_move;
+  *r_roll = ios_tweak_roll;
+  *r_tilt = ios_tweak_tilt;
 }
 
 bool WM_apple_ios_pencil_roll(float *r_angle, float r_tilt[2])

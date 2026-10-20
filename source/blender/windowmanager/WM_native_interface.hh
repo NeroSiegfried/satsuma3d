@@ -129,6 +129,12 @@ struct wmNativeInterface {
    */
   bool (*pencil_roll)(float *r_angle, float r_tilt[2]) = nullptr;
 
+  /**
+   * What a drag with the Tweak tool does, as its settings in the top bar have it: move things, and
+   * turn them as the Pencil rolls or tilts. Null to do all of these.
+   */
+  void (*tweak_drag)(bool *r_move, bool *r_roll, bool *r_tilt) = nullptr;
+
   /** Ensure the platform's own items in the default key configuration. */
   void (*keyconfig_default_ensure)(wmKeyConfig *keyconf) = nullptr;
   /**

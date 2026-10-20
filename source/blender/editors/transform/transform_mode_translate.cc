@@ -19,7 +19,6 @@
 #include "BLI_string_utils.hh"
 #include "BLI_task.hh"
 
-#include "BKE_context.hh"
 #include "BKE_image.hh"
 #include "BKE_report.hh"
 #include "BKE_unit.hh"
@@ -31,12 +30,9 @@
 #include "UI_interface_types.hh"
 #include "UI_view2d.hh"
 
-#include "WM_api.hh"
 #include "WM_native_interface.hh"
 #include "WM_toolsystem.hh"
 
-#include "RNA_access.hh"
-#include "RNA_prototypes.hh"
 
 #include "transform.hh"
 #include "transform_convert.hh"
@@ -743,17 +739,8 @@ static void initTranslation(TransInfo *t, wmOperator * /*op*/)
   /* With Tweak, its settings say which of these a drag does, however it drags. */
   const bToolRef *tool = t->spacetype == SPACE_VIEW3D ? WM_toolsystem_ref_from_context(t->context) :
                                                         nullptr;
-  if (tool && STREQ(tool->idname, "builtin.select")) {
-    if (wmWindowManager *wm = CTX_wm_manager(t->context)) {
-      PointerRNA wm_ptr = RNA_id_pointer_create(&wm->id);
-      const auto setting = [&](const char *name) {
-        PropertyRNA *prop = RNA_struct_find_property(&wm_ptr, name);
-        return prop == nullptr || RNA_property_boolean_get(&wm_ptr, prop);
-      };
-      custom_data->roll.move = setting("native_tweak_move");
-      custom_data->roll.rolls = setting("native_tweak_roll");
-      custom_data->roll.tilts = setting("native_tweak_tilt");
-    }
+  if (tool && STREQ(tool->idname, "builtin.select") && native && native->tweak_drag) {
+    native->tweak_drag(&custom_data->roll.move, &custom_data->roll.rolls, &custom_data->roll.tilts);
   }
   t->custom.mode.data = custom_data;
   t->custom.mode.use_free = true;
