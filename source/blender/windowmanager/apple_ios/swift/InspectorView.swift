@@ -506,10 +506,18 @@ struct HeaderControls: View, Equatable {
 
 struct ToolStrip: View {
   let store: InspectorStore
+  /** Where a pop-out section's controls come from, laid out in full. */
+  var popouts: InspectorStore?
 
   var body: some View {
     HStack(spacing: 6) {
       ForEach(store.sections) { section in
+        if section.id.hasSuffix("_popout_settings") {
+          /* A group of settings that would crowd the strip, such as Remesh: one control here,
+           * its options popping out. */
+          StripPopout(store: popouts ?? store, section: section)
+        }
+        else {
         ForEach(section.rows) { row in
           switch row.kind {
             case .property(let property):
@@ -522,11 +530,63 @@ struct ToolStrip: View {
               EmptyView()
           }
         }
+        }
       }
     }
     .frame(height: 40)
     .tint(PanelStyle.tint)
     .accessibilityIdentifier("blender.tool-settings.strip")
+  }
+}
+
+/** A compact capsule naming what it opens, with a chevron: the strip's menus and pop-outs. */
+struct StripCapsuleLabel: View {
+  let title: String
+  var icon: String?
+
+  var body: some View {
+    HStack(spacing: 4) {
+      if let image = BlenderIcon.image(icon ?? "") {
+        Image(uiImage: image).resizable().scaledToFit().frame(width: 18, height: 18)
+      }
+      Text(title).font(.caption).lineLimit(1).fixedSize()
+      Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+    }
+    .foregroundStyle(.primary)
+    .padding(.horizontal, 10)
+    .frame(height: 30)
+    .panelGlass(in: Capsule())
+    .contentShape(Capsule())
+  }
+}
+
+/** One of the strip's sections as a single control, its settings in a popover. */
+struct StripPopout: View {
+  let store: InspectorStore
+  let section: InspectorSection
+  @State private var open = false
+
+  var body: some View {
+    Button {
+      open = true
+    } label: {
+      StripCapsuleLabel(title: section.title, icon: section.icon)
+    }
+    .buttonStyle(.plain)
+    .frame(height: 40)
+    .popover(isPresented: $open) {
+      /* The same panel from the full tool settings, which keep its values in step. */
+      let full = store.sections.first { $0.id == section.id } ?? section
+      ScrollView {
+        SectionView(store: store, section: InspectorSection(
+          id: full.id, title: full.title, active: full.active, headerHidden: true, icon: full.icon,
+          switchOnly: full.switchOnly, headerControls: full.headerControls, rows: full.rows))
+          .padding()
+      }
+      .frame(idealWidth: 320, idealHeight: 340)
+      .presentationCompactAdaptation(.popover)
+    }
+    .accessibilityLabel(section.title)
   }
 }
 
@@ -557,17 +617,32 @@ struct StripColumn: View, Equatable {
   }
 
   var body: some View {
-    VStack(spacing: 0) {
-      Text(property.string("toolbar_label") ?? property.string("label") ?? "")
-        .font(.caption2)
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
-        .minimumScaleFactor(0.8)
-      control
-        .frame(height: 26)
+    if type == "MENU", let menu = property.string("menu") {
+      /* One of Blender's menus, such as Sculpt Mode's Mask and Face Sets: a compact capsule that
+       * names itself, as the strip's pop-outs do. */
+      Menu {
+        BlenderMenuItems(route: BlenderMenus.route(menu, tab: property.string("tab")))
+      } label: {
+        StripCapsuleLabel(title: property.string("label") ?? "", icon: property.string("icon"))
+      }
+      .prefetchingBlenderMenu(BlenderMenus.route(menu, tab: property.string("tab")))
+      .buttonStyle(.plain)
+      .disabled(!property.bool("editable"))
+      .frame(height: 40)
     }
-    .frame(width: width, height: 40)
-    .propertyActions(store, property)
+    else {
+      VStack(spacing: 0) {
+        Text(property.string("toolbar_label") ?? property.string("label") ?? "")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.8)
+        control
+          .frame(height: 26)
+      }
+      .frame(width: width, height: 40)
+      .propertyActions(store, property)
+    }
   }
 
   @ViewBuilder

@@ -602,7 +602,7 @@ struct DocumentToolbar: ToolbarContent {
     /* The room less the capsule's padding, and the overflow button when it is shown. */
     let room = model.toolStripRoom - 24
     let overflow = stripWidth > room + 0.5
-    let strip = ToolStrip(store: shell.panels.toolStripStore)
+    let strip = ToolStrip(store: shell.panels.toolStripStore, popouts: shell.panels.toolPopoverStore)
       .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { stripWidth = $0 }
     return HStack(spacing: 4) {
       if overflow {

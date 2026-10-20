@@ -187,6 +187,8 @@ final class SwiftScenePanels {
   }
 
   var toolStripStore: InspectorStore { toolStrip }
+  /** The tool's settings in full, as the popover shows them. */
+  var toolPopoverStore: InspectorStore { toolPopover }
 
   /** All the tool's settings, in a popover from the toolbar. */
   func toolSettingsContent(done: @escaping () -> Void) -> some View {

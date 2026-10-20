@@ -399,6 +399,34 @@ class VIEW3D_PT_native_sculpt_settings(bpy.types.Panel):
             else:
                 layout.prop(sculpt, "detail_size", text="Detail")
         _draw_mirror(layout, context)
+        # Blender's Mask and Face Sets menus, as its header has them in Sculpt Mode.
+        layout.menu("VIEW3D_MT_mask", text="Mask")
+        layout.menu("VIEW3D_MT_face_sets", text="Face Sets")
+
+
+class VIEW3D_PT_native_sculpt_remesh_popout_settings(bpy.types.Panel):
+    """Voxel Remesh for the native iPadOS top bar: one control there, its options popping out."""
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Tool"
+    bl_label = "Remesh"
+
+    @classmethod
+    def poll(cls, context):
+        region = context.region
+        obj = context.sculpt_object
+        return (context.mode == 'SCULPT' and obj is not None and obj.type == 'MESH' and
+                region is not None and region.type == 'WINDOW')
+
+    def draw(self, context):
+        layout = self.layout
+        mesh = context.sculpt_object.data
+        layout.prop(mesh, "remesh_voxel_size", text="Voxel Size")
+        layout.prop(mesh, "remesh_voxel_adaptivity", text="Adaptivity")
+        layout.prop(mesh, "use_remesh_fix_poles", text="Fix Poles")
+        layout.prop(mesh, "use_remesh_preserve_volume", text="Preserve Volume")
+        layout.prop(mesh, "use_remesh_preserve_attributes", text="Preserve Attributes")
+        layout.operator("object.voxel_remesh", text="Remesh", icon='MOD_REMESH')
 
 
 def _draw_mirror(layout, context):
@@ -515,5 +543,6 @@ class VIEW3D_PT_native_brush_settings(bpy.types.Panel):
 classes = (
     WM_OT_native_panel_edit,
     VIEW3D_PT_native_sculpt_settings,
+    VIEW3D_PT_native_sculpt_remesh_popout_settings,
     VIEW3D_PT_native_brush_settings,
 )
