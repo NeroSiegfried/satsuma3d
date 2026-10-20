@@ -248,6 +248,13 @@ std::string ios_panels_published;
 std::string ios_panels_json = "null";
 std::string ios_properties_state = "{\"tab\":\"OBJECT\"}";
 std::string ios_shading_state = "{\"tab\":\"SHADING\"}";
+/** Blender's Preferences, a section at a time, in the iPad's Settings, see `SettingsSheet.swift`. */
+std::string ios_preferences_state = "{\"tab\":\"PREFERENCES_INTERFACE\"}";
+/** The keymaps Settings shows with their items and what it searches for, as JSON. */
+std::string ios_keymaps_state = "{}";
+/** Changed preferences are saved shortly after, as the iPad may end the app without warning. */
+bool ios_preferences_save_pending = false;
+std::chrono::steady_clock::time_point ios_preferences_save_at;
 /** The node tree the native node editor shows: its kind and the groups entered. */
 std::string ios_nodes_state = "{\"tree\":\"SHADER\"}";
 /** The tree last read, to read it again at once when another is chosen. */
@@ -1151,6 +1158,34 @@ static bToolRef *ios_active_tool(bContext *C)
   return WM_toolsystem_ref_from_context(C);
 }
 
+/** Save the preferences, when changed, as Blender does on quit unless that is turned off. */
+static void ios_preferences_save(bContext *C)
+{
+  ios_preferences_save_pending = false;
+  if (U.runtime.is_dirty && (U.pref_flag & USER_PREF_FLAG_SAVE) &&
+      (G.f & G_FLAG_USERPREF_NO_SAVE_ON_EXIT) == 0)
+  {
+    WM_operator_name_call(
+        C, "WM_OT_save_userpref", blender::wm::OpCallContext::ExecDefault, nullptr, nullptr);
+  }
+}
+
+/** While Settings shows them, preferences are saved a second after they last changed. */
+static void ios_preferences_save_when_changed(bContext *C,
+                                              const std::chrono::steady_clock::time_point now)
+{
+  if (!U.runtime.is_dirty) {
+    ios_preferences_save_pending = false;
+  }
+  else if (!ios_preferences_save_pending) {
+    ios_preferences_save_pending = true;
+    ios_preferences_save_at = now + std::chrono::seconds(1);
+  }
+  else if (now >= ios_preferences_save_at) {
+    ios_preferences_save(C);
+  }
+}
+
 void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
 {
   bool preview = false;
@@ -1175,6 +1210,21 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     ios_panels_visible = (ios_panels_visible & ~4) | (command.value == "1" ? 4 : 0);
     ios_panels_next_snapshot = {};
     ios_panels_published.clear();
+    return;
+  }
+  if (command.setting == "native_preferences_state") {
+    ios_preferences_state = command.value;
+    ios_panels_next_snapshot = {};
+    ios_panels_published.clear();
+    return;
+  }
+  if (command.setting == "native_preferences_visible") {
+    ios_panels_visible = (ios_panels_visible & ~32) | (command.value == "1" ? 32 : 0);
+    ios_panels_next_snapshot = {};
+    ios_panels_published.clear();
+    if (command.value != "1") {
+      ios_preferences_save(C);
+    }
     return;
   }
   if (command.setting == "native_nodes_state") {
@@ -1325,7 +1375,8 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
   if (command.setting == "native_panels") {
     ios_panels_next_snapshot = {};
     ios_panels_published.clear();
-    ios_panels_visible = (ios_panels_visible & 4) | (command.value == "3" ? 3 :
+    /* Settings, open over the window, stays as it is. */
+    ios_panels_visible = (ios_panels_visible & (4 | 32)) | (command.value == "3" ? 3 :
                                                      command.value == "2" ? 2 :
                                                      command.value == "1" ? 1 :
                                                                             0);
@@ -1338,6 +1389,21 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     const std::string expression = "bl_ui.native_settings.keymap_set(bpy.context, \"" +
                                    ios_json_escape(command.value) + "\")";
     BPY_run_string_eval(C, imports, expression.c_str());
+    return;
+  }
+  if (command.setting == "native_keymaps_state") {
+    ios_keymaps_state = command.value;
+    ios_panels_next_snapshot = {};
+    return;
+  }
+  if (command.setting == "native_addon" || command.setting == "native_keymap_item_active") {
+    /* Add-ons and keymap items, which Settings lists in its own way, see `bl_ui.native_settings`. */
+    const char *imports[] = {"bpy", "bl_ui", nullptr};
+    const std::string expression = "bl_ui.native_settings.command(bpy.context, \"" +
+                                   command.setting.substr(strlen("native_")) + "\", \"" +
+                                   ios_json_escape(command.value) + "\")";
+    BPY_run_string_eval(C, imports, expression.c_str());
+    ios_panels_next_snapshot = {};
     return;
   }
   if (command.setting == "render" || command.setting == "viewport_toggle") {
@@ -2519,6 +2585,39 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
           ios_graph_json = ed::graph::native_graph_query(C, ios_graph_state, false);
         }
         merged.append_str("graph", "@native_graph_json@");
+      }
+      if (ios_panels_visible & 32) {
+        ios_preferences_save_when_changed(C, now);
+        std::istringstream preferences_stream(
+            ui::native_properties_query(C, ios_preferences_state, false));
+        auto preferences = JsonFormatter().deserialize(preferences_stream);
+        if (preferences && preferences->type() == eValueType::Dictionary) {
+          auto *dictionary = static_cast<DictionaryValue *>(preferences.get());
+          /* Sections drawn with lists of their own, which Settings lists in its own way. */
+          const std::string tab = dictionary->lookup_str("tab").value_or("");
+          std::string expression;
+          if (tab == "PREFERENCES_ADDONS") {
+            expression = "bl_ui.native_settings.addons_json(bpy.context)";
+          }
+          else if (tab == "PREFERENCES_KEYMAP") {
+            expression = "bl_ui.native_settings.keymaps_json(bpy.context, \"" +
+                         ios_json_escape(ios_keymaps_state) + "\")";
+          }
+          result = nullptr;
+          if (!expression.empty() &&
+              BPY_run_string_as_string(C, imports, expression.c_str(), nullptr, &result))
+          {
+            std::istringstream list_stream(result);
+            MEM_delete(result);
+            if (auto list = JsonFormatter().deserialize(list_stream)) {
+              dictionary->append(tab == "PREFERENCES_ADDONS" ? "addons" : "keymaps",
+                                 std::move(list));
+            }
+          }
+        }
+        if (preferences) {
+          merged.append("preferences", std::move(preferences));
+        }
       }
       if (ios_panels_visible & 4) {
         std::istringstream shading_stream(

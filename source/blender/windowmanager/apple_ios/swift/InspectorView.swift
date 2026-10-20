@@ -150,7 +150,7 @@ struct InspectorForm: View {
           if store.loaded && !store.hasInspector && store.mode == .properties {
             ContentUnavailableView("No Active Object", systemImage: "cube.transparent")
           }
-          else if !store.loaded && store.mode == .shading {
+          else if !store.loaded && (store.mode == .shading || store.mode == .preferences) {
             ProgressView()
           }
         }

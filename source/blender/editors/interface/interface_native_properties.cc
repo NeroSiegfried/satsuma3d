@@ -43,6 +43,7 @@
 #include "DNA_modifier_types.h"
 #include "DNA_object_types.h"
 #include "DNA_space_types.h"
+#include "DNA_userdef_types.h"
 #include "DNA_vfont_types.h"
 #include "DNA_workspace_types.h"
 #include "ED_buttons.hh"
@@ -96,26 +97,25 @@ std::unique_ptr<Value> decode(const std::string &json)
   return JsonFormatter().deserialize(stream);
 }
 
-/* A detached Properties space provides the same context as the desktop editor,
- * without changing the visible area or retaining scene pointers between requests. */
-struct PropertiesContext {
+/* A detached editor provides the same context as the desktop one, without changing the visible
+ * area or retaining scene pointers between requests. */
+struct DetachedAreaContext {
   bContext *C;
   ScrArea *previous_area;
   ARegion *previous_region;
   ScrArea area = {};
-  SpaceProperties *space;
+  SpaceLink *link;
   ARegion *region;
 
-  PropertiesContext(bContext *context) : C(context)
+  DetachedAreaContext(bContext *context, const short spacetype) : C(context)
   {
     previous_area = CTX_wm_area(C);
     previous_region = CTX_wm_region(C);
-    area.spacetype = SPACE_PROPERTIES;
-    area.type = BKE_spacetype_from_id(SPACE_PROPERTIES);
-    SpaceLink *link = area.type->create(&area, CTX_data_scene(C));
+    area.spacetype = spacetype;
+    area.type = BKE_spacetype_from_id(spacetype);
+    link = area.type->create(&area, CTX_data_scene(C));
     BLI_addtail(&area.spacedata, link);
     std::swap(area.regionbase, link->regionbase);
-    space = reinterpret_cast<SpaceProperties *>(link);
     region = BKE_area_find_region_type(&area, RGN_TYPE_WINDOW);
     region->runtime->type = BKE_regiontype_from_id(area.type, RGN_TYPE_WINDOW);
     region->winx = 320;
@@ -124,10 +124,9 @@ struct PropertiesContext {
     area.winy = region->winy;
     CTX_wm_area_set(C, &area);
     CTX_wm_region_set(C, region);
-    ED_buttons_native_context_prepare(C, space);
   }
 
-  ~PropertiesContext()
+  virtual ~DetachedAreaContext()
   {
     /* Instanced modifier/constraint panels can start window-level animation handlers.
      * Retire those handlers and timers before freeing their temporary panels. */
@@ -135,6 +134,17 @@ struct PropertiesContext {
     CTX_wm_area_set(C, previous_area);
     CTX_wm_region_set(C, previous_region);
     BKE_screen_area_free(&area);
+  }
+};
+
+/* A detached Properties editor, with its context computed for the active object. */
+struct PropertiesContext : DetachedAreaContext {
+  SpaceProperties *space;
+
+  PropertiesContext(bContext *context) : DetachedAreaContext(context, SPACE_PROPERTIES)
+  {
+    space = reinterpret_cast<SpaceProperties *>(link);
+    ED_buttons_native_context_prepare(C, space);
   }
 };
 
@@ -1987,6 +1997,118 @@ std::string native_operator_redo_query(bContext *C, const std::string &json, boo
   return native_redo_snapshot;
 }
 
+namespace {
+
+/** Preferences tabs are the Preferences' section identifiers with this prefix. */
+constexpr const char *PREFERENCES_TAB_PREFIX = "PREFERENCES_";
+
+/**
+ * List the Preferences' sections as tabs and return the requested one's tab id. \a panel_context
+ * is the section's panel context, or empty for a section drawn with lists of its own (the
+ * add-ons), which the native interface shows in its own way.
+ */
+std::string preferences_tabs(bContext *C,
+                             const std::string &requested_tab,
+                             ArrayValue &tab_items,
+                             std::string &panel_context)
+{
+  /* Icons for the sections, which Blender's Preferences list as text only. */
+  static const std::map<std::string, const char *> section_icons = {
+      {"INTERFACE", "WORKSPACE"},
+      {"VIEWPORT", "VIEW3D"},
+      {"LIGHTS", "LIGHT"},
+      {"EDITING", "EDITMODE_HLT"},
+      {"ANIMATION", "ANIM"},
+      {"EXTENSIONS", "INTERNET"},
+      {"ADDONS", "PLUGIN"},
+      {"THEMES", "COLOR"},
+      {"INPUT", "MOUSE_LMB"},
+      {"NAVIGATION", "VIEW_PAN"},
+      {"KEYMAP", "KEYINGSET"},
+      {"SYSTEM", "SYSTEM"},
+      {"SAVE_LOAD", "FILE_BLEND"},
+      {"FILE_PATHS", "FILE_FOLDER"},
+      {"DEVELOPER_TOOLS", "CONSOLE"},
+      {"EXPERIMENTAL", "EXPERIMENTAL"},
+  };
+  static const std::set<std::string> external_sections = {"ADDONS"};
+  /* Getting extensions downloads code to run, which apps on iPad may not do. */
+  static const std::set<std::string> hidden_sections = {"EXTENSIONS"};
+  const std::string requested = requested_tab.substr(strlen(PREFERENCES_TAB_PREFIX));
+  PointerRNA prefs_ptr = RNA_pointer_create_discrete(nullptr, RNA_Preferences, &U);
+  PropertyRNA *section_prop = RNA_struct_find_property(&prefs_ptr, "active_section");
+  const EnumPropertyItem *sections;
+  int section_count;
+  bool free_sections;
+  RNA_property_enum_items(C, &prefs_ptr, section_prop, &sections, &section_count, &free_sections);
+  std::string selected;
+  /* Sections between separators, grouped as Blender's Preferences list them. */
+  int group = 0;
+  for (int i = 0; i < section_count; i++) {
+    const EnumPropertyItem &section = sections[i];
+    if (!section.identifier || !section.identifier[0]) {
+      group += tab_items.elements().is_empty() ? 0 : 1;
+      continue;
+    }
+    if (hidden_sections.count(section.identifier)) {
+      continue;
+    }
+    if (selected.empty() || requested == section.identifier) {
+      selected = section.identifier;
+    }
+    auto item = tab_items.append_dict();
+    item->append_str("id", PREFERENCES_TAB_PREFIX + std::string(section.identifier));
+    item->append_str("title", section.name);
+    const auto icon = section_icons.find(section.identifier);
+    item->append_str("icon", icon != section_icons.end() ? icon->second : "PREFERENCES");
+    item->append_int("group", group);
+    if (external_sections.count(section.identifier)) {
+      item->append_int("external", 1);
+    }
+  }
+  if (free_sections) {
+    MEM_delete(sections);
+  }
+  panel_context.clear();
+  if (!external_sections.count(selected)) {
+    panel_context = selected;
+    std::transform(panel_context.begin(), panel_context.end(), panel_context.begin(), ::tolower);
+  }
+  return PREFERENCES_TAB_PREFIX + selected;
+}
+
+/**
+ * Preferences left out of their sections: the iPad sets these itself on every redraw (see
+ * `ios_ui_apply_viewport_preferences`), the keymap's filter belongs to a Preferences editor,
+ * which is made anew for every read here and so would not keep its text, and the keymaps
+ * themselves are listed by the native interface in its own way.
+ */
+bool preferences_hidden(const PointerRNA &ptr, PropertyRNA *prop)
+{
+  if (RNA_struct_is_a(ptr.type, RNA_SpacePreferences) || RNA_struct_is_a(ptr.type, RNA_KeyMap) ||
+      RNA_struct_is_a(ptr.type, RNA_KeyMapItem))
+  {
+    return true;
+  }
+#ifndef APPLE_TARGET_MACOS_NATIVE
+  if (ptr.data == &U) {
+    static const std::set<std::string> set_by_ipad = {"show_tooltips",
+                                                      "show_tooltips_python",
+                                                      "show_navigate_ui",
+                                                      "show_gizmo",
+                                                      "mini_axis_type",
+                                                      "drag_threshold_mouse",
+                                                      "drag_threshold_tablet",
+                                                      "drag_threshold",
+                                                      "move_threshold"};
+    return set_by_ipad.count(RNA_property_identifier(prop)) != 0;
+  }
+#endif
+  return false;
+}
+
+}  // namespace
+
 std::string native_properties_query(bContext *C, const std::string &json, bool execute)
 {
   DictionaryValue result;
@@ -2011,31 +2133,43 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
       return "";
     }
   }
-  const bool shading = query->lookup_str("tab").value_or("") == "SHADING";
-  const bool tool_settings = query->lookup_str("tab").value_or("") == "TOOL";
-  const bool viewport = shading || tool_settings;
-  std::unique_ptr<PropertiesContext> properties_context;
-  if (!viewport) {
-    properties_context = std::make_unique<PropertiesContext>(C);
+  const std::string requested_tab = query->lookup_str("tab").value_or("OBJECT");
+  const bool shading = requested_tab == "SHADING";
+  /* The viewport's overlays, a popover beside its shading in Blender's header. */
+  const bool overlays = requested_tab == "OVERLAYS";
+  const bool header_popover = shading || overlays;
+  const bool tool_settings = requested_tab == "TOOL";
+  const bool viewport = header_popover || tool_settings;
+  /* The Preferences' sections, their tabs named apart from the Properties' ones. */
+  const bool preferences = StringRef(requested_tab).startswith(PREFERENCES_TAB_PREFIX);
+  std::unique_ptr<DetachedAreaContext> detached_context;
+  if (preferences) {
+    detached_context = std::make_unique<DetachedAreaContext>(C, SPACE_USERPREF);
+  }
+  else if (!viewport) {
+    detached_context = std::make_unique<PropertiesContext>(C);
   }
   else if (!CTX_wm_view3d(C)) {
     return "{}";
   }
-  ARegion *panel_region = viewport ? CTX_wm_region(C) : properties_context->region;
+  ARegion *panel_region = viewport ? CTX_wm_region(C) : detached_context->region;
   ARegionType *panel_region_type = viewport ?
       BKE_regiontype_from_id(CTX_wm_area(C)->type, tool_settings ? RGN_TYPE_UI : RGN_TYPE_HEADER) :
       panel_region->runtime->type;
-  std::string tab_id = tool_settings ? "TOOL" : shading ? "SHADING" : "OBJECT";
+  std::string tab_id = tool_settings ? "TOOL" : shading ? "SHADING" : overlays ? "OVERLAYS" : "OBJECT";
+  std::string panel_context;
   auto tab_items = result.append_array("tabs");
-  if (!viewport) {
-    PropertiesContext &context = *properties_context;
+  if (preferences) {
+    tab_id = preferences_tabs(C, requested_tab, *tab_items, panel_context);
+  }
+  else if (!viewport) {
+    PropertiesContext &context = *static_cast<PropertiesContext *>(detached_context.get());
     PointerRNA space_ptr = RNA_pointer_create_discrete(nullptr, RNA_SpaceProperties, context.space);
     PropertyRNA *tab_prop = RNA_struct_find_property(&space_ptr, "context");
     const EnumPropertyItem *tabs;
     int tab_count;
     bool free_tabs;
     RNA_property_enum_items(C, &space_ptr, tab_prop, &tabs, &tab_count, &free_tabs);
-    const std::string requested_tab = query->lookup_str("tab").value_or("OBJECT");
     int selected = BCONTEXT_OBJECT;
     if (!RNA_enum_value_from_identifier(tabs, requested_tab.c_str(), &selected)) {
       selected = context.space->mainb;
@@ -2064,14 +2198,25 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
     ShowAllListRows() { ui_list_show_all_rows = true; }
     ~ShowAllListRows() { ui_list_show_all_rows = false; }
   } show_all_list_rows;
-  std::string panel_context = tab_id;
-  std::transform(panel_context.begin(), panel_context.end(), panel_context.begin(), ::tolower);
-  if (panel_context == "particles") {
-    panel_context = "particle";
+  if (!preferences) {
+    panel_context = tab_id;
+    std::transform(panel_context.begin(), panel_context.end(), panel_context.begin(), ::tolower);
+    if (panel_context == "particles") {
+      panel_context = "particle";
+    }
   }
   result.append_str("tab", tab_id);
-  result.append_str("name", tool_settings ? "Tool Settings" : shading ? "Viewport Shading" : "Properties");
-  Object *object = CTX_data_active_object(C);
+  result.append_str("name", tool_settings ? "Tool Settings" :
+                            shading       ? "Viewport Shading" :
+                            overlays      ? "Overlays" :
+                            preferences   ? "Preferences" :
+                                            "Properties");
+  if (preferences && panel_context.empty()) {
+    /* A section drawn with lists of its own (the add-ons), which the native interface shows in
+     * its own way. */
+    result.append_int("external", 1);
+  }
+  Object *object = preferences ? nullptr : CTX_data_active_object(C);
   std::string identity = tab_id + ":" + std::to_string(object ? object->id.session_uid : 0);
   if (tool_settings) {
     const bToolRef *tool = WM_toolsystem_ref_from_context(C);
@@ -2127,14 +2272,24 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
         !STREQ(pt.parent_id, "VIEW3D_PT_shading")) {
       continue;
     }
+    /* The overlays and those of the mode, each a panel under Blender's Overlays popover. */
+    if (overlays && !StringRef(pt.idname).startswith("VIEW3D_PT_overlay")) {
+      continue;
+    }
+    /* The Overlays popover's own panel only names it; the interface shows the overlays' switch
+     * there instead. */
+    if (overlays && STREQ(pt.idname, "VIEW3D_PT_overlay")) {
+      continue;
+    }
     if (!(pt.flag & PANEL_TYPE_INSTANCED)) {
-      candidates.push_back({&pt, nullptr, pt.idname, shading ? "" : pt.parent_id});
+      candidates.push_back({&pt, nullptr, pt.idname, header_popover ? "" : pt.parent_id});
     }
   }
   for (size_t candidate_index = 0; candidate_index < candidates.size(); candidate_index++) {
     const Candidate candidate = candidates[candidate_index];
     PanelType &pt = *candidate.type;
     if (!pt.draw || (!viewport && !candidate.instance && panel_context != pt.context) ||
+        (preferences && panel_context.empty()) ||
         /* Header-less Properties panels hold data-block pickers and slots (e.g. a material's
          * context panel); viewport ones are decorative. */
         ((pt.flag & PANEL_TYPE_NO_HEADER) && !pt.label[0] && viewport) ||
@@ -2165,7 +2320,7 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
     /* Header-less panels (e.g. Add Modifier above the stack) cannot be collapsed. */
     const bool header_hidden = is_outer && (pt.flag & PANEL_TYPE_NO_HEADER);
     const bool open = header_hidden ? true : is_outer ? (expanded ? std::any_of(expanded->elements().begin(), expanded->elements().end(),
-        [&](const auto &item) { return item->as_string_value() && item->as_string_value()->value() == candidate.id; }) : viewport || sections->elements().is_empty()) :
+        [&](const auto &item) { return item->as_string_value() && item->as_string_value()->value() == candidate.id; }) : viewport || preferences || sections->elements().is_empty()) :
         open_panels.count(outer) != 0 && (!collapsible_subpanel || subpanel_open);
     if (open && is_outer) {
       open_panels.insert(outer);
@@ -2241,7 +2396,7 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
     const bool instance_container = !candidate.instance &&
         ELEM(tab_id, "MODIFIER", "CONSTRAINT", "BONE_CONSTRAINT", "SHADERFX");
     if ((!execute && !open && !is_outer && !instance_container && !collapsible_subpanel) ||
-        (execute && !target_panel && !instance_container && !shading)) {
+        (execute && !target_panel && !instance_container && !header_popover)) {
       continue;
     }
     Block *block = block_begin(C, nullptr, "native_properties", EmbossType::Emboss);
@@ -2317,7 +2472,7 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
         button->rnaindex = -1;
       }
     }
-    if (shading) {
+    if (header_popover) {
       for (const auto &button : block->buttons) {
         if (!candidate.enabled) { button->flag |= BUT_DISABLED; }
         PanelType *nested = button_paneltype_get(button.get());
@@ -2391,6 +2546,18 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
     /* Buttons shown as part of one native control (an ID picker, a list row), not alone. */
     std::set<const Button *> combined;
     std::map<const Button *, std::vector<const Button *>> row_items;
+    if (preferences) {
+      for (const auto &button : block->buttons) {
+        if ((button->rnaprop && preferences_hidden(button->rnapoin, button->rnaprop)) ||
+            /* Paths are typed: Blender's file browser has no place in the native interface. */
+            (button->optype && ELEM(StringRef(button->optype->idname),
+                                    "BUTTONS_OT_file_browse",
+                                    "BUTTONS_OT_directory_browse")))
+        {
+          combined.insert(button.get());
+        }
+      }
+    }
     {
       std::set<ID *> template_ids;
       for (const auto &button : block->buttons) {

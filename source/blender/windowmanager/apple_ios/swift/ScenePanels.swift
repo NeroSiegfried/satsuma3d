@@ -22,6 +22,9 @@ final class SwiftScenePanels {
   private let shading = InspectorStore(mode: .shading, tab: "SHADING")
   private let toolStrip = InspectorStore(mode: .toolStrip, tab: "TOOL")
   private let toolPopover = InspectorStore(mode: .toolPopover, tab: "TOOL")
+  /** Blender's Preferences, which Settings shows. */
+  let preferences = InspectorStore(mode: .preferences, tab: "PREFERENCES_INTERFACE")
+  let preferenceLists = PreferencesLists()
   private(set) lazy var hierarchy = HierarchyStore { [weak self] request in self?.inspector.send(request) }
 
   private var showInspector = false
@@ -100,6 +103,11 @@ final class SwiftScenePanels {
 
   func updateSnapshot(_ snapshot: Any?) {
     guard let snapshot = snapshot as? JSON else { return }
+    if let preferencesSnapshot = snapshot.dict("preferences") {
+      preferenceLists.update(preferencesSnapshot)
+      preferences.update(snapshot: ["ack": snapshot["ack"] ?? 0, "error": snapshot["error"] ?? "",
+                                    "inspector": preferencesSnapshot])
+    }
     if let shadingSnapshot = snapshot.dict("shading"), shadingVisible {
       shading.update(snapshot: ["ack": snapshot["ack"] ?? 0, "error": snapshot["error"] ?? "",
                                 "inspector": shadingSnapshot])
@@ -132,8 +140,11 @@ final class SwiftScenePanels {
 
   /** The panel a window shows: the same store as the editor's, so both stay in step. */
   func windowContent(_ kind: PanelWindow) -> AnyView {
-    kind == .properties ? AnyView(InspectorPanel(store: inspector) {}) :
-                          AnyView(HierarchyPanel(store: hierarchy) {})
+    switch kind {
+      case .properties: AnyView(InspectorPanel(store: inspector) {})
+      case .nodes: AnyView(NodeEditorPanel(model: nodes))
+      default: AnyView(HierarchyPanel(store: hierarchy) {})
+    }
   }
 
   func setWindow(_ kind: PanelWindow, open: Bool) {

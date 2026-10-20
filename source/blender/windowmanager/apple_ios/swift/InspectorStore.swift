@@ -39,6 +39,10 @@ struct InspectorTab: Identifiable, Equatable {
   let id: String
   let title: String
   let icon: String
+  /** Tabs Blender lists apart, as the Preferences' sections. */
+  var group = 0
+  /** A Preferences section only Blender's own Preferences show. */
+  var external = false
 }
 
 /** A row of a section. Rows are identified by meaning, so updates animate only what changed. */
@@ -126,6 +130,8 @@ final class InspectorStore {
     case toolStrip
     /** All tool settings in a popover. */
     case toolPopover
+    /** Blender's Preferences, a section at a time, in Settings. */
+    case preferences
     /** The controls on a node editor's nodes. */
     case nodes
   }
@@ -187,6 +193,9 @@ final class InspectorStore {
   }
 
   var currentTab: String { selectedTab ?? "OBJECT" }
+
+  /** Whether Blender lists the tabs: Properties and the Preferences. */
+  private var hasTabs: Bool { mode == .properties || mode == .preferences }
 
   /* -------------------------------------------------------------------- */
   /** \name Sending edits
@@ -296,12 +305,17 @@ final class InspectorStore {
    * \{ */
 
   func requestProperties() {
-    guard mode == .properties || mode == .shading else { return }
+    guard mode == .properties || mode == .shading || mode == .preferences else { return }
     if selectedTab == "TOOL" { return }
     var state: JSON = ["tab": currentTab]
     if let expanded = expandedPanels[currentTab] { state["expanded"] = Array(expanded) }
     if let subpanels = subpanelStates[currentTab], !subpanels.isEmpty { state["subpanels"] = subpanels }
-    Engine.setting(mode == .shading ? "native_shading_state" : "native_properties_state", json: state)
+    let setting = switch mode {
+      case .shading: "native_shading_state"
+      case .preferences: "native_preferences_state"
+      default: "native_properties_state"
+    }
+    Engine.setting(setting, json: state)
   }
 
   func selectTab(_ tab: String) {
@@ -380,8 +394,8 @@ final class InspectorStore {
       return true
     }
     let inspector = mode == .properties ? physicsSections(raw) : raw
-    if mode == .properties { updateTabs(inspector) }
-    if let tab = inspector.string("tab"), mode == .properties, tab != selectedTab { return true }
+    if hasTabs { updateTabs(inspector) }
+    if let tab = inspector.string("tab"), hasTabs, tab != selectedTab { return true }
     self.inspector = inspector
     set(\.hasInspector, true)
     set(\.loaded, true)
@@ -428,7 +442,8 @@ final class InspectorStore {
 
   private func updateTabs(_ inspector: JSON) {
     let next = inspector.array("tabs").map {
-      InspectorTab(id: $0.string("id") ?? "", title: $0.string("title") ?? "", icon: $0.string("icon") ?? "")
+      InspectorTab(id: $0.string("id") ?? "", title: $0.string("title") ?? "", icon: $0.string("icon") ?? "",
+                   group: $0.int("group") ?? 0, external: $0.bool("external"))
     }
     if next != tabs { tabs = next }
     if selectedTab == nil || !tabs.contains(where: { $0.id == selectedTab }) {
@@ -517,7 +532,7 @@ final class InspectorStore {
     var result: [InspectorSection] = []
     for section in inspector.array("sections") {
       let sectionID = section.string("id") ?? section.string("title") ?? ""
-      if section.bool("header_hidden"), mode == .properties,
+      if section.bool("header_hidden"), hasTabs,
          expandedPanels[currentTab]?.contains(sectionID) != true
       {
         /* Blender draws these without a header, so they stay open. */

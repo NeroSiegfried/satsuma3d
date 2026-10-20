@@ -60,7 +60,8 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
                                         pencilMenu: pencilMenu))
     commands.presenter = self
     commands.render = SwiftRender(presenter: self)
-    commands.settings = SwiftSettings(presenter: self)
+    commands.settings = SwiftSettings(presenter: self, preferences: shell.panels.preferences,
+                                      lists: shell.panels.preferenceLists)
     commands.settings?.fingerUsesToolChanged = { [weak commands] useTool in
       commands?.setFingerUsesTool(useTool)
     }
