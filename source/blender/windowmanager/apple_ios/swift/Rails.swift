@@ -1739,48 +1739,93 @@ struct SidebarSlider: View {
 struct BrushColorWell: View {
   let color: [Double]
   static let size: CGFloat = 64
+  @State private var anchor = AnchorBox()
+
+  private var uiColor: UIColor {
+    UIColor(red: color.count > 0 ? color[0] : 0, green: color.count > 1 ? color[1] : 0,
+            blue: color.count > 2 ? color[2] : 0, alpha: 1)
+  }
 
   var body: some View {
-    let binding = Binding<Color>(
-      get: {
-        Color(.sRGB, red: color.count > 0 ? color[0] : 0, green: color.count > 1 ? color[1] : 0,
-              blue: color.count > 2 ? color[2] : 0)
-      },
-      set: { picked in
-        let resolved = UIColor(picked)
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        resolved.getRed(&r, green: &g, blue: &b, alpha: &a)
-        sendBrushValue("color", [Double(r), Double(g), Double(b)].map { min(1, max(0, $0)) })
-      })
-    Group {
-      /* Rolled with the Pencil, the color dial takes over: the system's picker steps aside, which
-       * also keeps the Pencil's lift from opening it. */
-      if ColorRoll.shared.showing || ColorRoll.shared.justClosed {
-        Circle()
-          .fill(binding.wrappedValue)
-          .frame(width: 30, height: 30)
-          .overlay(Circle().strokeBorder(.white.opacity(0.8), lineWidth: 2))
-      }
-      else {
-        ColorPicker("Color", selection: binding, supportsOpacity: false)
-          .labelsHidden()
-          .scaleEffect(1.5)
-      }
+    /* A tap opens the system's color picker; rolling a Pencil on it opens the color dial. */
+    Button {
+      guard !ColorRoll.shared.showing, !ColorRoll.shared.justClosed else { return }
+      BrushColorPicker.shared.present(from: anchor, color: uiColor)
+    } label: {
+      Circle()
+        .fill(Color(uiColor))
+        .frame(width: 36, height: 36)
+        .overlay(Circle().strokeBorder(.white.opacity(0.85), lineWidth: 2.5))
+        .shadow(color: .black.opacity(0.2), radius: 2)
+        .frame(width: Self.size, height: Self.size)
+        .contentShape(Circle())
     }
-    .frame(width: Self.size, height: Self.size)
+    .buttonStyle(.plain)
+    .background(PresentationAnchor(anchor: anchor))
     .panelGlass(.clear, in: Circle())
+    .opacity(ColorRoll.shared.showing ? 0 : 1)
     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
       ColorRoll.shared.wellFrame = frame
     }
     .onChange(of: color, initial: true) { _, color in ColorRoll.shared.brushColor = color }
     .onDisappear { ColorRoll.shared.wellFrame = .null }
+    .accessibilityLabel("Brush Color")
     .accessibilityIdentifier("blender.brush-color")
   }
 }
 
+/** The system color picker for the brush color: changes show as they are made, and one undo step
+ * is kept as it closes. */
+@MainActor
+final class BrushColorPicker: NSObject, UIColorPickerViewControllerDelegate,
+  UIPopoverPresentationControllerDelegate
+{
+  static let shared = BrushColorPicker()
+  private var picker: UIColorPickerViewController?
+  private var pending: [Double]?
+  private var lastSent: CFTimeInterval = 0
+
+  func present(from anchor: AnchorBox, color: UIColor) {
+    let picker = UIColorPickerViewController()
+    picker.title = "Brush Color"
+    picker.supportsAlpha = false
+    picker.selectedColor = color
+    picker.delegate = self
+    self.picker = picker
+    anchor.present(picker)
+    picker.popoverPresentationController?.delegate = self
+  }
+
+  func colorPickerViewController(_ picker: UIColorPickerViewController, didSelect color: UIColor,
+                                 continuously: Bool)
+  {
+    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+    color.getRed(&r, green: &g, blue: &b, alpha: &a)
+    let rgb = [r, g, b].map { min(1, max(0, Double($0))) }
+    pending = rgb
+    if !continuously {
+      commit()
+    }
+    else if CACurrentMediaTime() - lastSent > 1.0 / 30 {
+      lastSent = CACurrentMediaTime()
+      sendBrushValue("color", rgb)
+    }
+  }
+
+  private func commit() {
+    guard let pending else { return }
+    self.pending = nil
+    sendBrushValue("color", pending, commit: true)
+  }
+
+  func colorPickerViewControllerDidFinish(_ picker: UIColorPickerViewController) { commit() }
+
+  func presentationControllerDidDismiss(_ presentationController: UIPresentationController) { commit() }
+}
+
 /** The brush color, turned by rolling a Pencil held on the color well: the roll goes around the
- * hue ring, and sliding the Pencil sets saturation (across) and brightness (up and down). Lifting
- * keeps it. */
+ * hue wheel. Moving the Pencil in or out sets saturation, from white at the middle to full at the
+ * rim, and moving it around the wheel sets brightness. Lifting keeps it. */
 @MainActor
 @Observable
 final class ColorRoll {
