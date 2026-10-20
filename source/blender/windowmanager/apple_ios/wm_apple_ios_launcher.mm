@@ -321,6 +321,37 @@ static UIDocumentCreationIntent const launcher_general_intent = @"general";
 - (void)newDocumentFrom:(UIViewController *)presenter;
 @end
 
+/**
+ * A file in `folders` the browser imported from a copy of `backup`: named like it, the same
+ * contents, and created since the backup was.
+ */
+static NSURL *importedCopy(NSURL *backup, NSArray<NSURL *> *folders)
+{
+  NSFileManager *files = NSFileManager.defaultManager;
+  NSDate *backed_up = nil;
+  [backup getResourceValue:&backed_up forKey:NSURLCreationDateKey error:nil];
+  NSString *name = backup.URLByDeletingPathExtension.lastPathComponent;
+  for (NSURL *folder in folders) {
+    for (NSURL *item in [files contentsOfDirectoryAtURL:folder
+                             includingPropertiesForKeys:@[ NSURLCreationDateKey ]
+                                                options:NSDirectoryEnumerationSkipsHiddenFiles
+                                                  error:nil])
+    {
+      NSDate *created = nil;
+      [item getResourceValue:&created forKey:NSURLCreationDateKey error:nil];
+      /* The import may keep the date of the file it was given, made just before the backup. */
+      if (backed_up && created && [created timeIntervalSinceDate:backed_up] > -2.0 &&
+          [item.pathExtension isEqualToString:backup.pathExtension] &&
+          [item.lastPathComponent hasPrefix:name] &&
+          [files contentsEqualAtPath:item.path andPath:backup.path])
+      {
+        return item;
+      }
+    }
+  }
+  return nil;
+}
+
 static WMIOSLauncherController *launcher_controller = nil;
 /** A file the system asked to open before the launcher existed. */
 static NSURL *launcher_pending_url = nil;
@@ -524,6 +555,17 @@ static NSURL *launcher_pending_url = nil;
     [self discardCreationBackup];
     return nil;
   }
+  /* The browser can report an import as failed although the file arrived, when it cannot look
+   * the new file up straight away. Open the file it imported, which it lists in Recents, rather
+   * than a second copy it never saw. */
+  NSMutableArray<NSURL *> *folders = [NSMutableArray arrayWithObject:folder];
+  if (NSURL *current = self.document.fileURL.URLByDeletingLastPathComponent) {
+    [folders insertObject:current atIndex:0];
+  }
+  if (NSURL *imported = importedCopy(source, folders)) {
+    [self discardCreationBackup];
+    return imported;
+  }
   NSString *name = source.URLByDeletingPathExtension.lastPathComponent;
   NSString *extension = source.pathExtension;
   NSURL *destination = [folder URLByAppendingPathComponent:source.lastPathComponent];
@@ -713,13 +755,20 @@ static NSURL *launcher_pending_url = nil;
 
 - (void)setDocument:(UIDocument *)document
 {
+  /* The launcher starts without a document too, before it reopens the last one. */
+  const BOOL closed = self.document != nil && document == nil;
   [super setDocument:document];
   if (document == nil) {
     _opening = NO;
     /* Back in the launcher: the next launch starts there too. */
-    [NSUserDefaults.standardUserDefaults removeObjectForKey:launcher_open_document_key];
+    if (closed) {
+      [NSUserDefaults.standardUserDefaults removeObjectForKey:launcher_open_document_key];
+    }
     GHOST_ios_document_window_set_visible(false, true);
   }
+#if defined(APPLE_TARGET_VISIONOS)
+  [self updateOrnaments];
+#endif
 }
 
 - (void)documentDidOpen
