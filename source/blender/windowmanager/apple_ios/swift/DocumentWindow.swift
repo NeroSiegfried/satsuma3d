@@ -30,6 +30,9 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
   private let pencilSource: GHOSTIOSPencilMenuDelegate
   private var stateTimer: Timer?
   private var contextMenu: UIEditMenuInteraction?
+  /** One of Blender's menus, shown in place of its own popup where the pointer is: the context
+   * menu a right-click opens, Shift-A's Add menu, a pie, as on a Mac. */
+  private var blenderMenu: UIMenu?
   private var menuBarItems: NSArray = []
   private var menuBarRequest: UInt64 = 0
   private var menuBarMode: String?
@@ -108,6 +111,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     let desktop = model.desktop
     model.pullToolbar()
     shell.pullSnapshots()
+    pullMenuPopup()
     if desktop != model.desktop { desktopChanged() }
     refreshMenuBar()
   }
@@ -220,6 +224,8 @@ extension DocumentController: UIEditMenuInteractionDelegate, UIGestureRecognizer
     let interaction = UIEditMenuInteraction(delegate: self)
     metalView.addInteraction(interaction)
     contextMenu = interaction
+    /* A mouse or trackpad's secondary click goes to Blender, as on a Mac: its key-map opens the
+     * context menu, which shows natively, see #pullMenuPopup. */
     let press = UILongPressGestureRecognizer(target: self, action: #selector(contextMenuPress(_:)))
     press.minimumPressDuration = 0.42
     press.allowableMovement = 12
@@ -229,20 +235,22 @@ extension DocumentController: UIEditMenuInteractionDelegate, UIGestureRecognizer
     /* The phone holds a finger to use the tool. */
     press.isEnabled = UIDevice.current.userInterfaceIdiom != .phone
     metalView.addGestureRecognizer(press)
-    /* A mouse or trackpad's secondary click, as on the desktop. */
-    let click = UITapGestureRecognizer(target: self, action: #selector(contextMenuClick(_:)))
-    click.buttonMaskRequired = .secondary
-    click.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
-    click.cancelsTouchesInView = false
-    click.delegate = self
-    metalView.addGestureRecognizer(click)
   }
 
-  @objc private func contextMenuClick(_ click: UITapGestureRecognizer) {
-    /* Blender's own interface has its own context menus. */
-    guard click.state == .ended, !model.desktop else { return }
-    let configuration = UIEditMenuConfiguration(identifier: nil, sourcePoint: click.location(in: metalView))
-    contextMenu?.presentEditMenu(with: configuration)
+  private func pullMenuPopup() {
+    guard let json = WM_apple_ios_ui_menu_popup_take_json() else { return }
+    let data = Data(bytes: json, count: strlen(json))
+    free(json)
+    guard let request = (try? JSONSerialization.jsonObject(with: data)) as? JSON,
+          let menu = request.string("menu") else { return }
+    let bounds = metalView.bounds
+    let point = CGPoint(x: bounds.width * CGFloat(request.double("x") ?? 0.5),
+                        y: bounds.height * CGFloat(request.double("y") ?? 0.5))
+    Task { @MainActor in
+      guard let items = await BlenderMenus.shared.fetch(BlenderMenus.route(menu)), !items.isEmpty else { return }
+      blenderMenu = BlenderMenus.uiMenu(items)
+      contextMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+    }
   }
 
   @objc private func contextMenuPress(_ press: UILongPressGestureRecognizer) {
@@ -261,8 +269,16 @@ extension DocumentController: UIEditMenuInteractionDelegate, UIGestureRecognizer
                                   menuFor configuration: UIEditMenuConfiguration,
                                   suggestedActions: [UIMenuElement]) -> UIMenu?
   {
+    if let blenderMenu { return blenderMenu }
     let menu = wm_apple_ios_context_menu()
     return menu.children.isEmpty ? nil : menu
+  }
+
+  public func editMenuInteraction(_ interaction: UIEditMenuInteraction,
+                                  willDismissMenuFor configuration: UIEditMenuConfiguration,
+                                  animator: any UIEditMenuInteractionAnimating)
+  {
+    blenderMenu = nil
   }
 
   public func editMenuInteraction(_ interaction: UIEditMenuInteraction,

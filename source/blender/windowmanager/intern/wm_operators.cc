@@ -2189,6 +2189,11 @@ static wmOperatorStatus wm_call_menu_exec(bContext *C, wmOperator *op)
   char idname[BKE_ST_MAXNAME];
   RNA_string_get(op->ptr, "name", idname);
 
+  if (const wmNativeInterface *native = WM_native_interface(); native && native->menu_popup) {
+    if (native->menu_popup(C, idname)) {
+      return OPERATOR_INTERFACE;
+    }
+  }
   return ui::popup_menu_invoke(C, idname, op->reports);
 }
 
@@ -2228,6 +2233,12 @@ static wmOperatorStatus wm_call_pie_menu_invoke(bContext *C, wmOperator *op, con
   char idname[BKE_ST_MAXNAME];
   RNA_string_get(op->ptr, "name", idname);
 
+  /* A native interface shows pies as its own menus, as it does Blender's other menus. */
+  if (const wmNativeInterface *native = WM_native_interface(); native && native->menu_popup) {
+    if (native->menu_popup(C, idname)) {
+      return OPERATOR_INTERFACE;
+    }
+  }
   return ui::pie_menu_invoke(C, idname, event);
 }
 
@@ -2236,6 +2247,11 @@ static wmOperatorStatus wm_call_pie_menu_exec(bContext *C, wmOperator *op)
   char idname[BKE_ST_MAXNAME];
   RNA_string_get(op->ptr, "name", idname);
 
+  if (const wmNativeInterface *native = WM_native_interface(); native && native->menu_popup) {
+    if (native->menu_popup(C, idname)) {
+      return OPERATOR_INTERFACE;
+    }
+  }
   return ui::pie_menu_invoke(C, idname, CTX_wm_window(C)->runtime->eventstate);
 }
 

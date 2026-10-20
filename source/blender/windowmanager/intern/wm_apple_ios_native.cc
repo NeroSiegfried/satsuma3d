@@ -49,6 +49,7 @@ extern "C" void WM_apple_ios_ui_pencil_hover_set(bool active, int x, int y);
 extern "C" void WM_apple_ios_ui_navigation_hover_set(bool active);
 extern "C" void WM_apple_ios_ui_view_roll_enqueue(float angle);
 void WM_apple_ios_ui_operator_input_adjust(bContext *C, wmOperator *op);
+bool ios_menu_popup(bContext *C, const char *menu);
 
 namespace ui {
 void native_redo_operator_register(bContext *C, wmOperator *op);
@@ -145,8 +146,9 @@ void keyconfig_default_ensure(wmKeyConfig *keyconf)
 
 /**
  * In the iPad interface, keys keep Blender's key-map but skip what would show Blender's own
- * interface over it: its menus, pies, popovers, search, toolbars and sidebars, and changes to the
- * screen's layout. The iPad shows these its own way. Blender's interface takes every key.
+ * interface over it: its popovers, search, toolbars and sidebars, and changes to the screen's
+ * layout. The iPad shows these its own way, and Blender's menus and pies natively, as a Mac
+ * does. Blender's interface takes every key.
  */
 bool keymap_item_hidden(const wmKeyMapItem *kmi)
 {
@@ -157,9 +159,8 @@ bool keymap_item_hidden(const wmKeyMapItem *kmi)
   if (ot == nullptr) {
     return false;
   }
+  /* Menus and pies show natively, see #ios_menu_popup. */
   static const Set<StringRef> shows_interface = {
-      "WM_OT_call_menu",
-      "WM_OT_call_menu_pie",
       "WM_OT_call_panel",
       "WM_OT_call_asset_shelf_popover",
       "WM_OT_context_menu_enum",
@@ -223,6 +224,7 @@ wmNativeInterface native_interface_create()
   native.operator_input_adjust = WM_apple_ios_ui_operator_input_adjust;
   native.keyconfig_default_ensure = keyconfig_default_ensure;
   native.keymap_item_hidden = keymap_item_hidden;
+  native.menu_popup = ios_menu_popup;
   return native;
 }
 

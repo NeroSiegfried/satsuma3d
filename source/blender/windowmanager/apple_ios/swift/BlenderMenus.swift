@@ -96,6 +96,41 @@ final class BlenderMenus {
     }
   }
 
+  /** A menu's items as they are now, asked of Blender afresh. */
+  func fetch(_ route: String) async -> [BlenderMenuItem]? {
+    let list = await Self.request(route)
+    if let list, items[route] != list { items[route] = list }
+    return list
+  }
+
+  /** Items as the system's menu, each submenu filled as it opens. */
+  static func uiMenu(_ items: [BlenderMenuItem], title: String = "") -> UIMenu {
+    var sections: [[UIMenuElement]] = []
+    for item in items {
+      if item.sectionStart || sections.isEmpty { sections.append([]) }
+      sections[sections.count - 1].append(element(item))
+    }
+    return UIMenu(title: title, children: sections.map { UIMenu(options: .displayInline, children: $0) })
+  }
+
+  private static func element(_ item: BlenderMenuItem) -> UIMenuElement {
+    let image = item.destructive ? UIImage(systemName: "trash") :
+      ["", "NONE", "BLANK1"].contains(item.icon) ? nil : BlenderIcon.image(item.icon)
+    if item.submenu && !item.disabled {
+      return UIMenu(title: item.title, image: image, children: [UIDeferredMenuElement.uncached { completion in
+        Task { @MainActor in
+          completion(uiMenu(await shared.fetch(item.route) ?? []).children)
+        }
+      }])
+    }
+    var attributes: UIMenuElement.Attributes = []
+    if item.destructive { attributes.insert(.destructive) }
+    if item.disabled { attributes.insert(.disabled) }
+    return UIAction(title: item.title, image: image, attributes: attributes, state: item.checked ? .on : .off) { _ in
+      shared.run(item)
+    }
+  }
+
   /** Run an item in Blender. */
   func run(_ item: BlenderMenuItem) {
     _ = item.route.withCString { WM_apple_ios_ui_menu_request($0, true) }

@@ -297,6 +297,8 @@ struct IOSActionItem {
 };
 
 GHOST_IOSLatest<std::string> ios_toolbar_snapshot;
+/** One of Blender's menus to show natively where the pointer is, see #ios_menu_popup. */
+GHOST_IOSLatest<std::string> ios_menu_popup_snapshot;
 GHOST_IOSLatest<std::string> ios_panels_snapshot;
 GHOST_IOSLatest<std::string> ios_timeline_snapshot;
 std::string ios_timeline_json;
@@ -3017,6 +3019,43 @@ extern "C" char *WM_apple_ios_ui_toolbar_copy_json()
   }
   std::memcpy(json_copy, ios_toolbar_json.c_str(), ios_toolbar_json.size() + 1);
   return json_copy;
+}
+
+extern "C" bool WM_apple_ios_ui_desktop_mode();
+
+/**
+ * One of Blender's menus, which a key or mouse button would open (a right-click's context menu,
+ * Shift-A's Add menu, a pie), shown natively where the pointer is, as on a Mac. The native side
+ * shows it from Blender's menu projection, see `BlenderMenus.swift`, and runs what is chosen.
+ */
+bool ios_menu_popup(bContext *C, const char *menu)
+{
+  if (WM_apple_ios_ui_desktop_mode() || WM_menutype_find(menu, true) == nullptr) {
+    return false;
+  }
+  /* Where the pointer is, as fractions of the window from its top left. */
+  float x = 0.5f, y = 0.5f;
+  wmWindow *win = CTX_wm_window(C);
+  if (win && win->runtime->eventstate) {
+    const float width = WM_window_native_pixel_x(win);
+    const float height = WM_window_native_pixel_y(win);
+    if (width > 0 && height > 0) {
+      x = win->runtime->eventstate->xy[0] / width;
+      y = 1.0f - win->runtime->eventstate->xy[1] / height;
+    }
+  }
+  ios_menu_popup_snapshot.publish("{\"menu\":\"" + ios_json_escape(menu) + "\",\"x\":" +
+                                  std::to_string(x) + ",\"y\":" + std::to_string(y) + "}");
+  return true;
+}
+
+extern "C" char *WM_apple_ios_ui_menu_popup_take_json()
+{
+  std::string json;
+  if (!ios_menu_popup_snapshot.take(json)) {
+    return nullptr;
+  }
+  return strdup(json.c_str());
 }
 
 extern "C" char *WM_apple_ios_ui_panels_take_json()

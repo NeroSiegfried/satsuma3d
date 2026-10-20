@@ -117,6 +117,18 @@ struct wmNativeInterface {
    */
   void (*operator_input_adjust)(bContext *C, wmOperator *op) = nullptr;
 
+  /**
+   * Show one of Blender's menus, by its name, natively in place of Blender's popup, where the
+   * pointer is. False to show Blender's own.
+   */
+  bool (*menu_popup)(bContext *C, const char *menu) = nullptr;
+
+  /**
+   * The barrel roll of a Pencil touching the screen, in radians, for moving things to turn them
+   * too. False with no Pencil down.
+   */
+  bool (*pencil_roll)(float *r_angle) = nullptr;
+
   /** Ensure the platform's own items in the default key configuration. */
   void (*keyconfig_default_ensure)(wmKeyConfig *keyconf) = nullptr;
   /**
