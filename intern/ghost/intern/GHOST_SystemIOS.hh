@@ -34,6 +34,8 @@ void GHOST_ios_unregister_window(UIWindow *window);
 @interface UIWindow (GHOSTKeyboard)
 /** Take a hardware key event for Blender, true when UIKit must not see it. */
 - (BOOL)handleKeyboardEvent:(UIPressesEvent *)event;
+/** \a key_window false: only modifier keys, followed while another window has the keyboard. */
+- (BOOL)handleKeyboardEvent:(UIPressesEvent *)event keyWindow:(BOOL)key_window;
 @end
 
 @interface GHOST_IOSMetalRenderer : NSObject <MTKViewDelegate>

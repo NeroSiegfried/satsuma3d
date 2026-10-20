@@ -865,6 +865,14 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
 
 - (BOOL)handleKeyboardEvent:(UIPressesEvent *)event
 {
+  return [self handleKeyboardEvent:event keyWindow:YES];
+}
+
+/* Modifier keys are followed whichever window has the keyboard, such as another scene's
+ * Outliner on Apple Vision Pro, or a search field: holding Shift then still extends a click in
+ * the viewport. Other keys only reach Blender from the key window. */
+- (BOOL)handleKeyboardEvent:(UIPressesEvent *)event keyWindow:(BOOL)key_window
+{
   if (!window || !system) {
     return NO;
   }
@@ -895,12 +903,15 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
       [held_keys removeObjectForKey:usage];
     }
     else {
-      if (!takes && ![self blenderTakesKeyboard]) {
-        continue;
-      }
       NSString *base = ui_key.charactersIgnoringModifiers;
       key = convertKey(int(ui_key.keyCode), base.length ? [base characterAtIndex:0] : 0);
       if (key == GHOST_kKeyUnknown) {
+        continue;
+      }
+      GHOST_TModifierKey modifier;
+      if (!modifier_from_key(key, &modifier) &&
+          (!key_window || (!takes && ![self blenderTakesKeyboard])))
+      {
         continue;
       }
       held_keys[usage] = @(int(key));

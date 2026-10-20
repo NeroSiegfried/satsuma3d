@@ -613,6 +613,11 @@ void GHOST_ios_unregister_window(UIWindow *window)
   UNUSED_VARS(event);
   return NO;
 }
+- (BOOL)handleKeyboardEvent:(UIPressesEvent *)event keyWindow:(BOOL)key_window
+{
+  UNUSED_VARS(event, key_window);
+  return NO;
+}
 @end
 
 @interface GHOSTUIApplication : UIApplication
@@ -623,10 +628,16 @@ void GHOST_ios_unregister_window(UIWindow *window)
 {
   /* Hardware keys arrive as a private subclass with its own type, not #UIEventTypePresses. */
   if ([event isKindOfClass:UIPressesEvent.class]) {
+    bool handled = false;
     for (UIWindow *window in native_windows) {
-      if (window.isKeyWindow && [window handleKeyboardEvent:(UIPressesEvent *)event]) {
-        return;
+      if ([window handleKeyboardEvent:(UIPressesEvent *)event keyWindow:window.isKeyWindow] &&
+          window.isKeyWindow)
+      {
+        handled = true;
       }
+    }
+    if (handled) {
+      return;
     }
   }
   [super sendEvent:event];
@@ -1088,6 +1099,11 @@ static uint32_t held_modifiers = 0;
 void GHOST_ios_set_modifier_held(GHOST_TModifierKey modifier, bool held)
 {
   held_modifiers = held ? (held_modifiers | (1u << modifier)) : (held_modifiers & ~(1u << modifier));
+}
+
+extern "C" uint32_t GHOST_ios_held_modifiers()
+{
+  return held_modifiers;
 }
 
 GHOST_TSuccess GHOST_SystemIOS::getModifierKeys(GHOST_ModifierKeys &keys) const

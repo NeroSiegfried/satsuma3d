@@ -348,11 +348,15 @@ struct OutlineList: View {
 
   private var animation: Animation? { UIAccessibility.isReduceMotionEnabled ? nil : .smooth(duration: 0.25) }
 
-  /** A tap selects the object; in Select mode it adds it to or takes it from the selection. */
+  /** A tap selects the object; in Select mode, or with Shift or Command held on a keyboard, it adds
+   * it to or takes it from the selection. */
   private func tap(_ node: JSON) {
     let key = node.keyString
     guard node.string("kind") == "object", node.bool("enabled"), let id = node.string("id") else { return }
-    if store.editing {
+    /* Left and right Shift, and left and right Command, as GHOST numbers them. */
+    let held = GHOST_ios_held_modifiers()
+    let extending = held & (0b11 | 0b11 << 6) != 0
+    if store.editing || extending {
       let on = !selection.contains(key)
       if on { selection.insert(key) } else { selection.remove(key) }
       store.send(["action": "select", "id": id, "extend": true, "value": on])

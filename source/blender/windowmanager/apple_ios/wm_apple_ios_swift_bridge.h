@@ -62,7 +62,12 @@ void WM_apple_ios_ui_tool_set_by_id(const char *_Nonnull tool_id);
 void WM_apple_ios_ui_brush_activate(const char *_Nonnull brush_id);
 /** Held + and -: 0 for neither, 1 to add, 2 to subtract, see #IOSSelectIntent. */
 void WM_apple_ios_ui_select_intent_set(int intent);
+/** The modifier keys held on a hardware keyboard, bits by GHOST's #GHOST_TModifierKey, whichever
+ * window has the keyboard. */
+unsigned int GHOST_ios_held_modifiers(void);
 char *_Nullable WM_apple_ios_ui_panels_take_json(void);
+/** One of Blender's menus to show where the pointer is: its name and place, or null. */
+char *_Nullable WM_apple_ios_ui_menu_popup_take_json(void);
 char *_Nullable WM_apple_ios_ui_timeline_take_json(void);
 char *_Nullable WM_apple_ios_ui_assets_take_json(void);
 /** How much of the window's height, from the bottom, the asset pane and timeline cover. */
