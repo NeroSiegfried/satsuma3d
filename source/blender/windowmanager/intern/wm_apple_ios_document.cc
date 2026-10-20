@@ -51,6 +51,7 @@
 #  include "WM_api.hh"
 #  include "WM_apple_ios.hh"
 #  include "WM_types.hh"
+#  include "wm_event_system.hh"
 
 #  ifdef WITH_PYTHON
 #    include "BPY_extern_run.hh"
@@ -167,8 +168,19 @@ bool wm_apple_ios_autosave_location(const char *blendfile_path, char filepath[FI
   }
   char filename[FILE_MAX];
   if (blendfile_path && (blendfile_path[0] != '\0')) {
+    /* Inside the app's own folder, of the path within it: the folder moves when the app is
+     * updated or reinstalled, and its name changes with it. */
+    const char *hashed = blendfile_path;
+    if (const char *home = BLI_getenv("HOME")) {
+      const char *container = BLI_path_basename(home);
+      if (container[0] != '\0') {
+        if (const char *inside = strstr(blendfile_path, container)) {
+          hashed = inside + strlen(container);
+        }
+      }
+    }
     uint32_t hash = 2166136261u; /* FNV-1a: stable across launches and app versions. */
-    for (const char *c = blendfile_path; *c; c++) {
+    for (const char *c = hashed; *c; c++) {
       hash = (hash ^ uint8_t(*c)) * 16777619u;
     }
     const char *basename = BLI_path_basename(blendfile_path);
@@ -296,7 +308,10 @@ static bool wm_document_operator(bContext *C, const char *idname, PointerRNA *pr
   return status & OPERATOR_FINISHED;
 }
 
-bool WM_apple_ios_document_open(bContext *C, const char *filepath, const bool template_document)
+bool WM_apple_ios_document_open(bContext *C,
+                                const char *filepath,
+                                const bool template_document,
+                                bool *r_recovered)
 {
   PointerRNA props = WM_operator_properties_create("WM_OT_open_mainfile");
   RNA_string_set(&props, "filepath", filepath);
@@ -306,6 +321,8 @@ bool WM_apple_ios_document_open(bContext *C, const char *filepath, const bool te
   }
   const bool success = wm_document_operator(C, "WM_OT_open_mainfile", &props);
   WM_operator_properties_free(&props);
+  /* Opening continues from the auto-save when it is newer, see #wm_apple_ios_autosave_newer. */
+  *r_recovered = success && CTX_data_main(C)->recovered;
   return success;
 }
 
@@ -343,8 +360,26 @@ static bool wm_document_write(bContext *C, const char *filepath, const bool prev
   return success;
 }
 
-bool WM_apple_ios_document_write(bContext *C, const char *filepath, const bool preview)
+bool WM_apple_ios_document_write(bContext *C,
+                                 const char *filepath,
+                                 const bool preview,
+                                 const bool when_idle)
 {
+  /* Saving along the way waits for a stroke or other modal operator to finish, as Blender's
+   * auto-save does: its data is not in a state to write until then. */
+  if (when_idle) {
+    if (wmWindowManager *wm = CTX_wm_manager(C)) {
+      for (wmWindow &win : wm->windows) {
+        for (wmEventHandler &handler : win.runtime->modalhandlers) {
+          if (handler.type == WM_HANDLER_TYPE_OP &&
+              reinterpret_cast<wmEventHandler_Op &>(handler).op)
+          {
+            return false;
+          }
+        }
+      }
+    }
+  }
   /* A copy for iOS to move into place: paths stay relative to the document, and the file being
    * replaced keeps no `.blend1` backup, iOS keeps versions of documents itself. */
   const bool success = wm_document_write(C, filepath, preview);

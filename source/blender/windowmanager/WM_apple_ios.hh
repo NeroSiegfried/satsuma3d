@@ -63,13 +63,20 @@ void WM_apple_ios_autosave_ensure();
 void WM_apple_ios_autosave_now(bContext *C);
 /* Documents. UIKit owns them, and Blender reads and writes their files when asked. */
 
-/** Open the document's file. */
-bool WM_apple_ios_document_open(bContext *C, const char *filepath, bool template_document);
+/**
+ * Open the document's file. `r_recovered`: its auto-save was newer and opened instead, work the
+ * document has yet to save.
+ */
+bool WM_apple_ios_document_open(bContext *C,
+                                const char *filepath,
+                                bool template_document,
+                                bool *r_recovered);
 /**
  * Write the open file to `filepath`, for iOS to move into place as the saved document. Without
  * `preview` the file stores no preview image, which needs the GPU.
  */
-bool WM_apple_ios_document_write(bContext *C, const char *filepath, bool preview);
+/** `when_idle`: give up rather than write while a stroke or other modal operator runs. */
+bool WM_apple_ios_document_write(bContext *C, const char *filepath, bool preview, bool when_idle);
 /** Save a portable template copy and PNG preview without marking the document saved. */
 std::string WM_apple_ios_document_template_write(bContext *C,
                                                  const char *filepath,

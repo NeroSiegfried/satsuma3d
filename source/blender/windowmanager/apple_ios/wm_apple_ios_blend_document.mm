@@ -6,6 +6,8 @@
 #include "GHOST_IOSRuntime.hh"
 #import "wm_apple_ios_launcher.hh"
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <memory>
@@ -14,8 +16,11 @@
 
 namespace blender {
 /* Implemented in wm_files.cc. */
-bool WM_apple_ios_document_open(bContext *C, const char *filepath, bool template_document);
-bool WM_apple_ios_document_write(bContext *C, const char *filepath, bool preview);
+bool WM_apple_ios_document_open(bContext *C,
+                                const char *filepath,
+                                bool template_document,
+                                bool *r_recovered);
+bool WM_apple_ios_document_write(bContext *C, const char *filepath, bool preview, bool when_idle);
 std::string WM_apple_ios_document_template_write(bContext *C,
                                                  const char *filepath,
                                                  const char *preview,
@@ -57,6 +62,16 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work)
   BOOL _accessing;
   /** Saving was asked for, rather than UIKit's periodic saving while the document is edited. */
   int _saving;
+  /** When the document was last written, for saving along the way, see below. */
+  CFTimeInterval _lastWrite;
+  /** A save along the way is waiting to run. */
+  BOOL _alongTheWayScheduled;
+  /** The next write is a save along the way. */
+  BOOL _alongTheWay;
+  /** The file was last written without its preview, which closing the document renders. */
+  BOOL _previewStale;
+  /** Blender opened the document's newer auto-save, work the document has yet to save. */
+  BOOL _recovered;
 }
 
 - (void)saveChangesWithCompletionHandler:(void (^)(BOOL success))completionHandler
@@ -79,8 +94,8 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work)
 - (void)autosaveWithCompletionHandler:(void (^)(BOOL success))completionHandler
 {
   /* UIKit saves edited documents every so often. Blender would stop to write the file and render
-   * its preview, mid-edit: leave the work for when the document closes or the app leaves the
-   * foreground. Blender's own auto-save still keeps the work safe meanwhile. */
+   * its preview, mid-edit: the document saves along the way on its own terms instead, see below.
+   * Closing the document or leaving the app saves at once, with the preview. */
   if (_saving == 0 && !(self.documentState & UIDocumentStateClosed)) {
     if (completionHandler) {
       completionHandler(YES);
@@ -90,11 +105,63 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work)
   [super autosaveWithCompletionHandler:completionHandler];
 }
 
+/** How soon after an edit the document saves along the way, and how often at most, in seconds. */
+static const CFTimeInterval document_save_delay = 15.0;
+static const CFTimeInterval document_save_interval = 60.0;
+
+/**
+ * Save the edited document in place while it stays open, without its preview and never
+ * mid-stroke, so the file is never far behind: Blender's own auto-save is the backup, not the
+ * only copy. Saves wait for a stroke to end, and come at most once a minute.
+ */
+- (void)saveAlongTheWay
+{
+  if (_alongTheWayScheduled) {
+    return;
+  }
+  _alongTheWayScheduled = YES;
+  const CFTimeInterval wait = std::max(
+      document_save_delay, document_save_interval - (CACurrentMediaTime() - _lastWrite));
+  dispatch_after(
+      dispatch_time(DISPATCH_TIME_NOW, int64_t(wait * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        _alongTheWayScheduled = NO;
+        if ((self.documentState & UIDocumentStateClosed) ||
+            !(_blenderModified || [super hasUnsavedChanges]))
+        {
+          return;
+        }
+        if (_saving > 0) {
+          [self saveAlongTheWay];
+          return;
+        }
+        _saving++;
+        _alongTheWay = YES;
+        [super autosaveWithCompletionHandler:^(BOOL success) {
+          _saving--;
+          /* Edited since, or Blender was mid-stroke. */
+          if (_blenderModified || !success) {
+            [self saveAlongTheWay];
+          }
+        }];
+      });
+}
+
 - (void)openWithCompletionHandler:(void (^)(BOOL success))completionHandler
 {
   /* Blender opens the file by its path, outside of the document's coordinated read. */
   _accessing = [self.fileURL startAccessingSecurityScopedResource];
-  [super openWithCompletionHandler:completionHandler];
+  [super openWithCompletionHandler:^(BOOL success) {
+    /* Work recovered from the auto-save goes into the document, as an edit would. */
+    if (success && _recovered) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [self updateChangeCount:UIDocumentChangeDone];
+        [self saveAlongTheWay];
+      });
+    }
+    if (completionHandler) {
+      completionHandler(success);
+    }
+  }];
 }
 
 - (void)closeWithCompletionHandler:(void (^)(BOOL success))completionHandler
@@ -120,10 +187,16 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work)
   /* Blender loads the file now, so the document opens on its scene. */
   const std::string path = url.path.UTF8String ?: "";
   const bool template_document = self.templateDocument;
-  if (engine_wait([path, template_document](blender::bContext *C) {
-        return blender::WM_apple_ios_document_open(C, path.c_str(), template_document);
+  auto recovered = std::make_shared<std::atomic<bool>>(false);
+  if (engine_wait([path, template_document, recovered](blender::bContext *C) {
+        bool r_recovered = false;
+        const bool success = blender::WM_apple_ios_document_open(
+            C, path.c_str(), template_document, &r_recovered);
+        recovered->store(r_recovered);
+        return success;
       }))
   {
+    _recovered = recovered->load();
     return YES;
   }
   if (outError) {
@@ -149,12 +222,17 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work)
   /* Blender writes the file where UIKit asks, and UIKit moves it into place, so saving needs
    * access to nothing but the document. */
   const std::string path = url.path.UTF8String ?: "";
+  const bool along_the_way = _alongTheWay;
+  _alongTheWay = NO;
   /* Rendering the preview needs Blender's window on screen, and the app in front. */
-  const bool preview = !GHOST_ios_app_in_background() && GHOST_ios_document_window_visible();
-  if (engine_wait([path, preview](blender::bContext *C) {
-        return blender::WM_apple_ios_document_write(C, path.c_str(), preview);
+  const bool preview = !along_the_way && !GHOST_ios_app_in_background() &&
+                       GHOST_ios_document_window_visible();
+  if (engine_wait([path, preview, along_the_way](blender::bContext *C) {
+        return blender::WM_apple_ios_document_write(C, path.c_str(), preview, along_the_way);
       }))
   {
+    _lastWrite = CACurrentMediaTime();
+    _previewStale = !preview;
     return YES;
   }
   if (outError) {
@@ -167,16 +245,22 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work)
 
 - (BOOL)hasUnsavedChanges
 {
-  return _blenderModified || [super hasUnsavedChanges];
+  return _blenderModified || _previewStale || [super hasUnsavedChanges];
 }
 
 - (void)setBlenderModified:(BOOL)modified
 {
-  if (modified && !_blenderModified) {
-    /* Schedules saving, as any edit of a document does. */
-    [self updateChangeCount:UIDocumentChangeDone];
+  /* Blender reports on the way while it loads the file, before the document is open. */
+  if (self.documentState & UIDocumentStateClosed) {
+    return;
   }
+  const BOOL edited = modified && !_blenderModified;
   _blenderModified = modified;
+  if (edited) {
+    /* Marks the document edited, as any edit of a document does. */
+    [self updateChangeCount:UIDocumentChangeDone];
+    [self saveAlongTheWay];
+  }
 }
 
 @end
@@ -458,7 +542,15 @@ void wm_apple_ios_document_create(NSString *identifier, void (^completion)(NSURL
                                               attributes:nil
                                                    error:nil] &&
                          [files copyItemAtURL:seed toURL:url error:nil];
-    if (!success) {
+    if (success) {
+      /* A copy keeps the template's dates: date it now, so the new document sorts as the newest
+       * in the browser rather than among old files. */
+      NSDate *now = [NSDate date];
+      [files setAttributes:@{NSFileCreationDate : now, NSFileModificationDate : now}
+              ofItemAtPath:url.path
+                     error:nil];
+    }
+    else {
       [files removeItemAtPath:folder error:nil];
     }
     dispatch_async(dispatch_get_main_queue(), ^{

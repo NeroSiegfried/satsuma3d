@@ -2342,6 +2342,13 @@ static bool wm_autosave_write_try(Main *bmain, wmWindowManager *wm)
     return true;
   }
 
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* iOS ends apps without warning, and work done in Sculpt or Edit Mode is lost with them: save
+   * in every mode, as the document's own last chance does, see #WM_apple_ios_autosave_now. */
+  WM_autosave_write(wm, bmain);
+  return true;
+#endif
+
   char filepath[FILE_MAX];
   wm_autosave_location(filepath);
 
@@ -3272,6 +3279,10 @@ static wmOperatorStatus wm_open_mainfile__open(bContext *C, wmOperator *op)
   if (continue_autosave) {
     /* Loaded as recovered, which Blender keeps until the document is saved. */
     G.fileflags &= ~G_FILE_RECOVER_READ;
+    /* The auto-save remembers where the document was, which moves with the app's folder. */
+    if (success) {
+      STRNCPY(CTX_data_main(C)->filepath, filepath);
+    }
   }
 #else
   success = wm_file_read_opwrap(C, filepath, use_scripts_autoexec_check, op->reports);
