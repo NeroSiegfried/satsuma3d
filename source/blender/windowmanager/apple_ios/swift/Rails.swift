@@ -594,6 +594,11 @@ struct ToolRails: View {
   /** While asset libraries reload, the brush rail stays rather than flickering away. */
   @State private var brushesAvailable = false
   @AppStorage(leftHandedInterfaceKey) private var leftHanded = false
+  /** Where the sidebar was moved along its edge, from the top of its travel (0) to the bottom
+   * (1); below 0 it rests halfway down. */
+  @AppStorage("BlenderSidebarPosition") private var sidebarPosition = -1.0
+  /** The sidebar's top edge as its handle was picked up. */
+  @State private var sidebarDragStart: CGFloat?
 
   var body: some View {
     GeometryReader { proxy in
@@ -610,7 +615,7 @@ struct ToolRails: View {
                                         safe.maxY - 100
       let layout = RailLayout(safe: safe, tray: model.bottomTray, tools: tools, toolCount: toolItems.count,
                               brushes: brushesAvailable ? brushes : nil, brushCount: brushItems.count,
-                              sidebar: content,
+                              sidebar: content, sidebarPosition: sidebarPosition >= 0 ? sidebarPosition : nil,
                               colorWell: color != nil, leftHanded: leftHanded, gizmoTop: gizmoTop)
       ZStack(alignment: .topLeading) {
         if let color {
@@ -636,6 +641,9 @@ struct ToolRails: View {
         if !content.isEmpty {
           PaintSidebar(state: intent, direction: model.direction, brush: model.brush, content: content,
                        leading: layout.sidebarLeading)
+            .overlay(alignment: .top) {
+              if !content.buttonsOnly { sidebarHandle(layout, content: content) }
+            }
             .position(layout.sidebarCenter)
             /* An open tool list takes the edge: the sidebar steps aside until it closes. */
             .offset(x: layout.sidebarTucked ? (layout.sidebarLeading ? -96 : 96) : 0)
@@ -664,6 +672,34 @@ struct ToolRails: View {
       }
     }
     .ignoresSafeArea(edges: .vertical)
+  }
+
+  /** A small grabber above the sidebar: dragged, it moves the sidebar up or down its edge, where
+   * it stays. */
+  private func sidebarHandle(_ layout: RailLayout, content: SidebarContent) -> some View {
+    Capsule()
+      .fill(.secondary.opacity(0.6))
+      .frame(width: 24, height: 5)
+      .frame(width: 48, height: 22)
+      .contentShape(Rectangle())
+      .offset(y: -22)
+      .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
+        .onChanged { value in
+          let start = sidebarDragStart ?? layout.sidebarCenter.y - content.height / 2
+          if sidebarDragStart == nil { Haptics.selection() }
+          sidebarDragStart = start
+          let travel = layout.sidebarTravel
+          let y = min(max(start + value.translation.height, travel.lowerBound), travel.upperBound)
+          let span = travel.upperBound - travel.lowerBound
+          sidebarPosition = span > 0 ? Double((y - travel.lowerBound) / span) : 0.5
+        }
+        .onEnded { _ in sidebarDragStart = nil })
+      .hoverEffect(.highlight)
+      .accessibilityLabel("Move Sidebar")
+      .accessibilityAdjustableAction { direction in
+        sidebarPosition = min(1, max(0, (sidebarPosition >= 0 ? sidebarPosition : 0.5) +
+                                       (direction == .increment ? -0.1 : 0.1)))
+      }
   }
 
   @ViewBuilder
@@ -1199,6 +1235,8 @@ struct RailLayout: Equatable {
   var brushCenter: CGPoint
   var colorCenter: CGPoint
   var sidebarCenter: CGPoint
+  /** How far the sidebar's top edge can be moved along its edge. */
+  var sidebarTravel: ClosedRange<CGFloat> = 0...0
   var sidebarLeading: Bool
   /** Out of the way of an open tool list, or without the room to show. */
   var sidebarTucked: Bool
@@ -1217,7 +1255,8 @@ struct RailLayout: Equatable {
 
   @MainActor
   init(safe: CGRect, tray: CGFloat, tools: RailState, toolCount: Int, brushes: RailState?, brushCount: Int,
-       sidebar: SidebarContent, colorWell: Bool, leftHanded: Bool, gizmoTop: CGFloat)
+       sidebar: SidebarContent, sidebarPosition: Double? = nil, colorWell: Bool, leftHanded: Bool,
+       gizmoTop: CGFloat)
   {
     let compact: CGFloat = 64, gap: CGFloat = 10, topInset: CGFloat = 16, bottomInset: CGFloat = 12
     let inset: CGFloat = 14
@@ -1285,9 +1324,14 @@ struct RailLayout: Equatable {
     }
     else {
       let lowest = sidebarLeading ? toolTop - gap : trailingBottom
-      let y = max(top, min(safe.midY - h / 2, lowest - h))
+      /* Room above for its handle. */
+      let highest = top + 18
+      let travel = highest...max(highest, lowest - h)
+      sidebarTravel = travel
+      let y = sidebarPosition.map { travel.lowerBound + CGFloat($0) * (travel.upperBound - travel.lowerBound) } ??
+        max(top, min(safe.midY - h / 2, lowest - h))
       sidebarCenter = CGPoint(x: x, y: y + h / 2)
-      sidebarTucked = (sidebarLeading && tools.listVisible) || lowest - top < h
+      sidebarTucked = lowest - top < h
     }
   }
 }
