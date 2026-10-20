@@ -252,6 +252,12 @@ UIWindow *document_window = nil;
   system = nullptr;
 }
 
+/* Three fingers pan the view rather than undo or copy, as text editing has them. */
+- (UIEditingInteractionConfiguration)editingInteractionConfiguration
+{
+  return UIEditingInteractionConfigurationNone;
+}
+
 - (void)setFingerToolEnabled:(BOOL)enabled
 {
   [self cancelPencilStroke];
@@ -385,6 +391,17 @@ UIWindow *document_window = nil;
   pan2f_gesture_recognizer.maximumNumberOfTouches = 2;
   pan2f_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypeDirect) ];
   [window->getView() addGestureRecognizer:pan2f_gesture_recognizer];
+
+  /* Three fingers pan, whichever input uses the tool. */
+  pan3f_gesture_recognizer = [[GHOSTUIPanGestureRecognizer alloc]
+      initWithTarget:self
+              action:@selector(handlePan3f:)];
+  pan3f_gesture_recognizer.delegate = self;
+  pan3f_gesture_recognizer.cancelsTouchesInView = false;
+  pan3f_gesture_recognizer.minimumNumberOfTouches = 3;
+  pan3f_gesture_recognizer.maximumNumberOfTouches = 3;
+  pan3f_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypeDirect) ];
+  [window->getView() addGestureRecognizer:pan3f_gesture_recognizer];
 
   /* Pinch/Zoom gesture recognizer. */
   zoom_gesture_recognizer = [[GHOSTUIPinchGestureRecognizer alloc]
@@ -605,9 +622,11 @@ UIWindow *document_window = nil;
     return YES;
   }
   const BOOL is_navigation = gestureRecognizer == pan2f_gesture_recognizer ||
+                             gestureRecognizer == pan3f_gesture_recognizer ||
                              gestureRecognizer == zoom_gesture_recognizer ||
                              gestureRecognizer == rotation_gesture_recognizer;
   const BOOL other_is_navigation = otherGestureRecognizer == pan2f_gesture_recognizer ||
+                                   otherGestureRecognizer == pan3f_gesture_recognizer ||
                                    otherGestureRecognizer == zoom_gesture_recognizer ||
                                    otherGestureRecognizer == rotation_gesture_recognizer;
   return gestureRecognizer != otherGestureRecognizer && is_navigation && other_is_navigation;
@@ -633,6 +652,7 @@ UIWindow *document_window = nil;
       gestureRecognizer == tap4f_gesture_recognizer ||
       gestureRecognizer == pan_gesture_recognizer ||
       gestureRecognizer == pan2f_gesture_recognizer ||
+      gestureRecognizer == pan3f_gesture_recognizer ||
       gestureRecognizer == zoom_gesture_recognizer ||
       gestureRecognizer == rotation_gesture_recognizer ||
 #if !defined(APPLE_TARGET_VISIONOS)
@@ -1624,6 +1644,22 @@ static UIBezierPath *pointer_move()
 }
 
 - (void)handlePan2f:(GHOSTUIPanGestureRecognizer *)sender
+{
+  /* One finger uses the tool: two orbit, as one does with a Pencil, and three pan. */
+  if (finger_tool_enabled) {
+    [self handlePan:sender];
+    return;
+  }
+  [self handleViewPan:sender];
+}
+
+- (void)handlePan3f:(GHOSTUIPanGestureRecognizer *)sender
+{
+  [self handleViewPan:sender];
+}
+
+/** Pan the view by a drag of several fingers. */
+- (void)handleViewPan:(GHOSTUIPanGestureRecognizer *)sender
 {
   /* Translation can be non-zero on begin event */
   if (sender.state == UIGestureRecognizerStateBegan ||

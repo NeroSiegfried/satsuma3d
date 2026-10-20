@@ -249,7 +249,7 @@ private struct IPadSettingsPage: View {
                   symbol: "applepencil",
                   selected: model.touchInput == .pencilOnly) { model.touchInput = .pencilOnly }
         ChoiceRow(title: "Pencil and Fingers",
-                  detail: "One finger also uses the active tool. Two fingers move the view.",
+                  detail: "One finger uses the active tool. Two fingers orbit and pinch to zoom, three pan.",
                   symbol: "hand.point.up.left",
                   selected: model.touchInput == .pencilAndFingers) {
           model.touchInput = .pencilAndFingers

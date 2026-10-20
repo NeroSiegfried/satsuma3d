@@ -164,6 +164,8 @@ typedef struct UserInputEvent {
   GHOSTUITapGestureRecognizer *tap4f_gesture_recognizer;
   GHOSTUIPanGestureRecognizer *pan_gesture_recognizer;
   GHOSTUIPanGestureRecognizer *pan2f_gesture_recognizer;
+  /* Three fingers pan the view, with one finger on the tool. */
+  GHOSTUIPanGestureRecognizer *pan3f_gesture_recognizer;
   GHOSTUIPinchGestureRecognizer *zoom_gesture_recognizer;
   UIRotationGestureRecognizer *rotation_gesture_recognizer;
   GHOSTUIHoverGestureRecognizer *hover_gesture_recognizer;
