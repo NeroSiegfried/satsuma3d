@@ -1162,10 +1162,17 @@ struct ToggleGroupRow: View, Equatable {
             store.edit(item, value: !on)
             Haptics.selection()
           } label: {
-            Text(item.string("toolbar_label") ?? item.string("label") ?? "")
-              .font(.system(size: compact ? 13 : 15, weight: .semibold, design: .monospaced))
+            let title = item.string("toolbar_label") ?? item.string("label") ?? ""
+            /* An axis letter in a square, as Mirror's; a word as wide as it is. */
+            let letter = title.count <= 1
+            Text(title)
+              .font(letter ? .system(size: compact ? 13 : 15, weight: .semibold, design: .monospaced) :
+                             .system(size: compact ? 12 : 14, weight: .semibold))
+              .lineLimit(1)
+              .fixedSize()
               .foregroundStyle(on ? Color.white : .primary)
-              .frame(width: compact ? 28 : 36, height: compact ? 22 : 30)
+              .padding(.horizontal, letter ? 0 : 8)
+              .frame(minWidth: compact ? 28 : 36, minHeight: compact ? 22 : 30, maxHeight: compact ? 22 : 30)
               .background(on ? Color.accentColor : mixed ? Color.accentColor.opacity(0.25) : .clear,
                           in: RoundedRectangle(cornerRadius: compact ? 7 : 8, style: .continuous))
           }
