@@ -409,6 +409,10 @@ public struct DocumentWindow: View {
   public var body: some View {
     window
       .environment(\.blenderMenuContext, model.menuContext)
+#if !os(visionOS)
+      /* Over the bars too, which it dims while a Pencil rolls through it. */
+      .overlay { RollDialLayer() }
+#endif
   }
 
   @ViewBuilder
@@ -536,6 +540,9 @@ public struct DocumentWindow: View {
         ZStack {
 #if !os(visionOS) /* Ornaments there. */
           QuickActionsRow(model: model)
+            /* The Pencil's dial takes over while it shows. */
+            .opacity(RollDial.shared.showing ? 0 : 1)
+            .animation(.easeOut(duration: 0.18), value: RollDial.shared.showing)
           ToolRails(model: model)
 #endif
           ViewGizmoLayer(model: model)

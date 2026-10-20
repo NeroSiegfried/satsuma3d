@@ -200,9 +200,21 @@ def native_toolbar_json(context):
         return "[]"
     active_id = getattr(helper._tool_active_from_context(context, space_type), "idname", None)
 
+    from bpy.app.translations import pgettext_tip
+
+    def tool_description(tool):
+        # The tooltip Blender shows for the tool, for interfaces that name it with no hover.
+        description = tool.description
+        if callable(description):
+            try:
+                description = description(context, tool, None)
+            except Exception:
+                description = ""
+        return pgettext_tip(description) if description else ""
+
     def tool_data(tool):
         return {"id": tool.idname, "title": pgettext_iface(tool.label),
-                "icon": tool.icon, "symbol": ""}
+                "icon": tool.icon, "symbol": "", "description": tool_description(tool)}
 
     tools = []
     for item in cls.tools_from_context(context):

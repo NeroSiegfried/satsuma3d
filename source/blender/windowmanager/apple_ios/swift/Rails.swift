@@ -36,6 +36,8 @@ struct RailItem: Identifiable {
   let group: [RailItem]
   /** Where a group's menu separates its sections, by index into `group`. */
   let groupBreaks: Set<Int>
+  /** What it does, as Blender's tooltip says, where nothing hovers to show one. */
+  var detail = ""
 
   var grouped: Bool { group.count > 1 }
 
@@ -71,7 +73,7 @@ struct RailItem: Identifiable {
     }
     return RailItem(id: id, title: title, image: toolImage(tool, mode: mode, selected: false),
                     selectedImage: toolImage(tool, mode: mode, selected: true), gapBefore: gapBefore,
-                    group: group, groupBreaks: breaks)
+                    group: group, groupBreaks: breaks, detail: tool.string("description") ?? "")
   }
 
   /** Blender's colored tool artwork, or its monochrome icon, or a symbol. */
@@ -128,6 +130,8 @@ final class RailState {
   var restsAtTop = false
   /** Holding an item to slide to another and release. */
   var pressSelecting = false
+  /** Held with a Pencil: rolling it turns a dial of the items instead. */
+  var dialing = false
   /** The item under the finger while sliding. */
   var hovered: String?
   /** The rail following a drag, before it docks. */
@@ -288,6 +292,25 @@ struct Rail: View {
   var brushStops: (middle: CGFloat, other: CGFloat) = (0, 0)
   let choose: (RailItem) -> Void
   @Namespace private var namespace
+  @State private var railFrame = CGRect.zero
+
+  /** Where an item sits on the rail: in the open list, its own place; closed, the one shown,
+   * which becomes it. */
+  private var landing: (RailItem) -> CGRect? {
+    let state = state, active = active
+    return { item in state.frames[item.id] ?? state.frames[active] }
+  }
+
+  private func updateZone() {
+    let state = state, label = label, choose = choose, animation = animation
+    RollDial.shared.setZone(brush ? "brushes" : "tools", RollDial.Zone(
+      frame: railFrame, items: items, active: active, landing: landing) { item in
+        state.choose(item.id)
+        choose(item)
+        if state.expanded { withAnimation(animation) { state.expanded = false } }
+        label.show(item.title, item: item.id, rail: state, transient: true)
+      })
+  }
 
   private var animation: Animation? {
     UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: 0.32, dampingFraction: 0.84)
@@ -334,6 +357,21 @@ struct Rail: View {
     /* Only on the closed rail: on an open list, even a drag that does nothing takes the finger
      * from the scroll view, which then cannot scroll. */
     .simultaneousGesture(dockDrag, including: state.listVisible && !state.pressSelecting ? .subviews : .all)
+    /* A Pencil on the rail turns its dial as soon as it rolls. */
+    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+      railFrame = frame
+      updateZone()
+    }
+    .onChange(of: items.map(\.id)) { _, _ in updateZone() }
+    .onChange(of: active) { _, _ in updateZone() }
+    .onDisappear { RollDial.shared.setZone(brush ? "brushes" : "tools", nil) }
+    /* The dial ended as the Pencil lifted, whether or not the hold here saw it end. */
+    .onChange(of: RollDial.shared.showing) { _, showing in
+      if !showing && state.dialing {
+        state.dialing = false
+        state.pressSelecting = false
+      }
+    }
     .accessibilityIdentifier(brush ? "blender.brushbar" : "blender.toolbar")
   }
 
@@ -408,6 +446,8 @@ struct Rail: View {
   }
 
   private func tap(_ item: RailItem) {
+    /* The Pencil lifting from a dial it rolled here. */
+    if RollDial.shared.justClosed { return }
     if state.suppressTap {
       state.suppressTap = false
       return
@@ -441,14 +481,30 @@ struct Rail: View {
           guard canBeginPress(on: item) else { return }
           state.pressSelecting = true
           state.dragOffset = 0
-          state.hovered = item.id
           label.hide()
+          if PencilRoll.shared.down, let frame = state.frames[item.id] {
+            /* A Pencil holds it: the items fan out around it, to roll the Pencil through. */
+            state.dialing = true
+            RollDial.shared.begin(items: items, active: active, at: CGPoint(x: frame.midX, y: frame.midY),
+                                  landing: landing) { pick($0, closing: true) }
+            return
+          }
+          state.hovered = item.id
           withAnimation(animation) { state.expanded = true }
         }
+        if state.dialing { return }
         if let drag, let id = state.item(at: drag.location) { state.hovered = id }
       }
       .onEnded { value in
         guard state.pressSelecting, case .second(true, let drag) = value else { return }
+        if state.dialing {
+          state.dialing = false
+          state.pressSelecting = false
+          state.suppressTap = true
+          DispatchQueue.main.async { state.suppressTap = false }
+          RollDial.shared.end()
+          return
+        }
         pressEnded(at: drag?.location)
       }
   }
@@ -496,12 +552,23 @@ struct Rail: View {
   private var dockDrag: some Gesture {
     DragGesture(minimumDistance: 10, coordinateSpace: .global)
       .onChanged { value in
+        /* Not while the Pencil rolls the dial; a Pencil that may be about to roll moves the rail
+         * only once it clearly drags. */
+        if RollDial.shared.showing {
+          if state.dragOffset != 0 { state.dragOffset = 0 }
+          return
+        }
         guard !state.listVisible, !state.pressSelecting,
-              abs(value.translation.height) > abs(value.translation.width) * 0.4
+              abs(value.translation.height) > abs(value.translation.width) * 0.4,
+              !PencilRoll.shared.down || abs(value.translation.height) > 30
         else { return }
         state.dragOffset = value.translation.height
       }
       .onEnded { value in
+        if RollDial.shared.showing || RollDial.shared.justClosed {
+          state.dragOffset = 0
+          return
+        }
         guard !state.listVisible, !state.pressSelecting, state.dragOffset != 0 else { return }
         state.suppressTap = true
         DispatchQueue.main.async { state.suppressTap = false }
@@ -655,9 +722,23 @@ struct ToolRails: View {
         railLabel(safe: safe, layout: layout, frame: proxy.frame(in: .global), size: proxy.size)
       }
       .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
-      .animation(UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: 0.32, dampingFraction: 0.84),
+      /* The Pencil's dial shows the items instead, over everything. */
+      .opacity(RollDial.shared.showing ? 0 : 1)
+      /* Fading as the dial opens; back at once as it lands, where the chosen item meets it. */
+      .animation(RollDial.shared.showing ? .easeOut(duration: 0.18) : nil, value: RollDial.shared.showing)
+      /* For the Pencil's dial over the tool settings. */
+      .onChange(of: toolItems.map(\.id), initial: true) { _, _ in
+        RollDial.shared.tools = toolItems
+      }
+      .onChange(of: model.activeTool, initial: true) { _, tool in
+        RollDial.shared.activeTool = tools.active(tool)
+      }
+      /* Following the finger at once while the sidebar is moved. */
+      .animation(UIAccessibility.isReduceMotionEnabled || sidebarDragStart != nil ? nil :
+                   .spring(response: 0.32, dampingFraction: 0.84),
                  value: layout)
       .onChange(of: layout.toolWidth, initial: true) { _, width in model.toolRailWidth = width }
+      .onAppear { PencilRoll.start() }
       .onChange(of: model.brushes.map { $0 as NSDictionary }, initial: true) { _, snapshot in
         let brushes = snapshot as? JSON
         let loading = brushes?.bool("loading") ?? false
@@ -846,12 +927,399 @@ final class SelectIntentState {
       active = held
       intent = held
     }
-    WM_apple_ios_ui_select_intent_set(Int32(intent.rawValue))
+    WM_apple_ios_ui_select_intent_set(smoothing ? 3 : Int32(intent.rawValue))
   }
 }
 
-/** What the sidebar beside the viewport holds: the brush's size and strength, and the + and -.
- * Where Blender selects, it is only the + and -. */
+/** The barrel roll of a Pencil on the screen, anywhere in the window, for dials to turn with. */
+@MainActor
+@Observable
+final class PencilRoll {
+  static let shared = PencilRoll()
+
+  /** A Pencil touches the screen. */
+  private(set) var down = false
+  /** How far it has rolled since it touched down, in radians, past a half turn too. */
+  private(set) var turned: Double = 0
+  /** Where it touches, in the window; only the color dial reads it, while it shows. */
+  private(set) var point = CGPoint.zero
+  @ObservationIgnored private var last: Double?
+  @ObservationIgnored private var observer: NSObjectProtocol?
+
+  private init() {
+    observer = NotificationCenter.default.addObserver(forName: Notification.Name("BlenderPencilRoll"),
+                                                      object: nil, queue: .main) { note in
+      let info = note.userInfo
+      let down = (info?["down"] as? Bool) ?? false
+      let began = (info?["began"] as? Bool) ?? false
+      let angle = (info?["angle"] as? Double) ?? 0
+      let point = CGPoint(x: (info?["x"] as? Double) ?? 0, y: (info?["y"] as? Double) ?? 0)
+      MainActor.assumeIsolated {
+        PencilRoll.shared.update(down: down, began: began, angle: angle, point: point)
+      }
+    }
+  }
+
+  /** Started early, so the first Pencil touch is seen. */
+  static func start() { _ = shared }
+
+  private func update(down: Bool, began: Bool, angle: Double, point: CGPoint) {
+    defer {
+      if down {
+        if self.point != point { self.point = point }
+        RollDial.shared.pencilMoved(to: point, began: began)
+        ColorRoll.shared.pencilMoved(to: point, began: began)
+      }
+    }
+    guard down else {
+      /* The roll stays as it was: whatever ends with the lift still reads where it got to. */
+      if self.down {
+        self.down = false
+        RollDial.shared.pencilLifted()
+        ColorRoll.shared.pencilLifted()
+      }
+      last = nil
+      return
+    }
+    if let last {
+      let delta = atan2(sin(angle - last), cos(angle - last))
+      if delta != 0 { turned += delta }
+    }
+    last = angle
+    if !self.down { self.down = true }
+  }
+}
+
+/** Items fanned out around a Pencil holding a rail or the tool settings: rolling the Pencil turns
+ * the fan through them, and lifting it chooses the one in front. */
+@MainActor
+@Observable
+final class RollDial {
+  static let shared = RollDial()
+  /** The roll from one item to the next. */
+  static let step = Double.pi / 9
+
+  /** Tools of the active mode, and the active one, for the dial over the tool settings. */
+  @ObservationIgnored var tools: [RailItem] = []
+  @ObservationIgnored var activeTool = ""
+
+  /** A rail a Pencil can roll on at once, without holding first. */
+  struct Zone {
+    var frame: CGRect
+    var items: [RailItem]
+    var active: String
+    /** Where a chosen item sits on the rail, for the dial to land there. */
+    var landing: (RailItem) -> CGRect?
+    var choose: (RailItem) -> Void
+  }
+  @ObservationIgnored private var zones: [String: Zone] = [:]
+  /** A Pencil came down on a rail: rolling a little opens its dial; moving away or lifting first
+   * leaves it a tap or a scroll. */
+  @ObservationIgnored private var armed: (zone: Zone, point: CGPoint, roll: Double)?
+  /** Just closed: the tap the Pencil's lift makes on the rail is not one. */
+  @ObservationIgnored private var closedAt = Date.distantPast
+  /** How far a Pencil on a rail rolls before its dial opens. */
+  static let openingRoll = Double.pi / 45
+
+  func setZone(_ id: String, _ zone: Zone?) { zones[id] = zone }
+
+  var justClosed: Bool { Date().timeIntervalSince(closedAt) < 0.6 }
+
+  func pencilMoved(to point: CGPoint, began: Bool) {
+    if began {
+      armed = nil
+      guard center == nil, let zone = zones.values.first(where: { $0.frame.contains(point) }) else { return }
+      armed = (zone, point, PencilRoll.shared.turned)
+      return
+    }
+    guard let armed, center == nil else { return }
+    /* A Pencil drifts a little as it rolls: only a clear move is a scroll or a slide. */
+    if hypot(point.x - armed.point.x, point.y - armed.point.y) > 24 {
+      /* Moving: a scroll or a slide along the rail, not a roll. */
+      self.armed = nil
+      return
+    }
+    if abs(PencilRoll.shared.turned - armed.roll) > Self.openingRoll {
+      self.armed = nil
+      begin(items: armed.zone.items, active: armed.zone.active, at: armed.point,
+            landing: armed.zone.landing, choose: armed.zone.choose)
+      origin = armed.roll
+    }
+  }
+
+  private(set) var items: [RailItem] = []
+  /** Where the Pencil holds it, in the window, while it shows. */
+  private(set) var center: CGPoint?
+  private(set) var start = 0
+  /** The roll as the dial opened. */
+  @ObservationIgnored private(set) var origin: Double = 0
+  @ObservationIgnored private var choose: ((RailItem) -> Void)?
+  /** Chosen as the Pencil lifted: shown a moment, then the dial goes. */
+  private(set) var confirmed: Int?
+  /** Where the chosen item lands as the dial folds into what it came from, in the window. */
+  private(set) var landed: CGRect?
+  @ObservationIgnored private var landingFrame: ((RailItem) -> CGRect?)?
+
+  /** Where the fan has turned to, between items while rolling. */
+  var position: Double {
+    guard !items.isEmpty else { return 0 }
+    if let confirmed { return Double(confirmed) }
+    let turned = (PencilRoll.shared.turned - origin) / Self.step
+    return min(Double(items.count - 1), max(0, Double(start) + turned))
+  }
+
+  /** The position as the fan shows it: held at each item until the roll is well on its way to the
+   * next, then turning there quickly, so it clicks from one to the next. */
+  var shownPosition: Double {
+    let position = self.position
+    let nearest = position.rounded()
+    let off = position - nearest
+    return nearest + 4 * off * off * off
+  }
+
+  var selected: Int { Int(position.rounded()) }
+
+  func begin(items: [RailItem], active: String, at point: CGPoint,
+             landing: ((RailItem) -> CGRect?)? = nil, choose: @escaping (RailItem) -> Void)
+  {
+    guard !items.isEmpty, center == nil else { return }
+    self.items = items
+    self.landingFrame = landing
+    confirmed = nil
+    landed = nil
+    start = items.firstIndex { $0.id == active } ?? 0
+    origin = PencilRoll.shared.turned
+    self.choose = choose
+    Haptics.impact(.light)
+    withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) { center = point }
+  }
+
+  /** Felt through the Pencil itself, as it clicks from one item to the next, and as one is
+   * chosen; through the device too where it has haptics. */
+  @ObservationIgnored private lazy var pencilFeedback: UICanvasFeedbackGenerator? = {
+    guard let window = UIApplication.shared.connectedScenes
+      .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first
+    else { return nil }
+    return UICanvasFeedbackGenerator(view: window)
+  }()
+
+  func clicked() {
+    if let center { pencilFeedback?.alignmentOccurred(at: center) }
+    Haptics.selection()
+  }
+
+  /** A step felt through the Pencil at \a point in the window, such as a slider turned by rolling. */
+  func pencilTick(at point: CGPoint) {
+    pencilFeedback?.alignmentOccurred(at: point)
+  }
+
+  private func finish() {
+    guard center == nil else { return }
+    confirmed = nil
+    landed = nil
+  }
+
+  /** The tools around a Pencil holding the tool settings. */
+  func beginTools(at point: CGPoint) {
+    begin(items: tools, active: activeTool, at: point) { item in
+      WM_apple_ios_ui_tool_set_by_id(item.id)
+    }
+  }
+
+  var showing: Bool { center != nil }
+
+  /** The Pencil lifted: what held the dial may not see its hold end, as the rail beneath has
+   * hidden, so the dial ends itself too. */
+  func pencilLifted() {
+    armed = nil
+    guard center != nil, confirmed == nil else { return }
+    DispatchQueue.main.async { self.end() }
+  }
+
+  func end() {
+    guard center != nil, confirmed == nil else { return }
+    let index = selected
+    /* Where it will sit, read before choosing it changes the rail. */
+    let target = items.indices.contains(index) ? landingFrame?(items[index]) : nil
+    /* Chosen for real, as a tap on it would. */
+    if items.indices.contains(index), index != start { choose?(items[index]) }
+    choose = nil
+    landingFrame = nil
+    closedAt = Date()
+    if let center { pencilFeedback?.pathCompleted(at: center) }
+    Haptics.impact(.medium)
+    withAnimation(.spring(response: 0.22, dampingFraction: 0.75)) { confirmed = index }
+    /* Then it folds into the rail: the chosen item flies to its place there, the rest after it,
+     * and the rail shows again under it as it lands. */
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+      guard let target else {
+        withAnimation(.spring(response: 0.26, dampingFraction: 0.9)) { self.center = nil }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.finish() }
+        return
+      }
+      withAnimation(.spring(response: 0.36, dampingFraction: 0.8)) { self.landed = target }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) {
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant) { self.center = nil }
+        self.finish()
+      }
+    }
+  }
+}
+
+/** The fan of items around the Pencil, over the whole window, which dims behind it: the one in
+ * front, large and named, is chosen on lifting. */
+struct RollDialLayer: View {
+  private var dial: RollDial { RollDial.shared }
+  @State private var lastSelected = -1
+
+  var body: some View {
+    GeometryReader { proxy in
+      let origin = proxy.frame(in: .global).origin
+      ZStack {
+        if let center = dial.center {
+          Color.black.opacity(dial.landed == nil ? 0.18 : 0)
+            .transition(.opacity)
+          dialBody(local: CGPoint(x: center.x - origin.x, y: center.y - origin.y), size: proxy.size,
+                   origin: origin)
+            .transition(.opacity.combined(with: .scale(scale: 0.6)))
+        }
+      }
+      .frame(width: proxy.size.width, height: proxy.size.height)
+    }
+    .ignoresSafeArea()
+    .allowsHitTesting(false)
+    .onChange(of: dial.showing ? dial.selected : -1) { _, selected in
+      if selected >= 0 && lastSelected >= 0 && selected != lastSelected { dial.clicked() }
+      lastSelected = selected
+    }
+    .accessibilityHidden(true)
+  }
+
+  private func dialBody(local: CGPoint, size: CGSize, origin: CGPoint) -> some View {
+    /* Fanned towards the middle of the window, so it stays on screen from a corner, a side or the
+     * tool settings at the top. Items run clockwise from the one in front. */
+    let toward = atan2(Double(size.height / 2 - local.y), Double(size.width / 2 - local.x))
+    let position = dial.shownPosition
+    let radius: CGFloat = 176
+    /* Folding into the rail: everything goes to where the chosen item sits there. */
+    let landing = dial.landed.map { CGPoint(x: $0.midX - origin.x, y: $0.midY - origin.y) }
+    let landingScale = dial.landed.map { min($0.width, $0.height) / 60 } ?? 1
+    let spacing = 0.36
+    return ZStack {
+      /* The dial's track, which the items turn along. */
+      Circle()
+        .stroke(.thinMaterial, lineWidth: 76)
+        .frame(width: radius * 2, height: radius * 2)
+        .shadow(color: .black.opacity(0.12), radius: 12)
+        .scaleEffect(landing == nil ? 1 : 0.15)
+        .opacity(landing == nil ? 1 : 0)
+        .position(landing ?? local)
+      /* Where the chosen one sits, still as the items turn under it. */
+      Circle()
+        .fill(Color.accentColor)
+        .frame(width: 66, height: 66)
+        .scaleEffect(landing != nil ? landingScale * 0.9 : dial.confirmed != nil ? 1.1 : 1)
+        .opacity(landing == nil ? 1 : 0)
+        .position(landing ?? CGPoint(x: local.x + radius * cos(toward), y: local.y + radius * sin(toward)))
+      ForEach(Array(dial.items.enumerated()), id: \.element.id) { index, item in
+        let offset = Double(index) - position
+        if abs(offset) <= 4.5 {
+          let angle = toward + offset * spacing
+          let front = index == dial.selected
+          let place = CGPoint(x: local.x + radius * cos(angle), y: local.y + radius * sin(angle))
+          dialItem(item, front: front && landing == nil)
+            .scaleEffect(landing != nil ? (front ? landingScale : 0.3) :
+                         front ? (dial.confirmed == index ? 1.15 : 1.05) : max(0.75, 1 - abs(offset) * 0.06))
+            .animation(.spring(response: 0.24, dampingFraction: 0.78), value: front)
+            .opacity(landing != nil && !front ? 0 : max(0, 1 - max(0, abs(offset) - 3) * 0.7))
+            .position(landing ?? place)
+        }
+      }
+      if dial.items.indices.contains(dial.selected) {
+        VStack(spacing: 4) {
+          Text(dial.items[dial.selected].title)
+            .font(.headline)
+          /* What it does, as Blender's tooltip would say. */
+          let detail = dial.items[dial.selected].detail
+          if !detail.isEmpty {
+            Text(detail)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .multilineTextAlignment(.center)
+              .frame(maxWidth: 260)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .panelGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .fixedSize()
+        .position(x: local.x + (radius + 150) * cos(toward), y: local.y + (radius + 110) * sin(toward))
+        .opacity(landing == nil ? 1 : 0)
+        .contentTransition(.opacity)
+      }
+    }
+    /* Each click into place settles with a soft spring. */
+    .animation(.spring(response: 0.22, dampingFraction: 0.8), value: position)
+  }
+
+  private func dialItem(_ item: RailItem, front: Bool) -> some View {
+    Group {
+      if let image = (front ? item.selectedImage : nil) ?? item.image {
+        Image(uiImage: image).resizable().scaledToFit().padding(8)
+      }
+      else {
+        Text(String(item.title.prefix(1))).font(.title3.weight(.semibold))
+      }
+    }
+    .frame(width: 60, height: 60)
+    .foregroundStyle(front ? Color.white : Color.primary)
+  }
+}
+
+/** Held with a Pencil, the tool settings fan out the mode's tools, to roll the Pencil through. */
+struct PencilToolDialHold: ViewModifier {
+  @State private var press: (start: CGPoint, moved: Bool, id: Int)?
+  @State private var holding = false
+
+  func body(content: Content) -> some View {
+    content.simultaneousGesture(
+      DragGesture(minimumDistance: 0, coordinateSpace: .global)
+        .onChanged { value in
+          if press == nil {
+            guard PencilRoll.shared.down else { return }
+            let id = Int.random(in: 0 ..< Int.max)
+            press = (value.startLocation, false, id)
+            /* A Pencil held still, without moving, rolls: nothing reports it held but time. */
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+              guard let press, press.id == id, !press.moved, PencilRoll.shared.down else { return }
+              holding = true
+              RollDial.shared.beginTools(at: press.start)
+            }
+          }
+          else if !holding, hypot(value.translation.width, value.translation.height) > 12 {
+            press?.moved = true
+          }
+        }
+        .onEnded { _ in
+          press = nil
+          guard holding else { return }
+          holding = false
+          RollDial.shared.end()
+        })
+      .onChange(of: RollDial.shared.showing) { _, showing in
+        if !showing {
+          holding = false
+          press = nil
+        }
+      }
+  }
+}
+
+/** What the sidebar beside the viewport holds: the brush's size and strength, the + and -, and in
+ * Sculpt Mode, Smooth to hold. Where Blender selects, it is only the + and -. */
 struct SidebarContent: Equatable {
   var size = false
   var strength = false

@@ -536,6 +536,7 @@ struct ToolStrip: View {
     .frame(height: 40)
     .tint(PanelStyle.tint)
     .accessibilityIdentifier("blender.tool-settings.strip")
+    .modifier(PencilToolDialHold())
   }
 }
 
