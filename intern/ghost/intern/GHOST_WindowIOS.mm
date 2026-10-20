@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+#include <algorithm>
 #include "GHOST_IOSNativeInterface.hh"
 #import "GHOST_IOSWindowInput.hh"
 
@@ -619,6 +620,26 @@ UIWindow *document_window = nil;
          [view.accessibilityIdentifier isEqualToString:@"blender.viewport.navigation"];
 }
 
+/**
+ * The Pencil's force as Blender's pressure. Drawing hardly ever presses as hard as the Pencil can
+ * measure: full pressure comes well before that, and a curve lifts light strokes, as drawing apps
+ * have it. How light or firm a touch it wants is a setting, see `SettingsSheet.swift`.
+ */
+static float pencil_pressure(const CGFloat force, const CGFloat maximum)
+{
+  if (maximum <= 0.0) {
+    return 1.0f;
+  }
+  /* 0 wants the firmest touch, 1 the lightest; the default is halfway. */
+  static NSString *const key = @"BlenderPencilPressureSensitivity";
+  NSNumber *setting = [NSUserDefaults.standardUserDefaults objectForKey:key];
+  const double sensitivity = setting ? std::clamp(setting.doubleValue, 0.0, 1.0) : 0.5;
+  const double full = 0.9 - 0.5 * sensitivity;
+  const double exponent = 1.0 - 0.75 * sensitivity;
+  const double x = std::clamp(double(force / maximum) / full, 0.0, 1.0);
+  return float(pow(x, exponent));
+}
+
 - (void)updateTabletDataFromPencilTouch:(UITouch *)touch
 {
   if (touch.type == UITouchTypeDirect) {
@@ -629,12 +650,7 @@ UIWindow *document_window = nil;
    * drag is decided by movement, not by disguising a Pencil as a relative mouse. */
   tablet_data.Active = GHOST_kTabletModeStylus;
 
-  if (touch.maximumPossibleForce > 0.0) {
-    tablet_data.Pressure = touch.force / touch.maximumPossibleForce;
-  }
-  else {
-    tablet_data.Pressure = 1.0f;
-  }
+  tablet_data.Pressure = pencil_pressure(touch.force, touch.maximumPossibleForce);
 
   CGFloat azimuthAngle = [touch azimuthAngleInView:window->getView()];
   CGFloat altitudeAngle = [touch altitudeAngle];
