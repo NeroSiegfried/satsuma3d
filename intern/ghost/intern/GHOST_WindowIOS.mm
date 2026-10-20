@@ -56,6 +56,28 @@ static void ios_pencil_roll(UITouch *touch)
 #endif
 }
 
+/**
+ * What happens to Apple Pencil Pro squeezes, in the app's caches as `squeeze.log`, to read off
+ * the device, as the system log there needs more than the app can ask for.
+ */
+static void ios_squeeze_log(const char *message)
+{
+  os_log(OS_LOG_DEFAULT, "%{public}s", message);
+  NSURL *caches = [NSFileManager.defaultManager URLsForDirectory:NSCachesDirectory
+                                                       inDomains:NSUserDomainMask]
+                      .firstObject;
+  NSURL *url = [caches URLByAppendingPathComponent:@"squeeze.log"];
+  NSString *line = [NSString stringWithFormat:@"%@ %s\n", NSDate.date, message];
+  NSFileHandle *file = [NSFileHandle fileHandleForWritingToURL:url error:nil];
+  if (!file) {
+    [line writeToURL:url atomically:NO encoding:NSUTF8StringEncoding error:nil];
+    return;
+  }
+  [file seekToEndOfFile];
+  [file writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+  [file closeFile];
+}
+
 static void ios_navigation_hover(bool active)
 {
   if (const GHOST_IOSNativeInterface *native = GHOST_ios_native_interface()) {
@@ -505,8 +527,33 @@ UIWindow *document_window = nil;
   pencil_interaction = [[UIPencilInteraction alloc] init];
   pencil_interaction.delegate = self;
   [window->getView() addInteraction:pencil_interaction];
+  [self updatePencilInteraction];
+  [NSNotificationCenter.defaultCenter addObserver:self
+                                         selector:@selector(updatePencilInteraction)
+                                             name:NSUserDefaultsDidChangeNotification
+                                           object:nil];
 #endif
 }
+
+#if !defined(APPLE_TARGET_VISIONOS)
+/* While squeezing shows the system's tool palette, see the iPad page of Settings, the squeeze
+ * goes to the palette's own canvas, see `SqueezePalette` in `Rails.swift`: UIKit gives it to one
+ * Pencil interaction, which must not be this one then. */
+- (void)updatePencilInteraction
+{
+  if (![NSThread isMainThread]) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [self updatePencilInteraction]; });
+    return;
+  }
+  NSString *squeeze_shows = [NSUserDefaults.standardUserDefaults stringForKey:@"BlenderPencilSqueeze"];
+  const BOOL palette = ![squeeze_shows isEqualToString:@"menu"];
+  if (pencil_interaction.enabled == palette) {
+    pencil_interaction.enabled = !palette;
+    ios_squeeze_log(palette ? "Pencil interaction off: the palette's canvas takes squeezes" :
+                              "Pencil interaction on: squeezes show the radial menu");
+  }
+}
+#endif
 
 /* Turn the user inputs into Blender events.
  * We batch up the events rather than send them directly in the gesture
@@ -1873,10 +1920,10 @@ static UIBezierPath *pointer_move()
         didReceiveSqueeze:(UIPencilInteractionSqueeze *)squeeze
 {
   const UIPencilPreferredAction action = UIPencilInteraction.preferredSqueezeAction;
-  os_log(OS_LOG_DEFAULT,
-         "Pencil squeeze: phase %ld, preferred action %ld",
-         long(squeeze.phase),
-         long(action));
+  ios_squeeze_log([NSString stringWithFormat:@"Squeeze reached Blender: phase %ld, preferred action %ld",
+                                             long(squeeze.phase),
+                                             long(action)]
+                      .UTF8String);
   /* Unless Settings has the radial menu for squeezing, the system's tool palette shows instead,
    * see `SqueezePalette` in `Rails.swift`. */
   NSString *squeeze_shows = [NSUserDefaults.standardUserDefaults stringForKey:@"BlenderPencilSqueeze"];

@@ -1093,7 +1093,8 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
   }
   private let holder: Holder = {
     let view = Holder(frame: .zero)
-    view.isUserInteractionEnabled = false
+    /* Enabled, for its Pencil interaction, but behind all of Blender's views, which take every
+     * touch. */
     view.isOpaque = false
     view.backgroundColor = .clear
     view.drawingPolicy = .pencilOnly
