@@ -462,6 +462,29 @@ func colorComponents(_ color: UIColor, alpha: Bool) -> [Double]? {
  * \{ */
 
 /** Haptics where the device has them; Apple Vision Pro has none. */
+#if os(visionOS)
+/* No haptics on Apple Vision Pro: the iPad's feedback generators, which the shared views use,
+ * do nothing there. */
+final class UIImpactFeedbackGenerator {
+  enum FeedbackStyle { case light, medium, heavy, soft, rigid }
+  init(style: FeedbackStyle = .medium) {}
+  func prepare() {}
+  func impactOccurred() {}
+  func impactOccurred(intensity: CGFloat) {}
+}
+
+final class UISelectionFeedbackGenerator {
+  func prepare() {}
+  func selectionChanged() {}
+}
+
+final class UICanvasFeedbackGenerator {
+  init(view: UIView) {}
+  func alignmentOccurred(at point: CGPoint) {}
+  func pathCompleted(at point: CGPoint) {}
+}
+#endif
+
 enum Haptics {
   enum Impact { case light, medium }
 

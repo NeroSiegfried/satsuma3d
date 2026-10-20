@@ -837,15 +837,41 @@ struct FCurveGestures: ViewModifier {
   let boxed: (UIGestureRecognizer.State, CGPoint, CGPoint) -> Void
   let pinched: (UIGestureRecognizer.State, CGSize, CGPoint) -> Void
   let scrolled: (CGSize, Bool) -> Void
+#if os(visionOS)
+  /** A pinch-drag going on, begun where it started. */
+  @State private var dragging = false
+  @State private var magnifying = false
+#endif
 
   func body(content: Content) -> some View {
 #if os(visionOS)
-    content.gesture(DragGesture(minimumDistance: 4)
-      .onChanged { value in
-        if value.translation == .zero { began(value.startLocation) }
-        changed(value.startLocation, value.location)
-      }
-      .onEnded { _ in ended(false) })
+    /* A pinch and drag moves a key, or the view; both hands pinching zoom about where they began. */
+    content
+      .gesture(DragGesture(minimumDistance: 4, coordinateSpace: FCurveCanvas.space)
+        .onChanged { value in
+          if !dragging {
+            dragging = true
+            began(value.startLocation)
+          }
+          changed(value.startLocation, value.location)
+        }
+        .onEnded { _ in
+          dragging = false
+          ended(false)
+        })
+      .simultaneousGesture(MagnifyGesture()
+        .onChanged { value in
+          if !magnifying {
+            magnifying = true
+            pinched(.began, CGSize(width: 1, height: 1), value.startLocation)
+          }
+          let scale = CGFloat(value.magnification)
+          pinched(.changed, CGSize(width: scale, height: scale), value.startLocation)
+        }
+        .onEnded { value in
+          magnifying = false
+          pinched(.ended, CGSize(width: 1, height: 1), value.startLocation)
+        })
 #else
     content
       .gesture(FCurveFingers(dragged: { state, start, location in

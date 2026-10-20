@@ -175,7 +175,9 @@ final class TextObjectInputView: UIView, UIKeyInput, UITextFormattingViewControl
     return toolbar
   }()
 
+#if !os(visionOS) /* No accessory over its keyboard there. */
   override var inputAccessoryView: UIView? { toolbar }
+#endif
 
   /** The system's text formatting: font, styles and alignment. */
   private func showFormatting() {

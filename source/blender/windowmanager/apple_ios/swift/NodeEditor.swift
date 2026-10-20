@@ -3134,12 +3134,14 @@ final class NodeKeyCaptureView: UIView, UIKeyInput {
 
   /* No on-screen keyboard or shortcuts bar: only hardware keys are wanted. */
   override var inputView: UIView? { UIView(frame: .zero) }
+#if !os(visionOS) /* No shortcuts bar there. */
   override var inputAssistantItem: UITextInputAssistantItem {
     let item = super.inputAssistantItem
     item.leadingBarButtonGroups = []
     item.trailingBarButtonGroups = []
     return item
   }
+#endif
 
   var hasText: Bool { false }
   func insertText(_ text: String) {}

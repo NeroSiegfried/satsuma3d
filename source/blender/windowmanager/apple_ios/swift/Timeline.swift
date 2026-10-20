@@ -461,9 +461,7 @@ struct TimelineContent: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
       }
       HStack(spacing: 0) {
-#if !os(visionOS)
         curvesButton
-#endif
         keysButton
       }
       .padding(.trailing, 8)
@@ -472,11 +470,7 @@ struct TimelineContent: View {
     .foregroundStyle(.primary)
   }
 
-#if os(visionOS)
-  private let trailingButtons = 1
-#else
   private let trailingButtons = 2
-#endif
 
   /** Opens the curve editor out of the timeline, filled while it is open. */
   private var curvesButton: some View {
@@ -658,6 +652,11 @@ final class SwiftTimeline {
     Engine.setting("timeline_visible", open ? "1" : "0")
     visibilityDidChange?()
   }
+
+  /** The curve editor, in a window of its own beside the timeline's. */
+  func curvesWindowContent() -> AnyView {
+    AnyView(FCurveEditorView(model: store.curves, timeline: store))
+  }
 #endif
 
   var height: CGFloat { TimelinePanel.height(store) }
@@ -698,6 +697,9 @@ final class SwiftTimeline {
     store.curves.setShown(shown)
     if shown { curvesDidOpen?() }
     visibilityDidChange?()
+#if os(visionOS)
+    PanelWindows.set(.curves, open: shown)
+#endif
   }
 
   func toggle() {

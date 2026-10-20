@@ -29,14 +29,21 @@ final class ShellPanels {
     }
     panels.nodes.shownChanged = { [weak self] shown in
       withAnimation(SwiftTimeline.animation) { self?.model.nodesShown = shown }
+#if os(visionOS)
+      /* A window of its own, beside the curve editor's if that is open too. */
+      PanelWindows.set(.nodes, open: shown)
+#else
       /* One editor along the bottom at a time. */
       if shown { self?.timeline.setCurvesShown(false) }
+#endif
     }
     panels.graphSnapshot = { [weak self] snapshot in
       guard let self, timeline.store.curvesShown else { return }
       timeline.store.curves.update(snapshot)
     }
+#if !os(visionOS)
     timeline.curvesDidOpen = { [weak self] in self?.panels.nodes.setShown(false) }
+#endif
     timeline.visibilityDidChange = { [weak self] in
       guard let self else { return }
       model.timelineShown = timeline.visible

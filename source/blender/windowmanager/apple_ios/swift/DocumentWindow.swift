@@ -527,10 +527,12 @@ public struct DocumentWindow: View {
         .padding(.bottom, viewportCover)
       }
       BottomTrayLayer(model: model, timeline: shell.timeline.store, assets: shell.assets.store, shown: controlsShown)
+#if !os(visionOS) /* A window of its own there. */
       if controlsShown && model.nodesShown {
         NodeEditorLayer(model: model, nodes: shell.panels.nodes)
           .transition(.move(edge: .bottom).combined(with: .opacity))
       }
+#endif
       if let pencilMenu {
         /* Frontmost; it passes touches through while it is closed. */
         PencilMenuView(menu: pencilMenu)

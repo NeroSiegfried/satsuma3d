@@ -211,12 +211,19 @@ enum PanelWindow: String, CaseIterable {
   case properties = "org.blender.window.properties"
   case outliner = "org.blender.window.outliner"
   case timeline = "org.blender.window.timeline"
+  case nodes = "org.blender.window.nodes"
+  case curves = "org.blender.window.curves"
+  /** The scene live in 3D, see `VolumeView.swift`. */
+  case volume = "org.blender.window.volume"
 
   var title: String {
     switch self {
     case .properties: "Properties"
     case .outliner: "Outliner"
     case .timeline: "Timeline"
+    case .nodes: "Node Editor"
+    case .curves: "Curves"
+    case .volume: "3D Volume"
     }
   }
 }
@@ -231,6 +238,16 @@ enum PanelWindows {
       close()
       return
     }
+    open(kind)
+  }
+
+  /** Opens or closes a panel's window to match the editor, which shows or hides it. */
+  static func set(_ kind: PanelWindow, open shown: Bool) {
+    if shown == (close[kind] != nil) { return }
+    if shown { open(kind) } else { close[kind]?() }
+  }
+
+  private static func open(_ kind: PanelWindow) {
     guard let request = UISceneSessionActivationRequest(hostingDelegateClass: PanelSceneDelegate.self,
                                                         id: kind.rawValue) else { return }
     UIApplication.shared.activateSceneSession(for: request) { _ in }
@@ -238,13 +255,21 @@ enum PanelWindows {
 
   /** What the window shows, from the editor's own stores; nil without a document open. */
   static func content(_ kind: PanelWindow) -> AnyView? {
-    kind == .timeline ? SwiftTimeline.current?.windowContent() :
-                        SwiftScenePanels.current?.windowContent(kind)
+    switch kind {
+      case .timeline: SwiftTimeline.current?.windowContent()
+      case .curves: SwiftTimeline.current?.curvesWindowContent()
+      default: SwiftScenePanels.current?.windowContent(kind)
+    }
   }
 
   static func setOpen(_ kind: PanelWindow, _ open: Bool) {
-    if kind == .timeline { SwiftTimeline.current?.setWindowOpen(open) }
-    else { SwiftScenePanels.current?.setWindow(kind, open: open) }
+    switch kind {
+      case .timeline: SwiftTimeline.current?.setWindowOpen(open)
+      case .curves: SwiftTimeline.current?.setCurvesShown(open)
+      case .nodes: SwiftScenePanels.current?.nodes.setShown(open)
+      case .volume: VolumeStore.shared.windowOpened(open)
+      default: SwiftScenePanels.current?.setWindow(kind, open: open)
+    }
   }
 }
 
@@ -255,6 +280,16 @@ final class PanelSceneDelegate: NSObject, UIHostingSceneDelegate {
     panel(.outliner, size: CGSize(width: 360, height: 640))
     /* Wide and low, under the viewport. */
     panel(.timeline, size: CGSize(width: 1100, height: 96))
+    /* The editors, wide, to set below or beside the viewport. */
+    panel(.nodes, size: CGSize(width: 1100, height: 640))
+    panel(.curves, size: CGSize(width: 1100, height: 520))
+    /* The scene in 3D, to walk around. */
+    Window(PanelWindow.volume.title, id: PanelWindow.volume.rawValue) {
+      VolumeView()
+    }
+    .windowStyle(.volumetric)
+    .defaultSize(width: Double(VolumeStore.size), height: Double(VolumeStore.size),
+                 depth: Double(VolumeStore.size), in: .meters)
   }
 
   private static func panel(_ kind: PanelWindow, size: CGSize) -> some Scene {
@@ -276,7 +311,8 @@ struct PanelWindowContent: View {
         content
       }
     }
-    .frame(minWidth: kind == .timeline ? 520 : 320, minHeight: kind == .timeline ? 64 : 420)
+    .frame(minWidth: kind == .timeline ? 520 : kind == .nodes || kind == .curves ? 600 : 320,
+           minHeight: kind == .timeline ? 64 : kind == .curves ? 320 : 420)
     .environment(\.panelInWindow, true)
     .tint(PanelStyle.tint)
     .onAppear {
