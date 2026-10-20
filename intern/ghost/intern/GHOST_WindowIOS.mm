@@ -2424,7 +2424,9 @@ GHOST_WindowIOS::GHOST_WindowIOS(GHOST_SystemIOS *system_ios,
     }
 
     [ghost_rootWindow setSystemAndWindowIOS:system_ios_ windowIOS:this];
-    rootWindow.windowLevel = UIWindowLevelAlert;
+    /* Above the launcher's window, which it covers, but below the system's own windows, such as
+     * the tool palette a Pencil's squeeze shows. */
+    rootWindow.windowLevel = UIWindowLevelNormal + 1;
 
     GHOST_ASSERT(rootWindow, "UIWindow not valid");
     /* The native interface's view controller around the Metal view, see
