@@ -445,21 +445,22 @@ struct OutlineList: View {
     .onTapGesture { tap(node) }
     .contextMenu { menu(store.targets(store.byKey[key] ?? node)) }
     /* Touch and hold lifts the row; moving it drags it into a collection or onto an object. */
+#if os(visionOS)
+    /* Apple Vision Pro lifts rows only through Transferable drags. */
+    .draggable(dragPayload(key, node)) { dragPreview(node) }
+    .dropDestination(for: String.self) { payloads, _ in
+      guard let payload = payloads.first, !DraggedRows.keys(payload).isEmpty else { return false }
+      drop(payload, onto: key)
+      return true
+    } isTargeted: { over in
+      if over { dropTarget = key } else if dropTarget == key { dropTarget = nil }
+    }
+#else
     .onDrag {
-      let rows = store.targets(store.byKey[key] ?? node)
-      guard store.allow(rows, "move") else { return NSItemProvider() }
-      return NSItemProvider(object: DraggedRows.payload(rows) as NSString)
+      let payload = dragPayload(key, node)
+      return payload.isEmpty ? NSItemProvider() : NSItemProvider(object: payload as NSString)
     } preview: {
-      /* The row as it looks, with its own icon. */
-      HStack(spacing: 8) {
-        if let image = BlenderIcon.image(node.string("icon"), themed: true) {
-          Image(uiImage: image).resizable().scaledToFit().frame(width: 22, height: 22)
-        }
-        Text(node.string("name") ?? "")
-      }
-      .padding(.horizontal, 14)
-      .padding(.vertical, 8)
-      .background(.regularMaterial, in: Capsule())
+      dragPreview(node)
     }
     .onDrop(of: [.plainText], isTargeted: Binding(get: { dropTarget == key }, set: { over in
       if over { dropTarget = key } else if dropTarget == key { dropTarget = nil }
@@ -467,16 +468,38 @@ struct OutlineList: View {
       guard let provider = providers.first else { return false }
       _ = provider.loadObject(ofClass: NSString.self) { payload, _ in
         guard let payload = payload as? String else { return }
-        DispatchQueue.main.async {
-          guard let target = store.byKey[key] else { return }
-          store.move(DraggedRows.keys(payload).compactMap { store.byKey[$0] }, to: target)
-        }
+        DispatchQueue.main.async { drop(payload, onto: key) }
       }
       return true
     }
+#endif
     .accessibilityElement(children: .combine)
     .accessibilityAddTraits(selection.contains(key) ? [.isButton, .isSelected] : .isButton)
     .accessibilityIdentifier("blender.hierarchy." + (node.string("id") ?? ""))
+  }
+
+  /** The rows a drag from this one lifts, as text, or none when Blender cannot move them. */
+  private func dragPayload(_ key: String, _ node: JSON) -> String {
+    let rows = store.targets(store.byKey[key] ?? node)
+    return store.allow(rows, "move") ? DraggedRows.payload(rows) : ""
+  }
+
+  /** The row as it looks while dragged, with its own icon. */
+  private func dragPreview(_ node: JSON) -> some View {
+    HStack(spacing: 8) {
+      if let image = BlenderIcon.image(node.string("icon"), themed: true) {
+        Image(uiImage: image).resizable().scaledToFit().frame(width: 22, height: 22)
+      }
+      Text(node.string("name") ?? "")
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 8)
+    .background(.regularMaterial, in: Capsule())
+  }
+
+  private func drop(_ payload: String, onto key: String) {
+    guard let target = store.byKey[key] else { return }
+    store.move(DraggedRows.keys(payload).compactMap { store.byKey[$0] }, to: target)
   }
 
   /** The actions a swipe shows, as Blender allows them for the row now, outermost first. */
