@@ -757,6 +757,7 @@ struct ToolRails: View {
 #if !os(visionOS)
       .onChange(of: model.brush.map { $0 as NSDictionary }, initial: true) { _, brush in
         FaceControl.shared.brush = brush as? JSON
+        if #available(iOS 26.0, *) { SqueezePalette.shared.brush = brush as? JSON }
       }
 #endif
       /* Following the finger at once while the sidebar is moved. */
@@ -787,13 +788,17 @@ struct ToolRails: View {
   private func updateSqueezePalette(toolItems: [RailItem], brushItems: [RailItem]) {
 #if !os(visionOS)
     if #available(iOS 26.0, *) {
+      RollDial.shared.activeBrush = model.brushes?.string("active")
       if !brushItems.isEmpty {
-        SqueezePalette.shared.update(items: brushItems, active: model.brushes?.string("active") ?? "") { item in
+        SqueezePalette.shared.brush = model.brush
+        SqueezePalette.shared.update(items: brushItems, active: model.brushes?.string("active") ?? "",
+                                     brushes: true) { item in
           WM_apple_ios_ui_brush_activate(item.id)
         }
       }
       else {
-        SqueezePalette.shared.update(items: toolItems, active: tools.active(model.activeTool)) { item in
+        SqueezePalette.shared.update(items: toolItems, active: tools.active(model.activeTool),
+                                     brushes: false) { item in
           WM_apple_ios_ui_tool_set_by_id(item.id)
         }
       }
@@ -1007,19 +1012,42 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
     }
   }
 
-  func update(items: [RailItem], active: String, choose: @escaping (RailItem) -> Void) {
+
+  /** The brush's values from Blender, which the palette's width, opacity and color set: its size,
+   * strength and color. Null where Blender selects with tools rather than painting with brushes. */
+  var brush: JSON? {
+    didSet { followBrush() }
+  }
+  /** The palette's widths, the brush sizes it offers, in pixels. */
+  private static let widths: [CGFloat] = [8, 20, 40, 80, 160]
+  /** Its items are brushes, with their options. */
+  private var brushes = false
+
+  func update(items: [RailItem], active: String, brushes: Bool, choose: @escaping (RailItem) -> Void) {
     self.items = items
     self.choose = choose
     let ids = items.map(\.id)
-    if ids != self.ids || picker == nil {
+    if ids != self.ids || picker == nil || brushes != self.brushes {
       self.ids = ids
+      self.brushes = brushes
       picker?.removeObserver(self)
+      let paints = brush?.dict("color") != nil
       let toolItems = items.map { item -> PKToolPickerItem in
         var configuration = PKToolPickerCustomItem.Configuration(identifier: item.id, name: item.title)
-        let image = item.image
-        configuration.imageProvider = { _ in image ?? UIImage(systemName: "circle")! }
-        configuration.allowsColorSelection = false
-        configuration.toolAttributeControls = []
+        let image = item.image ?? UIImage(systemName: "circle")!
+        configuration.imageProvider = { _ in image }
+        if brushes {
+          /* The brush's options, as the palette's own controls. */
+          configuration.toolAttributeControls = [.width, .opacity]
+          configuration.defaultWidth = Self.widths[2]
+          configuration.widthVariants = Dictionary(uniqueKeysWithValues: Self.widths.map { ($0, image) })
+          configuration.allowsColorSelection = paints
+          configuration.defaultColor = paints ? .black : .label
+        }
+        else {
+          configuration.allowsColorSelection = false
+          configuration.toolAttributeControls = []
+        }
         return PKToolPickerCustomItem(configuration: configuration)
       }
       guard !toolItems.isEmpty else { return }
@@ -1032,7 +1060,27 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
       picker.selectedToolItemIdentifier = active
       following = false
     }
+    followBrush()
     attach()
+  }
+
+  /** The palette's item showing the brush as Blender has it: its size as the nearest width, its
+   * strength as opacity, and its color. */
+  private func followBrush() {
+    guard brushes, let item = picker?.selectedToolItem as? PKToolPickerCustomItem else { return }
+    following = true
+    defer { following = false }
+    if let size = brush?.dict("size")?.double("value") {
+      let width = Self.widths.min { abs(Double($0) - size) < abs(Double($1) - size) } ?? Self.widths[2]
+      if item.width != width { item.width = width }
+    }
+    let strength = CGFloat(brush?.dict("strength")?.double("value") ?? 1)
+    var color = item.color
+    if let rgb = (brush?["color"] as? [NSNumber])?.map({ CGFloat($0.doubleValue) }), rgb.count >= 3 {
+      color = UIColor(red: rgb[0], green: rgb[1], blue: rgb[2], alpha: 1)
+    }
+    color = color.withAlphaComponent(max(0.05, min(1, strength)))
+    if item.color != color { item.color = color }
   }
 
   /** The system finds the palette from the first responder, which nothing else in the window is
@@ -1088,7 +1136,25 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
       guard !following, let id = toolPicker.selectedToolItem.identifier as String?,
             let item = items.first(where: { $0.id == id })
       else { return }
-      choose?(item)
+      let active = brushes ? brush.flatMap { _ in RollDial.shared.activeBrush } : nil
+      if !brushes || active != id {
+        choose?(item)
+        return
+      }
+      /* The same brush with its options changed in the palette: its size, strength and color. */
+      guard let custom = toolPicker.selectedToolItem as? PKToolPickerCustomItem else { return }
+      let width = Double(custom.width)
+      if let size = brush?.dict("size"), abs((size.double("value") ?? 0) - width) > 0.5 {
+        sendBrushValue("size", width, commit: true)
+      }
+      var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 1
+      custom.color.getRed(&r, green: &g, blue: &b, alpha: &a)
+      if brush?.dict("strength") != nil {
+        sendBrushValue("strength", Double(a), commit: true)
+      }
+      if brush?["color"] != nil {
+        sendBrushValue("color", [r, g, b].map { min(1, max(0, Double($0))) }, commit: true)
+      }
     }
   }
 }
@@ -1162,9 +1228,11 @@ final class RollDial {
   /** The roll from one item to the next. */
   static let step = Double.pi / 9
 
-  /** Tools of the active mode, and the active one, for the dial over the tool settings. */
+  /** Tools of the active mode, and the active one, for the dial over the tool settings; the active
+   * brush too. */
   @ObservationIgnored var tools: [RailItem] = []
   @ObservationIgnored var activeTool = ""
+  @ObservationIgnored var activeBrush: String?
 
   /** A rail a Pencil can roll on at once, without holding first. */
   struct Zone {
