@@ -187,8 +187,8 @@ UIWindow *document_window = nil;
 - (void)detachBlender
 {
   [self releaseKeys];
-#if !defined(APPLE_TARGET_VISIONOS)
   [self releasePointerButtons];
+#if !defined(APPLE_TARGET_VISIONOS)
   [window->getView() removeInteraction:pointer_interaction];
 #endif
   [self cancelPencilStroke];
@@ -395,10 +395,11 @@ UIWindow *document_window = nil;
   [self addGestureRecognizer:hover_gesture_recognizer];
   current_pencil_touch = nil;
 
-#if !defined(APPLE_TARGET_VISIONOS)
   /* A mouse or trackpad, as on the desktop: the pointer moves Blender's cursor and shows it. */
+#if !defined(APPLE_TARGET_VISIONOS)
   pointer_interaction = [[UIPointerInteraction alloc] initWithDelegate:self];
   [window->getView() addInteraction:pointer_interaction];
+#endif
 
   pointer_hover_recognizer = [[UIHoverGestureRecognizer alloc]
       initWithTarget:self
@@ -439,6 +440,7 @@ UIWindow *document_window = nil;
   trackpad_rotation_recognizer.allowedTouchTypes = @[ @(UITouchTypeIndirectPointer) ];
   [window->getView() addGestureRecognizer:trackpad_rotation_recognizer];
 
+#if !defined(APPLE_TARGET_VISIONOS)
   /**  Apple Pencil double-tap. */
   pencil_interaction = [[UIPencilInteraction alloc] init];
   pencil_interaction.delegate = self;
@@ -557,7 +559,6 @@ UIWindow *document_window = nil;
   {
     return YES;
   }
-#if !defined(APPLE_TARGET_VISIONOS)
   if ((gestureRecognizer == trackpad_pinch_recognizer &&
        otherGestureRecognizer == trackpad_rotation_recognizer) ||
       (gestureRecognizer == trackpad_rotation_recognizer &&
@@ -565,7 +566,6 @@ UIWindow *document_window = nil;
   {
     return YES;
   }
-#endif
   const BOOL is_navigation = gestureRecognizer == pan2f_gesture_recognizer ||
                              gestureRecognizer == zoom_gesture_recognizer ||
                              gestureRecognizer == rotation_gesture_recognizer;
@@ -729,12 +729,10 @@ UIWindow *document_window = nil;
         }
         continue;
       }
-#if !defined(APPLE_TARGET_VISIONOS)
       if (touch.type == UITouchTypeIndirectPointer) {
         [self handlePointerTouch:touch event:event];
         continue;
       }
-#endif
       if (touch.type != UITouchTypePencil &&
           !(finger_tool_enabled && touch.type == UITouchTypeDirect && fingers <= 1))
       {
@@ -993,7 +991,6 @@ UIWindow *document_window = nil;
   [held_keys removeAllObjects];
 }
 
-#if !defined(APPLE_TARGET_VISIONOS)
 /* -------------------------------------------------------------------- */
 /* Mouse and trackpad
  *
@@ -1255,6 +1252,7 @@ static int32_t trackpad_units(double value, double *remainder)
 }
 
 /* Shapes for the pointer, around its point. */
+#if !defined(APPLE_TARGET_VISIONOS) /* The pointer's shapes; Apple Vision Pro shows its own. */
 static UIBezierPath *pointer_crosshair()
 {
   UIBezierPath *path = [UIBezierPath bezierPathWithRect:CGRectMake(-9, -0.75, 18, 1.5)];
@@ -1514,9 +1512,7 @@ static UIBezierPath *pointer_move()
 {
   UNUSED_VARS(notification);
   [self releaseKeys];
-#if !defined(APPLE_TARGET_VISIONOS)
   [self releasePointerButtons];
-#endif
   [self stopOrbitMomentum];
   [self cancelPencilStroke];
   [pencil_context_menu cancel];

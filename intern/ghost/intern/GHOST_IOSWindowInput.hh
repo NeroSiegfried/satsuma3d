@@ -174,9 +174,11 @@ typedef struct UserInputEvent {
 #endif
   // GHOSTUILongPressGestureRecognizer *long_press_gesture_recognizer;
 
+  /* A mouse or trackpad: the pointer, its buttons, scrolling and trackpad gestures. On Apple
+   * Vision Pro too, without the pointer's own shapes. */
 #if !defined(APPLE_TARGET_VISIONOS)
-  /* A mouse or trackpad: the pointer, its buttons, scrolling and trackpad gestures. */
   UIPointerInteraction *pointer_interaction;
+#endif
   UIHoverGestureRecognizer *pointer_hover_recognizer;
   UIPanGestureRecognizer *trackpad_scroll_recognizer;
   UIPanGestureRecognizer *wheel_scroll_recognizer;
@@ -185,7 +187,6 @@ typedef struct UserInputEvent {
   UITouch *pointer_touch;
   UIEventButtonMask pointer_buttons;
   CGPoint scroll_translation;
-#endif
 
   /* Data from the Apple pencil */
   UITouch *current_pencil_touch;
