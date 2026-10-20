@@ -217,7 +217,18 @@ def native_toolbar_json(context):
                 "icon": tool.icon, "symbol": "", "description": tool_description(tool)}
 
     tools = []
+    # Tweak is the tool a Pencil uses most, to move things, and turn them as it rolls and tilts:
+    # it stands on its own above Move, rather than among the select tools.
+    tweak = None
     for item in cls.tools_from_context(context):
+        if type(item) is tuple:
+            found = next((tool for tool in item if tool is not None and tool.idname == "builtin.select"), None)
+            if found is not None:
+                tweak = found
+                item = tuple(tool for tool in item if tool is not found)
+        elif item is not None and item.idname == "builtin.move" and tweak is not None:
+            tools.append(tool_data(tweak))
+            tweak = None
         if item is None:
             tools.append(None)
         elif type(item) is tuple:
@@ -237,6 +248,8 @@ def native_toolbar_json(context):
             tools.append(group)
         else:
             tools.append(tool_data(item))
+    if tweak is not None:
+        tools.append(tool_data(tweak))
     return json.dumps(tools, ensure_ascii=False, separators=(",", ":"))
 
 
