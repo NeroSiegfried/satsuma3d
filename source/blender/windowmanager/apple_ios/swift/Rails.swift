@@ -1523,9 +1523,12 @@ struct SidebarSlider: View {
     var position: Double
     var lastY: CGFloat
     var moved = false
+    /** The Pencil's roll as last seen, to turn the value with it. */
+    var roll: Double?
   }
 
   @State private var drag: Drag?
+  @State private var globalFrame = CGRect.zero
   /** The value set here, shown until Blender's snapshot has it. */
   @State private var local: (value: Double, until: Date)?
   @State private var entering = false
@@ -1637,6 +1640,29 @@ struct SidebarSlider: View {
           }
         })
     .animation(.easeOut(duration: 0.15), value: drag?.moved == true)
+    /* Held with a Pencil, rolling it turns the value: half a turn from one end to the other.
+     * Only read while held, so the Pencil's roll elsewhere does not redraw the slider. */
+    .onChange(of: drag != nil ? PencilRoll.shared.turned : 0) { _, turned in
+      guard var current = drag, PencilRoll.shared.down else { return }
+      guard let last = current.roll else {
+        current.roll = turned
+        drag = current
+        return
+      }
+      current.roll = turned
+      let before = current.position
+      current.position = min(1, max(0, current.position + (turned - last) / .pi))
+      current.moved = true
+      drag = current
+      tick(from: before, to: current.position)
+      /* Felt through the Pencil every twentieth of the way. */
+      if Int(before * 20) != Int(current.position * 20) {
+        RollDial.shared.pencilTick(at: CGPoint(x: globalFrame.midX, y: globalFrame.midY))
+      }
+      let next = value(at: current.position)
+      local = (next, .distantFuture)
+      sendBrushValue(key, next)
+    }
     .alert(title, isPresented: $entering) {
       TextField(title, text: $entry)
         .keyboardType(.decimalPad)
@@ -1654,6 +1680,7 @@ struct SidebarSlider: View {
       local = (next, Date().addingTimeInterval(1))
       sendBrushValue(key, next, commit: true)
     }
+    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { globalFrame = $0 }
     .accessibilityIdentifier("blender.sidebar.\(key)")
   }
 
