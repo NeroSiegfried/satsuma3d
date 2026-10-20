@@ -46,6 +46,18 @@ bool WM_apple_ios_pencil_hover_active();
 bool WM_apple_ios_pencil_roll(float *r_angle, float r_tilt[2]);
 /** What a drag with the Tweak tool does, see #wmNativeInterface::tweak_drag. */
 void WM_apple_ios_tweak_drag(bool *r_move, bool *r_roll, bool *r_tilt);
+/**
+ * Fingers moving objects with the Tweak tool, see `wm_apple_ios_finger_tweak.cc`. GHOST asks
+ * whether they do and hands over their touches from UIKit's thread, see
+ * #GHOST_IOSNativeInterface::finger_tweak_touch; Blender's loop applies them with
+ * #WM_apple_ios_finger_tweak_flush.
+ */
+bool WM_apple_ios_finger_tweak_active();
+void WM_apple_ios_finger_tweak_touch(uint64_t id, int phase, int x, int y);
+int WM_apple_ios_finger_tweak_holding(bool *r_landing);
+/** Follow the active tool and mode, as they change. */
+void WM_apple_ios_finger_tweak_mode_update(bContext *C);
+void WM_apple_ios_finger_tweak_flush(bContext *C);
 /** Something in Blender changed (notifiers were sent): describe it to the native interface. */
 void WM_apple_ios_ui_tag_changed();
 bool WM_apple_ios_dialog_begin(bContext *C,

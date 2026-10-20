@@ -235,6 +235,7 @@ wmNativeInterface native_interface_create()
 void engine_step(bContext *C)
 {
   WM_apple_ios_ui_flush_commands(C);
+  WM_apple_ios_finger_tweak_flush(C);
   wm_window_events_process(C);
   wm_event_do_handlers(C);
   wm_event_do_notifiers(C);
@@ -256,6 +257,9 @@ GHOST_IOSNativeInterface ghost_interface_create()
   native.pencil_roll = WM_apple_ios_ui_pencil_roll_set;
   native.navigation_hover = WM_apple_ios_ui_navigation_hover_set;
   native.view_roll = WM_apple_ios_ui_view_roll_enqueue;
+  native.finger_tweak_active = WM_apple_ios_finger_tweak_active;
+  native.finger_tweak_touch = WM_apple_ios_finger_tweak_touch;
+  native.finger_tweak_holding = WM_apple_ios_finger_tweak_holding;
   native.launcher_controller = WM_apple_ios_launcher_controller;
   native.window_controller = WM_apple_ios_window_controller;
   native.document_window_changed = WM_apple_ios_document_window_changed;

@@ -2867,6 +2867,9 @@ void ios_toolbar_build(bContext *C, const bool handled_commands)
     ios_ui_changed = false;
     last_build = now;
     next_check = now + std::chrono::seconds(1);
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+    WM_apple_ios_finger_tweak_mode_update(C);
+#endif
     std::string json = ios_toolbar_build_json_for_context(C);
     if (json != published) {
       published = json;

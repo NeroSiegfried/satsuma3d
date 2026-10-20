@@ -25,6 +25,14 @@ struct bContext;
 }
 class GHOST_WindowIOS;
 
+/** How a touch changed, see #GHOST_IOSNativeInterface::finger_tweak_touch. */
+enum GHOST_IOSTouchPhase {
+  GHOST_kIOSTouchBegan = 0,
+  GHOST_kIOSTouchMoved,
+  GHOST_kIOSTouchEnded,
+  GHOST_kIOSTouchCancelled,
+};
+
 struct GHOST_IOSNativeInterface {
   /** One pass of Blender's main loop, with the interface's queued commands. */
   void (*engine_step)(blender::bContext *C) = nullptr;
@@ -41,6 +49,20 @@ struct GHOST_IOSNativeInterface {
   void (*navigation_hover)(bool active) = nullptr;
   /** Two fingers twist the view by `angle`, in radians. */
   void (*view_roll)(float angle) = nullptr;
+
+  /**
+   * Fingers using the tool move objects, one under each finger, instead of sending Blender a
+   * pointer: Tweak is the tool, in Object Mode. Their touches in the viewport go to
+   * #finger_tweak_touch then.
+   */
+  bool (*finger_tweak_active)() = nullptr;
+  /** A finger's touch \a id, a #GHOST_IOSTouchPhase, at a window position in pixels. */
+  void (*finger_tweak_touch)(uint64_t id, int phase, int x, int y) = nullptr;
+  /**
+   * How many fingers hold objects, which keep other fingers from navigating. `r_landing`: fingers
+   * landed that Blender has yet to look under, which may.
+   */
+  int (*finger_tweak_holding)(bool *r_landing) = nullptr;
 
   /** `UIViewController *`: the first window's content, before a document opens. */
   void *(*launcher_controller)() = nullptr;

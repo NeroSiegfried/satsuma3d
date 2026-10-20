@@ -92,6 +92,29 @@ static void ios_view_roll(float angle)
   }
 }
 
+static bool ios_finger_tweak_active()
+{
+  const GHOST_IOSNativeInterface *native = GHOST_ios_native_interface();
+  return native && native->finger_tweak_active && native->finger_tweak_active();
+}
+
+static int ios_finger_tweak_holding(bool *r_landing)
+{
+  *r_landing = false;
+  const GHOST_IOSNativeInterface *native = GHOST_ios_native_interface();
+  return native && native->finger_tweak_holding ? native->finger_tweak_holding(r_landing) : 0;
+}
+
+static void ios_finger_tweak_touch(UITouch *touch, GHOST_IOSTouchPhase phase, CGPoint point)
+{
+  if (const GHOST_IOSNativeInterface *native = GHOST_ios_native_interface()) {
+    if (native->finger_tweak_touch) {
+      native->finger_tweak_touch(
+          uint64_t(uintptr_t(touch)), int(phase), int(lround(point.x)), int(lround(point.y)));
+    }
+  }
+}
+
 /* Hardware keys held for Blender, by HID usage: their release goes to Blender too. */
 static NSMutableDictionary<NSNumber *, NSNumber *> *held_keys = nil;
 /* The key that repeats while held, as on the desktop, and its text. */
@@ -257,6 +280,7 @@ UIWindow *document_window = nil;
   [window->getView() removeInteraction:pointer_interaction];
 #endif
   [self cancelPencilStroke];
+  [self cancelFingerTweakTouches];
   [self stopOrbitMomentum];
   [self hideOnscreenKeyboard];
   [NSNotificationCenter.defaultCenter removeObserver:self];
@@ -288,6 +312,7 @@ UIWindow *document_window = nil;
 - (void)setFingerToolEnabled:(BOOL)enabled
 {
   [self cancelPencilStroke];
+  [self cancelFingerTweakTouches];
   [self stopOrbitMomentum];
   finger_tool_enabled = enabled;
 }
@@ -313,6 +338,9 @@ UIWindow *document_window = nil;
   toolbar = nil;
   last_tap_with_pencil = false;
   finger_tool_enabled = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
+  [finger_tweak_touches release];
+  finger_tweak_touches = [[NSMutableSet alloc] init];
+  finger_tweak_held = false;
   orbit_display_link = nil;
   external_keyboard_connected = [GCKeyboard coalescedKeyboard] != nil;
 
@@ -812,6 +840,95 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
   tablet_data = GHOST_TABLET_DATA_NONE;
 }
 
+/**
+ * With the Tweak tool, a finger landing in the viewport moves the object under it, see
+ * #GHOST_IOSNativeInterface::finger_tweak_touch: Blender looks for it, and the finger sends no
+ * pointer events. True for such a finger's touches.
+ */
+- (BOOL)sendFingerTweakTouch:(UITouch *)touch active:(bool)active
+{
+  GHOST_IOSTouchPhase phase;
+  switch (touch.phase) {
+    case UITouchPhaseBegan:
+      if (!active || ![self touchBeganInBlenderViewport:touch] ||
+          [finger_tweak_touches containsObject:touch])
+      {
+        return [finger_tweak_touches containsObject:touch];
+      }
+      [finger_tweak_touches addObject:touch];
+      phase = GHOST_kIOSTouchBegan;
+      break;
+    case UITouchPhaseMoved:
+      phase = GHOST_kIOSTouchMoved;
+      break;
+    case UITouchPhaseEnded:
+      phase = GHOST_kIOSTouchEnded;
+      break;
+    case UITouchPhaseCancelled:
+      phase = GHOST_kIOSTouchCancelled;
+      break;
+    default:
+      return [finger_tweak_touches containsObject:touch];
+  }
+  if (![finger_tweak_touches containsObject:touch]) {
+    return NO;
+  }
+  CGPoint point = [touch preciseLocationInView:window->getView()];
+  point = window->scalePointToWindow(point);
+  ios_finger_tweak_touch(touch, phase, point);
+  if (phase == GHOST_kIOSTouchEnded || phase == GHOST_kIOSTouchCancelled) {
+    [finger_tweak_touches removeObject:touch];
+  }
+  return YES;
+}
+
+/** Lift the fingers moving objects, putting their objects back. */
+- (void)cancelFingerTweakTouches
+{
+  for (UITouch *touch in finger_tweak_touches) {
+    /* Only the identity of the touch is used: UIKit may already have retired it. */
+    ios_finger_tweak_touch(touch, GHOST_kIOSTouchCancelled, CGPointZero);
+  }
+  [finger_tweak_touches removeAllObjects];
+  finger_tweak_held = false;
+}
+
+/**
+ * Whether fingers holding objects keep the view still: navigation gestures and taps of several
+ * fingers do nothing then. Once a finger held an object, the view stays still until the gesture
+ * ends, so lifting it does not navigate or undo.
+ */
+- (BOOL)fingerTweakHolds
+{
+  if (finger_tweak_touches.count == 0) {
+    return finger_tweak_held;
+  }
+  bool landing = false;
+  if (ios_finger_tweak_holding(&landing) > 0) {
+    finger_tweak_held = true;
+  }
+  return finger_tweak_held || landing;
+}
+
+/** A gesture begins as the first fingers land: whether it holds objects is known again. */
+- (void)updateFingerTweakHeld:(UIEvent *)event
+{
+  bool began = false;
+  for (UITouch *touch in event.allTouches) {
+    if (touch.type != UITouchTypeDirect) {
+      continue;
+    }
+    if (touch.phase != UITouchPhaseBegan) {
+      [self fingerTweakHolds];
+      return;
+    }
+    began = true;
+  }
+  if (began) {
+    finger_tweak_held = false;
+  }
+}
+
 /* Observe Pencil input before UIKit's responder chain can consume the viewport touches. */
 - (void)sendEvent:(UIEvent *)event
 {
@@ -832,6 +949,8 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
     if (fingers > 1 && current_pencil_touch.type == UITouchTypeDirect) {
       [self cancelPencilStroke];
     }
+    const bool finger_tweak = finger_tool_enabled && ios_finger_tweak_active();
+    [self updateFingerTweakHeld:event];
     for (UITouch *touch in event.allTouches) {
       ios_pencil_roll(touch);
       if (touch.phase == UITouchPhaseBegan) {
@@ -846,6 +965,11 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
       }
       if (touch.type == UITouchTypeIndirectPointer) {
         [self handlePointerTouch:touch event:event];
+        continue;
+      }
+      if (touch.type == UITouchTypeDirect && [self sendFingerTweakTouch:touch
+                                                                 active:finger_tweak])
+      {
         continue;
       }
       if (touch.type != UITouchTypePencil &&
@@ -1529,7 +1653,7 @@ static UIBezierPath *pointer_move()
 
 - (void)handleTap2F:(GHOSTUITapGestureRecognizer *)sender
 {
-  if (sender.state != UIGestureRecognizerStateEnded) {
+  if (sender.state != UIGestureRecognizerStateEnded || [self fingerTweakHolds]) {
     return;
   }
 
@@ -1544,7 +1668,7 @@ static UIBezierPath *pointer_move()
 
 - (void)handleTap3F:(GHOSTUITapGestureRecognizer *)sender
 {
-  if (sender.state != UIGestureRecognizerStateEnded) {
+  if (sender.state != UIGestureRecognizerStateEnded || [self fingerTweakHolds]) {
     return;
   }
 
@@ -1559,7 +1683,7 @@ static UIBezierPath *pointer_move()
 
 - (void)handleTap4F:(GHOSTUITapGestureRecognizer *)sender
 {
-  if (sender.state != UIGestureRecognizerStateEnded) {
+  if (sender.state != UIGestureRecognizerStateEnded || [self fingerTweakHolds]) {
     return;
   }
 
@@ -1616,7 +1740,10 @@ static UIBezierPath *pointer_move()
     /* Update cached translation */
     [sender setCachedTranslation:translation];
 
-    if (!CGPointEqualToPoint(relative_translation, CGPointMake(0.0f, 0.0f))) {
+    /* Not while a finger holds an object with Tweak. */
+    if (!CGPointEqualToPoint(relative_translation, CGPointMake(0.0f, 0.0f)) &&
+        ![self fingerTweakHolds])
+    {
       if (orbits) {
         event_info.translation = CGPointMake(-relative_translation.x, -relative_translation.y);
         event_info.add_event(UserInputEvent::EventTypes::ORBIT_GESTURE);
@@ -1637,7 +1764,9 @@ static UIBezierPath *pointer_move()
     navigation_touches = 0;
     navigation_orbits = false;
     /* Spinning on only from an orbit. */
-    if (sender.state == UIGestureRecognizerStateEnded && !pencil_button_active && was_orbiting) {
+    if (sender.state == UIGestureRecognizerStateEnded && !pencil_button_active && was_orbiting &&
+        ![self fingerTweakHolds])
+    {
       CGPoint velocity = [sender velocityInView:window->getView()];
       const CGFloat speed = hypot(velocity.x, velocity.y);
       if (speed >= 80.0) {
@@ -1672,6 +1801,7 @@ static UIBezierPath *pointer_move()
   [self releasePointerButtons];
   [self stopOrbitMomentum];
   [self cancelPencilStroke];
+  [self cancelFingerTweakTouches];
   [pencil_context_menu cancel];
   ios_navigation_hover(false);
 }
@@ -1825,7 +1955,7 @@ static UIBezierPath *pointer_move()
     [sender setCachedDistance:point_distance];
 
     /* Send pinch/zoom event. */
-    if (fabs(relative_dist) > 0.0) {
+    if (fabs(relative_dist) > 0.0 && ![self fingerTweakHolds]) {
       /* Calculate midpoint between the two touch points. */
       CGPoint midPoint = [sender getPinchMidpoint:window];
 
@@ -1850,7 +1980,7 @@ static UIBezierPath *pointer_move()
     const CGFloat relative_rotation = sender.rotation;
     sender.rotation = 0.0;
 
-    if (fabs(relative_rotation) > 0.0) {
+    if (fabs(relative_rotation) > 0.0 && ![self fingerTweakHolds]) {
       ios_view_roll(float(relative_rotation));
     }
   }

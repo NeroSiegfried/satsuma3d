@@ -42,6 +42,7 @@ set(SRC
   intern/wm_apple_ios_dialog.cc
   intern/wm_apple_ios_document.cc
   intern/wm_apple_ios_document.hh
+  intern/wm_apple_ios_finger_tweak.cc
   intern/wm_apple_ios_native.cc
   intern/wm_menu_type.cc
   intern/wm_native_interface.cc

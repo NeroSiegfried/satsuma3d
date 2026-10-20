@@ -196,6 +196,10 @@ typedef struct UserInputEvent {
   CGPoint pencil_navigation_start;
   bool last_tap_with_pencil;
   bool finger_tool_enabled;
+  /* Fingers moving objects with the Tweak tool, see #GHOST_IOSNativeInterface::finger_tweak_touch,
+   * and whether one held an object since the gesture began: navigation waits for all to lift. */
+  NSMutableSet<UITouch *> *finger_tweak_touches;
+  bool finger_tweak_held;
   UIView<GHOSTIOSPencilMenu> *pencil_context_menu;
 
   CADisplayLink *orbit_display_link;
