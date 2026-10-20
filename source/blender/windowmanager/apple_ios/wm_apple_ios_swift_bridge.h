@@ -108,6 +108,10 @@ uint64_t WM_apple_ios_ui_menu_request(const char *_Nonnull route, bool execute);
 char *_Nullable WM_apple_ios_ui_menu_take_result(uint64_t identifier);
 /** The document window's controller is closing. */
 void wm_apple_ios_document_controller_closed(id _Nonnull controller);
+/** Ask Blender to carry out one of the app's intents, see `bl_ui.native_intents`: `request` is
+ * JSON, and `completion` gets Blender's JSON answer on the main queue, or nil when it had none. */
+void wm_apple_ios_intent_perform(const char *_Nonnull request,
+                                 void (^_Nonnull completion)(NSString *_Nullable answer));
 
 #ifdef __cplusplus
 }

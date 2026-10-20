@@ -85,6 +85,8 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
      * #FileDrop. */
     viewport.addInteraction(shell.assets.dropInteraction)
     installContextMenu()
+    /* Siri's phrases name Blender's commands, which Blender can list now. */
+    BlenderShortcuts.updateAppShortcutParameters()
 
     NotificationCenter.default.addObserver(self, selector: #selector(snapshotsPublished),
                                            name: Notification.Name("BlenderSnapshotsPublished"),

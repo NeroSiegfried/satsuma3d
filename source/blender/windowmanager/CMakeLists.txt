@@ -193,6 +193,7 @@ if(WITH_APPLE_CROSSPLATFORM)
   list(APPEND SRC
     apple_ios/wm_apple_ios_alerts.mm
     apple_ios/wm_apple_ios_blend_document.mm
+    apple_ios/wm_apple_ios_intents.mm
     apple_ios/wm_apple_ios_interface.mm
     apple_ios/wm_apple_ios_launcher.mm
     apple_ios/wm_apple_ios_window.mm

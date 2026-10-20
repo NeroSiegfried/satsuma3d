@@ -14,6 +14,7 @@ _modules = [
     "native_actions",
     "native_brush",
     "native_character",
+    "native_intents",
     "native_panels",
     "native_render",
     "native_settings",

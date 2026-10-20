@@ -373,6 +373,7 @@ else()
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/BlenderMenus.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/FileDrop.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/BlenderBridge.swift
+      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/BlenderIntents.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/CompileIndicator.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/CompositeControls.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/DocumentWindow.swift
