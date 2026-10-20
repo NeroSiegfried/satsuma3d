@@ -482,8 +482,7 @@ struct Rail: View {
           state.pressSelecting = true
           state.dragOffset = 0
           label.hide()
-          if PencilRoll.shared.down, PencilRollSetting.on(PencilRollSetting.tools),
-             let frame = state.frames[item.id] {
+          if PencilRoll.shared.down, let frame = state.frames[item.id] {
             /* A Pencil holds it: the items fan out around it, to roll the Pencil through. */
             state.dialing = true
             RollDial.shared.begin(items: items, active: active, at: CGPoint(x: frame.midX, y: frame.midY),
@@ -932,18 +931,6 @@ final class SelectIntentState {
   }
 }
 
-/** Which uses of the Pencil's barrel roll are on, see the iPad page of Settings. All are on until
- * turned off. */
-enum PencilRollSetting {
-  static let tools = "BlenderPencilRollTools"
-  static let sliders = "BlenderPencilRollSliders"
-  static let color = "BlenderPencilRollColor"
-  /** Read by GHOST too, which gives Blender the roll only while this is on. */
-  static let tweak = "BlenderPencilRollTweak"
-
-  static func on(_ key: String) -> Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
-}
-
 /** The barrel roll of a Pencil on the screen, anywhere in the window, for dials to turn with. */
 @MainActor
 @Observable
@@ -1041,8 +1028,7 @@ final class RollDial {
   func pencilMoved(to point: CGPoint, began: Bool) {
     if began {
       armed = nil
-      guard center == nil, PencilRollSetting.on(PencilRollSetting.tools),
-            let zone = zones.values.first(where: { $0.frame.contains(point) }) else { return }
+      guard center == nil, let zone = zones.values.first(where: { $0.frame.contains(point) }) else { return }
       armed = (zone, point, PencilRoll.shared.turned)
       return
     }
@@ -1311,7 +1297,7 @@ struct PencilToolDialHold: ViewModifier {
       DragGesture(minimumDistance: 0, coordinateSpace: .global)
         .onChanged { value in
           if press == nil {
-            guard PencilRoll.shared.down, PencilRollSetting.on(PencilRollSetting.tools) else { return }
+            guard PencilRoll.shared.down else { return }
             let id = Int.random(in: 0 ..< Int.max)
             press = (value.startLocation, false, id)
             /* A Pencil held still, without moving, rolls: nothing reports it held but time. */
@@ -1665,8 +1651,7 @@ struct SidebarSlider: View {
     /* Held with a Pencil, rolling it turns the value: half a turn from one end to the other.
      * Only read while held, so the Pencil's roll elsewhere does not redraw the slider. */
     .onChange(of: drag != nil ? PencilRoll.shared.turned : 0) { _, turned in
-      guard var current = drag, PencilRoll.shared.down, PencilRollSetting.on(PencilRollSetting.sliders)
-      else { return }
+      guard var current = drag, PencilRoll.shared.down else { return }
       guard let last = current.roll else {
         current.roll = turned
         drag = current
@@ -1882,8 +1867,7 @@ final class ColorRoll {
 
   func pencilMoved(to point: CGPoint, began: Bool) {
     if began {
-      armed = wellFrame.insetBy(dx: -6, dy: -6).contains(point) && origin == nil &&
-        PencilRollSetting.on(PencilRollSetting.color) ?
+      armed = wellFrame.insetBy(dx: -6, dy: -6).contains(point) && origin == nil ?
         (point, PencilRoll.shared.turned) : nil
       if armed != nil {
         /* Held still, it opens without rolling too. */

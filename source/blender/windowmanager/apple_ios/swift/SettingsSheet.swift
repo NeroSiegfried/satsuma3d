@@ -240,10 +240,6 @@ private struct PencilPressureControl: View {
 /** The iPad's own settings, the first page. */
 private struct IPadSettingsPage: View {
   @ObservedObject var model: SettingsModel
-  @AppStorage(PencilRollSetting.tools) private var rollTools = true
-  @AppStorage(PencilRollSetting.sliders) private var rollSliders = true
-  @AppStorage(PencilRollSetting.color) private var rollColor = true
-  @AppStorage(PencilRollSetting.tweak) private var rollTweak = true
 
   var body: some View {
     Form {
@@ -285,26 +281,6 @@ private struct IPadSettingsPage: View {
         Text("Pencil Pressure")
       } footer: {
         Text("How hard to press for a full stroke. Lighter reaches full size and strength sooner.")
-      }
-
-      Section {
-        Toggle(isOn: $rollTools) {
-          Label("Change Tools", systemImage: "circle.dashed")
-        }
-        Toggle(isOn: $rollSliders) {
-          Label("Change Size and Strength", systemImage: "slider.vertical.3")
-        }
-        Toggle(isOn: $rollColor) {
-          Label("Change Brush Color", systemImage: "paintpalette")
-        }
-        Toggle(isOn: $rollTweak) {
-          Label("Rotate While Moving", systemImage: "rotate.right")
-        }
-      } header: {
-        Text("Barrel Roll")
-      } footer: {
-        Text("Roll Apple Pencil Pro while it touches the toolbar, the brush size and strength, or the "
-          + "brush color to change them, or while moving things with Tweak to rotate them.")
       }
 
       Section {
