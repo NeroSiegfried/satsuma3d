@@ -1744,12 +1744,200 @@ struct BrushColorWell: View {
         resolved.getRed(&r, green: &g, blue: &b, alpha: &a)
         sendBrushValue("color", [Double(r), Double(g), Double(b)].map { min(1, max(0, $0)) })
       })
-    ColorPicker("Color", selection: binding, supportsOpacity: false)
-      .labelsHidden()
-      .scaleEffect(1.5)
-      .frame(width: Self.size, height: Self.size)
-      .panelGlass(.clear, in: Circle())
-      .accessibilityIdentifier("blender.brush-color")
+    Group {
+      /* Rolled with the Pencil, the color dial takes over: the system's picker steps aside, which
+       * also keeps the Pencil's lift from opening it. */
+      if ColorRoll.shared.showing || ColorRoll.shared.justClosed {
+        Circle()
+          .fill(binding.wrappedValue)
+          .frame(width: 30, height: 30)
+          .overlay(Circle().strokeBorder(.white.opacity(0.8), lineWidth: 2))
+      }
+      else {
+        ColorPicker("Color", selection: binding, supportsOpacity: false)
+          .labelsHidden()
+          .scaleEffect(1.5)
+      }
+    }
+    .frame(width: Self.size, height: Self.size)
+    .panelGlass(.clear, in: Circle())
+    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+      ColorRoll.shared.wellFrame = frame
+    }
+    .onChange(of: color, initial: true) { _, color in ColorRoll.shared.brushColor = color }
+    .onDisappear { ColorRoll.shared.wellFrame = .null }
+    .accessibilityIdentifier("blender.brush-color")
+  }
+}
+
+/** The brush color, turned by rolling a Pencil held on the color well: the roll goes around the
+ * hue ring, and sliding the Pencil sets saturation (across) and brightness (up and down). Lifting
+ * keeps it. */
+@MainActor
+@Observable
+final class ColorRoll {
+  static let shared = ColorRoll()
+
+  @ObservationIgnored var wellFrame = CGRect.null
+  @ObservationIgnored var brushColor: [Double] = [0, 0, 0]
+
+  /** Where the dial is centered, in the window, while it shows. */
+  private(set) var center: CGPoint?
+  private(set) var hue: Double = 0
+  private(set) var saturation: Double = 0
+  private(set) var brightness: Double = 0
+  @ObservationIgnored private var armed: (point: CGPoint, roll: Double)?
+  @ObservationIgnored private var start: (hue: Double, saturation: Double, brightness: Double,
+                                          roll: Double, point: CGPoint)?
+  @ObservationIgnored private var closedAt = Date.distantPast
+  @ObservationIgnored private var lastSent = Date.distantPast
+  @ObservationIgnored private var lastSegment = 0
+
+  var showing: Bool { center != nil }
+  var justClosed: Bool { Date().timeIntervalSince(closedAt) < 0.6 }
+
+  var rgb: [Double] {
+    let color = UIColor(hue: hue, saturation: saturation, brightness: brightness, alpha: 1)
+    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+    color.getRed(&r, green: &g, blue: &b, alpha: &a)
+    return [Double(r), Double(g), Double(b)]
+  }
+
+  func pencilMoved(to point: CGPoint, began: Bool) {
+    if began {
+      armed = wellFrame.insetBy(dx: -6, dy: -6).contains(point) && center == nil ?
+        (point, PencilRoll.shared.turned) : nil
+      if armed != nil {
+        /* Held still, it opens without rolling too. */
+        let token = point
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+          if let armed = self.armed, armed.point == token, PencilRoll.shared.down { self.open(at: armed) }
+        }
+      }
+      return
+    }
+    if let armed, center == nil {
+      if abs(PencilRoll.shared.turned - armed.roll) > RollDial.openingRoll { open(at: armed) }
+      else if hypot(point.x - armed.point.x, point.y - armed.point.y) > 24 { self.armed = nil }
+      return
+    }
+    guard let start, center != nil else { return }
+    /* Rolling turns the hue, a full turn of the Pencil once around; sliding sets the rest, a
+     * couple of hundred points from one end to the other. */
+    let turned = (PencilRoll.shared.turned - start.roll) / (2 * .pi)
+    var nextHue = (start.hue + turned).truncatingRemainder(dividingBy: 1)
+    if nextHue < 0 { nextHue += 1 }
+    hue = nextHue
+    saturation = min(1, max(0, start.saturation + Double(point.x - start.point.x) / 220))
+    brightness = min(1, max(0, start.brightness - Double(point.y - start.point.y) / 220))
+    /* Felt at each of the twelve hues around the ring. */
+    let segment = Int((hue * 12).rounded())
+    if segment != lastSegment {
+      lastSegment = segment
+      RollDial.shared.pencilTick(at: point)
+    }
+    if Date().timeIntervalSince(lastSent) > 1.0 / 30 {
+      lastSent = Date()
+      sendBrushValue("color", rgb)
+    }
+  }
+
+  private func open(at armed: (point: CGPoint, roll: Double)) {
+    self.armed = nil
+    guard center == nil else { return }
+    let color = UIColor(red: brushColor.count > 0 ? brushColor[0] : 0, green: brushColor.count > 1 ? brushColor[1] : 0,
+                        blue: brushColor.count > 2 ? brushColor[2] : 0, alpha: 1)
+    var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+    color.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+    hue = Double(h)
+    saturation = Double(s)
+    brightness = Double(b)
+    lastSegment = Int((hue * 12).rounded())
+    start = (hue, saturation, brightness, armed.roll, PencilRoll.shared.point)
+    Haptics.impact(.light)
+    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+      center = CGPoint(x: wellFrame.midX, y: wellFrame.midY)
+    }
+  }
+
+  func pencilLifted() {
+    armed = nil
+    guard center != nil else { return }
+    sendBrushValue("color", rgb, commit: true)
+    start = nil
+    closedAt = Date()
+    RollDial.shared.pencilTick(at: center ?? .zero)
+    withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { center = nil }
+  }
+}
+
+/** The hue ring around the color well and the saturation and brightness pad inside it, over the
+ * whole window, while a Pencil rolls the color. */
+struct ColorRollLayer: View {
+  private var roll: ColorRoll { ColorRoll.shared }
+
+  var body: some View {
+    GeometryReader { proxy in
+      let origin = proxy.frame(in: .global).origin
+      ZStack {
+        if let center = roll.center {
+          Color.black.opacity(0.12).transition(.opacity)
+          dial(radius: 104)
+            /* Kept on screen from the well near the window's edge. */
+            .position(x: min(max(center.x - origin.x, 130), proxy.size.width - 130),
+                      y: min(max(center.y - origin.y, 130), proxy.size.height - 130))
+            .transition(.opacity.combined(with: .scale(scale: 0.7)))
+        }
+      }
+      .frame(width: proxy.size.width, height: proxy.size.height)
+    }
+    .ignoresSafeArea()
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
+  }
+
+  private func dial(radius: CGFloat) -> some View {
+    let hues = (0...12).map { Color(hue: Double($0) / 12, saturation: 1, brightness: 1) }
+    let angle = Angle(radians: roll.hue * 2 * .pi - .pi / 2)
+    let current = Color(hue: roll.hue, saturation: roll.saturation, brightness: roll.brightness)
+    let pad: CGFloat = 92
+    return ZStack {
+      Circle()
+        .fill(.thinMaterial)
+        .frame(width: radius * 2 + 40, height: radius * 2 + 40)
+        .shadow(color: .black.opacity(0.12), radius: 12)
+      /* The hue ring, turned so the current hue sits at the top under its marker. */
+      Circle()
+        .stroke(AngularGradient(colors: hues, center: .center), lineWidth: 18)
+        .frame(width: radius * 2, height: radius * 2)
+        .rotationEffect(-angle - .degrees(90))
+      Capsule()
+        .fill(.white)
+        .frame(width: 6, height: 28)
+        .shadow(color: .black.opacity(0.3), radius: 2)
+        .offset(y: -radius)
+      /* Saturation across, brightness up, the current color's place on it marked. */
+      RoundedRectangle(cornerRadius: 14, style: .continuous)
+        .fill(LinearGradient(colors: [.white, Color(hue: roll.hue, saturation: 1, brightness: 1)],
+                             startPoint: .leading, endPoint: .trailing))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+          .fill(LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)))
+        .frame(width: pad, height: pad)
+        .overlay(alignment: .topLeading) {
+          Circle()
+            .fill(current)
+            .frame(width: 20, height: 20)
+            .overlay(Circle().strokeBorder(.white, lineWidth: 3))
+            .shadow(color: .black.opacity(0.3), radius: 2)
+            .offset(x: pad * roll.saturation - 10, y: pad * (1 - roll.brightness) - 10)
+        }
+      /* The color as it is, beside the dial. */
+      Circle()
+        .fill(current)
+        .frame(width: 34, height: 34)
+        .overlay(Circle().strokeBorder(.white.opacity(0.9), lineWidth: 2))
+        .offset(x: radius * 0.72, y: radius * 0.72)
+    }
   }
 }
 

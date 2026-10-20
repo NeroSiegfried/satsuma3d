@@ -412,6 +412,7 @@ public struct DocumentWindow: View {
 #if !os(visionOS)
       /* Over the bars too, which it dims while a Pencil rolls through it. */
       .overlay { RollDialLayer() }
+      .overlay { ColorRollLayer() }
 #endif
   }
 
