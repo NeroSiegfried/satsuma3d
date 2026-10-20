@@ -376,6 +376,7 @@ else()
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/CompileIndicator.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/CompositeControls.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/DocumentWindow.swift
+      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/FaceControl.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/FCurveEditor.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/DialogSheet.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/FontPicker.swift

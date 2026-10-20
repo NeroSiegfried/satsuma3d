@@ -41,6 +41,8 @@
 	<false/>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>NSCameraUsageDescription</key>
+	<string>Face Control sets the brush from your facial expressions, such as its strength as you open your mouth. Nothing is recorded.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

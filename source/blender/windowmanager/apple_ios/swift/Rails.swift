@@ -725,6 +725,14 @@ struct ToolRails: View {
             .transition(.opacity.combined(with: .scale(scale: 0.9)))
         }
         railLabel(safe: safe, layout: layout, frame: proxy.frame(in: .global), size: proxy.size)
+#if !os(visionOS)
+        if FaceControl.shared.running {
+          /* Below the bar, while the face plays the brush. */
+          FaceControlBadge()
+            .position(x: safe.midX, y: safe.minY + 34)
+            .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+#endif
       }
       .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
       /* The Pencil's dial shows the items instead, over everything. */
@@ -746,6 +754,11 @@ struct ToolRails: View {
       .onChange(of: model.brushes?.string("active")) { _, _ in
         updateSqueezePalette(toolItems: toolItems, brushItems: brushItems)
       }
+#if !os(visionOS)
+      .onChange(of: model.brush.map { $0 as NSDictionary }, initial: true) { _, brush in
+        FaceControl.shared.brush = brush as? JSON
+      }
+#endif
       /* Following the finger at once while the sidebar is moved. */
       .animation(UIAccessibility.isReduceMotionEnabled || sidebarDragStart != nil ? nil :
                    .spring(response: 0.32, dampingFraction: 0.84),
@@ -1639,7 +1652,7 @@ struct PaintSidebar: View {
 
 /** Send one of the brush's values to Blender; \a commit ends a drag with an undo step. */
 @MainActor
-private func sendBrushValue(_ key: String, _ value: Any, commit: Bool = false) {
+func sendBrushValue(_ key: String, _ value: Any, commit: Bool = false) {
   let encoded: String
   if let color = value as? [Double] {
     encoded = "[" + color.map { String($0) }.joined(separator: ",") + "]"

@@ -454,6 +454,15 @@ struct DocumentToolbar: ToolbarContent {
     Button("New…", systemImage: "doc.badge.plus") {
       if let presenter = commands.presenter { wm_apple_ios_new_document(presenter) }
     }
+#if !os(visionOS)
+    if FaceControl.supported && (model.brush?.dict("size") != nil || model.brush?.dict("strength") != nil) {
+      Section {
+        /* The face plays the brush: the mouth its strength, the eyebrows its size. */
+        sidebarToggle("Face Control", icon: UIImage(systemName: "face.smiling"),
+                      isOn: FaceControl.shared.running) { FaceControl.shared.toggle() }
+      }
+    }
+#endif
     Section {
       ForEach(ViewportToggle.all, id: \.name) { toggle in
         sidebarToggle(toggle.title, icon: BlenderIcon.image(toggle.icon) ?? UIImage(systemName: toggle.symbol),
