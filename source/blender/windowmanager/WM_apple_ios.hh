@@ -43,7 +43,7 @@ void WM_apple_ios_open_url(void *url);
 
 bool WM_apple_ios_pencil_hover_active();
 /** The barrel roll of a Pencil touching the screen, false with none down. */
-bool WM_apple_ios_pencil_roll(float *r_angle);
+bool WM_apple_ios_pencil_roll(float *r_angle, float r_tilt[2]);
 /** Something in Blender changed (notifiers were sent): describe it to the native interface. */
 void WM_apple_ios_ui_tag_changed();
 bool WM_apple_ios_dialog_begin(bContext *C,

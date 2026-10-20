@@ -48,7 +48,8 @@ enum eTranslateRotateMode {
   TRANSLATE_ROTATE_OFF = 0, /** Perform rotation (currently only snap to normal is used). */
   TRANSLATE_ROTATE_ON,      /** Rotate, resetting back to the disabled state. */
   TRANSLATE_ROTATE_RESET,
-  /** Rotate around the view axis, as far as the Pencil has rolled since the move began. */
+  /** Rotate around the view axis, as far as the Pencil has rolled since the move began, and
+   * around the view's other axes, as far as it has tilted. */
   TRANSLATE_ROTATE_ROLL,
 };
 
@@ -62,11 +63,15 @@ struct TranslateCustomData {
   } prev;
 
   /** The Pencil's barrel roll as last seen, and how far it has turned since the move began,
-   * beyond a half turn too. Only where the platform reports a Pencil's roll. */
+   * beyond a half turn too; its tilt as the move began, and the turns tilting it since gives
+   * around the view's horizontal and vertical axes. Only where the platform reports a Pencil's
+   * roll and tilt. */
   struct {
     bool active;
     float last;
     float angle;
+    float2 tilt_start;
+    float2 tilt_angle;
   } roll;
 
   float3 snap_target_grid;
@@ -99,8 +104,13 @@ static void transdata_elem_translate(const TransInfo *t,
     else if (rotate_mode == TRANSLATE_ROTATE_ROLL) {
       const TranslateCustomData *custom_data = static_cast<const TranslateCustomData *>(
           t->custom.mode.data);
-      /* Rolling the Pencil clockwise, seen from its end, turns things clockwise on screen. */
-      axis_angle_normalized_to_mat3(mat, t->viewinv[2], custom_data->roll.angle);
+      /* Rolling the Pencil turns things around the view axis; tilting it, around the view's
+       * horizontal axis (tilting it up or down) and vertical axis (left or right). */
+      float roll_mat[3][3], tilt_x_mat[3][3], tilt_y_mat[3][3];
+      axis_angle_normalized_to_mat3(roll_mat, t->viewinv[2], custom_data->roll.angle);
+      axis_angle_normalized_to_mat3(tilt_x_mat, t->viewinv[0], custom_data->roll.tilt_angle.y);
+      axis_angle_normalized_to_mat3(tilt_y_mat, t->viewinv[1], custom_data->roll.tilt_angle.x);
+      mul_m3_series(mat, roll_mat, tilt_y_mat, tilt_x_mat);
     }
     else {
       BLI_assert(rotate_mode == TRANSLATE_ROTATE_ON);
@@ -430,16 +440,27 @@ static void applyTranslationValue(TransInfo *t, const float vec[3])
 
   /* Rolling the Pencil turns what it moves, once it has rolled at all, for the rest of the move. */
   float pencil_roll;
+  float2 pencil_tilt;
   const wmNativeInterface *native = WM_native_interface();
   if (custom_data->roll.active && native && native->pencil_roll &&
-      native->pencil_roll(&pencil_roll))
+      native->pencil_roll(&pencil_roll, pencil_tilt))
   {
     custom_data->roll.angle += angle_wrap_rad(pencil_roll - custom_data->roll.last);
     custom_data->roll.last = pencil_roll;
+    /* Tilt wavers as a hand moves the Pencil: only tilting it clearly turns things. */
+    const float dead_zone = 0.08f;
+    const float turn = 2.0f;
+    for (int axis = 0; axis < 2; axis++) {
+      const float change = pencil_tilt[axis] - custom_data->roll.tilt_start[axis];
+      custom_data->roll.tilt_angle[axis] = fabsf(change) > dead_zone ?
+                                               copysignf(fabsf(change) - dead_zone, change) * turn :
+                                               0.0f;
+    }
   }
   if (rotate_mode == TRANSLATE_ROTATE_OFF && custom_data->roll.active &&
       (custom_data->prev.rotate_mode == TRANSLATE_ROTATE_ROLL ||
-       fabsf(custom_data->roll.angle) > DEG2RADF(4.0f)))
+       fabsf(custom_data->roll.angle) > DEG2RADF(4.0f) ||
+       custom_data->roll.tilt_angle.x != 0.0f || custom_data->roll.tilt_angle.y != 0.0f))
   {
     rotate_mode = TRANSLATE_ROTATE_ROLL;
   }
@@ -671,11 +692,13 @@ static void initTranslation(TransInfo *t, wmOperator * /*op*/)
   /* Moved with a Pencil in the 3D Viewport, rolling it turns things around the view axis. */
   const wmNativeInterface *native = WM_native_interface();
   float pencil_roll;
+  float2 pencil_tilt;
   if (t->spacetype == SPACE_VIEW3D && native && native->pencil_roll &&
-      native->pencil_roll(&pencil_roll))
+      native->pencil_roll(&pencil_roll, pencil_tilt))
   {
     custom_data->roll.active = true;
     custom_data->roll.last = pencil_roll;
+    custom_data->roll.tilt_start = pencil_tilt;
   }
   t->custom.mode.data = custom_data;
   t->custom.mode.use_free = true;

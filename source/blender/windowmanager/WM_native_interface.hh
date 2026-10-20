@@ -127,7 +127,7 @@ struct wmNativeInterface {
    * The barrel roll of a Pencil touching the screen, in radians, for moving things to turn them
    * too. False with no Pencil down.
    */
-  bool (*pencil_roll)(float *r_angle) = nullptr;
+  bool (*pencil_roll)(float *r_angle, float r_tilt[2]) = nullptr;
 
   /** Ensure the platform's own items in the default key configuration. */
   void (*keyconfig_default_ensure)(wmKeyConfig *keyconf) = nullptr;

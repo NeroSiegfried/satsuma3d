@@ -29,9 +29,12 @@ static void ios_pencil_roll(UITouch *touch)
   if (@available(iOS 17.5, *)) {
     angle = float(touch.rollAngle);
   }
+  /* Its tilt too, across the screen and down it, from -1 to 1 lying flat. */
+  const CGFloat azimuth = [touch azimuthAngleInView:touch.window];
+  const CGFloat lean = cos(touch.altitudeAngle);
   if (const GHOST_IOSNativeInterface *native = GHOST_ios_native_interface()) {
     if (native->pencil_roll) {
-      native->pencil_roll(down, angle);
+      native->pencil_roll(down, angle, float(sin(azimuth) * lean), float(-cos(azimuth) * lean));
     }
   }
   /* Where it touches, in the window, so a rail under it can turn its dial at once. */
