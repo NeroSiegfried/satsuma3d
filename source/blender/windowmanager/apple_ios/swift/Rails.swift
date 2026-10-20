@@ -608,7 +608,8 @@ struct ToolRails: View {
       let safe = CGRect(origin: .zero, size: proxy.size).inset(by: insets)
       let toolItems = RailItem.tools(model.tools, mode: model.mode)
       let brushItems = RailItem.brushes(model.brushes)
-      let content = SidebarContent(brush: model.brush, buttons: model.direction?.bool("hidden") != true)
+      let content = SidebarContent(brush: model.brush, buttons: model.direction?.bool("hidden") != true,
+                                   smooth: model.direction?.bool("smooth") == true)
       let color = (model.brush?["color"] as? [NSNumber])?.map(\.doubleValue)
       let gizmo = model.navigationGizmo
       let gizmoTop = gizmo.count == 3 ? CGFloat(gizmo[1]) * proxy.size.height - CGFloat(gizmo[2]) * proxy.size.width :
@@ -762,6 +763,10 @@ final class SelectIntentState {
 
   /** The one shown on. */
   private(set) var active: SelectIntent = .none
+  /** The Smooth button is held: strokes smooth, as with Shift, until it is let go. */
+  var smoothing = false {
+    didSet { if smoothing != oldValue { apply() } }
+  }
   private(set) var strokes: Strokes?
   @ObservationIgnored private var held: SelectIntent = .none
   @ObservationIgnored private var pressed = Date.distantPast
@@ -851,23 +856,29 @@ struct SidebarContent: Equatable {
   var size = false
   var strength = false
   var buttons = false
+  var smooth = false
 
-  init(brush: JSON?, buttons: Bool) {
+  init(brush: JSON?, buttons: Bool, smooth: Bool = false) {
     size = brush?.dict("size") != nil
     strength = brush?.dict("strength") != nil
     self.buttons = buttons
+    self.smooth = smooth
   }
 
-  var isEmpty: Bool { !size && !strength && !buttons }
-  /** Only the + and -: small enough to sit above the tool rail. */
-  var buttonsOnly: Bool { buttons && !size && !strength }
+  var isEmpty: Bool { !size && !strength && !buttons && !smooth }
+  /** Only buttons: small enough to sit above the tool rail. */
+  var buttonsOnly: Bool { (buttons || smooth) && !size && !strength }
 
   let sliderHeight: CGFloat = 148
-  static let buttonsHeight: CGFloat = 52 + 4 + 52
+  /** The + and -, and Smooth below them, each 52 high. */
+  var buttonsHeight: CGFloat {
+    let count = (buttons ? 2 : 0) + (smooth ? 1 : 0)
+    return count == 0 ? 0 : CGFloat(count) * 52 + CGFloat(count - 1) * 4
+  }
 
   var height: CGFloat {
     let parts: [CGFloat] = [size ? sliderHeight : 0, strength ? sliderHeight : 0,
-                            buttons ? Self.buttonsHeight : 0].filter { $0 > 0 }
+                            buttonsHeight].filter { $0 > 0 }
     return parts.isEmpty ? 0 : parts.reduce(0, +) + CGFloat(parts.count - 1) * 8 + 12
   }
 }
@@ -901,10 +912,13 @@ struct PaintSidebar: View {
                       logarithmic: false, height: content.sliderHeight, leading: leading, unit: "%",
                       preview: .strength, format: { String(Int(($0 * 100).rounded())) })
       }
-      if content.buttons {
+      if content.buttons || content.smooth {
         VStack(spacing: 4) {
-          button(.add, symbol: "plus", label: state.strokes?.addName ?? "Add to Selection")
-          button(.subtract, symbol: "minus", label: state.strokes?.subtractName ?? "Subtract from Selection")
+          if content.buttons {
+            button(.add, symbol: "plus", label: state.strokes?.addName ?? "Add to Selection")
+            button(.subtract, symbol: "minus", label: state.strokes?.subtractName ?? "Subtract from Selection")
+          }
+          if content.smooth { smoothButton }
         }
         .transition(.opacity.combined(with: .scale(scale: 0.9)))
       }
@@ -922,9 +936,42 @@ struct PaintSidebar: View {
     .onChange(of: content.buttons) { _, shown in
       if !shown { state.clear() }
     }
+    .onChange(of: content.smooth) { _, shown in
+      if !shown { state.smoothing = false }
+    }
     .onDisappear { state.clear() }
     .accessibilityElement(children: .contain)
     .accessibilityIdentifier("blender.sidebar")
+  }
+
+  /** Held, strokes smooth, as Shift does with a keyboard; let go, the brush is back. Not a brush to
+   * choose: a key to hold with one hand while the other strokes. */
+  private var smoothButton: some View {
+    let on = state.smoothing
+    return Image(systemName: "drop.halffull")
+      .font(.system(size: 19, weight: .semibold))
+      .foregroundStyle(on ? Color.white : Color.primary)
+      .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
+      .background {
+        if on {
+          Capsule().fill(.clear).panelGlass(.tinted(.blue), in: Capsule())
+            .transition(.opacity.combined(with: .scale(scale: 0.8)))
+        }
+      }
+      .scaleEffect(on ? 0.94 : 1)
+      .animation(UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: 0.2, dampingFraction: 0.7),
+                 value: on)
+      .contentShape(Capsule())
+      .hoverHighlight(Capsule())
+      .onLongPressGesture(minimumDuration: .infinity, maximumDistance: .infinity, perform: {}) { down in
+        state.smoothing = down
+      }
+      .onDisappear { state.smoothing = false }
+      .accessibilityElement()
+      .accessibilityLabel("Smooth")
+      .accessibilityHint("Hold to smooth with the brush")
+      .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+      .accessibilityIdentifier("blender.select-intent.smooth")
   }
 
   private func button(_ intent: SelectIntent, symbol: String, label: String) -> some View {

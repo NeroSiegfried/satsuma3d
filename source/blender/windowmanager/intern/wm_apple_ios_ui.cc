@@ -1972,7 +1972,7 @@ std::optional<PointerRNA> ios_brush_direction_ptr(bContext *C)
  * The + and - pill in modes that stroke brushes: which way strokes go, and for brushes with a
  * Direction, its two choices' names (such as Inflate and Deflate). Painting colors has no two
  * ways to go, and hides it. Null elsewhere, where the pill adds to or subtracts from the
- * selection.
+ * selection. In Sculpt Mode, "smooth" adds a Smooth button to hold, as Shift is with a keyboard.
  */
 std::string ios_direction_json(bContext *C, const eContextObjectMode mode)
 {
@@ -1986,6 +1986,9 @@ std::string ios_direction_json(bContext *C, const eContextObjectMode mode)
                              CTX_MODE_PAINT_TEXTURE,
                              CTX_MODE_PAINT_VERTEX,
                              CTX_MODE_VERTEX_GREASE_PENCIL);
+    if (mode == CTX_MODE_SCULPT) {
+      return "{\"hidden\":true,\"smooth\":true}";
+    }
     return colors ? "{\"hidden\":true}" : "{\"brush\":false}";
   }
   PropertyRNA *prop = RNA_struct_find_property(&*brush_ptr, "direction");
@@ -2005,7 +2008,8 @@ std::string ios_direction_json(bContext *C, const eContextObjectMode mode)
   const Brush *brush = static_cast<const Brush *>(brush_ptr->data);
   return "{\"brush\":true,\"inverted\":" +
          std::string((brush->flag & BRUSH_DIR_IN) ? "true" : "false") + ",\"add\":\"" +
-         ios_json_escape(names[0]) + "\",\"subtract\":\"" + ios_json_escape(names[1]) + "\"}";
+         ios_json_escape(names[0]) + "\",\"subtract\":\"" + ios_json_escape(names[1]) +
+         "\",\"smooth\":" + (mode == CTX_MODE_SCULPT ? "true" : "false") + "}";
 }
 
 /** Set the active brush's Direction to its first (\a add) or second choice. */
@@ -2896,7 +2900,8 @@ extern "C" void WM_apple_ios_ui_brush_activate(const char *brush_id)
  * selection, for taps as well as box, lasso and circle selection, or stroke a brush either way.
  * \{ */
 
-enum class IOSSelectIntent { None = 0, Add = 1, Subtract = 2 };
+/* Smooth: brush strokes smooth instead, as with Shift, while the Smooth button is held. */
+enum class IOSSelectIntent { None = 0, Add = 1, Subtract = 2, Smooth = 3 };
 
 static std::atomic<int> ios_select_intent = int(IOSSelectIntent::None);
 
@@ -2929,6 +2934,18 @@ void WM_apple_ios_ui_operator_input_adjust(bContext *C, wmOperator *op)
   }
   const bool add = intent == IOSSelectIntent::Add;
   PointerRNA *ptr = op->ptr;
+
+  if (intent == IOSSelectIntent::Smooth) {
+    if (PropertyRNA *mode = RNA_struct_find_property(ptr, "mode");
+        mode && RNA_property_type(mode) == PROP_ENUM)
+    {
+      int value;
+      if (RNA_property_enum_value(C, ptr, mode, "SMOOTH", &value)) {
+        RNA_property_enum_set(ptr, mode, value);
+      }
+    }
+    return;
+  }
 
   if (PropertyRNA *mode = RNA_struct_find_property(ptr, "mode");
       mode && RNA_property_type(mode) == PROP_ENUM)
