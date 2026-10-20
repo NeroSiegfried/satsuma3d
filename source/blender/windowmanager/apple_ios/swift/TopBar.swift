@@ -127,7 +127,7 @@ private struct TweakDragMenu: View {
         Toggle(isOn: binding("t")) { Label("Turn Over by Tilting", systemImage: "rotate.3d") }
       }
     } label: {
-      Image(systemName: drag == "m" ? "arrow.up.and.down.and.arrow.left.and.right" : "rotate.3d")
+      Image(systemName: "applepencil.tip")
         .font(.system(size: 17, weight: .medium))
         .frame(width: 44, height: 44)
     }
