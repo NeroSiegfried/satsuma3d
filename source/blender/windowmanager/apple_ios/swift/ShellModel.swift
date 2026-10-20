@@ -68,6 +68,10 @@ final class ShellModel {
   /** Blender's viewport has shown its first frame. */
   private(set) var viewportReady = false
   private(set) var documentsAvailable = false
+#if os(visionOS)
+  /** The window shows, not the launcher: a hidden window's ornaments still show there. */
+  private(set) var windowVisible = true
+#endif
   /** The window's safe area, without the toolbar's: controls laid out over the whole window,
    * such as the view pie, keep to it. */
   var safeAreaInsets = UIEdgeInsets.zero
@@ -176,5 +180,8 @@ final class ShellModel {
       viewportReady = true
     }
     set(\.documentsAvailable, wm_apple_ios_documents_available())
+#if os(visionOS)
+    set(\.windowVisible, wm_apple_ios_document_window_visible())
+#endif
   }
 }

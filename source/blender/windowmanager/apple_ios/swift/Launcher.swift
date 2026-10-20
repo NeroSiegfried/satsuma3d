@@ -565,3 +565,240 @@ private func svgPath(_ data: String) -> CGMutablePath {
 }
 
 /** \} */
+
+#if os(visionOS)
+
+/* -------------------------------------------------------------------- */
+/** \name Apple Vision Pro
+ *
+ * visionOS shows the launcher as the system's document browser alone. Blender's welcome sits
+ * beside it in an ornament instead: Suzanne in real depth, the logo, and the same two ways to
+ * start a document.
+ * \{ */
+
+final class LauncherOrnamentState: ObservableObject {
+  /** Hidden while a document is open, over the launcher's window. */
+  @Published var shown = true
+}
+
+/** The logo's artwork as a shape, fitted to its frame. */
+private struct LauncherLogoShape: Shape {
+  let artwork: Path
+
+  func path(in rect: CGRect) -> Path {
+    let box = artwork.boundingRect
+    guard box.width > 0, box.height > 0 else {
+      return Path()
+    }
+    let fit = CGAffineTransform(translationX: rect.minX, y: rect.minY)
+      .scaledBy(x: rect.width / box.width, y: rect.height / box.height)
+      .translatedBy(x: -box.minX, y: -box.minY)
+    return artwork.applying(fit)
+  }
+}
+
+/** Suzanne floating in front of the ornament, turning slowly; a drag flicks her around. */
+private struct LauncherFloatingModel: View {
+  let model: LauncherModel
+  @State private var subscription: EventSubscription?
+  @State private var lastTranslation = CGSize.zero
+  @PhysicalMetric(from: .meters) private var pointsPerMeter = 1.0
+
+  /** Turned a little toward the window beside her, slanted, breathing. */
+  private static func rest(at time: Float) -> simd_quatf {
+    return simd_quatf(angle: 0.18 + sin(time * 0.31) * 0.04, axis: [0, 0, 1]) *
+      simd_quatf(angle: -0.12 + sin(time * 0.43) * 0.03, axis: [1, 0, 0]) *
+      simd_quatf(angle: 0.45 + sin(time * 0.27) * 0.1, axis: [0, 1, 0])
+  }
+
+  var body: some View {
+    GeometryReader { geometry in
+      let size = Float(min(geometry.size.width, geometry.size.height))
+      RealityView { content in
+        guard let entity = try? await Entity(contentsOf: model.url) else {
+          return
+        }
+        let bounds = entity.visualBounds(relativeTo: nil)
+        entity.position = -bounds.center
+        let pivot = Entity()
+        pivot.addChild(entity)
+        let largest = max(bounds.extents.x, bounds.extents.y, bounds.extents.z)
+        /* Looked at and dragged as a whole. */
+        pivot.components.set(InputTargetComponent())
+        pivot.components.set(CollisionComponent(shapes: [.generateSphere(radius: largest * 0.5)]))
+        pivot.components.set(HoverEffectComponent())
+        /* The model fills 85% of the view, standing out in front of the glass. */
+        let extent = size * 0.85 / Float(pointsPerMeter)
+        let scale = SIMD3<Float>(repeating: extent / largest)
+        let home = SIMD3<Float>(0, 0, extent * 0.3)
+        pivot.scale = scale * 0.6
+        pivot.position = home + [0, extent * 0.4, 0]
+        model.orientation = Self.rest(at: 0)
+        pivot.orientation = model.orientation
+        content.add(pivot)
+
+        var time: Float = 0
+        subscription = content.subscribe(to: SceneEvents.Update.self) { event in
+          /* A long frame must never skip motion. */
+          let dt = min(Float(event.deltaTime), 1.0 / 30.0)
+          time += dt
+          if model.intro < 1 {
+            /* The entrance: dropping in, turning about a tilted axis, slowing into the pose
+             * where the idle motion continues. A drag hands her to the hand. */
+            model.introTime += dt
+            model.intro = model.dragging ? 1 : min(1, model.introTime / 1.6)
+            let ease = easeOut(model.intro)
+            let spin = simd_quatf(angle: (1 - ease) * Float.pi * 2.2, axis: simd_normalize([0.35, 1, 0.25]))
+            model.orientation = spin * Self.rest(at: time)
+            pivot.position = home + [0, (1 - ease) * extent * 0.4, 0]
+            pivot.scale = scale * (0.6 + 0.4 * ease)
+            pivot.orientation = model.orientation
+            return
+          }
+          if !model.dragging {
+            /* A flick keeps spinning, slowing down, then she settles into her idle motion. */
+            model.rotate(by: model.velocity * dt * 100)
+            model.velocity *= pow(0.45, dt)
+            let moving = simd_length(model.velocity) > 0.4
+            model.settle = moving ? 0 : min(1, model.settle + dt * 0.6)
+            if !moving {
+              model.orientation = simd_slerp(model.orientation, Self.rest(at: time),
+                                             1 - pow(0.25, dt * model.settle))
+            }
+          }
+          pivot.position = home
+          pivot.scale = scale
+          pivot.orientation = model.orientation
+        }
+      }
+      .gesture(
+        DragGesture(minimumDistance: 0)
+          .targetedToAnyEntity()
+          .onChanged { value in
+            if !model.dragging {
+              model.dragging = true
+              model.velocity = .zero
+              lastTranslation = .zero
+            }
+            let translation = value.translation
+            model.rotate(by: SIMD2(Float(translation.width - lastTranslation.width),
+                                   Float(translation.height - lastTranslation.height)))
+            lastTranslation = translation
+          }
+          .onEnded { value in
+            model.dragging = false
+            model.settle = 0
+            model.velocity = SIMD2(Float(value.velocity.width), Float(value.velocity.height)) * 0.012
+          }
+      )
+      .onDisappear {
+        subscription?.cancel()
+        subscription = nil
+      }
+    }
+    .accessibilityHidden(true)
+  }
+}
+
+/** Blender's welcome beside the document browser: Suzanne, the logo, and the ways to start. */
+private struct LauncherWelcome: View {
+  @ObservedObject var state: LauncherOrnamentState
+  let model: LauncherModel?
+  let logo: Path?
+  let choose: () -> Void
+  let start: () -> Void
+
+  var body: some View {
+    ZStack {
+      if state.shown {
+        card
+          .transition(.opacity.combined(with: .scale(scale: 0.95)))
+      }
+    }
+    .animation(.smooth(duration: 0.3), value: state.shown)
+  }
+
+  private var card: some View {
+    VStack(spacing: 0) {
+      if let model {
+        LauncherFloatingModel(model: model)
+          .frame(width: 220, height: 220)
+          .padding(.bottom, 8)
+      }
+      if let logo {
+        LauncherLogoShape(artwork: logo)
+          .fill(.primary)
+          .aspectRatio(logo.boundingRect.width / max(1, logo.boundingRect.height),
+                       contentMode: .fit)
+          .frame(height: 64)
+          .accessibilityElement()
+          .accessibilityLabel("Blender")
+          .accessibilityAddTraits(.isHeader)
+      }
+      else {
+        Text("Blender")
+          .font(.extraLargeTitle)
+          .accessibilityAddTraits(.isHeader)
+      }
+      Text("Create a new scene or open one")
+        .font(.title3)
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+        .padding(.top, 12)
+      VStack(spacing: 12) {
+        Button(action: choose) {
+          Text("Choose a Template")
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(Color(red: 0xE8 / 255.0, green: 0x7D / 255.0, blue: 0x0D / 255.0))
+        Button(action: start) {
+          Text("Start Creating")
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+      }
+      .controlSize(.extraLarge)
+      .padding(.top, 32)
+    }
+    .padding(36)
+    .frame(width: 360)
+    .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 46, style: .continuous))
+    .padding(.trailing, 24)
+  }
+}
+
+/**
+ * The launcher's ornament on Apple Vision Pro, at the leading side of the window. Created by name
+ * from `wm_apple_ios_launcher.mm`, which runs the buttons and shows or hides it.
+ */
+@objc(WMIOSLauncherOrnaments) public final class WMIOSLauncherOrnaments: NSObject {
+  private let state = LauncherOrnamentState()
+
+  @objc public init(controller: UIViewController, modelURL: URL?, logoURL: URL?,
+                    choose: @escaping () -> Void, start: @escaping () -> Void)
+  {
+    let model = modelURL.map { LauncherModel(url: $0) }
+    let logo = logoURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) }.map { Path(svgArtwork($0)) }
+    super.init()
+    let state = self.state
+    controller.ornaments = [
+      UIHostingOrnament(sceneAnchor: .leading, contentAlignment: .trailing) {
+        LauncherWelcome(state: state, model: model, logo: logo, choose: choose, start: start)
+      },
+    ]
+  }
+
+  @objc public var shown: Bool {
+    get { state.shown }
+    set {
+      if state.shown != newValue {
+        state.shown = newValue
+      }
+    }
+  }
+}
+
+/** \} */
+
+#endif

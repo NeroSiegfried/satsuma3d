@@ -21,6 +21,19 @@
 @property(nonatomic, readonly) CGFloat aspectRatio;
 @end
 
+#if defined(APPLE_TARGET_VISIONOS)
+/** Apple Vision Pro: Blender's welcome in an ornament beside the document browser, which is all
+ * the system shows of the launcher there. */
+@protocol WMIOSLauncherOrnaments
+- (instancetype)initWithController:(UIViewController *)controller
+                          modelURL:(NSURL *)model_url
+                           logoURL:(NSURL *)logo_url
+                            choose:(void (^)(void))choose
+                             start:(void (^)(void))start;
+@property(nonatomic) BOOL shown;
+@end
+#endif
+
 static UIColor *launcherColor(uint32_t rgb, CGFloat alpha)
 {
   return [UIColor colorWithRed:((rgb >> 16) & 0xff) / 255.0
@@ -239,6 +252,10 @@ static void launcherStyle(UIDocumentViewControllerLaunchOptions *launch)
   launch.background = background;
   launch.browserViewController.view.tintColor = launcherColor(0xE87D0D, 1);
 
+#if defined(APPLE_TARGET_VISIONOS)
+  /* The system shows none of these there: the launcher's ornament has Suzanne and the logo. */
+  return;
+#endif
   NSBundle *bundle = NSBundle.mainBundle;
   NSURL *model_url = [bundle URLForResource:@"Suzanne" withExtension:@"usdz"];
   NSURL *logo_url = [bundle URLForResource:@"blender_logo_mono" withExtension:@"svg"];
@@ -319,6 +336,9 @@ static NSURL *launcher_pending_url = nil;
   NSURL *_creationSource;
   /** A copy of the new document, kept until the browser has imported it. */
   NSURL *_creationBackup;
+#if defined(APPLE_TARGET_VISIONOS)
+  NSObject<WMIOSLauncherOrnaments> *_ornaments;
+#endif
 }
 
 - (void)viewDidLoad
@@ -327,6 +347,10 @@ static NSURL *launcher_pending_url = nil;
   /* The document view, which iOS zooms between the browser and the open document: the 3D
    * viewport's grey, so opening and closing never flash white. */
   self.view.backgroundColor = launcherColor(0x3D3D3D, 1);
+#if defined(APPLE_TARGET_VISIONOS)
+  /* The window's glass around the browser, as the system's own document windows there. */
+  self.view.backgroundColor = UIColor.clearColor;
+#endif
   UIDocumentViewControllerLaunchOptions *launch = self.launchOptions;
   launch.title = @"Blender";
   if (@available(iOS 27.0, visionOS 27.0, *)) {
@@ -365,6 +389,9 @@ static NSURL *launcher_pending_url = nil;
   browser.allowsPickingMultipleItems = YES;
   launch.browserViewController = browser;
   launcherStyle(launch);
+#if defined(APPLE_TARGET_VISIONOS)
+  [self addOrnaments];
+#endif
 
   /* Save before leaving the foreground, while the GPU can still render the file's preview. */
   [NSNotificationCenter.defaultCenter addObserver:self
@@ -399,8 +426,61 @@ static NSURL *launcher_pending_url = nil;
   [_createdPresentation release];
   [_creationSource release];
   [self discardCreationBackup];
+#if defined(APPLE_TARGET_VISIONOS)
+  [_ornaments release];
+#endif
   [super dealloc];
 }
+
+#if defined(APPLE_TARGET_VISIONOS)
+/** Blender's welcome beside the browser, with the launch options' title and actions, which the
+ * system shows nowhere there. */
+- (void)addOrnaments
+{
+  Class ornaments_class = NSClassFromString(@"WMIOSLauncherOrnaments");
+  if (ornaments_class == nil) {
+    return;
+  }
+  NSBundle *bundle = NSBundle.mainBundle;
+  _ornaments = [[ornaments_class alloc]
+      initWithController:self
+                modelURL:[bundle URLForResource:@"Suzanne" withExtension:@"usdz"]
+                 logoURL:[bundle URLForResource:@"blender_logo_mono" withExtension:@"svg"]
+                  choose:^{
+                    [launcher_controller chooseFromLauncher:YES];
+                  }
+                   start:^{
+                     [launcher_controller chooseFromLauncher:NO];
+                   }];
+  [self updateOrnaments];
+}
+
+/** The ornament's buttons: choosing a template first, or starting at once from General, as the
+ * launch options' actions do. */
+- (void)chooseFromLauncher:(BOOL)choose_template
+{
+  if (_creating || _opening || self.document) {
+    return;
+  }
+  /* The system presents the browser over the launcher there: present over it. */
+  UIViewController *presenter = self;
+  while (presenter.presentedViewController) {
+    presenter = presenter.presentedViewController;
+  }
+  if (choose_template) {
+    [self newDocumentFrom:presenter];
+  }
+  else {
+    [self createDocumentFromTemplate:@"" presenter:presenter];
+  }
+}
+
+/** Shown in the launcher only, never over an open document. */
+- (void)updateOrnaments
+{
+  _ornaments.shown = self.document == nil && !GHOST_ios_document_window_visible();
+}
+#endif
 
 /* The document browser can fail to import into a location it remembers but can no longer reach,
  * such as the app's previous container after a reinstall, and it deletes the file it was given.
@@ -514,35 +594,43 @@ static NSURL *launcher_pending_url = nil;
       self->_creating = NO;
       return;
     }
-    [self->_creatingTemplate release];
-    self->_creatingTemplate = [identifier copy];
-    wm_apple_ios_document_create(identifier, ^(NSURL *source) {
-      if (!source) {
-        [self creationFailed:presenter];
-        return;
-      }
-      [self backUpCreation:source];
-      [self.launchOptions.browserViewController
-          importDocumentAtURL:source
-          nextToDocumentAtURL:self.document.fileURL
-                         mode:UIDocumentBrowserImportModeMove
-            completionHandler:^(NSURL *destination, NSError *error) {
-              if (!destination || error) {
-                destination = [self keepCreationBackup];
-              }
-              [self discardCreationBackup];
-              [NSFileManager.defaultManager removeItemAtURL:source.URLByDeletingLastPathComponent
-                                                      error:nil];
-              if (!destination) {
-                [self creationFailed:presenter];
-                return;
-              }
-              [self recordCreatedTemplateAtURL:destination];
-              [self openDocumentAtURL:destination];
-            }];
-    });
+    [self createDocumentFromTemplate:identifier presenter:presenter];
   }];
   [presenter presentViewController:picker animated:YES completion:nil];
+}
+
+/** Create a document from a template, empty for General, place it with the browser, which lists
+ * it in Recents, and open it. */
+- (void)createDocumentFromTemplate:(NSString *)identifier presenter:(UIViewController *)presenter
+{
+  _creating = YES;
+  [_creatingTemplate release];
+  _creatingTemplate = [identifier copy];
+  wm_apple_ios_document_create(identifier, ^(NSURL *source) {
+    if (!source) {
+      [self creationFailed:presenter];
+      return;
+    }
+    [self backUpCreation:source];
+    [self.launchOptions.browserViewController
+        importDocumentAtURL:source
+        nextToDocumentAtURL:self.document.fileURL
+                       mode:UIDocumentBrowserImportModeMove
+          completionHandler:^(NSURL *destination, NSError *error) {
+            if (!destination || error) {
+              destination = [self keepCreationBackup];
+            }
+            [self discardCreationBackup];
+            [NSFileManager.defaultManager removeItemAtURL:source.URLByDeletingLastPathComponent
+                                                    error:nil];
+            if (!destination) {
+              [self creationFailed:presenter];
+              return;
+            }
+            [self recordCreatedTemplateAtURL:destination];
+            [self openDocumentAtURL:destination];
+          }];
+  });
 }
 
 - (void)openDocumentAtURL:(NSURL *)url
@@ -647,6 +735,9 @@ static NSURL *launcher_pending_url = nil;
   }
   /* Blender has loaded the file: show it. */
   GHOST_ios_document_window_set_visible(true, true);
+#if defined(APPLE_TARGET_VISIONOS)
+  [self updateOrnaments];
+#endif
   if ([_createdURL.URLByStandardizingPath isEqual:self.document.fileURL.URLByStandardizingPath]) {
     [NSNotificationCenter.defaultCenter postNotificationName:@"BlenderTemplatePresentation"
                                                       object:nil
@@ -756,8 +847,13 @@ extern "C" NSURL *wm_apple_ios_document_url()
 
 bool wm_apple_ios_launcher_can_show_documents()
 {
+#if defined(APPLE_TARGET_VISIONOS)
+  /* No back action there: the launcher closes the document itself. */
+  return launcher_controller.document != nil;
+#else
   return launcher_controller.document != nil &&
          launcher_controller.navigationItem.backAction != nil;
+#endif
 }
 
 void wm_apple_ios_launcher_show_documents(id sender)
@@ -785,6 +881,21 @@ void wm_apple_ios_launcher_show_documents(id sender)
                    });
   }
   GHOST_ios_document_window_set_visible(false, false);
+#if defined(APPLE_TARGET_VISIONOS)
+  if (launcher_controller.navigationItem.backAction == nil) {
+    /* Close the document, then show the browser again. */
+    [document closeWithCompletionHandler:^(BOOL) {
+      launcher_controller.document = nil;
+      UIDocumentBrowserViewController *browser =
+          launcher_controller.launchOptions.browserViewController;
+      if (launcher_controller.presentedViewController == nil &&
+          browser.presentingViewController == nil)
+      {
+        [launcher_controller presentViewController:browser animated:YES completion:nil];
+      }
+    }];
+  }
+#endif
   /* The system's back action closes the document and shows the launcher. */
   [launcher_controller.navigationItem.backAction performWithSender:sender target:nil];
   /* Show where the document is, in case the browser is elsewhere. */

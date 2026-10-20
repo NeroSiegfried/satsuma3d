@@ -39,6 +39,8 @@ void wm_apple_ios_window_send_key(void *_Nullable window, const char *_Nonnull k
 /** Whether a document is open that the launcher can go back from, and going back. */
 bool wm_apple_ios_documents_available(void);
 void wm_apple_ios_show_documents(id _Nullable sender);
+/** Whether the launcher shows the document window, rather than its document browser. */
+bool wm_apple_ios_document_window_visible(void);
 /** A quick action's icon: Blender's for the operator, or a symbol, or none. */
 UIImage *_Nullable wm_apple_ios_action_icon(NSString *_Nonnull op_name,
                                             NSString *_Nonnull property,

@@ -496,7 +496,7 @@ public struct DocumentWindow: View {
         .toolbarTitleDisplayMode(.inline)
         .onChange(of: sizeClass, initial: true) { _, size in model.compact = size == .compact }
 #if os(visionOS)
-        .visionOrnaments(model: model, shown: controlsShown)
+        .visionOrnaments(model: model, shown: controlsShown && model.windowVisible)
 #endif
     }
   }

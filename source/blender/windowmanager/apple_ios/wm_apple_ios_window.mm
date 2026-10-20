@@ -79,6 +79,11 @@ extern "C" void wm_apple_ios_show_documents(id sender)
   wm_apple_ios_launcher_show_documents(sender);
 }
 
+extern "C" bool wm_apple_ios_document_window_visible()
+{
+  return GHOST_ios_document_window_visible();
+}
+
 extern "C" UIImage *wm_apple_ios_action_icon(NSString *op_name,
                                              NSString *property,
                                              NSString *value)
