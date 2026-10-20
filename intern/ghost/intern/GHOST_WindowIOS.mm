@@ -1868,6 +1868,14 @@ static UIBezierPath *pointer_move()
         didReceiveSqueeze:(UIPencilInteractionSqueeze *)squeeze
 {
   const UIPencilPreferredAction action = UIPencilInteraction.preferredSqueezeAction;
+  /* Unless Settings has the radial menu for squeezing, the system's tool palette shows instead,
+   * see `SqueezePalette` in `Rails.swift`. */
+  NSString *squeeze_shows = [NSUserDefaults.standardUserDefaults stringForKey:@"BlenderPencilSqueeze"];
+  if (action == UIPencilPreferredActionShowContextualPalette &&
+      ![squeeze_shows isEqualToString:@"menu"])
+  {
+    return;
+  }
   if (squeeze.phase == UIPencilInteractionPhaseEnded && action != UIPencilPreferredActionIgnore &&
       action != UIPencilPreferredActionRunSystemShortcut)
   {

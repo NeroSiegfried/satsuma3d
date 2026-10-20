@@ -13,6 +13,9 @@
  * names an item while a pointer or the Pencil hovers it, and briefly after choosing one.
  */
 
+#if !os(visionOS)
+import PencilKit
+#endif
 import SwiftUI
 import UIKit
 
@@ -729,9 +732,17 @@ struct ToolRails: View {
       /* For the Pencil's dial over the tool settings. */
       .onChange(of: toolItems.map(\.id), initial: true) { _, _ in
         RollDial.shared.tools = toolItems
+        updateSqueezePalette(toolItems: toolItems, brushItems: brushItems)
       }
       .onChange(of: model.activeTool, initial: true) { _, tool in
         RollDial.shared.activeTool = tools.active(tool)
+        updateSqueezePalette(toolItems: toolItems, brushItems: brushItems)
+      }
+      .onChange(of: brushItems.map(\.id)) { _, _ in
+        updateSqueezePalette(toolItems: toolItems, brushItems: brushItems)
+      }
+      .onChange(of: model.brushes?.string("active")) { _, _ in
+        updateSqueezePalette(toolItems: toolItems, brushItems: brushItems)
       }
       /* Following the finger at once while the sidebar is moved. */
       .animation(UIAccessibility.isReduceMotionEnabled || sidebarDragStart != nil ? nil :
@@ -754,6 +765,25 @@ struct ToolRails: View {
       }
     }
     .ignoresSafeArea(edges: .vertical)
+  }
+
+  /** The system's tool palette a Pencil's squeeze shows: the brushes where Blender paints with
+   * them, otherwise the tools. */
+  private func updateSqueezePalette(toolItems: [RailItem], brushItems: [RailItem]) {
+#if !os(visionOS)
+    if #available(iOS 26.0, *) {
+      if !brushItems.isEmpty {
+        SqueezePalette.shared.update(items: brushItems, active: model.brushes?.string("active") ?? "") { item in
+          WM_apple_ios_ui_brush_activate(item.id)
+        }
+      }
+      else {
+        SqueezePalette.shared.update(items: toolItems, active: tools.active(model.activeTool)) { item in
+          WM_apple_ios_ui_tool_set_by_id(item.id)
+        }
+      }
+    }
+#endif
   }
 
   /** A small grabber above the sidebar: dragged, it moves the sidebar up or down its edge, where
@@ -930,6 +960,93 @@ final class SelectIntentState {
     WM_apple_ios_ui_select_intent_set(smoothing ? 3 : Int32(intent.rawValue))
   }
 }
+
+#if !os(visionOS)
+/** What squeezing Apple Pencil Pro shows, see the iPad page of Settings: the system's tool palette
+ * by the Pencil, as drawing apps have it, or the Pencil's radial menu. GHOST reads it too. */
+enum PencilSqueeze {
+  static let key = "BlenderPencilSqueeze"
+  static var showsPalette: Bool { UserDefaults.standard.string(forKey: key) != "menu" }
+}
+
+/** The system's tool palette, which a squeeze of Apple Pencil Pro shows by the Pencil anywhere in
+ * the window, with Blender's brushes or tools as its items: choosing one makes it active. */
+@available(iOS 26.0, *)
+@MainActor
+final class SqueezePalette: NSObject, PKToolPickerObserver {
+  static let shared = SqueezePalette()
+
+  private var picker: PKToolPicker?
+  private var ids: [String] = []
+  private var choose: ((RailItem) -> Void)?
+  private var items: [RailItem] = []
+  /** Set here from Blender, not chosen in the palette. */
+  private var following = false
+  private var observer: NSObjectProtocol?
+
+  private override init() {
+    super.init()
+    observer = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification,
+                                                      object: nil, queue: .main) { _ in
+      MainActor.assumeIsolated { SqueezePalette.shared.attach() }
+    }
+  }
+
+  func update(items: [RailItem], active: String, choose: @escaping (RailItem) -> Void) {
+    self.items = items
+    self.choose = choose
+    let ids = items.map(\.id)
+    if ids != self.ids || picker == nil {
+      self.ids = ids
+      picker?.removeObserver(self)
+      let toolItems = items.map { item -> PKToolPickerItem in
+        var configuration = PKToolPickerCustomItem.Configuration(identifier: item.id, name: item.title)
+        let image = item.image
+        configuration.imageProvider = { _ in image ?? UIImage(systemName: "circle")! }
+        configuration.allowsColorSelection = false
+        configuration.toolAttributeControls = []
+        return PKToolPickerCustomItem(configuration: configuration)
+      }
+      guard !toolItems.isEmpty else { return }
+      let picker = PKToolPicker(toolItems: toolItems)
+      picker.addObserver(self)
+      self.picker = picker
+    }
+    if let picker, ids.contains(active), picker.selectedToolItemIdentifier != active {
+      following = true
+      picker.selectedToolItemIdentifier = active
+      following = false
+    }
+    attach()
+  }
+
+  /** Given to the window's responders, hidden until a squeeze shows it, while Settings has the
+   * palette for squeezing. */
+  func attach() {
+    guard let window = UIApplication.shared.connectedScenes
+      .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first
+    else { return }
+    let state = window.pencilKitResponderState
+    if PencilSqueeze.showsPalette, let picker {
+      if state.activeToolPicker !== picker { state.activeToolPicker = picker }
+      state.toolPickerVisibility = .hidden
+    }
+    else {
+      state.toolPickerVisibility = .inactive
+      state.activeToolPicker = nil
+    }
+  }
+
+  nonisolated func toolPickerSelectedToolItemDidChange(_ toolPicker: PKToolPicker) {
+    MainActor.assumeIsolated {
+      guard !following, let id = toolPicker.selectedToolItem.identifier as String?,
+            let item = items.first(where: { $0.id == id })
+      else { return }
+      choose?(item)
+    }
+  }
+}
+#endif
 
 /** The barrel roll of a Pencil on the screen, anywhere in the window, for dials to turn with. */
 @MainActor

@@ -240,6 +240,7 @@ private struct PencilPressureControl: View {
 /** The iPad's own settings, the first page. */
 private struct IPadSettingsPage: View {
   @ObservedObject var model: SettingsModel
+  @AppStorage("BlenderPencilSqueeze") private var squeeze = "palette"
 
   var body: some View {
     Form {
@@ -281,6 +282,22 @@ private struct IPadSettingsPage: View {
         Text("Pencil Pressure")
       } footer: {
         Text("How hard to press for a full stroke. Lighter reaches full size and strength sooner.")
+      }
+
+      Section {
+        ChoiceRow(title: "Tool Palette",
+                  detail: "The brushes or tools by the Pencil, to choose from with it.",
+                  symbol: "pencil.and.scribble",
+                  selected: squeeze != "menu") { squeeze = "palette" }
+        ChoiceRow(title: "Context Menu",
+                  detail: "Blender's context menu around the Pencil.",
+                  symbol: "circle.circle",
+                  selected: squeeze == "menu") { squeeze = "menu" }
+      } header: {
+        Text("Squeeze Apple Pencil Pro")
+      } footer: {
+        Text("Anywhere over the viewport, when squeezing shows the tool palette in the iPad's Apple "
+          + "Pencil settings.")
       }
 
       Section {
