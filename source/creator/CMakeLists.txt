@@ -2042,7 +2042,9 @@ elseif(APPLE)
     foreach(_oidn_module ${_oidn_modules})
       get_filename_component(_oidn_module_name ${_oidn_module} NAME)
       string(REGEX REPLACE "(\\.[0-9]+)+\\.dylib$" ".dylib" _oidn_module_link ${_oidn_module_name})
+      # Made here too: on a first install the libraries may not have been copied in yet.
       install(CODE "
+        file(MAKE_DIRECTORY \${CMAKE_INSTALL_PREFIX}/${TARGETDIR_LIB})
         file(CREATE_LINK ${_oidn_module_name}
              \${CMAKE_INSTALL_PREFIX}/${TARGETDIR_LIB}/${_oidn_module_link} SYMBOLIC)")
     endforeach()
