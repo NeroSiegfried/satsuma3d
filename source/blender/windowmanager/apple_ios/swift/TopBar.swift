@@ -381,7 +381,16 @@ struct DocumentToolbar: ToolbarContent {
     }
     nodeEditorToggles
     Section {
-      Button("Viewport Shading", systemImage: "circle.lefthalf.filled") { model.shadingOpen = true }
+      Button("Viewport Shading", systemImage: "circle.lefthalf.filled") {
+        shell.panels.showShadingTab("SHADING")
+        model.shadingOpen = true
+      }
+      Button {
+        shell.panels.showShadingTab("OVERLAYS")
+        model.shadingOpen = true
+      } label: {
+        Label { Text("Overlays") } icon: { iconImage(BlenderIcon.image("OVERLAY")) }
+      }
       Menu {
         ForEach(ViewCommand.pie, id: \.command) { command in
           Button { command.run() } label: { Label { Text(command.title) } icon: { iconImage(command.image) } }
@@ -655,6 +664,7 @@ struct DocumentToolbar: ToolbarContent {
     ]
     let current = commands[model.shading] ?? commands["solid"]!
     return Button {
+      shell.panels.showShadingTab("SHADING")
       model.shadingOpen = true
     } label: {
       Label { Text("Viewport Shading") } icon: { iconImage(wm_apple_ios_command_icon(current.0, current.2)) }
@@ -670,7 +680,7 @@ extension View {
   func shadingPopover(model: ShellModel, shell: ShellPanels) -> some View {
     @Bindable var model = model
     return popover(isPresented: $model.shadingOpen) {
-      shell.panels.shadingContent { model.shadingOpen = false }
+      shell.panels.shadingContent(model: model) { model.shadingOpen = false }
     }
     .onChange(of: model.shadingOpen) { _, shown in shell.panels.setShadingShown(shown) }
   }

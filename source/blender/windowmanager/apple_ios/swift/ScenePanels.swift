@@ -162,17 +162,49 @@ final class SwiftScenePanels {
 
   /** Viewport shading as a SwiftUI popover's content shows it: Blender sends its settings while
    * it is open. */
-  func shadingContent(done: @escaping () -> Void) -> some View {
+  func shadingContent(model: ShellModel, done: @escaping () -> Void) -> some View {
     NavigationStack {
       InspectorForm(store: shading)
         .tint(PanelStyle.tint)
-        .navigationTitle("Viewport Shading")
+        /* All of the viewport's overlays at once, as the switch beside Blender's Overlays
+         * popover in its header. */
+        .safeAreaInset(edge: .top, spacing: 0) {
+          if shading.currentTab == "OVERLAYS" {
+            Toggle("Show Overlays", isOn: Binding(
+              get: { model.viewport?.bool("overlays") == true },
+              set: { _ in Engine.setting("viewport_toggle", "overlays") }))
+              .padding(.horizontal, 16)
+              .padding(.vertical, 12)
+              .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+              .padding(.horizontal, 16)
+              .padding(.top, 8)
+              .accessibilityIdentifier("blender.overlays.toggle")
+          }
+        }
+        .navigationTitle(shading.currentTab == "OVERLAYS" ? "Overlays" : "Viewport Shading")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done", action: done) } }
+        .toolbar {
+          /* The viewport's shading and its overlays, side by side as in Blender's header. */
+          ToolbarItem(placement: .principal) {
+            let store = shading
+            Picker("Show", selection: Binding(get: { store.currentTab }, set: { store.selectTab($0) })) {
+              Text("Shading").tag("SHADING")
+              Text("Overlays").tag("OVERLAYS")
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+          }
+          ToolbarItem(placement: .confirmationAction) { Button("Done", action: done) }
+        }
     }
     /* A popover's size; a sheet on a phone, which it fills. */
     .frame(idealWidth: 400, idealHeight: 640)
     .sheetDetents()
+  }
+
+  /** Shading or Overlays, as the popover opens on it. */
+  func showShadingTab(_ tab: String) {
+    shading.selectTab(tab)
   }
 
   func setShadingShown(_ shown: Bool) {
