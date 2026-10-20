@@ -104,8 +104,9 @@ static void transdata_elem_translate(const TransInfo *t,
     else if (rotate_mode == TRANSLATE_ROTATE_ROLL) {
       const TranslateCustomData *custom_data = static_cast<const TranslateCustomData *>(
           t->custom.mode.data);
-      /* Rolling the Pencil turns things around the view axis; tilting it, around the view's
-       * horizontal axis (tilting it up or down) and vertical axis (left or right). */
+      /* Rolling the Pencil turns things around the view axis. Tilting it turns them as if it
+       * were a handle stuck into them: leaning its end right swings their near side right, around
+       * the view's vertical axis, and leaning it down swings it down, around the horizontal one. */
       float roll_mat[3][3], tilt_x_mat[3][3], tilt_y_mat[3][3];
       axis_angle_normalized_to_mat3(roll_mat, t->viewinv[2], custom_data->roll.angle);
       axis_angle_normalized_to_mat3(tilt_x_mat, t->viewinv[0], custom_data->roll.tilt_angle.y);
