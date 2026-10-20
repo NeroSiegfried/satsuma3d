@@ -2935,6 +2935,22 @@ bool WM_apple_ios_pencil_hover_active()
   return ios_hover_request.active;
 }
 
+/* The barrel roll of a Pencil on the screen, set from UIKit's thread. */
+static std::atomic<bool> ios_pencil_roll_down = false;
+static std::atomic<float> ios_pencil_roll_angle = 0.0f;
+
+extern "C" void WM_apple_ios_ui_pencil_roll_set(bool down, float angle)
+{
+  ios_pencil_roll_angle = angle;
+  ios_pencil_roll_down = down;
+}
+
+bool WM_apple_ios_pencil_roll(float *r_angle)
+{
+  *r_angle = ios_pencil_roll_angle;
+  return ios_pencil_roll_down;
+}
+
 extern "C" char *WM_apple_ios_ui_pencil_hover_copy_json()
 {
   static std::string snapshot = "{}";

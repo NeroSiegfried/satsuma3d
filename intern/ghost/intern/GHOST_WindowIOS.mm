@@ -14,6 +14,43 @@ static void ios_pencil_hover(bool active, int x, int y)
   }
 }
 
+/**
+ * A Pencil's barrel roll while it touches the screen, anywhere in the window: Blender turns what
+ * it moves, and the interface around it turns its dials. Pencils that cannot tell report none.
+ */
+static void ios_pencil_roll(UITouch *touch)
+{
+#if !defined(APPLE_TARGET_VISIONOS)
+  if (touch.type != UITouchTypePencil) {
+    return;
+  }
+  const bool down = touch.phase != UITouchPhaseEnded && touch.phase != UITouchPhaseCancelled;
+  float angle = 0.0f;
+  if (@available(iOS 17.5, *)) {
+    angle = float(touch.rollAngle);
+  }
+  if (const GHOST_IOSNativeInterface *native = GHOST_ios_native_interface()) {
+    if (native->pencil_roll) {
+      native->pencil_roll(down, angle);
+    }
+  }
+  /* Where it touches, in the window, so a rail under it can turn its dial at once. */
+  const CGPoint point = [touch locationInView:nil];
+  [NSNotificationCenter.defaultCenter
+      postNotificationName:@"BlenderPencilRoll"
+                    object:nil
+                  userInfo:@{
+                    @"down" : @(down),
+                    @"began" : @(touch.phase == UITouchPhaseBegan),
+                    @"angle" : @(angle),
+                    @"x" : @(point.x),
+                    @"y" : @(point.y)
+                  }];
+#else
+  (void)touch;
+#endif
+}
+
 static void ios_navigation_hover(bool active)
 {
   if (const GHOST_IOSNativeInterface *native = GHOST_ios_native_interface()) {
@@ -735,6 +772,7 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
       [self cancelPencilStroke];
     }
     for (UITouch *touch in event.allTouches) {
+      ios_pencil_roll(touch);
       if (touch.phase == UITouchPhaseBegan) {
         ios_pencil_hover(false, 0, 0);
         [self stopOrbitMomentum];

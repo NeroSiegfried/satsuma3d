@@ -29,6 +29,8 @@
 #include "UI_interface_types.hh"
 #include "UI_view2d.hh"
 
+#include "WM_native_interface.hh"
+
 #include "transform.hh"
 #include "transform_convert.hh"
 #include "transform_mode.hh"
@@ -46,6 +48,8 @@ enum eTranslateRotateMode {
   TRANSLATE_ROTATE_OFF = 0, /** Perform rotation (currently only snap to normal is used). */
   TRANSLATE_ROTATE_ON,      /** Rotate, resetting back to the disabled state. */
   TRANSLATE_ROTATE_RESET,
+  /** Rotate around the view axis, as far as the Pencil has rolled since the move began. */
+  TRANSLATE_ROTATE_ROLL,
 };
 
 /**
@@ -56,6 +60,14 @@ struct TranslateCustomData {
   struct {
     enum eTranslateRotateMode rotate_mode;
   } prev;
+
+  /** The Pencil's barrel roll as last seen, and how far it has turned since the move began,
+   * beyond a half turn too. Only where the platform reports a Pencil's roll. */
+  struct {
+    bool active;
+    float last;
+    float angle;
+  } roll;
 
   float3 snap_target_grid;
 };
@@ -83,6 +95,12 @@ static void transdata_elem_translate(const TransInfo *t,
 
     if (rotate_mode == TRANSLATE_ROTATE_RESET) {
       unit_m3(mat);
+    }
+    else if (rotate_mode == TRANSLATE_ROTATE_ROLL) {
+      const TranslateCustomData *custom_data = static_cast<const TranslateCustomData *>(
+          t->custom.mode.data);
+      /* Rolling the Pencil clockwise, seen from its end, turns things clockwise on screen. */
+      axis_angle_normalized_to_mat3(mat, t->viewinv[2], -custom_data->roll.angle);
     }
     else {
       BLI_assert(rotate_mode == TRANSLATE_ROTATE_ON);
@@ -410,6 +428,22 @@ static void applyTranslationValue(TransInfo *t, const float vec[3])
     rotate_mode = TRANSLATE_ROTATE_ON;
   }
 
+  /* Rolling the Pencil turns what it moves, once it has rolled at all, for the rest of the move. */
+  float pencil_roll;
+  const wmNativeInterface *native = WM_native_interface();
+  if (custom_data->roll.active && native && native->pencil_roll &&
+      native->pencil_roll(&pencil_roll))
+  {
+    custom_data->roll.angle += angle_wrap_rad(pencil_roll - custom_data->roll.last);
+    custom_data->roll.last = pencil_roll;
+  }
+  if (rotate_mode == TRANSLATE_ROTATE_OFF && custom_data->roll.active &&
+      (custom_data->prev.rotate_mode == TRANSLATE_ROTATE_ROLL ||
+       fabsf(custom_data->roll.angle) > DEG2RADF(4.0f)))
+  {
+    rotate_mode = TRANSLATE_ROTATE_ROLL;
+  }
+
   /* Check to see if this needs to be re-enabled. */
   if (rotate_mode == TRANSLATE_ROTATE_OFF) {
     if (t->flag & T_POINTS) {
@@ -430,7 +464,9 @@ static void applyTranslationValue(TransInfo *t, const float vec[3])
   FOREACH_TRANS_DATA_CONTAINER (t, tc) {
     float3 snap_source_local(0);
     if (rotate_mode != TRANSLATE_ROTATE_OFF) {
-      snap_source_local = t->tsnap.snap_source;
+      /* Rolled, things turn about the pivot, as rotating does. */
+      snap_source_local = rotate_mode == TRANSLATE_ROTATE_ROLL ? float3(t->center_global) :
+                                                                 t->tsnap.snap_source;
       if (tc->use_local_mat) {
         /* The pivot has to be in local-space (see #49494). */
         snap_source_local = math::transform_point(float4x4(tc->imat), snap_source_local);
@@ -632,6 +668,15 @@ static void initTranslation(TransInfo *t, wmOperator * /*op*/)
 
   TranslateCustomData *custom_data = MEM_new_zeroed<TranslateCustomData>(__func__);
   custom_data->prev.rotate_mode = TRANSLATE_ROTATE_OFF;
+  /* Moved with a Pencil in the 3D Viewport, rolling it turns things around the view axis. */
+  const wmNativeInterface *native = WM_native_interface();
+  float pencil_roll;
+  if (t->spacetype == SPACE_VIEW3D && native && native->pencil_roll &&
+      native->pencil_roll(&pencil_roll))
+  {
+    custom_data->roll.active = true;
+    custom_data->roll.last = pencil_roll;
+  }
   t->custom.mode.data = custom_data;
   t->custom.mode.use_free = true;
 

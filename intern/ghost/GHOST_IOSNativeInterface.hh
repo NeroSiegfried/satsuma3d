@@ -35,6 +35,8 @@ struct GHOST_IOSNativeInterface {
 
   /** An Apple Pencil hovers over the viewport, at a window position in pixels, or stopped. */
   void (*pencil_hover)(bool active, int x, int y) = nullptr;
+  /** A Pencil touching the screen rolled to \a angle radians; \a down is false as it lifts. */
+  void (*pencil_roll)(bool down, float angle) = nullptr;
   /** A pointer hovers over the navigation gizmo, or stopped. */
   void (*navigation_hover)(bool active) = nullptr;
   /** Two fingers twist the view by `angle`, in radians. */

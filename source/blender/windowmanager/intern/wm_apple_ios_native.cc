@@ -46,6 +46,7 @@ extern "C" void WM_apple_ios_ui_flush_commands(bContext *C);
 extern "C" double WM_apple_ios_engine_idle_seconds(bContext *C);
 extern "C" bool WM_apple_ios_ui_desktop_mode();
 extern "C" void WM_apple_ios_ui_pencil_hover_set(bool active, int x, int y);
+extern "C" void WM_apple_ios_ui_pencil_roll_set(bool down, float angle);
 extern "C" void WM_apple_ios_ui_navigation_hover_set(bool active);
 extern "C" void WM_apple_ios_ui_view_roll_enqueue(float angle);
 void WM_apple_ios_ui_operator_input_adjust(bContext *C, wmOperator *op);
@@ -219,6 +220,7 @@ wmNativeInterface native_interface_create()
   native.alert = alert;
   native.confirm = confirm;
   native.pointer_hovering = WM_apple_ios_pencil_hover_active;
+  native.pencil_roll = WM_apple_ios_pencil_roll;
   native.direct_gizmo_press = true;
   native.hide_gizmo_tooltips = true;
   native.operator_input_adjust = WM_apple_ios_ui_operator_input_adjust;
@@ -250,6 +252,7 @@ GHOST_IOSNativeInterface ghost_interface_create()
   native.engine_idle_seconds = WM_apple_ios_engine_idle_seconds;
   native.autosave_now = WM_apple_ios_autosave_now;
   native.pencil_hover = WM_apple_ios_ui_pencil_hover_set;
+  native.pencil_roll = WM_apple_ios_ui_pencil_roll_set;
   native.navigation_hover = WM_apple_ios_ui_navigation_hover_set;
   native.view_roll = WM_apple_ios_ui_view_roll_enqueue;
   native.launcher_controller = WM_apple_ios_launcher_controller;
