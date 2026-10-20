@@ -306,8 +306,9 @@ struct Rail: View {
 
   private func updateZone() {
     let state = state, label = label, choose = choose, animation = animation
+    /* Only the closed rail, its one button: an open list is tapped instead. */
     RollDial.shared.setZone(brush ? "brushes" : "tools", RollDial.Zone(
-      frame: railFrame, items: items, active: active, landing: landing) { item in
+      frame: state.listVisible ? .null : railFrame, items: items, active: active, landing: landing) { item in
         state.choose(item.id)
         choose(item)
         if state.expanded { withAnimation(animation) { state.expanded = false } }
@@ -367,6 +368,7 @@ struct Rail: View {
     }
     .onChange(of: items.map(\.id)) { _, _ in updateZone() }
     .onChange(of: active) { _, _ in updateZone() }
+    .onChange(of: state.listVisible) { _, _ in updateZone() }
     .onDisappear { RollDial.shared.setZone(brush ? "brushes" : "tools", nil) }
     /* The dial ended as the Pencil lifted, whether or not the hold here saw it end. */
     .onChange(of: RollDial.shared.showing) { _, showing in
