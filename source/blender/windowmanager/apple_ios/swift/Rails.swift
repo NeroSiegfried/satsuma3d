@@ -1084,15 +1084,21 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
   }
 
   /** The system finds the palette from the first responder, which nothing else in the window is
-   * while no text is typed: this invisible view is, holding the palette, hidden until a squeeze
-   * shows it, while Settings has the palette for squeezing. */
-  private final class Holder: UIView {
+   * while no text is typed, and shows it for a squeeze through PencilKit's own canvas: this
+   * empty, invisible canvas behind everything is both, holding the palette, hidden until a
+   * squeeze shows it, while Settings has the palette for squeezing. It never draws or takes a
+   * touch. */
+  private final class Holder: PKCanvasView {
     override var canBecomeFirstResponder: Bool { true }
   }
   private let holder: Holder = {
-    let view = Holder(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+    let view = Holder(frame: .zero)
     view.isUserInteractionEnabled = false
-    view.alpha = 0
+    view.isOpaque = false
+    view.backgroundColor = .clear
+    view.drawingPolicy = .pencilOnly
+    view.isScrollEnabled = false
+    view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     return view
   }()
   private var keyboardObserver: NSObjectProtocol?
@@ -1103,7 +1109,8 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
     else { return }
     if holder.window !== window {
       holder.removeFromSuperview()
-      window.addSubview(holder)
+      holder.frame = window.bounds
+      window.insertSubview(holder, at: 0)
     }
     if keyboardObserver == nil {
       /* Back as the first responder once typing ends. */

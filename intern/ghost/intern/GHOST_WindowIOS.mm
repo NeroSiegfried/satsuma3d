@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 #include <algorithm>
+#include <os/log.h>
 #include "GHOST_IOSNativeInterface.hh"
 #import "GHOST_IOSWindowInput.hh"
 
@@ -1872,6 +1873,10 @@ static UIBezierPath *pointer_move()
         didReceiveSqueeze:(UIPencilInteractionSqueeze *)squeeze
 {
   const UIPencilPreferredAction action = UIPencilInteraction.preferredSqueezeAction;
+  os_log(OS_LOG_DEFAULT,
+         "Pencil squeeze: phase %ld, preferred action %ld",
+         long(squeeze.phase),
+         long(action));
   /* Unless Settings has the radial menu for squeezing, the system's tool palette shows instead,
    * see `SqueezePalette` in `Rails.swift`. */
   NSString *squeeze_shows = [NSUserDefaults.standardUserDefaults stringForKey:@"BlenderPencilSqueeze"];
