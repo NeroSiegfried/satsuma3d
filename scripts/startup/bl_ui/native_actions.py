@@ -29,6 +29,12 @@ class _State:
         self.selecting = self.tool.startswith("builtin.select")
         self.obj = context.active_object
         self.selected = list(context.selected_objects) if self.mode == 'OBJECT' else []
+        # The sculpt brush in use, for the brushes that work on masks and face sets.
+        brush = None
+        if self.mode == 'SCULPT':
+            paint = context.tool_settings.sculpt
+            brush = paint.brush if paint else None
+        self.sculpt_brush = getattr(brush, "sculpt_brush_type", "") if brush else ""
         self.verts = self.edges = self.faces = 0
         self.select_mode = (False, False, False)
         if self.mode == 'EDIT_MESH':
@@ -49,15 +55,27 @@ class _State:
     def selected_of_type(self, *types):
         return [ob for ob in self.selected if ob.type in types]
 
+    @property
+    def face_sets(self):
+        """Working on face sets in Sculpt Mode: a face set tool or the Face Sets brush."""
+        return self.mode == 'SCULPT' and ("face_set" in self.tool or self.sculpt_brush == 'DRAW_FACE_SETS')
+
+    @property
+    def masking(self):
+        """Working on the mask in Sculpt Mode: a mask tool or the Mask brush."""
+        return self.mode == 'SCULPT' and (
+            ("mask" in self.tool and "face_set" not in self.tool) or self.sculpt_brush == 'MASK')
+
     def xray(self):
         space = self.context.space_data
         return bool(space and space.type == 'VIEW_3D' and space.shading.show_xray)
 
 
 class Action:
-    __slots__ = ("id", "label", "op", "icon", "when", "props", "checked")
+    __slots__ = ("id", "label", "op", "icon", "when", "props", "checked", "first", "invoke")
 
-    def __init__(self, id, label, op, icon="", when=None, props=None, checked=None):
+    def __init__(self, id, label, op, icon="", when=None, props=None, checked=None, first=None,
+                 invoke=False):
         self.id = id
         self.label = label
         self.op = op
@@ -65,6 +83,10 @@ class Action:
         self.when = when or (lambda s: True)
         self.props = props or {}
         self.checked = checked
+        # Whether it leads the strip: what the active tool or brush works on comes before the rest.
+        self.first = first
+        # Runs where the pointer or Pencil last was, as from Blender's menu.
+        self.invoke = invoke
 
     def properties(self, state):
         return self.props(state) if callable(self.props) else dict(self.props)
@@ -127,10 +149,18 @@ ACTIONS = [
     Action("object.keyframe", "Insert Keyframe", "anim.keyframe_insert", "DECORATE_KEYFRAME",
            lambda s: s.obj and ((s.mode == 'OBJECT' and s.selected) or
                                (s.mode == 'POSE' and s.context.selected_pose_bones))),
+    Action("object.select_all_more", "Select All", "object.select_all", "SELECT_EXTEND",
+           lambda s: s.mode == 'OBJECT' and s.selecting and s.selected, {"action": 'SELECT'},
+           first=lambda s: s.selecting),
     Action("object.select_none", "Select None", "object.select_all", "SELECT_SUBTRACT",
-           lambda s: s.mode == 'OBJECT' and s.selecting and s.selected, {"action": 'DESELECT'}),
+           lambda s: s.mode == 'OBJECT' and s.selecting and s.selected, {"action": 'DESELECT'},
+           first=lambda s: s.selecting),
     Action("object.select_invert", "Invert", "object.select_all", "SELECT_DIFFERENCE",
-           lambda s: s.mode == 'OBJECT' and s.selecting and s.selected, {"action": 'INVERT'}),
+           lambda s: s.mode == 'OBJECT' and s.selecting and s.selected, {"action": 'INVERT'},
+           first=lambda s: s.selecting),
+    Action("object.select_linked", "Select Linked", "object.select_linked", "",
+           lambda s: s.mode == 'OBJECT' and s.selecting and s.selected, {"type": 'OBDATA'},
+           first=lambda s: s.selecting),
 
     # 3D cursor tool.
     Action("cursor.to_selected", "Cursor to Selected", "view3d.snap_cursor_to_selected", "PIVOT_CURSOR",
@@ -178,22 +208,56 @@ ACTIONS = [
     Action("mesh.merge_distance", "Merge by Distance", "mesh.remove_doubles", "",
            _mesh("VERT", verts=2)),
     # Edit Mesh: growing and shrinking the selection, for every tool.
-    Action("mesh.select_linked", "Select Linked", "mesh.select_linked", "", _mesh(verts=1)),
-    Action("mesh.select_more", "More", "mesh.select_more", "SELECT_EXTEND", _mesh(verts=1)),
-    Action("mesh.select_less", "Less", "mesh.select_less", "SELECT_SUBTRACT", _mesh(verts=1)),
+    # The selection tools lead with these.
+    Action("mesh.select_all_more", "Select All", "mesh.select_all", "SELECT_EXTEND",
+           lambda s: _mesh(verts=1)(s) and s.selecting, {"action": 'SELECT'}, first=lambda s: s.selecting),
     Action("mesh.select_none", "Select None", "mesh.select_all", "SELECT_SUBTRACT",
-           lambda s: _mesh(verts=1)(s) and s.selecting, {"action": 'DESELECT'}),
+           lambda s: _mesh(verts=1)(s) and s.selecting, {"action": 'DESELECT'}, first=lambda s: s.selecting),
+    Action("mesh.select_invert", "Invert", "mesh.select_all", "SELECT_DIFFERENCE",
+           lambda s: _mesh(verts=1)(s) and s.selecting, {"action": 'INVERT'}, first=lambda s: s.selecting),
+    Action("mesh.select_more", "More", "mesh.select_more", "SELECT_EXTEND", _mesh(verts=1),
+           first=lambda s: s.selecting),
+    Action("mesh.select_less", "Less", "mesh.select_less", "SELECT_SUBTRACT", _mesh(verts=1),
+           first=lambda s: s.selecting),
+    Action("mesh.select_linked", "Select Linked", "mesh.select_linked", "", _mesh(verts=1),
+           first=lambda s: s.selecting),
     Action("mesh.hide", "Hide", "mesh.hide", "HIDE_ON", _mesh(verts=1), {"unselected": False}),
 
     # Selection tools in Object and Edit Mode.
     Action("view.xray", "X-Ray", "view3d.toggle_xray", "XRAY",
            lambda s: s.selecting and s.mode in {'OBJECT', 'EDIT_MESH'}, checked=lambda s: s.xray()),
 
-    # Sculpt Mode: whole-mesh operations that otherwise need a menu.
+    # Sculpt Mode: face sets, for the face set tools and brush.
+    Action("sculpt.face_set_mask", "From Mask", "sculpt.face_sets_create", "", lambda s: s.face_sets,
+           {"mode": 'MASKED'}, first=lambda s: s.face_sets),
+    Action("sculpt.face_set_visible", "From Visible", "sculpt.face_sets_create", "", lambda s: s.face_sets,
+           {"mode": 'VISIBLE'}, first=lambda s: s.face_sets),
+    Action("sculpt.face_set_grow", "Grow", "sculpt.face_set_edit", "", lambda s: s.face_sets,
+           {"mode": 'GROW'}, first=lambda s: s.face_sets, invoke=True),
+    Action("sculpt.face_set_shrink", "Shrink", "sculpt.face_set_edit", "", lambda s: s.face_sets,
+           {"mode": 'SHRINK'}, first=lambda s: s.face_sets, invoke=True),
+    Action("sculpt.face_set_init", "Initialize by Parts", "sculpt.face_sets_init", "", lambda s: s.face_sets,
+           {"mode": 'LOOSE_PARTS'}, first=lambda s: s.face_sets),
+    Action("sculpt.face_set_colors", "Randomize Colors", "sculpt.face_sets_randomize_colors", "",
+           lambda s: s.face_sets, first=lambda s: s.face_sets),
+
+    # Sculpt Mode: the mask, first for the mask tools and brush.
     Action("sculpt.mask_invert", "Invert Mask", "paint.mask_flood_fill", "", lambda s: s.mode == 'SCULPT',
-           {"mode": 'INVERT'}),
+           {"mode": 'INVERT'}, first=lambda s: s.masking),
     Action("sculpt.mask_clear", "Clear Mask", "paint.mask_flood_fill", "", lambda s: s.mode == 'SCULPT',
-           {"mode": 'VALUE', "value": 0.0}),
+           {"mode": 'VALUE', "value": 0.0}, first=lambda s: s.masking),
+    Action("sculpt.mask_fill", "Fill Mask", "paint.mask_flood_fill", "", lambda s: s.masking,
+           {"mode": 'VALUE', "value": 1.0}, first=lambda s: s.masking),
+    Action("sculpt.mask_grow", "Grow Mask", "sculpt.mask_filter", "", lambda s: s.masking,
+           {"filter_type": 'GROW'}, first=lambda s: s.masking),
+    Action("sculpt.mask_shrink", "Shrink Mask", "sculpt.mask_filter", "", lambda s: s.masking,
+           {"filter_type": 'SHRINK'}, first=lambda s: s.masking),
+    Action("sculpt.mask_smooth", "Smooth Mask", "sculpt.mask_filter", "MOD_SMOOTH", lambda s: s.masking,
+           {"filter_type": 'SMOOTH'}, first=lambda s: s.masking),
+    Action("sculpt.mask_sharpen", "Sharpen Mask", "sculpt.mask_filter", "", lambda s: s.masking,
+           {"filter_type": 'SHARPEN'}, first=lambda s: s.masking),
+
+    # Sculpt Mode: whole-mesh operations that otherwise need a menu.
     Action("sculpt.reveal", "Reveal", "paint.hide_show_all", "HIDE_OFF", lambda s: s.mode == 'SCULPT',
            {"action": 'SHOW'}),
     Action("sculpt.symmetrize", "Symmetrize", "sculpt.symmetrize", "MOD_MIRROR", lambda s: s.mode == 'SCULPT'),
@@ -249,7 +313,10 @@ def _available(state):
 def actions_json(context, tool):
     state = _State(context, tool)
     items = []
-    for action in _available(state):
+    available = list(_available(state))
+    # What the active tool or brush works on leads; otherwise the order above holds.
+    available.sort(key=lambda action: 0 if action.first and action.first(state) else 1)
+    for action in available:
         items.append({
             "title": action.label, "action": action.id, "operator": action.operator().idname(),
             "icon": action.icon, "symbol": "",
@@ -269,4 +336,5 @@ def run(context, action_id, tool=""):
     operator = action.operator()
     if not operator.poll():
         return False
-    return 'FINISHED' in operator('EXEC_REGION_WIN', True, **action.properties(state))
+    context_type = 'INVOKE_REGION_WIN' if action.invoke else 'EXEC_REGION_WIN'
+    return 'FINISHED' in operator(context_type, True, **action.properties(state))
