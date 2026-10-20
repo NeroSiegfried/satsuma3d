@@ -1051,15 +1051,17 @@ struct SidebarSlider: View {
       DragGesture(minimumDistance: 0)
         .onChanged { gesture in
           var current = drag ?? Drag(position: position(value), lastY: gesture.startLocation.y)
-          let dy = gesture.location.y - current.lastY
-          current.lastY = gesture.location.y
-          if !current.moved, abs(gesture.translation.height) + abs(gesture.translation.width) > 4 {
+          /* A tap types a value instead; the slightest drag moves it, from where the finger
+           * landed, so no movement is lost to telling the two apart. */
+          if !current.moved, abs(gesture.translation.height) + abs(gesture.translation.width) > 2 {
             current.moved = true
           }
           guard current.moved else {
             drag = current
             return
           }
+          let dy = gesture.location.y - current.lastY
+          current.lastY = gesture.location.y
           /* Out to the side, the finger moves the value more finely. */
           let side = max(0, abs(gesture.location.x - width / 2) - width)
           let fine = 1 / (1 + Double(side) / 60)
