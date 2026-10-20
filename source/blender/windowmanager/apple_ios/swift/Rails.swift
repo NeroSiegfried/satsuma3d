@@ -1022,21 +1022,52 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
     attach()
   }
 
-  /** Given to the window's responders, hidden until a squeeze shows it, while Settings has the
-   * palette for squeezing. */
+  /** The system finds the palette from the first responder, which nothing else in the window is
+   * while no text is typed: this invisible view is, holding the palette, hidden until a squeeze
+   * shows it, while Settings has the palette for squeezing. */
+  private final class Holder: UIView {
+    override var canBecomeFirstResponder: Bool { true }
+  }
+  private let holder: Holder = {
+    let view = Holder(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+    view.isUserInteractionEnabled = false
+    view.alpha = 0
+    return view
+  }()
+  private var keyboardObserver: NSObjectProtocol?
+
   func attach() {
     guard let window = UIApplication.shared.connectedScenes
       .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first
     else { return }
-    let state = window.pencilKitResponderState
+    if holder.window !== window {
+      holder.removeFromSuperview()
+      window.addSubview(holder)
+    }
+    if keyboardObserver == nil {
+      /* Back as the first responder once typing ends. */
+      keyboardObserver = NotificationCenter.default.addObserver(
+        forName: UIResponder.keyboardDidHideNotification, object: nil, queue: .main) { _ in
+          MainActor.assumeIsolated { SqueezePalette.shared.attach() }
+        }
+    }
+    let state = holder.pencilKitResponderState
     if PencilSqueeze.showsPalette, let picker {
       if state.activeToolPicker !== picker { state.activeToolPicker = picker }
       state.toolPickerVisibility = .hidden
+      if !holder.isFirstResponder && !Self.typing(in: window) { holder.becomeFirstResponder() }
     }
     else {
       state.toolPickerVisibility = .inactive
       state.activeToolPicker = nil
+      if holder.isFirstResponder { holder.resignFirstResponder() }
     }
+  }
+
+  /** A text field or view has the keyboard, which the palette must not take. */
+  private static func typing(in view: UIView) -> Bool {
+    if view.isFirstResponder && view is UIKeyInput { return true }
+    return view.subviews.contains { typing(in: $0) }
   }
 
   nonisolated func toolPickerSelectedToolItemDidChange(_ toolPicker: PKToolPicker) {
