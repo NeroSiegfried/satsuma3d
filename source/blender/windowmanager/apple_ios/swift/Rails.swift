@@ -22,6 +22,9 @@ import UIKit
 
 /** A tool or brush on a rail. */
 struct RailItem: Identifiable {
+  /** A brush's preview on its rail, in points. */
+  static let brushPreviewSize: CGFloat = 46
+
   let id: String
   let title: String
   let image: UIImage?
@@ -98,7 +101,7 @@ struct RailItem: Identifiable {
       guard let id = brush.string("id"), !id.isEmpty, let title = brush.string("title") else { continue }
       /* Catalogs are separated the way the tool rail separates groups. */
       let brushCatalog = brush.string("catalog") ?? ""
-      let image = wm_apple_ios_brush_image(brush.string("preview") ?? "", 36)
+      let image = wm_apple_ios_brush_image(brush.string("preview") ?? "", brushPreviewSize)
       items.append(RailItem(id: id, title: title, image: image, selectedImage: image,
                             gapBefore: catalog != nil && catalog != brushCatalog, group: [],
                             groupBreaks: []))
@@ -218,9 +221,18 @@ struct RailItemView: View {
     let image = selected ? item.selectedImage ?? item.image : item.image
     HStack(spacing: showsTitle ? 10 : 0) {
       if let image {
-        Image(uiImage: image)
-          .renderingMode(image.renderingMode == .alwaysOriginal ? .original : .template)
-          .font(.system(size: 20))
+        if brush {
+          /* A brush's stroke, large enough to tell from the others at a glance. */
+          Image(uiImage: image)
+            .resizable()
+            .scaledToFit()
+            .frame(width: RailItem.brushPreviewSize, height: RailItem.brushPreviewSize)
+        }
+        else {
+          Image(uiImage: image)
+            .renderingMode(image.renderingMode == .alwaysOriginal ? .original : .template)
+            .font(.system(size: 20))
+        }
       }
       if showsTitle {
         Text(item.title)
@@ -231,8 +243,8 @@ struct RailItemView: View {
       }
     }
     .foregroundStyle(selected ? Color.white : Color.primary)
-    .padding(.leading, showsTitle ? (brush ? 8 : 12) : (brush ? 6 : 8))
-    .padding(.trailing, showsTitle ? 14 : (brush ? 6 : 8))
+    .padding(.leading, showsTitle ? (brush ? 4 : 12) : (brush ? 3 : 8))
+    .padding(.trailing, showsTitle ? 14 : (brush ? 3 : 8))
     .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
     .background {
       if selected {
