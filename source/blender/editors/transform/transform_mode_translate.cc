@@ -14,6 +14,7 @@
 #include "BLI_math_matrix.hh"
 #include "BLI_math_rotation.h"
 #include "BLI_math_vector.h"
+#include "BLI_math_vector.hh"
 #include "BLI_string_utf8.h"
 #include "BLI_string_utils.hh"
 #include "BLI_task.hh"
@@ -72,6 +73,9 @@ struct TranslateCustomData {
     float angle;
     float2 tilt_start;
     float2 tilt_angle;
+    /** What turns things this move: decided by what the Pencil clearly does first, rolling or
+     * tilting, as each moves the other's reading a little. */
+    enum { UNDECIDED, ROLLING, TILTING } turns;
   } roll;
 
   float3 snap_target_grid;
@@ -108,7 +112,10 @@ static void transdata_elem_translate(const TransInfo *t,
        * were a handle stuck into them: leaning its end right swings their near side right, around
        * the view's vertical axis, and leaning it down swings it down, around the horizontal one. */
       float roll_mat[3][3], tilt_x_mat[3][3], tilt_y_mat[3][3];
-      axis_angle_normalized_to_mat3(roll_mat, t->viewinv[2], custom_data->roll.angle);
+      axis_angle_normalized_to_mat3(
+          roll_mat,
+          t->viewinv[2],
+          custom_data->roll.turns == custom_data->roll.ROLLING ? custom_data->roll.angle : 0.0f);
       axis_angle_normalized_to_mat3(tilt_x_mat, t->viewinv[0], custom_data->roll.tilt_angle.y);
       axis_angle_normalized_to_mat3(tilt_y_mat, t->viewinv[1], custom_data->roll.tilt_angle.x);
       mul_m3_series(mat, roll_mat, tilt_y_mat, tilt_x_mat);
@@ -446,22 +453,37 @@ static void applyTranslationValue(TransInfo *t, const float vec[3])
   if (custom_data->roll.active && native && native->pencil_roll &&
       native->pencil_roll(&pencil_roll, pencil_tilt))
   {
-    custom_data->roll.angle += angle_wrap_rad(pencil_roll - custom_data->roll.last);
-    custom_data->roll.last = pencil_roll;
-    /* Tilt wavers as a hand moves the Pencil: only tilting it clearly turns things. */
-    const float dead_zone = 0.08f;
-    const float turn = 2.0f;
-    for (int axis = 0; axis < 2; axis++) {
-      const float change = pencil_tilt[axis] - custom_data->roll.tilt_start[axis];
-      custom_data->roll.tilt_angle[axis] = fabsf(change) > dead_zone ?
-                                               copysignf(fabsf(change) - dead_zone, change) * turn :
-                                               0.0f;
+    auto &roll = custom_data->roll;
+    roll.angle += angle_wrap_rad(pencil_roll - roll.last);
+    roll.last = pencil_roll;
+    /* Tilt wavers as a hand moves the Pencil, and which way it leans means little while it stands
+     * nearly upright: only a clear tilt of a leaning Pencil turns things, smoothed. */
+    const float dead_zone = 0.1f;
+    const float turn = 1.5f;
+    float2 tilt_target = roll.tilt_angle;
+    if (math::length(pencil_tilt) > 0.2f && math::length(roll.tilt_start) > 0.2f) {
+      for (int axis = 0; axis < 2; axis++) {
+        const float change = pencil_tilt[axis] - roll.tilt_start[axis];
+        tilt_target[axis] = fabsf(change) > dead_zone ?
+                                copysignf(fabsf(change) - dead_zone, change) * turn :
+                                0.0f;
+      }
+    }
+    if (roll.turns == roll.UNDECIDED) {
+      if (fabsf(roll.angle) > DEG2RADF(8.0f)) {
+        roll.turns = roll.ROLLING;
+      }
+      else if (tilt_target.x != 0.0f || tilt_target.y != 0.0f) {
+        roll.turns = roll.TILTING;
+      }
+    }
+    if (roll.turns == roll.TILTING) {
+      roll.tilt_angle += (tilt_target - roll.tilt_angle) * 0.35f;
     }
   }
   if (rotate_mode == TRANSLATE_ROTATE_OFF && custom_data->roll.active &&
       (custom_data->prev.rotate_mode == TRANSLATE_ROTATE_ROLL ||
-       fabsf(custom_data->roll.angle) > DEG2RADF(4.0f) ||
-       custom_data->roll.tilt_angle.x != 0.0f || custom_data->roll.tilt_angle.y != 0.0f))
+       custom_data->roll.turns != custom_data->roll.UNDECIDED))
   {
     rotate_mode = TRANSLATE_ROTATE_ROLL;
   }
