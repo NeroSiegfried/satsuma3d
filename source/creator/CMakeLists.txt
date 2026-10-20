@@ -401,6 +401,7 @@ else()
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/UIKitInterop.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/ViewGizmo.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/VisionOrnaments.swift
+      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/VolumeView.swift
     )
     set(IOS_LAUNCHER_RESOURCES
       ${CMAKE_SOURCE_DIR}/release/ios/launcher/Suzanne.usdz

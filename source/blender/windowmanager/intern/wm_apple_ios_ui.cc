@@ -132,6 +132,10 @@ std::string native_properties_menu_query(bContext *C, const std::string &request
 }  // namespace blender::ui
 
 namespace blender {
+/* The scene as 3D geometry for a volumetric window, see `wm_apple_ios_volume.cc`. */
+void ios_volume_build(bContext *C);
+bool ios_volume_command(bContext *C, StringRef setting, StringRef value);
+
 void ios_interface_set(bContext *C, bool desktop);
 
 namespace {
@@ -1148,6 +1152,9 @@ static bToolRef *ios_active_tool(bContext *C)
 void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
 {
   bool preview = false;
+  if (ios_volume_command(C, command.setting, command.value)) {
+    return;
+  }
   if (command.setting == "native_redo_edit") {
     ui::native_operator_redo_query(C, command.value, true);
     return;
@@ -3640,6 +3647,7 @@ extern "C" void WM_apple_ios_ui_flush_commands(bContext *C)
   }
 
   ios_toolbar_build(C, handled_commands);
+  ios_volume_build(C);
 }
 
 }  // namespace blender

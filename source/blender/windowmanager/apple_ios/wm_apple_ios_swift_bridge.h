@@ -14,6 +14,7 @@
 
 #import "GHOST_IOSPencilMenu.hh"
 #import "GHOST_IOSRuntime.hh"
+#import "../intern/wm_apple_ios_volume.h"
 
 #ifdef __cplusplus
 extern "C" {

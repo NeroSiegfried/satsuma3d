@@ -35,6 +35,8 @@ set(SRC
   intern/wm_keymap.cc
   intern/wm_keymap_utils.cc
   intern/wm_apple_ios_ui.cc
+  intern/wm_apple_ios_volume.cc
+  intern/wm_apple_ios_volume.h
   intern/wm_apple_ios_file.cc
   intern/wm_apple_ios_file.hh
   intern/wm_apple_ios_dialog.cc

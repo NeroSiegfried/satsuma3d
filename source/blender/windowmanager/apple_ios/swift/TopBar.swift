@@ -323,6 +323,12 @@ struct DocumentToolbar: ToolbarContent {
         shell.assets.toggle()
       }
       nodeEditorToggles
+#if os(visionOS)
+      Section {
+        sidebarToggle("3D Volume", icon: UIImage(systemName: "cube.transparent"),
+                      isOn: VolumeStore.shared.shown) { VolumeStore.shared.setShown($0) }
+      }
+#endif
     } label: {
       Label("Sidebar", systemImage: "sidebar.leading")
     }
