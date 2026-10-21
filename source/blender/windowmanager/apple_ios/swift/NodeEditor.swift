@@ -1749,12 +1749,8 @@ struct NodeCanvas: View {
     /* Another tree shown, not every node deleted. */
     let fresh = knownNodes.isEmpty || (!names.isEmpty && knownNodes.isDisjoint(with: names))
     knownNodes = names
-    /* Their cables break and reel in; then gone nodes leave no place behind, for wires or
-     * touches to find. */
-    if !removed.isEmpty {
-      if !fresh, !UIAccessibility.isReduceMotionEnabled { snapCables(of: removed) }
-      layout.forget(removed)
-    }
+    /* Their cables break and reel in, read before their places are forgotten. */
+    if !removed.isEmpty, !fresh, !UIAccessibility.isReduceMotionEnabled { snapCables(of: removed) }
     if !fresh, !removed.isEmpty, !UIAccessibility.isReduceMotionEnabled {
       let now = Date()
       let gone = removed.prefix(24).compactMap { name -> NodeVanish? in
@@ -1774,6 +1770,9 @@ struct NodeCanvas: View {
         }
       }
     }
+    /* Measured where they were, gone nodes then leave no place behind, for wires or touches to
+     * find. */
+    if !removed.isEmpty { layout.forget(removed) }
     lastNodes = Dictionary(model.nodes.map { ($0.nodeName, $0) }, uniquingKeysWith: { a, _ in a })
     lastLinks = model.links
     guard !fresh, let name = added.first, let node = model.nodes.first(where: { $0.string("name") == name })
