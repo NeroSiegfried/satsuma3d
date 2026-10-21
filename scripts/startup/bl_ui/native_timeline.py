@@ -49,6 +49,16 @@ def _fcurves(context):
         yield from channelbag.fcurves
 
 
+def _grease_pencil_layers(context):
+    """The layers of the Grease Pencil objects among them: their keys are drawings."""
+    seen = set()
+    for ob in _objects(context):
+        if ob.type != 'GREASEPENCIL' or ob.data is None or ob.data.session_uid in seen:
+            continue
+        seen.add(ob.data.session_uid)
+        yield from ob.data.layers
+
+
 def keys_json(context):
     """Keyed frames as `[{"f": frame, "s": selected}, ...]`, sorted by frame."""
     frames = {}
@@ -64,6 +74,10 @@ def keys_json(context):
         for i in range(count):
             frame = round(co[i * 2])
             frames[frame] = frames.get(frame, False) or bool(selected[i])
+    for layer in _grease_pencil_layers(context):
+        for gp_frame in layer.frames:
+            frame = gp_frame.frame_number
+            frames[frame] = frames.get(frame, False) or gp_frame.select
     return json.dumps([{"f": frame, "s": frames[frame]} for frame in sorted(frames)])
 
 
@@ -99,6 +113,12 @@ class ANIM_OT_native_key_select(bpy.types.Operator):
                     _set_selected(point, True)
                 elif not self.extend:
                     _set_selected(point, False)
+        for layer in _grease_pencil_layers(context):
+            for gp_frame in layer.frames:
+                if gp_frame.frame_number in frames:
+                    gp_frame.select = True
+                elif not self.extend:
+                    gp_frame.select = False
         _redraw(context)
         return {'FINISHED'}
 
@@ -132,6 +152,17 @@ class ANIM_OT_native_key_move(bpy.types.Operator):
                     point.handle_right.x += delta
             fcurve.update()
             moved = True
+        for layer in _grease_pencil_layers(context):
+            selected = sorted((f.frame_number for f in layer.frames if f.select), reverse=delta > 0)
+            if not selected:
+                continue
+            # Drawings moved replace unselected ones where they land, as keys do.
+            targets = {frame + delta for frame in selected}
+            for frame in [f.frame_number for f in layer.frames if not f.select and f.frame_number in targets]:
+                layer.frames.remove(frame)
+            for frame in selected:
+                layer.frames.move(frame, frame + delta)
+            moved = True
         if not moved:
             return {'CANCELLED'}
         _redraw(context)
@@ -160,6 +191,10 @@ class ANIM_OT_native_key_delete(bpy.types.Operator):
                     fcurve.update()
                 else:
                     channelbag.fcurves.remove(fcurve)
+        for layer in _grease_pencil_layers(context):
+            for frame in [f.frame_number for f in layer.frames if f.select]:
+                layer.frames.remove(frame)
+                deleted = True
         if not deleted:
             return {'CANCELLED'}
         _redraw(context)
