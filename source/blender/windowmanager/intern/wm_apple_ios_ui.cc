@@ -3306,7 +3306,6 @@ void ios_ui_apply_viewport_preferences(bContext *C)
         refresh_gizmo_map = true;
       }
       v3d->gizmo_flag &= ~(V3D_GIZMO_HIDE | V3D_GIZMO_HIDE_NAVIGATE);
-      v3d->overlay.flag |= V3D_OVERLAY_HIDE_CURSOR;
     }
     /* Brushes are picked from the native brush rail. The shelf shows itself again whenever a
      * brush mode creates its shelf (`DEFAULT_VISIBLE`), so keep it hidden here. */
