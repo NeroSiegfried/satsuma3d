@@ -393,11 +393,11 @@ class VIEW3D_PT_native_sculpt_settings(bpy.types.Panel):
             # Beside the toggle, a number to type or drag rather than a slider.
             sculpt = context.tool_settings.sculpt
             if sculpt.detail_type_method in {'CONSTANT', 'MANUAL'}:
-                layout.prop(sculpt, "constant_detail_resolution", text="Detail")
+                layout.prop(sculpt, "constant_detail_resolution", text="")
             elif sculpt.detail_type_method == 'BRUSH':
-                layout.prop(sculpt, "detail_percent", text="Detail")
+                layout.prop(sculpt, "detail_percent", text="")
             else:
-                layout.prop(sculpt, "detail_size", text="Detail")
+                layout.prop(sculpt, "detail_size", text="")
         _draw_mirror(layout, context)
 
 

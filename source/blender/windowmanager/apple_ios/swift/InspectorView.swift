@@ -674,8 +674,27 @@ struct ToolSettingItem: View {
           }
         }
         .disabled(!property.bool("editable"))
+      case "INT", "FLOAT":
+        /* A number typed in place, beside its name unless the layout gives none, as Dyntopo's
+         * Detail, which the switch beside it names. */
+        HStack(spacing: 6) {
+          if !title.isEmpty { Text(title) }
+          TextField(propertyLabel(property), value: Binding(
+            get: { (store.value(property) as? NSNumber)?.doubleValue ?? 0 },
+            set: { store.edit(property, value: type == "INT" ? NSNumber(value: Int($0.rounded())) : NSNumber(value: $0)) }),
+            format: .number.precision(.fractionLength(0...(type == "INT" ? 0 : 3))))
+            .keyboardType(type == "INT" ? .numberPad : .decimalPad)
+            .multilineTextAlignment(.trailing)
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 64)
+          if let suffix = property.string("unit_suffix"), !suffix.isEmpty {
+            Text(suffix).foregroundStyle(.secondary)
+          }
+        }
+        .fixedSize()
+        .disabled(!property.bool("editable"))
       default:
-        /* A value to drag or type, or a color: named with its value, set in a popover. */
+        /* A color, or a value of another kind: named with its value, set in a popover. */
         ToolSettingPopover(title: valueTitle, icon: property.string("icon"),
                            systemImage: type == "COLOR" ? "paintpalette" : "slider.horizontal.below.rectangle")
         {
