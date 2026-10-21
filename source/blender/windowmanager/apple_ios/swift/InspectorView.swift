@@ -585,15 +585,18 @@ struct ToolSettingsItems: View {
                   }
                 }
               } label: {
+                /* The ones on beside the name, in the tint: kept in the bar's group, where a
+                 * prominent item would stand apart from it. */
+                let on = items.filter { (store.value($0) as? NSNumber)?.boolValue == true }
+                  .map { $0.string("toolbar_label") ?? $0.string("label") ?? "" }
                 Label {
-                  Text(caption)
+                  Text(on.isEmpty ? caption : "\(caption) \(on.joined(separator: " "))")
+                    .foregroundStyle(on.isEmpty ? AnyShapeStyle(.primary) : AnyShapeStyle(.tint))
                 } icon: {
                   if caption == "Mirror" { IconView(name: "MOD_MIRROR") }
                 }
               }
               .menuActionDismissBehavior(.disabled)
-              /* Highlighted while any of them is on, as a toggle in the bar is. */
-              .modifier(ProminentWhen(on: items.contains { (store.value($0) as? NSNumber)?.boolValue == true }))
             default:
               EmptyView()
           }
@@ -656,21 +659,6 @@ struct ToolSettingItem: View {
           .prefetchingBlenderMenu(route)
           .disabled(!property.bool("editable"))
         }
-      case "ENUM" where property.bool("expand") && (2...4).contains(property.array("options").count):
-        /* A few choices laid out side by side, as Grease Pencil's Material or Color Attribute: a
-         * segmented switch. */
-        Picker(title, selection: Binding(
-          get: { store.value(property) as? String ?? "" },
-          set: { store.edit(property, value: $0) }))
-        {
-          ForEach(Array(property.array("options").enumerated()), id: \.offset) { _, option in
-            Text(option.string("label") ?? option.string("name") ?? "")
-              .tag(option.string("value") ?? "")
-          }
-        }
-        .pickerStyle(.segmented)
-        .fixedSize()
-        .disabled(!property.bool("editable"))
       case "ENUM":
         let options = property.array("options")
         Menu {
@@ -709,18 +697,13 @@ struct ToolSettingItem: View {
         }
         .disabled(!property.bool("editable"))
       case "INT", "FLOAT":
-        /* A number typed in place, beside its name unless the layout gives none, as Dyntopo's
-         * Detail, which the switch beside it names. */
+        /* A number to slide sideways or tap to type, beside a name only where Blender's bar
+         * draws one: Dyntopo's Detail is the number alone, the switch beside it names it. */
         HStack(spacing: 6) {
-          if !title.isEmpty { Text(title) }
-          TextField(propertyLabel(property), value: Binding(
-            get: { (store.value(property) as? NSNumber)?.doubleValue ?? 0 },
-            set: { store.edit(property, value: type == "INT" ? NSNumber(value: Int($0.rounded())) : NSNumber(value: $0)) }),
-            format: .number.precision(.fractionLength(0...(type == "INT" ? 0 : 3))))
-            .keyboardType(type == "INT" ? .numberPad : .decimalPad)
-            .multilineTextAlignment(.trailing)
-            .textFieldStyle(.roundedBorder)
-            .frame(width: 64)
+          if let label = property.string("toolbar_label"), !label.isEmpty { Text(label) }
+          NumberField(store: store, property: property, compact: true, significant: 3)
+            .equatable()
+            .frame(width: 72)
           if let suffix = property.string("unit_suffix"), !suffix.isEmpty {
             Text(suffix).foregroundStyle(.secondary)
           }
@@ -769,14 +752,6 @@ struct ToolSettingItem: View {
     else {
       Text(title)
     }
-  }
-}
-
-private struct ProminentWhen: ViewModifier {
-  let on: Bool
-
-  func body(content: Content) -> some View {
-    if on { content.buttonStyle(.borderedProminent) } else { content }
   }
 }
 
