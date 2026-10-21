@@ -19,6 +19,11 @@ struct StoryboardPicture: Equatable {
   var path: String
 }
 
+struct StoryboardTemplate: Equatable, Identifiable {
+  var name: String
+  var id: String
+}
+
 struct StoryboardShot: Equatable, Identifiable {
   var name: String
   var channel: Int
@@ -29,6 +34,8 @@ struct StoryboardShot: Equatable, Identifiable {
   var selected: Bool
   var active: Bool
   var muted: Bool
+  /** Its scene is kept as a template new shots can start from. */
+  var template: Bool
   var color: Int
   /** Width over height of its scene's frames. */
   var aspect: Double
@@ -48,6 +55,7 @@ struct StoryboardShot: Equatable, Identifiable {
     scene = json.string("scene") ?? ""
     sceneStrip = json.bool("scene_strip")
     selected = json.bool("selected")
+    template = json.bool("template")
     active = json.bool("active")
     muted = json.bool("muted")
     color = json.int("color") ?? 0
@@ -87,6 +95,8 @@ final class StoryboardModel {
   private(set) var shots: [StoryboardShot] = []
   /** The scenes a shot can show instead. */
   private(set) var scenes: [String] = []
+  /** The scene assets a new shot can start from, by name and where they are. */
+  private(set) var templates: [StoryboardTemplate] = []
   /** The layers of the drawing in the shot shown, the top one first. */
   private(set) var layers: [StoryboardLayer] = []
   /** A reordering just made here, kept until Blender's snapshot agrees or a while passes. */
@@ -149,6 +159,10 @@ final class StoryboardModel {
     /* The frame comes from the timeline's snapshot, every frame; this one is older. */
     let scenes = (snapshot["scenes"] as? [String]) ?? []
     if scenes != self.scenes { self.scenes = scenes }
+    let templates = snapshot.array("templates").map {
+      StoryboardTemplate(name: $0.string("name") ?? "", id: $0.string("id") ?? "")
+    }
+    if templates != self.templates { self.templates = templates }
     let layers = snapshot.array("layers").map {
       StoryboardLayer(name: $0.string("name") ?? "", visible: $0.bool("visible"), locked: $0.bool("locked"),
                       active: $0.bool("active"))
@@ -187,7 +201,7 @@ final class StoryboardModel {
    * shot opened, its own scene's frame, which then plays alone, in the edit's time. */
   func follow(frame: Int, sceneFrame: Int) {
     var frame = frame
-    if let entered, let shot = shots.first(where: { $0.id == entered }) {
+    if shown, let entered, let shot = shots.first(where: { $0.id == entered }) {
       frame = sceneFrame + shot.offset
     }
     if !scrubbing, frame != self.frame { self.frame = frame }
@@ -210,10 +224,14 @@ final class StoryboardModel {
 
   /** Moves the playhead, the window following the shot under it. */
   func setFrame(_ frame: Int, final: Bool) {
-    var frame = min(end, max(start, frame))
-    /* A shot opened keeps the playhead within it. */
-    if let entered, let shot = shots.first(where: { $0.id == entered }) {
-      frame = min(shot.end - 1, max(shot.start, frame))
+    var frame = frame
+    /* Closed, the shots are not kept up to date here: the small timeline keeps to the edit. */
+    if shown {
+      frame = min(end, max(start, frame))
+      /* A shot opened keeps the playhead within it. */
+      if let entered, let shot = shots.first(where: { $0.id == entered }) {
+        frame = min(shot.end - 1, max(shot.start, frame))
+      }
     }
     self.frame = frame
     /* Each frame sent switches scenes as needed: often enough to follow, not every touch. */
@@ -338,6 +356,8 @@ struct StoryboardView: View {
   @State private var pinchStart: (scale: CGFloat, laneZoom: CGFloat)?
   /** A pinch began during a shot's drag: the drag ends without moving it. */
   @State private var pinchCancelled = false
+  /** The frames from the first one to the pinch's center as it began, in frames. */
+  @State private var pinchAnchor: CGFloat?
   @State private var fitted = false
   /** A shot being moved or trimmed: by how many frames, and lanes. */
   @State private var drag: ShotDrag?
@@ -354,6 +374,7 @@ struct StoryboardView: View {
   @State private var lanesWidth: CGFloat = 0
   /** The shot a hold on the lanes picked up, while it is moved. */
   @State private var movingShot: String?
+  @State private var moveStart = CGPoint.zero
   private let lanesSpace = "storyboard.lanes"
   /** The frames the selected keys are being dragged by. */
   @State private var keyDrag: Int?
@@ -539,7 +560,8 @@ struct StoryboardView: View {
               scrubber(width: width)
                 .offset(x: -scrollOffset)
                 .frame(width: proxy.size.width, height: scrubberHeight, alignment: .leading)
-                .clipped()
+                /* At the sides only: the knob grows as it is held. */
+                .mask(Rectangle().padding(.vertical, -40))
             }
           }
           .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, offset in
@@ -580,7 +602,8 @@ struct StoryboardView: View {
           .scrollIndicators(.hidden)
           .scrollDisabled(drag != nil)
           .scrollPosition($position)
-          .clipped()
+          /* At the sides only: the scrubber's knob grows as it is held. */
+          .mask(Rectangle().padding(.vertical, -40))
           .onChange(of: model.frame) { _, frame in
             /* Playback keeps the playhead in view, a page at a time. */
             let at = x(frame)
@@ -589,25 +612,37 @@ struct StoryboardView: View {
             }
           }
         }
-        .gesture(AxisPinch { stretch in
+        .gesture(AxisPinch { stretch, center in
           let base = pinchStart ?? (scale, laneZoom)
           if pinchStart == nil {
             /* A second finger: a pinch, not a shot moved by the first one. */
             drag = nil
             pinchCancelled = true
+            /* The frame between the fingers, which stays there as it zooms. */
+            pinchAnchor = (scrollOffset + center.x - leading) / max(0.01, scale)
           }
           pinchStart = base
           scale = min(40, max(0.5, base.scale * stretch.width))
           laneZoom = min(4, max(0.4, base.laneZoom * stretch.height))
+          if let anchor = pinchAnchor {
+            position.scrollTo(x: max(0, leading + anchor * scale - center.x))
+          }
         } ended: {
           pinchStart = nil
+          pinchAnchor = nil
         })
         .onChange(of: model.shots.isEmpty, initial: true) { _, empty in
-          /* The shots in view to begin with. */
-          guard !empty, !fitted else { return }
-          fitted = true
-          let last = model.shots.map(\.end).max() ?? model.end
-          scale = min(40, max(0.5, (proxy.size.width - 60) / CGFloat(max(1, last - model.start))))
+          /* The shots in view to begin with, from the edit's start. */
+          if !empty, !fitted {
+            fitted = true
+            let last = model.shots.map(\.end).max() ?? model.end
+            scale = min(40, max(0.5, (proxy.size.width - 60) / CGFloat(max(1, last - model.start))))
+          }
+          position.scrollTo(x: CGFloat(model.start - origin) * scale)
+        }
+        .onChange(of: origin) { old, new in
+          /* The lanes reach further back: the same frames stay in view. */
+          position.scrollTo(x: max(0, scrollOffset + CGFloat(old - new) * scale))
         }
         .onChange(of: PictureRequest(scale: scale, laneHeight: laneHeight), initial: true) { _, request in
           requestPictures(request)
@@ -630,8 +665,11 @@ struct StoryboardView: View {
 
   /** Room before the first frame for the scrubber's knob, centred on it. */
   private let leading: CGFloat = 30
-  private func x(_ frame: Int) -> CGFloat { leading + CGFloat(frame - model.start) * scale }
-  private func frame(at x: CGFloat) -> Int { model.start + Int(((x - leading) / scale).rounded(.down)) }
+  private func x(_ frame: Int) -> CGFloat { leading + CGFloat(frame - origin) * scale }
+  private func frame(at x: CGFloat) -> Int { origin + Int(((x - leading) / scale).rounded(.down)) }
+  /** The first frame the lanes reach: well before the edit's start, and any shot there, so shots
+   * before frame 0 can be scrolled to and moved. */
+  private var origin: Int { min(model.start, model.shots.map(\.start).min() ?? model.start) - 250 }
 
   /* -------------------------------------------------------------------- */
   /* Header, ruler and playhead */
@@ -642,7 +680,7 @@ struct StoryboardView: View {
         Button {
           model.leave()
         } label: {
-          Label("Storyboard", systemImage: "chevron.backward")
+          Label("Story", systemImage: "chevron.backward")
         }
         .buttonStyle(.borderless)
         .accessibilityIdentifier("blender.storyboard.leave")
@@ -651,22 +689,37 @@ struct StoryboardView: View {
           .lineLimit(1)
       }
       else {
-        Text("Storyboard")
+        Text("Story")
           .font(.headline)
       }
       Spacer(minLength: 8)
       transport
       loopButton
       Spacer(minLength: 8)
-      Button {
-        model.send("add")
-        Haptics.impact(.light)
+      Menu {
+        Button("New Shot", systemImage: "plus.rectangle") {
+          model.send("add")
+          Haptics.impact(.light)
+        }
+        Menu {
+          if model.templates.isEmpty {
+            Text("No Scene Templates")
+          }
+          ForEach(model.templates) { template in
+            Button(template.name) {
+              model.send("add", ["template": template.id])
+              Haptics.impact(.light)
+            }
+          }
+        } label: {
+          Label("Choose Template", systemImage: "square.on.square.dashed")
+        }
       } label: {
-        Label("New Shot", systemImage: "plus")
+        Label("Add Shot", systemImage: "plus")
       }
+      .labelStyle(.iconOnly)
       .buttonStyle(.bordered)
-      .buttonBorderShape(.capsule)
-      .controlSize(.small)
+      .buttonBorderShape(.circle)
       .accessibilityIdentifier("blender.storyboard.add")
       Button(action: timeline.toggleStoryboard) {
         Image(systemName: "film.stack.fill")
@@ -675,7 +728,7 @@ struct StoryboardView: View {
           .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
-      .accessibilityLabel("Close Storyboard")
+      .accessibilityLabel("Close Story")
     }
     .padding(.horizontal, 12)
     .frame(height: headerHeight)
@@ -803,7 +856,19 @@ struct StoryboardView: View {
     }
     .frame(width: width, height: scrubberHeight, alignment: .topLeading)
     .contentShape(Rectangle())
-    .gesture(DragGesture(minimumDistance: 0)
+    .gesture(scrub)
+    .accessibilityElement()
+    .accessibilityLabel("Frame")
+    .accessibilityValue(String(shown))
+    .accessibilityAdjustableAction { direction in
+      model.setFrame(model.frame + (direction == .increment ? 1 : -1), final: true)
+    }
+  }
+
+  /** Dragged along the ruler or the scrubber, both in the lanes' frames: the playhead and the
+   * knob below it move together. */
+  private var scrub: some Gesture {
+    DragGesture(minimumDistance: 0)
       .onChanged { value in
         let frame = min(model.end, max(model.start, frame(at: value.location.x)))
         if frame != scrubbing { Haptics.selection() }
@@ -815,13 +880,7 @@ struct StoryboardView: View {
         model.setFrame(min(model.end, max(model.start, frame(at: value.location.x))), final: true)
         model.scrubbing = false
         scrubbing = nil
-      })
-    .accessibilityElement()
-    .accessibilityLabel("Frame")
-    .accessibilityValue(String(shown))
-    .accessibilityAdjustableAction { direction in
-      model.setFrame(model.frame + (direction == .increment ? 1 : -1), final: true)
-    }
+      }
   }
 
   private func ruler(width: CGFloat) -> some View {
@@ -834,28 +893,18 @@ struct StoryboardView: View {
                           height: rulerHeight)
         context.fill(Path(band), with: .color(PanelStyle.selection.opacity(0.18)))
       }
-      var frame = (model.start / step) * step
+      var frame = Int((Double(origin) / Double(step)).rounded(.down)) * step
       while x(frame) < size.width {
         let px = x(frame)
-        if frame >= model.start {
-          context.fill(Path(CGRect(x: px, y: rulerHeight - 7, width: 1, height: 7)), with: .color(.secondary.opacity(0.6)))
-          context.draw(Text(verbatim: String(frame)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary),
-                       at: CGPoint(x: px + 3, y: 8), anchor: .leading)
-        }
+        context.fill(Path(CGRect(x: px, y: rulerHeight - 7, width: 1, height: 7)), with: .color(.secondary.opacity(0.6)))
+        context.draw(Text(verbatim: String(frame)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary),
+                     at: CGPoint(x: px + 3, y: 8), anchor: .leading)
         frame += step
       }
     }
     .frame(width: width, height: rulerHeight)
     .contentShape(Rectangle())
-    .gesture(DragGesture(minimumDistance: 0)
-      .onChanged { value in
-        model.scrubbing = true
-        model.setFrame(frame(at: value.location.x), final: false)
-      }
-      .onEnded { value in
-        model.setFrame(frame(at: value.location.x), final: true)
-        model.scrubbing = false
-      })
+    .gesture(scrub)
     .accessibilityLabel("Edit Time")
     .accessibilityValue("Frame \(model.frame)")
   }
@@ -873,7 +922,7 @@ struct StoryboardView: View {
     }
     /* Centred on its frame, as the ruler's marks and the scrubber's knob are. */
     .frame(width: 12)
-    .offset(x: x(model.frame) - 6)
+    .offset(x: x(scrubbing ?? model.frame) - 6)
     .allowsHitTesting(false)
   }
 
@@ -980,10 +1029,19 @@ struct StoryboardView: View {
         newName = shot.name
         renaming = shot
       },
+      templateAction(shot),
       UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { _ in
         model.send("delete", ["name": shot.name])
       },
     ])
+  }
+
+  /** Keeps the shot's scene as a scene template to start new shots from, or no longer. */
+  private func templateAction(_ shot: StoryboardShot) -> UIAction {
+    UIAction(title: "Save as Template", image: UIImage(systemName: "square.on.square.dashed"),
+             state: shot.template ? .on : .off) { _ in
+      model.send("template", ["name": shot.name, "value": shot.template ? 0 : 1])
+    }
   }
 
   /** The shot's name, tapped for what to do with it: show another scene, rename it, and so on. */
@@ -1005,6 +1063,11 @@ struct StoryboardView: View {
         renaming = shot
       }
       Button("Duplicate", systemImage: "plus.square.on.square") { model.send("duplicate", ["name": shot.name]) }
+      if shot.sceneStrip {
+        Toggle("Save as Template", systemImage: "square.on.square.dashed", isOn: Binding(
+          get: { shot.template },
+          set: { model.send("template", ["name": shot.name, "value": $0 ? 1 : 0]) }))
+      }
       Divider()
       Button("Delete", systemImage: "trash", role: .destructive) { model.send("delete", ["name": shot.name]) }
     } label: {
@@ -1094,25 +1157,31 @@ struct StoryboardView: View {
   }
 
   /** Moving a shot waits for a hold, so a swipe over the shots scrolls them and never moves one
-   * by accident. One gesture over the lanes, which finds the shot under the finger where it is
-   * drawn, whichever it is. */
-  private func laneMove(laneHeight: CGFloat, lanes: Int) -> some Gesture {
-    LongPressGesture(minimumDuration: 0.25, maximumDistance: 12)
-      .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(lanesSpace)))
-      .onChanged { value in
-        guard case .second(true, let drag?) = value else { return }
-        if movingShot == nil {
-          guard let shot = shot(at: drag.startLocation, laneHeight: laneHeight, lanes: lanes) else { return }
+   * by accident. The shot under the finger lifts the moment the hold takes, and follows the
+   * finger from there, whichever shot it is where they overlap. */
+  private func laneMove(laneHeight: CGFloat, lanes: Int) -> some UIGestureRecognizerRepresentable {
+    LaneHold { phase, location in
+      switch phase {
+        case .began:
+          guard let shot = shot(at: location, laneHeight: laneHeight, lanes: lanes) else { return false }
           movingShot = shot.name
-        }
-        guard let name = movingShot, let shot = model.shots.first(where: { $0.name == name }) else { return }
-        dragChanged(shot, kind: .move, translation: drag.translation, laneHeight: laneHeight)
+          moveStart = location
+          dragChanged(shot, kind: .move, translation: .zero, laneHeight: laneHeight)
+        case .changed:
+          guard let name = movingShot, let shot = model.shots.first(where: { $0.name == name }) else { return true }
+          dragChanged(shot, kind: .move,
+                      translation: CGSize(width: location.x - moveStart.x, height: location.y - moveStart.y),
+                      laneHeight: laneHeight)
+        case .ended:
+          defer { movingShot = nil }
+          guard let name = movingShot, let shot = model.shots.first(where: { $0.name == name }) else { return true }
+          dragEnded(shot, kind: .move)
+        default:
+          movingShot = nil
+          drag = nil
       }
-      .onEnded { _ in
-        defer { movingShot = nil }
-        guard let name = movingShot, let shot = model.shots.first(where: { $0.name == name }) else { return }
-        dragEnded(shot, kind: .move)
-      }
+      return true
+    }
   }
 
   /** The shot drawn at a point of the lanes, the topmost where they overlap. */
@@ -1211,7 +1280,8 @@ struct StoryboardView: View {
 /** A pinch measured along each axis: how far apart the fingers are across and up and down,
  * against where they began. Fingers close together along an axis leave it unchanged. */
 private struct AxisPinch: UIGestureRecognizerRepresentable {
-  let changed: (CGSize) -> Void
+  /** How far apart across and up and down, against where they began, and where between them. */
+  let changed: (CGSize, CGPoint) -> Void
   let ended: () -> Void
 
   /** Alongside the scroll view's own panning, which stops as two fingers pinch. */
@@ -1247,9 +1317,32 @@ private struct AxisPinch: UIGestureRecognizerRepresentable {
         /* Under a finger's width apart, that axis is not being pinched. */
         let across = start.width > 40 ? now.width / start.width : 1
         let up = start.height > 40 ? now.height / start.height : 1
-        changed(CGSize(width: across, height: up))
+        changed(CGSize(width: across, height: up), context.converter.localLocation)
       default:
         ended()
+    }
+  }
+}
+
+/** A hold that picks up what is under the finger and then follows it, as lifting an item to drag
+ * it does everywhere else. Away from a shot it lets go at once, leaving the scroll view to pan. */
+private struct LaneHold: UIGestureRecognizerRepresentable {
+  /** Whether there was something to pick up, asked as the hold takes. */
+  let changed: (UIGestureRecognizer.State, CGPoint) -> Bool
+
+  func makeUIGestureRecognizer(context: Context) -> UILongPressGestureRecognizer {
+    let recognizer = UILongPressGestureRecognizer()
+    recognizer.minimumPressDuration = 0.2
+    recognizer.allowableMovement = 10
+    return recognizer
+  }
+
+  func handleUIGestureRecognizerAction(_ recognizer: UILongPressGestureRecognizer, context: Context) {
+    let location = context.converter.localLocation
+    if !changed(recognizer.state, location), recognizer.state == .began {
+      /* Nothing there: let go, so the next touch is free. */
+      recognizer.isEnabled = false
+      recognizer.isEnabled = true
     }
   }
 }

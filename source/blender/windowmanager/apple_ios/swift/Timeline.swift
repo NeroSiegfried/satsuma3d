@@ -68,8 +68,11 @@ final class TimelineStore {
   /** An editor grown out of the timeline, docked to the bottom with it. */
   var editorShown: Bool { curvesShown || storyboardShown }
   /** The timeline shows the storyboard's edit, rather than the scene in the window: its frames,
-   * the playhead moving across shots. Opening a shot shows its own scene's time again. */
-  var editTime: Bool { storyboardShown && storyboard.entered == nil }
+   * the playhead moving across shots, the small timeline too. Opening a shot shows its own
+   * scene's time again, as do the keys and curves of the window's scene. */
+  var editTime: Bool {
+    storyboardAvailable && !expanded && !curvesShown && !(storyboardShown && storyboard.entered != nil)
+  }
   /** Blender's frame; the knob follows it unless a finger holds the knob. */
   let frame = TimelineFrame()
   @ObservationIgnored var toggleExpanded: () -> Void = {}
@@ -94,8 +97,8 @@ final class TimelineStore {
     }
     let board = storyboard
     switch command {
-      case "start": board.setFrame(board.start, final: true)
-      case "end": board.setFrame(board.end, final: true)
+      case "start": board.setFrame(start, final: true)
+      case "end": board.setFrame(end, final: true)
       case "prev_key": if let cut = board.cut(after: false) { board.setFrame(cut, final: true) }
       case "next_key": if let cut = board.cut(after: true) { board.setFrame(cut, final: true) }
       default: board.send("play")
@@ -532,7 +535,7 @@ struct TimelineContent: View {
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .accessibilityLabel("Storyboard")
+    .accessibilityLabel("Story")
     .accessibilityAddTraits(store.storyboardShown ? .isSelected : [])
     .accessibilityIdentifier("blender.timeline.storyboard-toggle")
   }
@@ -684,7 +687,7 @@ struct TimelinePanel: View {
                 store.storyboardHeight = min(store.curvesMaximum, max(170, start - value.translation.height))
               }
               .onEnded { _ in dragStart = nil })
-          .accessibilityLabel("Resize Storyboard")
+          .accessibilityLabel("Resize Story")
         /* Its own controls in its header, and its own scrubber along the bottom, in step with its
          * shots: the timeline's row is not needed. */
         StoryboardView(model: store.storyboard, timeline: store)
@@ -762,6 +765,8 @@ final class SwiftTimeline {
 
   /** Shows the scene's time, or in the storyboard the edit's, from Blender's snapshot. */
   private func apply(_ json: JSON) {
+    let storyboard = json.bool("storyboard")
+    store.set(\.storyboardAvailable, storyboard)
     let edit = store.editTime
     shownEditTime = edit
     /* Playing, usually only the frame changes: leave the rest untouched so nothing else redraws. */
@@ -774,8 +779,6 @@ final class SwiftTimeline {
     if store.frame.blender != frame { store.frame.blender = frame }
     store.set(\.playing, json.bool("playing"))
     store.set(\.recording, json.bool("autokey"))
-    let storyboard = json.bool("storyboard")
-    store.set(\.storyboardAvailable, storyboard)
     if let editFrame = json.int("edit_frame") {
       store.storyboard.follow(frame: editFrame, sceneFrame: json.int("frame") ?? 0)
     }
