@@ -316,17 +316,8 @@ struct ListOutliner: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
-      if rows.isEmpty {
-        Text("None")
-          .font(.subheadline)
-          .foregroundStyle(.tertiary)
-          .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-          .padding(.leading, 10)
-      }
-      else {
-        let shown = shownRows
-        ListRows(store: store, property: property, rows: shown.rows, offset: shown.offset)
-      }
+      /* Add, remove and the rest above the rows, where they stay as the list grows: adding one
+       * after another, the finger stays put. */
       HStack {
         if rows.count > inlineListRows {
           Button {
@@ -345,7 +336,18 @@ struct ListOutliner: View {
         Spacer(minLength: 0)
         ListToolbar(store: store, property: property)
       }
-      .padding(.bottom, 4)
+      .padding(.top, 2)
+      if rows.isEmpty {
+        Text("None")
+          .font(.subheadline)
+          .foregroundStyle(.tertiary)
+          .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+          .padding(.leading, 10)
+      }
+      else {
+        let shown = shownRows
+        ListRows(store: store, property: property, rows: shown.rows, offset: shown.offset)
+      }
     }
   }
 
