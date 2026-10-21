@@ -37,6 +37,7 @@
 #include "DNA_screen_types.h"
 #include "DNA_sequence_types.h"
 #include "DNA_space_types.h"
+#include "DNA_userdef_types.h"
 #include "DNA_workspace_types.h"
 
 #include "BKE_appdir.hh"
@@ -54,6 +55,10 @@
 #include "BKE_undo_system.hh"
 #include "BKE_wm_runtime.hh"
 
+#include "AS_asset_library.hh"
+#include "AS_asset_representation.hh"
+
+#include "ED_asset.hh"
 #include "ED_object.hh"
 #include "ED_screen.hh"
 #include "ED_sequencer.hh"
@@ -67,6 +72,8 @@
 #include "RNA_access.hh"
 #include "RNA_prototypes.hh"
 
+#include "SEQ_add.hh"
+#include "SEQ_relations.hh"
 #include "SEQ_render.hh"
 #include "SEQ_select.hh"
 #include "SEQ_sequencer.hh"
@@ -325,6 +332,20 @@ std::string read_storyboard(bContext *C, const DictionaryValue *state, const boo
     }
   }
 
+  /* The scene templates a new shot can start from: the scene assets of every library, loaded
+   * in the background, listed once they are. */
+  const AssetLibraryReference all_library = asset_system::all_library_reference();
+  asset::list::storage_fetch(&all_library, C);
+  auto templates = result.append_array("templates");
+  asset::list::iterate(all_library, [&](asset_system::AssetRepresentation &asset) {
+    if (asset.get_id_type() == ID_SCE) {
+      auto item = templates->append_dict();
+      item->append_str("name", asset.get_name());
+      item->append_str("id", asset.full_path());
+    }
+    return true;
+  });
+
   /* A new undo step, other than the storyboard's own: the shot being drawn in may look
    * different now. */
   const wmWindowManager *wm = CTX_wm_manager(C);
@@ -369,6 +390,7 @@ std::string read_storyboard(bContext *C, const DictionaryValue *state, const boo
       item->append_int("end", right);
       item->append_int("scene_strip", strip.type == STRIP_TYPE_SCENE);
       item->append_str("scene", strip.scene ? strip.scene->id.name + 2 : "");
+      item->append_int("template", strip.scene && strip.scene->id.asset_data);
       item->append_int("selected", (strip.flag & SEQ_SELECT) != 0);
       item->append_int("active", &strip == active);
       item->append_int("muted", (strip.flag & SEQ_MUTE) != 0);
@@ -691,6 +713,26 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     const bool left = query.lookup_str("side").value_or("") == "left";
     set_int(C, scene, strip, left ? "frame_final_start" : "frame_final_end",
             int(query.lookup_int("frame").value_or(0)));
+    if (strip->type == STRIP_TYPE_SCENE && strip->scene) {
+      /* The shot's scene covers what the shot shows, its frame range following, the shot's
+       * frames where they were in the edit. */
+      Scene *shot = strip->scene;
+      const int first_frame = strip->left_handle();
+      const int last_frame = strip->right_handle(scene);
+      const int first = shot->r.sfra + strip->anim_startofs + (first_frame - int(strip->start));
+      shot->r.sfra = first;
+      shot->r.efra = first + max_ii(1, last_frame - first_frame) - 1;
+      strip->anim_startofs = 0;
+      strip->anim_endofs = 0;
+      seq::add_reload_new_file(CTX_data_main(C), scene, strip, false);
+      strip->start = float(first_frame);
+      strip->startofs = 0.0f;
+      strip->endofs = 0.0f;
+      seq::relations_invalidate_cache(scene, strip);
+      DEG_id_tag_update(&shot->id, ID_RECALC_FRAME_CHANGE);
+      DEG_id_tag_update(&scene->id, ID_RECALC_SEQUENCER_STRIPS);
+      WM_event_add_notifier(C, NC_SCENE | ND_FRAME_RANGE, shot);
+    }
     sync_scene(C);
     return left ? "Trim Shot Start" : "Trim Shot End";
   }
@@ -848,6 +890,25 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     sync_scene(C);
     return "";
   }
+  if (action == "template") {
+    /* A shot's scene kept as a template new shots can start from, or no longer. */
+    Strip *strip = find_strip(scene, query);
+    if (!strip || !strip->scene) {
+      return "No shot";
+    }
+    ID *id = &strip->scene->id;
+    if (lookup_flag(query, "value", true)) {
+      if (asset::mark_id(id)) {
+        asset::generate_preview(C, id);
+      }
+    }
+    else {
+      asset::clear_id(id);
+    }
+    asset::list::storage_tag_main_data_dirty();
+    WM_main_add_notifier(NC_ASSET | NA_EDITED, nullptr);
+    return "";
+  }
   if (action == "add") {
     /* After the selected shot, or the shot under the playhead, or at the end. */
     Editing *ed = seq::editing_ensure(scene);
@@ -865,6 +926,49 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
       for (Strip &other : *seq::active_seqbase_get(ed)) {
         frame = max_ii(frame, other.right_handle(scene));
       }
+    }
+    /* From a scene template: a copy of it, appended from its library or duplicated here. */
+    if (const std::optional<StringRefNull> id = query.lookup_str("template")) {
+      const asset_system::AssetRepresentation *found = nullptr;
+      asset::list::iterate(asset_system::all_library_reference(),
+                           [&](asset_system::AssetRepresentation &asset) {
+                             if (asset.get_id_type() == ID_SCE && asset.full_path() == *id) {
+                               found = &asset;
+                               return false;
+                             }
+                             return true;
+                           });
+      if (!found) {
+        return "No such template";
+      }
+      Main *bmain = CTX_data_main(C);
+      Scene *shot = reinterpret_cast<Scene *>(
+          asset::asset_local_id_ensure_imported(*bmain, *found, ASSET_IMPORT_APPEND));
+      if (shot && found->is_local_id()) {
+        shot = BKE_scene_duplicate(bmain,
+                                   shot,
+                                   SCE_COPY_FULL,
+                                   eDupli_ID_Flags(U.dupflag | USER_DUP_OBJECT),
+                                   LIB_ID_DUPLICATE_IS_ROOT_ID);
+      }
+      if (!shot) {
+        return "Could not add the template";
+      }
+      /* A shot of its own, not another template. */
+      asset::clear_id(&shot->id);
+      make_room(scene, channel, frame, shot->r.efra - shot->r.sfra + 1);
+      seq::LoadData load_data;
+      seq::add_load_data_init(&load_data, shot->id.name + 2, nullptr, frame, channel);
+      load_data.scene = shot;
+      Strip *added = seq::add_scene_strip(scene, ed->current_strips(), &load_data);
+      seq::select_active_set(scene, added);
+      DEG_id_tag_update(&scene->id, ID_RECALC_SEQUENCER_STRIPS);
+      DEG_relations_tag_update(bmain);
+      scene->r.cfra = frame;
+      DEG_id_tag_update(&scene->id, ID_RECALC_FRAME_CHANGE);
+      sync_scene(C);
+      WM_event_add_notifier(C, NC_SCENE | ND_SEQUENCER, scene);
+      return "";
     }
     /* A copy of the shot it follows, to fit the sequence: its world, render settings, camera and
      * layers, its contents then taken out. A blank panel the file keeps, without one. */
