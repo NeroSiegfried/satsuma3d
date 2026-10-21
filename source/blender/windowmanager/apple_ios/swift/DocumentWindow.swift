@@ -641,7 +641,7 @@ struct BottomTrayLayer: View {
 #if os(visionOS)
     false
 #else
-    shown && timeline.visible && timeline.curvesShown
+    shown && timeline.visible && timeline.editorShown
 #endif
   }
 

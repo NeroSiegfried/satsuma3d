@@ -23,6 +23,7 @@ final class SwiftScenePanels {
   let nodes = NodeEditorModel()
   /** The curve editor's curves, which the timeline shows. */
   var graphSnapshot: ((JSON) -> Void)?
+  var storyboardSnapshot: ((JSON) -> Void)?
   private let shading = InspectorStore(mode: .shading, tab: "SHADING")
   private let toolStrip = InspectorStore(mode: .toolStrip, tab: "TOOL")
   private let toolPopover = InspectorStore(mode: .toolPopover, tab: "TOOL")
@@ -116,6 +117,7 @@ final class SwiftScenePanels {
     }
     let ack = (snapshot["ack"] as? NSNumber)?.uint64Value ?? 0
     if let graph = snapshot.dict("graph") { graphSnapshot?(graph) }
+    if let storyboard = snapshot.dict("storyboard") { storyboardSnapshot?(storyboard) }
     if let nodesSnapshot = snapshot.dict("nodes"), nodes.shown {
       nodes.update(nodesSnapshot, ack: ack)
     }

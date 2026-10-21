@@ -34,12 +34,19 @@ final class ShellPanels {
       PanelWindows.set(.nodes, open: shown)
 #else
       /* One editor along the bottom at a time. */
-      if shown { self?.timeline.setCurvesShown(false) }
+      if shown {
+        self?.timeline.setCurvesShown(false)
+        self?.timeline.setStoryboardShown(false)
+      }
 #endif
     }
     panels.graphSnapshot = { [weak self] snapshot in
       guard let self, timeline.store.curvesShown else { return }
       timeline.store.curves.update(snapshot)
+    }
+    panels.storyboardSnapshot = { [weak self] snapshot in
+      guard let self, timeline.store.storyboardShown else { return }
+      timeline.store.storyboard.update(snapshot)
     }
 #if !os(visionOS)
     timeline.curvesDidOpen = { [weak self] in self?.panels.nodes.setShown(false) }

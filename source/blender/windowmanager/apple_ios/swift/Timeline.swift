@@ -57,10 +57,21 @@ final class TimelineStore {
   var curvesDragging = false
   /** The tallest the curve editor may be, leaving some viewport above it. */
   var curvesMaximum: CGFloat = 700
+  /** The storyboard grown out of the timeline, see `Storyboard.swift`. */
+  var storyboardShown = false
+  let storyboard = StoryboardModel()
+  /** The workspace has shots, the window following the one under the edit's playhead. */
+  var storyboardAvailable = false
+  var storyboardHeight: CGFloat = CGFloat(UserDefaults.standard.object(forKey: "BlenderStoryboardHeight") as? Double ?? 200) {
+    didSet { UserDefaults.standard.set(Double(storyboardHeight), forKey: "BlenderStoryboardHeight") }
+  }
+  /** An editor grown out of the timeline, docked to the bottom with it. */
+  var editorShown: Bool { curvesShown || storyboardShown }
   /** Blender's frame; the knob follows it unless a finger holds the knob. */
   let frame = TimelineFrame()
   @ObservationIgnored var toggleExpanded: () -> Void = {}
   @ObservationIgnored var toggleCurves: () -> Void = {}
+  @ObservationIgnored var toggleStoryboard: () -> Void = {}
 
   /** Observers redraw on every assignment, even of the same value. */
   func set<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<TimelineStore, Value>, _ value: Value) {
@@ -461,6 +472,7 @@ struct TimelineContent: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
       }
       HStack(spacing: 0) {
+        if showsStoryboardButton { storyboardButton }
         curvesButton
         keysButton
       }
@@ -470,7 +482,30 @@ struct TimelineContent: View {
     .foregroundStyle(.primary)
   }
 
-  private let trailingButtons = 2
+  private var trailingButtons: Int { showsStoryboardButton ? 3 : 2 }
+
+  private var showsStoryboardButton: Bool {
+#if os(visionOS)
+    false
+#else
+    store.storyboardAvailable || store.storyboardShown
+#endif
+  }
+
+  /** Opens the storyboard out of the timeline, filled while it is open. */
+  private var storyboardButton: some View {
+    Button(action: store.toggleStoryboard) {
+      Image(systemName: "film.stack")
+        .symbolVariant(store.storyboardShown ? .fill : .none)
+        .foregroundStyle(store.storyboardShown ? PanelStyle.selection : .primary)
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("Storyboard")
+    .accessibilityAddTraits(store.storyboardShown ? .isSelected : [])
+    .accessibilityIdentifier("blender.timeline.storyboard-toggle")
+  }
 
   /** Opens the curve editor out of the timeline, filled while it is open. */
   private var curvesButton: some View {
@@ -519,7 +554,18 @@ struct TimelineContent: View {
 
   private func transportButton(_ symbol: String, _ label: String, _ command: String) -> some View {
     Button {
-      store.send("timeline", command)
+      /* With the storyboard open, the edit plays, the window following its shots. */
+      if store.storyboardShown && ["play", "start", "end"].contains(command) {
+        let board = store.storyboard
+        switch command {
+          case "start": board.setFrame(board.start, final: true)
+          case "end": board.setFrame(board.end, final: true)
+          default: board.send("play")
+        }
+      }
+      else {
+        store.send("timeline", command)
+      }
     } label: {
       Image(systemName: symbol).frame(width: 44, height: 44).contentShape(Rectangle())
     }
@@ -573,7 +619,8 @@ struct TimelinePanel: View {
 
   /** With the curve editor open, it and the timeline's row of controls under it. */
   static func height(_ store: TimelineStore) -> CGFloat {
-    store.curvesShown ? store.curvesHeight + collapsedHeight : height(expanded: store.expanded)
+    store.curvesShown ? store.curvesHeight + collapsedHeight :
+      store.storyboardShown ? store.storyboardHeight + collapsedHeight : height(expanded: store.expanded)
   }
 
   /** The handle the curve editor is made taller or shorter by, and its height when the drag began. */
@@ -604,18 +651,37 @@ struct TimelinePanel: View {
           .frame(height: store.curvesHeight - 16)
         Divider()
       }
+      if store.storyboardShown {
+        Capsule()
+          .fill(.secondary.opacity(0.5))
+          .frame(width: 44, height: 5)
+          .frame(maxWidth: .infinity, minHeight: 16)
+          .contentShape(Rectangle())
+          .gesture(
+            DragGesture(coordinateSpace: .global)
+              .onChanged { value in
+                let start = dragStart ?? store.storyboardHeight
+                dragStart = start
+                store.storyboardHeight = min(store.curvesMaximum, max(120, start - value.translation.height))
+              }
+              .onEnded { _ in dragStart = nil })
+          .accessibilityLabel("Resize Storyboard")
+        StoryboardView(model: store.storyboard)
+          .frame(height: store.storyboardHeight - 16)
+        Divider()
+      }
       TimelineContent(store: store)
-        .frame(height: store.curvesShown ? collapsedHeight : Self.height(expanded: store.expanded))
+        .frame(height: store.editorShown ? collapsedHeight : Self.height(expanded: store.expanded))
     }
     .frame(height: Self.height(store))
-    .padding(.bottom, store.curvesShown ? bottomInset : 0)
+    .padding(.bottom, store.editorShown ? bottomInset : 0)
     .onGeometryChange(for: Bool.self) { $0.size.width < 520 } action: { store.set(\.compact, $0) }
-    .background(store.curvesShown ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.clear),
+    .background(store.editorShown ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.clear),
                 in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous))
     /* No corners with the curve editor open: the glass's shape would round the curves' corners
      * too. */
-    .panelGlass(store.curvesShown ? .none : .regular,
-                in: RoundedRectangle(cornerRadius: store.curvesShown ? 0 : store.expanded ? 24 : collapsedHeight / 2,
+    .panelGlass(store.editorShown ? .none : .regular,
+                in: RoundedRectangle(cornerRadius: store.editorShown ? 0 : store.expanded ? 24 : collapsedHeight / 2,
                                      style: .continuous))
     .accessibilityIdentifier("blender.timeline.panel")
   }
@@ -633,6 +699,7 @@ final class SwiftTimeline {
   init() {
     store.toggleExpanded = { [weak self] in self?.toggleExpanded() }
     store.toggleCurves = { [weak self] in self?.setCurvesShown(!(self?.store.curvesShown ?? true)) }
+    store.toggleStoryboard = { [weak self] in self?.setStoryboardShown(!(self?.store.storyboardShown ?? true)) }
 #if os(visionOS)
     Self.current = self
 #endif
@@ -677,14 +744,46 @@ final class SwiftTimeline {
     if store.frame.blender != frame { store.frame.blender = frame }
     store.set(\.playing, json.bool("playing"))
     store.set(\.recording, json.bool("autokey"))
+    let storyboard = json.bool("storyboard")
+    store.set(\.storyboardAvailable, storyboard)
+    if let editFrame = json.int("edit_frame") { store.storyboard.follow(frame: editFrame) }
+#if !os(visionOS)
+    /* A storyboard opens with its shots showing, once. */
+    if storyboard && !storyboardOpened {
+      storyboardOpened = true
+      setVisible(true)
+      setStoryboardShown(true)
+    }
+#endif
+  }
+
+  @ObservationIgnored private var storyboardOpened = false
+
+  func setStoryboardShown(_ shown: Bool) {
+    guard shown != store.storyboardShown else { return }
+    withAnimation(Self.animation) {
+      store.storyboardShown = shown
+      if shown {
+        store.expanded = false
+        store.curvesShown = false
+      }
+    }
+    if shown { store.curves.setShown(false) }
+    store.storyboard.setShown(shown)
+    if shown { curvesDidOpen?() }
+    visibilityDidChange?()
   }
 
   func toggleExpanded() {
     withAnimation(Self.animation) {
       store.expanded.toggle()
-      if store.expanded { store.curvesShown = false }
+      if store.expanded {
+        store.curvesShown = false
+        store.storyboardShown = false
+      }
     }
     store.curves.setShown(store.curvesShown)
+    store.storyboard.setShown(store.storyboardShown)
     visibilityDidChange?()
   }
 
@@ -692,9 +791,13 @@ final class SwiftTimeline {
     guard shown != store.curvesShown else { return }
     withAnimation(Self.animation) {
       store.curvesShown = shown
-      if shown { store.expanded = false }
+      if shown {
+        store.expanded = false
+        store.storyboardShown = false
+      }
     }
     store.curves.setShown(shown)
+    store.storyboard.setShown(store.storyboardShown)
     if shown { curvesDidOpen?() }
     visibilityDidChange?()
 #if os(visionOS)
