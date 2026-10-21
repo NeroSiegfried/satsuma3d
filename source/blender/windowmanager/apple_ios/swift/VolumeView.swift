@@ -7,10 +7,9 @@
  * editor. Blender sends its evaluated meshes as GPU-ready arrays, only those that changed, and
  * every instance's transform, see `wm_apple_ios_volume.cc`; they are copied straight into
  * RealityKit's low-level meshes, which are reused while they have room. Tapping an object selects
- * it; pinching and dragging one moves it. Both hands scale and turn the scene.
+ * it; pinching and dragging one moves it. Both hands scale and turn the scene. On iPad and
+ * iPhone the same scene stands in the room through the camera, see `ARPreview.swift`.
  */
-
-#if os(visionOS)
 
 import RealityKit
 import SwiftUI
@@ -56,6 +55,8 @@ final class VolumeStore {
 
   /** The volume's size the scene fits in, in meters. */
   static let size: Float = 0.8
+  /** Seen through the camera, standing on a real table or floor rather than in a volume. */
+  @ObservationIgnored var standing = false
   /** How much the hands have scaled and turned the scene. */
   @ObservationIgnored var zoom: Float = 1
   @ObservationIgnored var turn: Float = 0
@@ -68,9 +69,11 @@ final class VolumeStore {
 
   /* Opening and closing */
 
+#if os(visionOS)
   func setShown(_ shown: Bool) {
     PanelWindows.set(.volume, open: shown)
   }
+#endif
 
   func windowOpened(_ open: Bool) {
     guard open != shown else { return }
@@ -250,13 +253,14 @@ final class VolumeStore {
   func fit() {
     let extent = max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z)
     guard extent.isFinite, extent > 0 else { return }
-    let scale = Self.size * 0.6 / extent * zoom
+    /* Through the camera, about as large as a model on a table. */
+    let scale = (standing ? 0.35 : Self.size * 0.6) / extent * zoom
     /* Centered across, resting on the volume's floor as a model on a table does. Blender's Y is
      * RealityKit's -Z. */
     let center = bounds.center
     root.scale = SIMD3(repeating: scale)
     root.orientation = simd_quatf(angle: turn, axis: [0, 1, 0])
-    let floor = -Self.size / 2 + 0.02 - bounds.min.z * scale
+    let floor = (standing ? 0 : -Self.size / 2 + 0.02) - bounds.min.z * scale
     root.position = root.orientation.act(SIMD3(-center.x * scale, 0, center.y * scale)) + SIMD3(0, floor, 0)
   }
 
@@ -278,6 +282,8 @@ final class VolumeStore {
 /* -------------------------------------------------------------------- */
 /** \name Window
  * \{ */
+
+#if os(visionOS)
 
 struct VolumeView: View {
   @State private var store = VolumeStore.shared

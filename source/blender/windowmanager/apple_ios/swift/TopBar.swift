@@ -503,6 +503,10 @@ struct DocumentToolbar: ToolbarContent {
         }
       }
     }
+    if ARPreviewState.supported {
+      /* The scene in the room, through the camera. */
+      Button("View in AR", systemImage: "arkit") { ARPreviewState.shared.shown = true }
+    }
 #endif
     Section {
       ForEach(ViewportToggle.all, id: \.name) { toggle in

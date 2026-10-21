@@ -417,6 +417,8 @@ public struct DocumentWindow: View {
     window
       .environment(\.blenderMenuContext, model.menuContext)
 #if !os(visionOS)
+      /* The scene in the room, through the camera. */
+      .fullScreenCover(isPresented: Bindable(ARPreviewState.shared).shown) { ARPreview() }
       /* Over the bars too, which it dims while a Pencil rolls through it. */
       .overlay { RollDialLayer() }
       .overlay { ColorRollLayer() }

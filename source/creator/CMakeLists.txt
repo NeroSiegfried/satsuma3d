@@ -397,6 +397,7 @@ else()
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/ShellModel.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/ShellPanels.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/Storyboard.swift
+      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/ARPreview.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/TemplatePicker.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/TextObjectKeyboard.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/Timeline.swift
