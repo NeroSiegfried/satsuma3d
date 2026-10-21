@@ -241,6 +241,53 @@ Vector<int> drawing_starts(const Scene &edit, const Strip &strip)
   return result;
 }
 
+/** A layer's drawings at these frames moved by some frames: those landing on others replace
+ * them, as keys do. */
+void move_frames(GreasePencil &grease_pencil,
+                 bke::greasepencil::Layer &layer,
+                 Span<int> frames_in,
+                 const int delta)
+{
+  Vector<int> frames;
+  for (const int frame : frames_in) {
+    if (layer.frames().contains(frame)) {
+      frames.append(frame);
+    }
+  }
+  if (delta == 0 || frames.is_empty()) {
+    return;
+  }
+  std::sort(frames.begin(), frames.end());
+  if (delta > 0) {
+    std::reverse(frames.begin(), frames.end());
+  }
+  const Set<int> moving(frames);
+  for (const int frame : frames) {
+    const int target = frame + delta;
+    if (!moving.contains(target) && layer.frames().contains(target)) {
+      grease_pencil.remove_frames(layer, {target});
+    }
+  }
+  for (const int frame : frames) {
+    grease_pencil.insert_duplicate_frame(layer, frame, frame + delta, true);
+    grease_pencil.remove_frames(layer, {frame});
+  }
+}
+
+/** Frames sent as a list of numbers. */
+Vector<int> lookup_frames(const DictionaryValue &query)
+{
+  Vector<int> frames;
+  if (const ArrayValue *list = query.lookup_array("frames")) {
+    for (const std::shared_ptr<Value> &element : list->elements()) {
+      if (const IntValue *number = element->as_int_value()) {
+        frames.append(int(number->value()));
+      }
+    }
+  }
+  return frames;
+}
+
 /** Undo steps of the storyboard's own edits, which change no shot's pictures. */
 bool storyboard_step(const char *name)
 {
@@ -693,6 +740,43 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     WM_event_add_notifier(C, NC_SCENE | ND_SEQUENCER | NA_SELECTED, scene);
     return "Select Shot";
   }
+  if (action == "shot_keys_move" || action == "shot_keys_delete") {
+    /* A shot's drawings, all its layers' starting at these frames of the edit, moved or gone. */
+    if (!strip || !strip->scene) {
+      return std::nullopt;
+    }
+    Scene *shot = strip->scene;
+    Vector<int> frames;
+    for (const int frame : lookup_frames(query)) {
+      frames.append(frame - int(strip->start) + shot->r.sfra + strip->anim_startofs);
+    }
+    const int delta = int(query.lookup_int("delta").value_or(0));
+    const bool remove = action == "shot_keys_delete";
+    FOREACH_SCENE_OBJECT_BEGIN (shot, object) {
+      if (object->type != OB_GREASE_PENCIL) {
+        continue;
+      }
+      GreasePencil &grease_pencil = *reinterpret_cast<GreasePencil *>(object->data);
+      for (bke::greasepencil::Layer *layer : grease_pencil.layers_for_write()) {
+        if (remove) {
+          Vector<int> present;
+          for (const int frame : frames) {
+            if (layer->frames().contains(frame)) {
+              present.append(frame);
+            }
+          }
+          grease_pencil.remove_frames(*layer, present);
+        }
+        else {
+          move_frames(grease_pencil, *layer, frames, delta);
+        }
+      }
+      DEG_id_tag_update(&grease_pencil.id, ID_RECALC_GEOMETRY);
+    }
+    FOREACH_SCENE_OBJECT_END;
+    WM_event_add_notifier(C, NC_GPENCIL | NA_EDITED, nullptr);
+    return remove ? "Delete Drawings" : "Move Drawings";
+  }
   if (action == "move") {
     if (!strip) {
       return std::nullopt;
@@ -757,13 +841,9 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
        * do. */
       const int delta = int(query.lookup_int("delta").value_or(0));
       Vector<int> frames;
-      if (const io::serialize::ArrayValue *list = query.lookup_array("frames")) {
-        for (const std::shared_ptr<Value> &element : list->elements()) {
-          if (const io::serialize::IntValue *number = element->as_int_value()) {
-            if (layer->frames().contains(int(number->value()))) {
-              frames.append(int(number->value()));
-            }
-          }
+      for (const int frame : lookup_frames(query)) {
+        if (layer->frames().contains(frame)) {
+          frames.append(frame);
         }
       }
       if (action == "layer_keys_delete") {
@@ -778,21 +858,7 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
       if (delta == 0 || frames.is_empty()) {
         return std::nullopt;
       }
-      std::sort(frames.begin(), frames.end());
-      if (delta > 0) {
-        std::reverse(frames.begin(), frames.end());
-      }
-      const Set<int> moving(frames);
-      for (const int frame : frames) {
-        const int target = frame + delta;
-        if (!moving.contains(target) && layer->frames().contains(target)) {
-          grease_pencil->remove_frames(*layer, {target});
-        }
-      }
-      for (const int frame : frames) {
-        grease_pencil->insert_duplicate_frame(*layer, frame, frame + delta, true);
-        grease_pencil->remove_frames(*layer, {frame});
-      }
+      move_frames(*grease_pencil, *layer, frames, delta);
       DEG_id_tag_update(&grease_pencil->id, ID_RECALC_GEOMETRY);
       WM_event_add_notifier(C, NC_GPENCIL | NA_EDITED, nullptr);
       return "Move Drawings";
