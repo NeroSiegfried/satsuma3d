@@ -652,6 +652,20 @@ void sync_scene(bContext *C)
    * never left in Object Mode with its tools. Entering a mode can pick its own brush, so the
    * brush is set after. */
   Object *object = CTX_data_active_object(C);
+  if (!object || object->type != OB_GREASE_PENCIL) {
+    /* Its drawing, even with nothing or its camera active: otherwise the window is left in Object
+     * Mode, with Object Mode's tool. */
+    if (ViewLayer *view_layer = after ? CTX_data_view_layer(C) : nullptr) {
+      BKE_view_layer_synced_ensure(after, view_layer);
+      for (Base &base : *BKE_view_layer_object_bases_get(view_layer)) {
+        if (base.object->type == OB_GREASE_PENCIL && (base.flag & BASE_SELECTABLE)) {
+          object::base_activate(C, &base);
+          object = base.object;
+          break;
+        }
+      }
+    }
+  }
   const eObjectMode drawing_mode = object_before && object_before->type == OB_GREASE_PENCIL &&
                                            mode != OB_MODE_OBJECT ?
                                        mode :
