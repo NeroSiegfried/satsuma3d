@@ -207,6 +207,8 @@ final class InspectorStore {
     var payload = request
     payload.merge(requestContext) { $1 }
     payload["sequence"] = NSNumber(value: sequence)
+    /* Properties' own Tool tab, not the toolbar's tool settings. */
+    if mode == .properties { payload["properties"] = 1 }
     if mode == .nodes {
       Engine.setting("native_nodes_edit", json: payload)
       return
@@ -306,8 +308,7 @@ final class InspectorStore {
 
   func requestProperties() {
     guard mode == .properties || mode == .shading || mode == .preferences else { return }
-    if selectedTab == "TOOL" { return }
-    var state: JSON = ["tab": currentTab]
+    var state: JSON = ["tab": currentTab, "properties": mode == .properties ? 1 : 0]
     if let expanded = expandedPanels[currentTab] { state["expanded"] = Array(expanded) }
     if let subpanels = subpanelStates[currentTab], !subpanels.isEmpty { state["subpanels"] = subpanels }
     let setting = switch mode {

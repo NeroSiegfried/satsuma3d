@@ -59,16 +59,9 @@ struct InspectorPanel: View {
       PropertiesTabs(store: store)
         .padding(.horizontal, 8)
         .frame(height: 44)
-      if store.selectedTab == "TOOL", let tool = SwiftScenePanels.current?.toolPopoverStore {
-        /* The active tool's settings in full, as the toolbar's popover has them, which Blender
-         * sends for the tool as it changes. */
-        InspectorForm(store: tool)
-          .padding(.top, 4)
-      }
-      else {
-        InspectorForm(store: store)
-          .padding(.top, 4)
-      }
+      /* The Tool tab as Blender's: the active tool and the mode's Tool panels, brush and all. */
+      InspectorForm(store: store)
+        .padding(.top, 4)
     }
     .tint(PanelStyle.tint)
   }

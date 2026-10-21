@@ -31,6 +31,7 @@
 #include "BKE_packedFile.hh"
 #include "BKE_scene.hh"
 #include "BKE_screen.hh"
+#include "BKE_workspace.hh"
 #include "BKE_vfont.hh"
 #include "BLI_array.hh"
 #include "BLI_listbase.h"
@@ -2113,6 +2114,43 @@ bool preferences_hidden(const PointerRNA &ptr, PropertyRNA *prop)
 
 }  // namespace
 
+/**
+ * The contexts of the 3D Viewport's Tool panels for the mode, which Properties' Tool tab draws,
+ * as #ED_view3d_buttons_region_layout_ex chooses them.
+ */
+static Vector<std::string> tool_tab_contexts(const bContext *C)
+{
+  Vector<std::string> contexts = {CTX_data_mode_string(C)};
+  switch (CTX_data_mode_enum(C)) {
+    case CTX_MODE_EDIT_MESH: contexts.append(".mesh_edit"); break;
+    case CTX_MODE_EDIT_CURVE:
+    case CTX_MODE_EDIT_SURFACE: contexts.append(".curve_edit"); break;
+    case CTX_MODE_EDIT_CURVES: contexts.append(".curves_edit"); break;
+    case CTX_MODE_EDIT_TEXT: contexts.append(".text_edit"); break;
+    case CTX_MODE_EDIT_ARMATURE: contexts.append(".armature_edit"); break;
+    case CTX_MODE_EDIT_METABALL: contexts.append(".mball_edit"); break;
+    case CTX_MODE_EDIT_LATTICE: contexts.append(".lattice_edit"); break;
+    case CTX_MODE_EDIT_GREASE_PENCIL: contexts.append(".grease_pencil_edit"); break;
+    case CTX_MODE_PAINT_GREASE_PENCIL: contexts.append(".grease_pencil_paint"); break;
+    case CTX_MODE_SCULPT_GREASE_PENCIL:
+      contexts.extend({".paint_common", ".grease_pencil_sculpt"});
+      break;
+    case CTX_MODE_WEIGHT_GREASE_PENCIL: contexts.append(".greasepencil_weight"); break;
+    case CTX_MODE_VERTEX_GREASE_PENCIL: contexts.append(".greasepencil_vertex"); break;
+    case CTX_MODE_EDIT_POINTCLOUD: contexts.append(".pointcloud_edit"); break;
+    case CTX_MODE_POSE: contexts.append(".posemode"); break;
+    case CTX_MODE_SCULPT: contexts.extend({".paint_common", ".sculpt_mode"}); break;
+    case CTX_MODE_PAINT_WEIGHT: contexts.extend({".paint_common", ".weightpaint"}); break;
+    case CTX_MODE_PAINT_VERTEX: contexts.extend({".paint_common", ".vertexpaint"}); break;
+    case CTX_MODE_PAINT_TEXTURE: contexts.extend({".paint_common", ".imagepaint"}); break;
+    case CTX_MODE_PARTICLE: contexts.extend({".paint_common", ".particlemode"}); break;
+    case CTX_MODE_OBJECT: contexts.append(".objectmode"); break;
+    case CTX_MODE_SCULPT_CURVES: contexts.extend({".paint_common", ".curves_sculpt"}); break;
+    default: break;
+  }
+  return contexts;
+}
+
 std::string native_properties_query(bContext *C, const std::string &json, bool execute)
 {
   DictionaryValue result;
@@ -2142,7 +2180,8 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
   /* The viewport's overlays, a popover beside its shading in Blender's header. */
   const bool overlays = requested_tab == "OVERLAYS";
   const bool header_popover = shading || overlays;
-  const bool tool_settings = requested_tab == "TOOL";
+  /* The toolbar's tool settings; the Properties' Tool tab is Blender's own, see #tool_tab. */
+  const bool tool_settings = requested_tab == "TOOL" && !query->lookup_int("properties").value_or(0);
   const bool viewport = header_popover || tool_settings;
   /* The Preferences' sections, their tabs named apart from the Properties' ones. */
   const bool preferences = StringRef(requested_tab).startswith(PREFERENCES_TAB_PREFIX);
@@ -2264,7 +2303,35 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
   /* Each stack panel's place among the stack's, which reordering them takes. */
   int stack_index = 0;
   std::set<Panel *> instances;
-  for (PanelType &pt : panel_region_type->paneltypes) {
+  /* Properties' Tool tab: the 3D Viewport's Tool panels for the mode, with their sub-panels, as
+   * Blender draws them there. */
+  const bool tool_tab = !viewport && !preferences && tab_id == "TOOL";
+  const Vector<std::string> tool_contexts = tool_tab ? tool_tab_contexts(C) : Vector<std::string>();
+  std::set<std::string> tool_panels;
+  ARegionType *candidate_region_type = tool_tab ?
+                                           BKE_regiontype_from_id(BKE_spacetype_from_id(SPACE_VIEW3D),
+                                                                  RGN_TYPE_UI) :
+                                           panel_region_type;
+  WorkSpace *workspace = CTX_wm_workspace(C);
+  for (PanelType &pt : candidate_region_type->paneltypes) {
+    if (tool_tab) {
+      if (pt.parent_id[0] ? !tool_panels.count(pt.parent_id) :
+                            !STREQ(pt.category, "Tool") ||
+                                (pt.context[0] && !std::any_of(tool_contexts.begin(), tool_contexts.end(),
+                                                               [&](const std::string &context) {
+                                                                 return context == pt.context;
+                                                               })) ||
+                                (pt.owner_id[0] && workspace &&
+                                 !BKE_workspace_owner_id_check(workspace, pt.owner_id)))
+      {
+        continue;
+      }
+      tool_panels.insert(pt.idname);
+      if (!(pt.flag & PANEL_TYPE_INSTANCED)) {
+        candidates.push_back({&pt, nullptr, pt.idname, pt.parent_id});
+      }
+      continue;
+    }
     /* Besides the active tool, the panels `bl_ui.native_panels` writes for the top bar. */
     if (tool_settings && !STREQ(pt.idname, "VIEW3D_PT_active_tool") &&
         !(StringRef(pt.idname).startswith("VIEW3D_PT_native_") &&
@@ -2292,7 +2359,7 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
   for (size_t candidate_index = 0; candidate_index < candidates.size(); candidate_index++) {
     const Candidate candidate = candidates[candidate_index];
     PanelType &pt = *candidate.type;
-    if (!pt.draw || (!viewport && !candidate.instance && panel_context != pt.context) ||
+    if (!pt.draw || (!viewport && !tool_tab && !candidate.instance && panel_context != pt.context) ||
         (preferences && panel_context.empty()) ||
         /* Header-less Properties panels hold data-block pickers and slots (e.g. a material's
          * context panel); viewport ones are decorative. */
