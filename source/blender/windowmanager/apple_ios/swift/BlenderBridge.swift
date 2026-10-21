@@ -156,6 +156,30 @@ extension View {
 /** Fills as UIKit draws them on the panels' glass, measured from UIKit-drawn panels: on glass,
  * UIKit's grouped and fill colors come out lighter in dark mode and darker in light mode than
  * the same colors drawn by SwiftUI. */
+/** The round buttons ending the header of an editor docked at the bottom, alike in each: More,
+ * then Add, then Close. */
+extension View {
+  func editorHeaderButton() -> some View {
+    labelStyle(.iconOnly)
+      .buttonStyle(.bordered)
+      .buttonBorderShape(.circle)
+  }
+}
+
+/** Closes an editor docked at the bottom: the last of its header's buttons. */
+struct EditorCloseButton: View {
+  var label = "Close"
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Label(label, systemImage: "xmark")
+    }
+    .editorHeaderButton()
+    .keyboardShortcut(.cancelAction)
+  }
+}
+
 enum PanelStyle {
   private static func dynamic(dark: UIColor, light: UIColor) -> Color {
     Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? dark : light })

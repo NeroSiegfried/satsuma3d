@@ -135,15 +135,7 @@ struct AssetsPane: View {
         if !store.categories.isEmpty { categoryMenu }
         PanelSearchField(text: $store.query, prompt: "Search Assets", identifier: "blender.assets.search")
           .frame(maxWidth: .infinity)
-        Button(action: store.close) {
-          Image(systemName: "xmark")
-            .font(.system(size: 20, weight: .medium))
-            .foregroundStyle(.primary)
-            .frame(width: 36, height: 36)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Hide Assets")
+        EditorCloseButton(label: "Hide Assets", action: store.close)
       }
       .frame(height: 40)
       .padding(.leading, 14)

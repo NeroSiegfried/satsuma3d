@@ -1333,9 +1333,16 @@ struct FCurveEditorView: View {
           Button("Delete Keyframes", systemImage: "trash", role: .destructive) { model.runOperator("GRAPH_OT_delete") }
         }
       } label: {
-        Label("More", systemImage: "ellipsis.circle")
+        Label("More", systemImage: "ellipsis")
       }
-      .labelStyle(.iconOnly)
+      .editorHeaderButton()
+      Button {
+        model.runOperator("GRAPH_OT_keyframe_insert", ["type": "ALL"])
+      } label: {
+        Label("Insert Keyframe", systemImage: "plus")
+      }
+      .editorHeaderButton()
+      EditorCloseButton(label: "Close Curves", action: timeline.toggleCurves)
     }
     .font(.title3)
     .padding(.horizontal, 14)

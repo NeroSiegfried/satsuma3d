@@ -714,18 +714,9 @@ struct StoryboardView: View {
       } label: {
         Label("Add Shot", systemImage: "plus")
       }
-      .labelStyle(.iconOnly)
-      .buttonStyle(.bordered)
-      .buttonBorderShape(.circle)
+      .editorHeaderButton()
       .accessibilityIdentifier("blender.storyboard.add")
-      Button(action: timeline.toggleStoryboard) {
-        Image(systemName: "film.stack.fill")
-          .foregroundStyle(PanelStyle.selection)
-          .frame(width: 36, height: 36)
-          .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-      .accessibilityLabel("Close Story")
+      EditorCloseButton(label: "Close Story", action: timeline.toggleStoryboard)
     }
     .padding(.horizontal, 12)
     .frame(height: headerHeight)

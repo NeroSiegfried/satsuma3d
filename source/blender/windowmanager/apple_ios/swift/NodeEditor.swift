@@ -359,27 +359,16 @@ struct NodeEditorPanel: View {
       } label: {
         Label("More", systemImage: "ellipsis")
       }
-      .labelStyle(.iconOnly)
-      .buttonStyle(.bordered)
-      .buttonBorderShape(.circle)
+      .editorHeaderButton()
       .disabled(model.snapshot?["nodes"] == nil)
       Button {
         adding = NodeAddRequest(location: NodeCanvas.lastCenter, connect: nil)
       } label: {
         Label("Add Node", systemImage: "plus")
       }
-      .labelStyle(.iconOnly)
-      .buttonStyle(.bordered)
-      .buttonBorderShape(.circle)
+      .editorHeaderButton()
       .disabled(model.snapshot?["nodes"] == nil)
-      Button {
-        model.setShown(false)
-      } label: {
-        Label("Close", systemImage: "xmark")
-      }
-      .labelStyle(.iconOnly)
-      .buttonStyle(.bordered)
-      .buttonBorderShape(.circle)
+      EditorCloseButton(label: "Close Node Editor") { model.setShown(false) }
     }
     .padding(.horizontal, 14)
     .frame(height: 52)
