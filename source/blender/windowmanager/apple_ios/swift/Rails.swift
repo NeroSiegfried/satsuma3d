@@ -354,7 +354,7 @@ struct Rail: View {
     }
     .frame(width: width, height: height)
     .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
-    .panelGlass(.clear, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+    .panelGlass(in: RoundedRectangle(cornerRadius: 32, style: .continuous))
     .offset(y: state.dragOffset)
     /* The finger on the rail: dragging the closed rail up or down docks it, and holding an item
      * slides to another. An open list scrolls instead. */
@@ -2115,7 +2115,7 @@ struct PaintSidebar: View {
     }
     .padding(6)
     .frame(width: Self.width, height: content.height)
-    .panelGlass(.clear, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+    .panelGlass(in: RoundedRectangle(cornerRadius: 32, style: .continuous))
     .animation(UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: 0.32, dampingFraction: 0.84),
                value: state.active)
     .animation(UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: 0.2, dampingFraction: 0.7),
