@@ -752,6 +752,8 @@ struct NodeCanvas: View {
   @State private var knownNodes: Set<String> = []
   /** The nodes as they were last drawn, for those just deleted to vanish from. */
   @State private var lastNodes: [String: JSON] = [:]
+  /** The links as they were then, for those of deleted nodes to break. */
+  @State private var lastLinks: [JSON] = []
   /** A frame just made, drawing itself in. */
   @State private var framing: (name: String, start: Date)?
   /** Nodes just deleted, drawn a moment longer as they are sucked away. */
@@ -862,6 +864,10 @@ struct NodeCanvas: View {
       }
       .onChange(of: positions) { _, _ in moved.removeAll() }
       .onChange(of: model.nodes.map(\.nodeName), initial: true) { _, names in landed(Set(names)) }
+      .onChange(of: model.links.map(CableMotion.key)) { _, _ in
+        /* Linked and unlinked with the same nodes: the links to break, should one go. */
+        if Set(model.nodes.map(\.nodeName)) == knownNodes { lastLinks = model.links }
+      }
       .onChange(of: pan) { _, _ in
         rememberCenter()
         /* A value being typed is done once the canvas moves from under it. */
@@ -1377,8 +1383,16 @@ struct NodeCanvas: View {
     guard let anchor = layout.sockets[NodeCanvasLayout.socketKey(wire.node, output: wire.output, wire.socket)] else {
       return
     }
-    let from = wire.output ? anchor : wire.end, to = wire.output ? wire.end : anchor
-    let slack = cables.slack(CableMotion.pending, from: from, to: to)
+    snapCord(from: anchor, broken: wire.end, output: wire.output, color: wire.color, motion: CableMotion.pending)
+  }
+
+  /** A cord hanging from \a anchor, an output's socket or an input's, breaks at \a broken and
+   * reels into its socket. \a motion is the cable's sway, for its shape as it broke. */
+  private func snapCord(from anchor: CGPoint, broken: CGPoint, output: Bool, color: Color, motion: String,
+                        felt: Bool = true)
+  {
+    let from = output ? anchor : broken, to = output ? broken : anchor
+    let slack = cables.slack(motion, from: from, to: to)
     let controls = Self.controls(from: from, to: to, slack: slack)
     var curve: [CGPoint] = (0...28).map { step in
       let t = CGFloat(step) / 28, u = 1 - t
@@ -1386,18 +1400,39 @@ struct NodeCanvas: View {
       return CGPoint(x: a * from.x + b * controls.0.x + c * controls.1.x + d * to.x,
                      y: a * from.y + b * controls.0.y + c * controls.1.y + d * to.y)
     }
-    if !wire.output { curve.reverse() }
-    snaps.snap(along: curve, color: wire.color)
+    if !output { curve.reverse() }
+    snaps.snap(along: curve, color: color)
     snapping = true
-    CableFeedback.broke(at: windowPoint(wire.end))
+    if felt { CableFeedback.broke(at: windowPoint(broken)) }
     /* The cord whips into its socket, which takes it with a small ring. */
     DispatchQueue.main.asyncAfter(deadline: .now() + CableSnaps.reel * 0.85) {
-      let plug = CablePlug(point: anchor, color: wire.color, start: Date())
+      let plug = CablePlug(point: anchor, color: color, start: Date())
       plugs.append(plug)
       DispatchQueue.main.asyncAfter(deadline: .now() + CablePlug.duration) {
         plugs.removeAll { $0.id == plug.id }
       }
-      CableFeedback.reeled(at: windowPoint(anchor))
+      if felt { CableFeedback.reeled(at: windowPoint(anchor)) }
+    }
+  }
+
+  /** Cables from deleted nodes to those left break at the deleted end, each reeling into the
+   * socket it still hangs from. Read before the deleted nodes' sockets are forgotten. */
+  private func snapCables(of removed: Set<String>) {
+    var felt = true
+    for link in lastLinks {
+      let fromNode = link.string("from_node") ?? "", toNode = link.string("to_node") ?? ""
+      let fromGone = removed.contains(fromNode), toGone = removed.contains(toNode)
+      /* Both ends gone, the cable goes with them. */
+      guard fromGone != toGone else { continue }
+      let fromSocket = link.string("from_socket") ?? "", toSocket = link.string("to_socket") ?? ""
+      guard let from = layout.sockets[NodeCanvasLayout.socketKey(fromNode, output: true, fromSocket)],
+            let to = layout.sockets[NodeCanvasLayout.socketKey(toNode, output: false, toSocket)]
+      else { continue }
+      let source = lastNodes[fromNode]?.array("outputs").first { $0.string("id") == fromSocket }
+      let color = link.bool("valid") ? source.map(socketColor) ?? .gray : .red
+      snapCord(from: fromGone ? to : from, broken: fromGone ? from : to, output: !fromGone, color: color,
+               motion: CableMotion.key(link), felt: felt)
+      felt = false
     }
   }
 
@@ -1476,8 +1511,12 @@ struct NodeCanvas: View {
               Text(time < 1 ? String(format: "%.2f ms", time) : String(format: "%.1f ms", time))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
+                /* Readable over the compositor's backdrop too. */
+                .background(.regularMaterial, in: Capsule())
                 .fixedSize()
-                .offset(y: -22)
+                .offset(y: -24)
                 .allowsHitTesting(false)
             }
           }
@@ -1706,8 +1745,10 @@ struct NodeCanvas: View {
     /* Another tree shown, not every node deleted. */
     let fresh = knownNodes.isEmpty || (!names.isEmpty && knownNodes.isDisjoint(with: names))
     knownNodes = names
-    /* Gone nodes leave no place behind, for wires or touches to find. */
+    /* Their cables break and reel in; then gone nodes leave no place behind, for wires or
+     * touches to find. */
     if !removed.isEmpty {
+      if !fresh, !UIAccessibility.isReduceMotionEnabled { snapCables(of: removed) }
       layout.forget(removed)
     }
     if !fresh, !removed.isEmpty, !UIAccessibility.isReduceMotionEnabled {
@@ -1730,6 +1771,7 @@ struct NodeCanvas: View {
       }
     }
     lastNodes = Dictionary(model.nodes.map { ($0.nodeName, $0) }, uniquingKeysWith: { a, _ in a })
+    lastLinks = model.links
     guard !fresh, let name = added.first, let node = model.nodes.first(where: { $0.string("name") == name })
     else { return }
     /* A new frame draws its outline around what it holds instead. */
