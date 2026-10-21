@@ -615,6 +615,18 @@ endif()
 # -----------------------------------------------------------------------------
 # Install Targets (Generic, All Platforms)
 
+if(WITH_APPLE_CROSSPLATFORM AND CMAKE_GENERATOR MATCHES "Xcode" AND NOT WITH_PYTHON_MODULE)
+  # The blender target installs and signs its runtime assets in POST_BUILD, before
+  # Xcode signs the app. The aggregate install target runs afterwards, without the
+  # app's signing identity. Do not overwrite the contents of the signed bundle.
+  install(CODE [[
+    if("$ENV{TARGET_NAME}" STREQUAL "install")
+      message(STATUS "Blender runtime assets were installed by the blender target; skipping duplicate install")
+      return()
+    endif()
+  ]])
+endif()
+
 if(WITH_PYTHON)
   # install(CODE "message(\"copying blender scripts...\")")
 
@@ -2075,40 +2087,42 @@ elseif(APPLE)
       DESTINATION ${TARGETDIR_LIB}
     )
     if(WITH_APPLE_CROSSPLATFORM)
-      message(STATUS "IOS_FIXME: PLATFORM_BUNDLED_LIBRARIES=${PLATFORM_BUNDLED_LIBRARIES}")
-      # Ensure dylibs are signed. We extract the codesigning identity from the system and format it correctly for the signing call.
-      set(EXTRACT_CODESIGN_IDENTITY_CMD "
-      execute_process(COMMAND security find-identity -v -p codesigning
-                      COMMAND sed -n 1p
-                      COMMAND sed \"s/\\\"//g\"
-                      COMMAND awk \"{$1=$2=\\\"\\\"; print $0}\"
-                      COMMAND awk \"{$1=$1};1\"
-                      OUTPUT_VARIABLE EXTRACT_CODESIGN_IDENTITY
-                      OUTPUT_STRIP_TRAILING_WHITESPACE)")
+      # Use the identity selected by Xcode for the app, resolved at install time rather
+      # than configure time. Picking an arbitrary keychain identity can sign libraries
+      # with a different team, which iOS refuses to load.
       install(CODE "
-      ${EXTRACT_CODESIGN_IDENTITY_CMD}
-      # Iterate through all of the libraries copied to the bundle and sign
-      file(GLOB _signing_libraries \${CMAKE_INSTALL_PREFIX}/${TARGETDIR_LIB}/*.*)
-      foreach(f \${_signing_libraries})
-        message(\"Signing \${f} with signing identity: '\${EXTRACT_CODESIGN_IDENTITY}'\")
-        execute_process(COMMAND codesign -s \"\${EXTRACT_CODESIGN_IDENTITY}\" --options runtime -f \${f})
-      endforeach()")
-      # Ensure python dylib is signed
-      install(CODE "
-      ${EXTRACT_CODESIGN_IDENTITY_CMD}
-      file(GLOB _signing_libraries \${CMAKE_INSTALL_PREFIX}/${TARGETDIR_VER}/python/bin/*.*)
-      foreach(f \${_signing_libraries})
-        message(\"Signing \${f} with signing identity: '\${EXTRACT_CODESIGN_IDENTITY}'\")
-        execute_process(COMMAND codesign -s \"\${EXTRACT_CODESIGN_IDENTITY}\" --options runtime -f \${f})
-      endforeach()")
-      # Ensure numpy so is signed
-      install(CODE "
-      ${EXTRACT_CODESIGN_IDENTITY_CMD}
-      file(GLOB_RECURSE _signing_libraries ${CMAKE_INSTALL_PREFIX}/${TARGETDIR_VER}/python/lib/python${PYTHON_VERSION}/site-packages/numpy/*.so)
-      foreach(f \${_signing_libraries})
-        message(\"Signing \${f} with signing identity: '\${EXTRACT_CODESIGN_IDENTITY}'\")
-        execute_process(COMMAND codesign -s \"\${EXTRACT_CODESIGN_IDENTITY}\" --options runtime -f \${f})
-      endforeach()
+        set(_codesign_identity \"\$ENV{EXPANDED_CODE_SIGN_IDENTITY}\")
+        if(_codesign_identity STREQUAL \"\")
+          message(FATAL_ERROR
+            \"Signing bundled libraries requires Xcode's EXPANDED_CODE_SIGN_IDENTITY. \"
+            \"Build from Xcode, or provide the app's signing identity in that environment variable.\")
+        endif()
+
+        file(GLOB _signing_libraries
+          \"\${CMAKE_INSTALL_PREFIX}/${TARGETDIR_LIB}/*.*\"
+          \"\${CMAKE_INSTALL_PREFIX}/${TARGETDIR_VER}/python/bin/*.*\"
+        )
+        file(GLOB_RECURSE _signing_python_modules
+          \"\${CMAKE_INSTALL_PREFIX}/${TARGETDIR_VER}/python/lib/python${PYTHON_VERSION}/site-packages/numpy/*.so\"
+        )
+        list(APPEND _signing_libraries \${_signing_python_modules})
+        foreach(_library IN LISTS _signing_libraries)
+          message(STATUS \"Signing \${_library} with signing identity: '\${_codesign_identity}'\")
+          execute_process(
+            COMMAND codesign -s \"\${_codesign_identity}\" --options runtime -f \"\${_library}\"
+            RESULT_VARIABLE _codesign_result
+            ERROR_VARIABLE _codesign_error
+          )
+          if(NOT _codesign_result STREQUAL \"0\")
+            message(FATAL_ERROR \"Failed to sign \${_library}: \${_codesign_result}\\n\${_codesign_error}\")
+          endif()
+        endforeach()
+        unset(_codesign_identity)
+        unset(_codesign_result)
+        unset(_codesign_error)
+        unset(_signing_libraries)
+        unset(_signing_python_modules)
+        unset(_library)
       ")
     endif()
   endif()
