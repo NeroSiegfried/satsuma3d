@@ -1609,6 +1609,11 @@ final class RollDial {
   var justClosed: Bool { Date().timeIntervalSince(closedAt) < 0.6 }
 
   func pencilMoved(to point: CGPoint, began: Bool) {
+    if center != nil {
+      /* Open: a Pencil that can't roll turns it by moving along it instead. */
+      drag(to: point)
+      return
+    }
     if began {
       armed = nil
       guard center == nil, let zone = zones.values.first(where: { $0.frame.contains(point) }) else { return }
@@ -1645,11 +1650,39 @@ final class RollDial {
   private(set) var landed: CGRect?
   @ObservationIgnored private var landingFrame: ((RailItem) -> CGRect?)?
 
-  /** Where the fan has turned to, between items while rolling. */
+  /** How far the fan has been turned by moving along it, a Pencil or a finger, in items. */
+  private(set) var dragged: Double = 0
+  @ObservationIgnored private var lastDrag: CGPoint?
+  /** Along the fan from one item to the next, in points, as the layer spaces them. */
+  static let dragStep: CGFloat = 63
+
+  /** Toward the middle of the window, where the fan opens, from its center. */
+  var toward: Double {
+    guard let center, let window = UIApplication.shared.connectedScenes
+      .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first
+    else { return 0 }
+    return atan2(Double(window.bounds.midY - center.y), Double(window.bounds.midX - center.x))
+  }
+
+  /** A Pencil or finger moved to \a point: along the fan, pulling the next item to the front. */
+  func drag(to point: CGPoint) {
+    guard center != nil, confirmed == nil else { return }
+    if let lastDrag {
+      let toward = self.toward
+      /* Along the fan's track where it is in front; items further round come toward it. */
+      let along = Double(point.x - lastDrag.x) * -sin(toward) + Double(point.y - lastDrag.y) * cos(toward)
+      dragged -= along / Double(Self.dragStep)
+    }
+    lastDrag = point
+  }
+
+  func dragEnded() { lastDrag = nil }
+
+  /** Where the fan has turned to, between items while rolling or dragged. */
   var position: Double {
     guard !items.isEmpty else { return 0 }
     if let confirmed { return Double(confirmed) }
-    let turned = (PencilRoll.shared.turned - origin) / Self.step
+    let turned = (PencilRoll.shared.turned - origin) / Self.step + dragged
     return min(Double(items.count - 1), max(0, Double(start) + turned))
   }
 
@@ -1674,6 +1707,8 @@ final class RollDial {
     landed = nil
     start = items.firstIndex { $0.id == active } ?? 0
     origin = PencilRoll.shared.turned
+    dragged = 0
+    lastDrag = nil
     self.choose = choose
     Haptics.impact(.light)
     /* Out of the button the Pencil holds: there first, then grown to its size. */
@@ -1778,7 +1813,12 @@ struct RollDialLayer: View {
       .frame(width: proxy.size.width, height: proxy.size.height)
     }
     .ignoresSafeArea()
-    .allowsHitTesting(false)
+    /* Open, a finger turns it too, dragged along it. */
+    .contentShape(Rectangle())
+    .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
+      .onChanged { dial.drag(to: $0.location) }
+      .onEnded { _ in dial.dragEnded() })
+    .allowsHitTesting(dial.showing)
     .onChange(of: dial.showing ? dial.selected : -1) { _, selected in
       if selected >= 0 && lastSelected >= 0 && selected != lastSelected { dial.clicked() }
       lastSelected = selected
@@ -1792,6 +1832,7 @@ struct RollDialLayer: View {
     let toward = atan2(Double(size.height / 2 - local.y), Double(size.width / 2 - local.x))
     let position = dial.shownPosition
     let radius: CGFloat = 176
+    /* Items 0.36 radians apart on it: RollDial.dragStep points along it. */
     /* Folding into the rail: everything goes to where the chosen item sits there. */
     let landing = dial.landed.map { CGPoint(x: $0.midX - origin.x, y: $0.midY - origin.y) }
     let landingScale = dial.landed.map { min($0.width, $0.height) / 60 } ?? 1
