@@ -233,12 +233,16 @@ private enum ShotPictures {
   }
 }
 
-private let headerHeight: CGFloat = 40
+private let headerHeight: CGFloat = 44
 private let rulerHeight: CGFloat = 24
+/** The scrubber along the bottom, its knob showing the frame. */
+private let scrubberHeight: CGFloat = 40
 private let gripWidth: CGFloat = 18
 
 struct StoryboardView: View {
   let model: StoryboardModel
+  /** The timeline it grew out of: its playback, and its other editors to switch to. */
+  let timeline: TimelineStore
   /** Points per frame, pinched apart sideways to zoom in time. */
   @State private var scale: CGFloat = 4
   /** How much taller than fits the lanes are, pinched apart up and down. */
@@ -252,6 +256,10 @@ struct StoryboardView: View {
   @State private var renaming: StoryboardShot?
   @State private var newName = ""
   @Environment(\.displayScale) private var displayScale
+  /** How far the shots are scrolled, for the scrubber to follow. */
+  @State private var scrollOffset: CGFloat = 0
+  /** The frame under the finger on the scrubber, shown before Blender follows. */
+  @State private var scrubbing: Int?
 
   private struct ShotDrag: Equatable {
     enum Kind { case move, left, right }
@@ -268,7 +276,7 @@ struct StoryboardView: View {
         /* An empty lane below the shots, to move one into. */
         let lanes = model.channels + 1
         /* All of them in the panel's height, unless pinched taller, then scrolled to. */
-        let fit = max(28, min(120, (proxy.size.height - rulerHeight - 4) / CGFloat(lanes)))
+        let fit = max(28, min(120, (proxy.size.height - rulerHeight - scrubberHeight - 4) / CGFloat(lanes)))
         let laneHeight = min(240, fit * laneZoom)
         let width = max(proxy.size.width, x(model.end + 1) + 160)
         ScrollViewReader { scroller in
@@ -277,11 +285,31 @@ struct StoryboardView: View {
               ruler(width: width)
               ForEach(model.shots) { shot in
                 shotView(shot, laneHeight: laneHeight, lanes: lanes)
+                  .id(shot.id)
               }
               playhead(height: rulerHeight + CGFloat(lanes) * laneHeight)
                 .id("playhead")
             }
             .frame(width: width, height: rulerHeight + CGFloat(lanes) * laneHeight, alignment: .topLeading)
+          }
+          .safeAreaInset(edge: .bottom, spacing: 0) {
+            /* In step with the shots above: the same frames at the same places, scrolled with
+             * them. */
+            scrubber(width: width)
+              .offset(x: -scrollOffset)
+              .frame(width: proxy.size.width, height: scrubberHeight, alignment: .leading)
+              .clipped()
+          }
+          .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, offset in
+            scrollOffset = offset
+          }
+          .onChange(of: model.entered) { _, entered in
+            /* Opened, the shot fills the width, to work in its frames. */
+            guard let shot = model.shots.first(where: { $0.id == entered }) else { return }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) {
+              scale = min(40, max(0.5, (proxy.size.width - 40) / CGFloat(max(1, shot.end - shot.start))))
+              scroller.scrollTo(shot.id, anchor: .leading)
+            }
           }
           .scrollIndicators(.hidden)
           .scrollDisabled(drag != nil)
@@ -359,7 +387,9 @@ struct StoryboardView: View {
         Text("Storyboard")
           .font(.headline)
       }
-      Spacer()
+      Spacer(minLength: 8)
+      transport
+      Spacer(minLength: 8)
       Button {
         model.send("add")
         Haptics.impact(.light)
@@ -370,9 +400,89 @@ struct StoryboardView: View {
       .buttonBorderShape(.capsule)
       .controlSize(.small)
       .accessibilityIdentifier("blender.storyboard.add")
+      Button(action: timeline.toggleStoryboard) {
+        Image(systemName: "film.stack.fill")
+          .foregroundStyle(PanelStyle.selection)
+          .frame(width: 36, height: 36)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Close Storyboard")
     }
     .padding(.horizontal, 12)
     .frame(height: headerHeight)
+  }
+
+  /** Playback, as the timeline's: in the edit's time, from shot to shot. */
+  private var transport: some View {
+    HStack(spacing: 0) {
+      Button {
+        timeline.recording.toggle()
+        timeline.send("timeline", "autokey")
+      } label: {
+        Image(systemName: timeline.recording ? "record.circle.fill" : "record.circle")
+          .foregroundStyle(timeline.recording ? Color.red : .primary)
+          .frame(width: 40, height: 40)
+      }
+      .accessibilityLabel("Auto Keying")
+      transportButton("backward.end.fill", "Jump to Start", "start")
+      transportButton("backward.frame.fill", model.entered == nil ? "Previous Cut" : "Previous Keyframe", "prev_key")
+      transportButton(timeline.playing ? "pause.fill" : "play.fill", timeline.playing ? "Pause" : "Play", "play")
+      transportButton("forward.frame.fill", model.entered == nil ? "Next Cut" : "Next Keyframe", "next_key")
+      transportButton("forward.end.fill", "Jump to End", "end")
+    }
+    .buttonStyle(.plain)
+    .font(.system(size: 17))
+  }
+
+  private func transportButton(_ symbol: String, _ label: String, _ command: String) -> some View {
+    Button { timeline.transport(command) } label: {
+      Image(systemName: symbol).frame(width: 40, height: 40).contentShape(Rectangle())
+    }
+    .accessibilityLabel(label)
+  }
+
+  /** The playhead's knob along the bottom at its frame, dragged anywhere along it to scrub. */
+  private func scrubber(width: CGFloat) -> some View {
+    let shown = scrubbing ?? model.frame
+    return ZStack(alignment: .topLeading) {
+      Capsule()
+        .fill(.secondary.opacity(0.25))
+        .frame(width: max(0, x(model.end + 1) - x(model.start)), height: 4)
+        .offset(x: x(model.start), y: scrubberHeight / 2 - 2)
+      Text(verbatim: String(shown))
+        .font(.system(size: 14, weight: .bold).monospacedDigit())
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10)
+        .frame(minWidth: 46, minHeight: 30)
+        .panelGlass(.tinted(Color(uiColor: .systemBlue)), interactive: true, in: Capsule())
+        .scaleEffect(scrubbing != nil ? 1.15 : 1)
+        .fixedSize()
+        /* Centred on its frame, as the playhead above it is. */
+        .position(x: x(shown), y: scrubberHeight / 2)
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: scrubbing != nil)
+    }
+    .frame(width: width, height: scrubberHeight, alignment: .topLeading)
+    .contentShape(Rectangle())
+    .gesture(DragGesture(minimumDistance: 0)
+      .onChanged { value in
+        let frame = min(model.end, max(model.start, frame(at: value.location.x)))
+        if frame != scrubbing { Haptics.selection() }
+        scrubbing = frame
+        model.scrubbing = true
+        model.setFrame(frame, final: false)
+      }
+      .onEnded { value in
+        model.setFrame(min(model.end, max(model.start, frame(at: value.location.x))), final: true)
+        model.scrubbing = false
+        scrubbing = nil
+      })
+    .accessibilityElement()
+    .accessibilityLabel("Frame")
+    .accessibilityValue(String(shown))
+    .accessibilityAdjustableAction { direction in
+      model.setFrame(model.frame + (direction == .increment ? 1 : -1), final: true)
+    }
   }
 
   private func ruler(width: CGFloat) -> some View {
@@ -415,7 +525,9 @@ struct StoryboardView: View {
       Rectangle().fill(PanelStyle.selection).frame(width: 2, height: height)
       Capsule().fill(PanelStyle.selection).frame(width: 12, height: rulerHeight - 6).offset(y: 2)
     }
-    .offset(x: x(model.frame) - 1)
+    /* Centred on its frame, as the ruler's marks and the scrubber's knob are. */
+    .frame(width: 12)
+    .offset(x: x(model.frame) - 6)
     .allowsHitTesting(false)
   }
 

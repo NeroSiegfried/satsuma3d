@@ -62,7 +62,7 @@ final class TimelineStore {
   let storyboard = StoryboardModel()
   /** The workspace has shots, the window following the one under the edit's playhead. */
   var storyboardAvailable = false
-  var storyboardHeight: CGFloat = CGFloat(UserDefaults.standard.object(forKey: "BlenderStoryboardHeight") as? Double ?? 260) {
+  var storyboardHeight: CGFloat = CGFloat(UserDefaults.standard.object(forKey: "BlenderStoryboardHeight") as? Double ?? 300) {
     didSet { UserDefaults.standard.set(Double(storyboardHeight), forKey: "BlenderStoryboardHeight") }
   }
   /** An editor grown out of the timeline, docked to the bottom with it. */
@@ -83,6 +83,23 @@ final class TimelineStore {
 
   func send(_ setting: String, _ value: String) {
     Engine.setting(setting, value)
+  }
+
+  /** A transport button: in the edit's time the edit plays, the window following its shots, and
+   * the previous and next buttons go from cut to cut. */
+  func transport(_ command: String) {
+    guard editTime else {
+      send("timeline", command)
+      return
+    }
+    let board = storyboard
+    switch command {
+      case "start": board.setFrame(board.start, final: true)
+      case "end": board.setFrame(board.end, final: true)
+      case "prev_key": if let cut = board.cut(after: false) { board.setFrame(cut, final: true) }
+      case "next_key": if let cut = board.cut(after: true) { board.setFrame(cut, final: true) }
+      default: board.send("play")
+    }
   }
 
   /* Each edit shows at once; Blender's snapshot confirms it. */
@@ -567,21 +584,7 @@ struct TimelineContent: View {
 
   private func transportButton(_ symbol: String, _ label: String, _ command: String) -> some View {
     Button {
-      /* In the edit's time, the edit plays, the window following its shots, and the previous
-       * and next buttons go from cut to cut. */
-      if store.editTime {
-        let board = store.storyboard
-        switch command {
-          case "start": board.setFrame(board.start, final: true)
-          case "end": board.setFrame(board.end, final: true)
-          case "prev_key": if let cut = board.cut(after: false) { board.setFrame(cut, final: true) }
-          case "next_key": if let cut = board.cut(after: true) { board.setFrame(cut, final: true) }
-          default: board.send("play")
-        }
-      }
-      else {
-        store.send("timeline", command)
-      }
+      store.transport(command)
     } label: {
       Image(systemName: symbol).frame(width: 44, height: 44).contentShape(Rectangle())
     }
@@ -636,7 +639,7 @@ struct TimelinePanel: View {
   /** With the curve editor open, it and the timeline's row of controls under it. */
   static func height(_ store: TimelineStore) -> CGFloat {
     store.curvesShown ? store.curvesHeight + collapsedHeight :
-      store.storyboardShown ? store.storyboardHeight + collapsedHeight : height(expanded: store.expanded)
+      store.storyboardShown ? store.storyboardHeight : height(expanded: store.expanded)
   }
 
   /** The handle the curve editor is made taller or shorter by, and its height when the drag began. */
@@ -678,16 +681,19 @@ struct TimelinePanel: View {
               .onChanged { value in
                 let start = dragStart ?? store.storyboardHeight
                 dragStart = start
-                store.storyboardHeight = min(store.curvesMaximum, max(120, start - value.translation.height))
+                store.storyboardHeight = min(store.curvesMaximum, max(170, start - value.translation.height))
               }
               .onEnded { _ in dragStart = nil })
           .accessibilityLabel("Resize Storyboard")
-        StoryboardView(model: store.storyboard)
+        /* Its own controls in its header, and its own scrubber along the bottom, in step with its
+         * shots: the timeline's row is not needed. */
+        StoryboardView(model: store.storyboard, timeline: store)
           .frame(height: store.storyboardHeight - 16)
-        Divider()
       }
-      TimelineContent(store: store)
-        .frame(height: store.editorShown ? collapsedHeight : Self.height(expanded: store.expanded))
+      else {
+        TimelineContent(store: store)
+          .frame(height: store.curvesShown ? collapsedHeight : Self.height(expanded: store.expanded))
+      }
     }
     .frame(height: Self.height(store))
     .padding(.bottom, store.editorShown ? bottomInset : 0)
