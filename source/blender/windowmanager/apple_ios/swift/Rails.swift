@@ -680,8 +680,9 @@ struct ToolRails: View {
       let safe = CGRect(origin: .zero, size: proxy.size).inset(by: insets)
       let toolItems = RailItem.tools(model.tools, mode: model.mode)
       let brushItems = RailItem.brushes(model.brushes)
-      let content = SidebarContent(brush: model.brush, buttons: model.direction?.bool("hidden") != true,
-                                   smooth: model.direction?.bool("smooth") == true)
+      let content = SidebarContent(brush: model.brush,
+                                   buttons: model.direction?.bool("hidden") != true || model.transforming,
+                                   smooth: model.direction?.bool("smooth") == true && !model.transforming)
       let color = (model.brush?["color"] as? [NSNumber])?.map(\.doubleValue)
       let gizmo = model.navigationGizmo
       let gizmoTop = gizmo.count == 3 ? CGFloat(gizmo[1]) * proxy.size.height - CGFloat(gizmo[2]) * proxy.size.width :
@@ -721,7 +722,7 @@ struct ToolRails: View {
         }
         if !content.isEmpty {
           PaintSidebar(state: intent, direction: model.direction, brush: model.brush, content: content,
-                       leading: layout.sidebarLeading)
+                       leading: layout.sidebarLeading, transforming: model.transforming, window: model.window)
             .overlay(alignment: .top) {
               if !content.buttonsOnly { sidebarHandle(layout, content: content) }
             }
@@ -1997,7 +1998,13 @@ struct PaintSidebar: View {
   let content: SidebarContent
   /** On the leading edge: value labels open towards the viewport, on the other side. */
   let leading: Bool
+  /** Moving, turning or scaling: the + and - are Snap and Precision, held as Control and Shift
+   * are on a keyboard. */
+  var transforming = false
+  var window: UnsafeMutableRawPointer?
   static let width: CGFloat = 64
+
+  @State private var held: String?
 
   @State private var pressing: SelectIntent?
   /** One selection between the + and -, sliding from one to the other as the rails' does. */
@@ -2019,7 +2026,11 @@ struct PaintSidebar: View {
       }
       if content.buttons || content.smooth || content.face {
         VStack(spacing: 4) {
-          if content.buttons {
+          if content.buttons && transforming {
+            modifierButton("ctrl", symbol: "magnet", label: "Snap")
+            modifierButton("shift", symbol: "scope", label: "Precision")
+          }
+          else if content.buttons {
             button(.add, symbol: "plus", label: state.strokes?.addName ?? "Add to Selection")
             button(.subtract, symbol: "minus", label: state.strokes?.subtractName ?? "Subtract from Selection")
           }
@@ -2104,6 +2115,47 @@ struct PaintSidebar: View {
       .accessibilityHint("Hold to smooth with the brush")
       .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
       .accessibilityIdentifier("blender.select-intent.smooth")
+  }
+
+  /** Held while moving, turning or scaling, as a keyboard's key is: Snap snaps, Precision slows
+   * it for fine steps; let go, it is free again. */
+  private func modifierButton(_ key: String, symbol: String, label: String) -> some View {
+    let on = held == key
+    return Image(systemName: symbol)
+      .font(.system(size: 19, weight: .semibold))
+      .foregroundStyle(on ? Color.white : Color.primary)
+      .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
+      .background {
+        if on {
+          Capsule().fill(.clear).panelGlass(.tinted(.blue), in: Capsule())
+            .transition(.opacity.combined(with: .scale(scale: 0.8)))
+        }
+      }
+      .scaleEffect(on ? 0.94 : 1)
+      .contentShape(Capsule())
+      .hoverHighlight(Capsule())
+      .onLongPressGesture(minimumDuration: .infinity, maximumDistance: .infinity, perform: {}) { down in
+        if down {
+          held = key
+          Haptics.selection()
+        }
+        else if held == key {
+          held = nil
+        }
+        wm_apple_ios_window_hold_modifier(window, key, down)
+      }
+      .onChange(of: transforming) { _, transforming in
+        /* The move ended with it held: let go of it too. */
+        if !transforming, held == key {
+          held = nil
+          wm_apple_ios_window_hold_modifier(window, key, false)
+        }
+      }
+      .transition(.opacity.combined(with: .scale(scale: 0.8)))
+      .accessibilityElement()
+      .accessibilityLabel(label)
+      .accessibilityHint(key == "ctrl" ? "Hold to snap" : "Hold for finer steps")
+      .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
   }
 
   private func button(_ intent: SelectIntent, symbol: String, label: String) -> some View {

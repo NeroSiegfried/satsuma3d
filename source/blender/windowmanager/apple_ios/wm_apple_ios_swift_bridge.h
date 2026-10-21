@@ -36,6 +36,8 @@ void WM_apple_ios_ui_toolbar_free_json(char *_Nullable json);
 bool wm_apple_ios_window_presented_frame(void *_Nullable window);
 CGPoint wm_apple_ios_window_pixels(void *_Nullable window, CGPoint point);
 void wm_apple_ios_window_send_key(void *_Nullable window, const char *_Nonnull key);
+/** "shift" or "ctrl" held down or let go, for an operator running to read. */
+void wm_apple_ios_window_hold_modifier(void *_Nullable window, const char *_Nonnull key, bool down);
 /** Whether a document is open that the launcher can go back from, and going back. */
 bool wm_apple_ios_documents_available(void);
 void wm_apple_ios_show_documents(id _Nullable sender);

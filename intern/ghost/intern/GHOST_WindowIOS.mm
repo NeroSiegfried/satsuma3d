@@ -3271,6 +3271,24 @@ void GHOST_ios_window_send_key(GHOST_WindowIOS *window, GHOST_TKey key)
       std::make_unique<GHOST_EventKey>(time, GHOST_kEventKeyUp, window, key, false, nullptr));
 }
 
+void GHOST_ios_window_hold_modifier(GHOST_WindowIOS *window, GHOST_TKey key, const bool down)
+{
+  GHOST_SystemIOS *system = window->getSystem();
+  if (system == nullptr) {
+    return;
+  }
+  const GHOST_TModifierKey modifier = key == GHOST_kKeyLeftShift ? GHOST_kModifierKeyLeftShift :
+                                                                   GHOST_kModifierKeyLeftControl;
+  GHOST_ios_set_modifier_held(modifier, down);
+  system->pushEvent(std::make_unique<GHOST_EventKey>(system->getMilliSeconds(),
+                                                     down ? GHOST_kEventKeyDown :
+                                                            GHOST_kEventKeyUp,
+                                                     window,
+                                                     key,
+                                                     false,
+                                                     nullptr));
+}
+
 UIWindow<GHOST_IOSInputWindow> *GHOST_ios_window_native(GHOST_WindowIOS *window)
 {
   return (GHOSTUIWindow *)window->rootWindow;

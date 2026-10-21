@@ -2834,6 +2834,9 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
   json += brush_json;
   json += ",\"direction\":";
   json += has_view3d_context ? ios_direction_json(C, mode) : "null";
+  /* Moving, turning or scaling: the held buttons are Snap and Precision then. */
+  json += ",\"transforming\":";
+  json += ios_constraint_operator(CTX_wm_window(C)) ? "true" : "false";
   json += ",\"panels\":";
   json += panels_json;
   json += ",\"render\":";

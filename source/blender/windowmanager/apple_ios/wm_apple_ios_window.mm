@@ -69,6 +69,15 @@ extern "C" void wm_apple_ios_window_send_key(void *window, const char *key)
   }
 }
 
+extern "C" void wm_apple_ios_window_hold_modifier(void *window, const char *key, const bool down)
+{
+  if (!window || !key) {
+    return;
+  }
+  GHOST_ios_window_hold_modifier(
+      ghost_window(window), STREQ(key, "shift") ? GHOST_kKeyLeftShift : GHOST_kKeyLeftControl, down);
+}
+
 extern "C" bool wm_apple_ios_documents_available()
 {
   return wm_apple_ios_launcher_can_show_documents();

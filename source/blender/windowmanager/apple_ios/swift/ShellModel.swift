@@ -32,6 +32,8 @@ final class ShellModel {
   private(set) var brush: JSON?
   /** Which way brushes stroke, in modes that paint with them; none where Blender selects. */
   private(set) var direction: JSON?
+  /** Moving, turning or scaling: the sidebar's + and - hold Snap and Precision. */
+  private(set) var transforming = false
   private(set) var canUndo = false
   private(set) var canRedo = false
   /** Adjust Last Operation: the last operator's settings, or none. */
@@ -136,6 +138,7 @@ final class ShellModel {
     set(\.actions, toolbar.array("actions"), equal: jsonListEqual)
     set(\.brushes, toolbar.dict("brushes"), equal: { jsonEqual($0, $1) })
     set(\.direction, toolbar.dict("direction"), equal: { jsonEqual($0, $1) })
+    set(\.transforming, toolbar.bool("transforming"))
     set(\.brush, toolbar.dict("brush"), equal: { jsonEqual($0, $1) })
     set(\.canUndo, toolbar.bool("canUndo"))
     set(\.canRedo, toolbar.bool("canRedo"))

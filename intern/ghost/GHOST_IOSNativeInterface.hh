@@ -99,6 +99,8 @@ std::shared_ptr<std::atomic<bool>> GHOST_ios_window_alive(GHOST_WindowIOS *windo
 bool GHOST_ios_window_presented_frame(GHOST_WindowIOS *window);
 /** Press and release `key` in the window, as a keyboard would. */
 void GHOST_ios_window_send_key(GHOST_WindowIOS *window, GHOST_TKey key);
+/** Shift or Control held down or let go, as a keyboard's would be. */
+void GHOST_ios_window_hold_modifier(GHOST_WindowIOS *window, GHOST_TKey key, bool down);
 
 #ifdef __OBJC__
 #  import <UIKit/UIKit.h>
