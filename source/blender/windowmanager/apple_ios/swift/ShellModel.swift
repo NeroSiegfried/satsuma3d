@@ -33,6 +33,7 @@ final class ShellModel {
   /** Which way brushes stroke, in modes that paint with them; none where Blender selects. */
   private(set) var direction: JSON?
   private(set) var canUndo = false
+  private(set) var canRedo = false
   /** Adjust Last Operation: the last operator's settings, or none. */
   private(set) var redo: JSON?
   /** The text object being typed into: its style where the cursor is, alignment and font file. */
@@ -137,6 +138,7 @@ final class ShellModel {
     set(\.direction, toolbar.dict("direction"), equal: { jsonEqual($0, $1) })
     set(\.brush, toolbar.dict("brush"), equal: { jsonEqual($0, $1) })
     set(\.canUndo, toolbar.bool("canUndo"))
+    set(\.canRedo, toolbar.bool("canRedo"))
     set(\.menuContext, "\(toolbar.string("objectMode") ?? "")|\(toolbar.string("menuState") ?? "")")
     set(\.redo, toolbar.dict("redo"), equal: { jsonEqual($0, $1) })
     set(\.textObject, toolbar.dict("textObject"), equal: { jsonEqual($0, $1) })

@@ -492,7 +492,7 @@ void ios_operator_call(bContext *C, const char *op_name, PointerRNA *props = nul
   }
 }
 
-bool ios_undo_available(bContext *C)
+bool ios_undo_available(bContext *C, const char *op_name = "ED_OT_undo")
 {
   wmWindow *win = CTX_wm_window(C);
   if (win == nullptr) {
@@ -505,12 +505,14 @@ bool ios_undo_available(bContext *C)
       return false;
     }
   }
-  return WM_operator_name_poll(C, "ED_OT_undo");
+  return WM_operator_name_poll(C, op_name);
 }
 
 void ios_operator_invoke(bContext *C, const char *op_name)
 {
-  if (STREQ(op_name, "ED_OT_undo") && !ios_undo_available(C)) {
+  if ((STREQ(op_name, "ED_OT_undo") || STREQ(op_name, "ED_OT_redo")) &&
+      !ios_undo_available(C, op_name))
+  {
     return;
   }
   if (WM_operator_name_poll(C, op_name)) {
@@ -2666,6 +2668,7 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
                                                                       C, mode, active_tool_id) :
                                                                   std::vector<IOSActionItem>();
   const bool can_undo = has_view3d_context && ios_undo_available(C);
+  const bool can_redo = has_view3d_context && ios_undo_available(C, "ED_OT_redo");
   const std::string settings_json = ios_transform_settings_json(
       scene, CTX_data_active_object(C), mode);
   const std::string tool_settings_json = has_view3d_context ? ui::native_properties_query(
@@ -2729,6 +2732,8 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
   json += ios_json_escape(active_tool_id ? active_tool_id : "");
   json += "\",\"canUndo\":";
   json += can_undo ? "true" : "false";
+  json += ",\"canRedo\":";
+  json += can_redo ? "true" : "false";
   /* Which undo step is active: it moves with every change an operator makes, and with undo and
    * redo, once per action rather than during one. Menus are built from the scene, so the interface
    * asks for them again when this changes, and only then. */

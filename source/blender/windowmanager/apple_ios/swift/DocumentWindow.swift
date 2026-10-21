@@ -44,6 +44,11 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     let model = ShellModel(window: window)
     let shell = ShellPanels(model: model)
     let commands = ShellCommands(model: model, shell: shell)
+#if !os(visionOS)
+    if #available(iOS 26.0, *) {
+      SqueezePalette.shared.showSettings = { [weak commands] in commands?.settings?.present() }
+    }
+#endif
     let viewport = ViewportContainer(metalView: metalView)
 #if os(visionOS)
     /* visionOS has no Pencil to bring a radial menu up. */
