@@ -56,6 +56,14 @@ struct StoryboardShot: Equatable, Identifiable {
   }
 }
 
+struct StoryboardLayer: Equatable, Identifiable {
+  var name: String
+  var visible: Bool
+  var locked: Bool
+  var active: Bool
+  var id: String { name }
+}
+
 @MainActor
 @Observable
 final class StoryboardModel {
@@ -70,6 +78,10 @@ final class StoryboardModel {
   private(set) var shots: [StoryboardShot] = []
   /** The scenes a shot can show instead. */
   private(set) var scenes: [String] = []
+  /** The layers of the drawing in the shot shown, the top one first. */
+  private(set) var layers: [StoryboardLayer] = []
+  /** A reordering just made here, kept until Blender's snapshot agrees or a while passes. */
+  @ObservationIgnored private var expectedLayers: (names: [String], until: Date)?
   /** The shot opened to work in its own scene's time, which the timeline then shows; none, the
    * timeline shows the edit's. */
   private(set) var entered: String? {
@@ -107,6 +119,17 @@ final class StoryboardModel {
     /* The frame comes from the timeline's snapshot, every frame; this one is older. */
     let scenes = (snapshot["scenes"] as? [String]) ?? []
     if scenes != self.scenes { self.scenes = scenes }
+    let layers = snapshot.array("layers").map {
+      StoryboardLayer(name: $0.string("name") ?? "", visible: $0.bool("visible"), locked: $0.bool("locked"),
+                      active: $0.bool("active"))
+    }
+    if let expected = expectedLayers, layers.map(\.name) != expected.names && Date() < expected.until {
+      /* Still the order from before the move. */
+    }
+    else {
+      expectedLayers = nil
+      if layers != self.layers { self.layers = layers }
+    }
     let now = Date()
     let next = snapshot.array("strips").map(StoryboardShot.init).map { shot in
       guard let kept = expected[shot.id] else { return shot }
@@ -157,6 +180,28 @@ final class StoryboardModel {
     guard final || Date().timeIntervalSince(lastFrameSent) > 1.0 / 30 else { return }
     lastFrameSent = Date()
     send("frame", ["frame": frame])
+  }
+
+  func activateLayer(_ layer: StoryboardLayer) {
+    layers = layers.map { var other = $0; other.active = $0.id == layer.id; return other }
+    send("layer_active", ["layer": layer.name])
+  }
+
+  func setLayerVisible(_ layer: StoryboardLayer, _ visible: Bool) {
+    if let index = layers.firstIndex(where: { $0.id == layer.id }) { layers[index].visible = visible }
+    send("layer_visible", ["layer": layer.name, "value": visible])
+  }
+
+  /** A layer dragged in the list, which shows the top one first: placed above the layer now at
+   * `destination`, or below the last. */
+  func moveLayers(from source: IndexSet, to destination: Int) {
+    guard let from = source.first, from != destination, from + 1 != destination else { return }
+    let layer = layers[from]
+    let above = destination < from
+    let target = above ? layers[destination] : layers[destination - 1]
+    layers.move(fromOffsets: source, toOffset: destination)
+    expectedLayers = (layers.map(\.name), Date().addingTimeInterval(1.5))
+    send("layer_move", ["layer": layer.name, "target": target.name, "above": above])
   }
 
   /** Opens a shot: the window shows it, the timeline its own scene's time. */
@@ -256,6 +301,11 @@ struct StoryboardView: View {
   @State private var renaming: StoryboardShot?
   @State private var newName = ""
   @Environment(\.displayScale) private var displayScale
+  @State private var lanesWidth: CGFloat = 0
+  /** Where the shots are scrolled to: shots and the playhead are placed by offsets, so scrolled
+   * to by position rather than by view. */
+  @State private var position = ScrollPosition(edge: .leading)
+  @State private var zoomBeforeEntering: CGFloat?
   /** How far the shots are scrolled, for the scrubber to follow. */
   @State private var scrollOffset: CGFloat = 0
   /** The frame under the finger on the scrubber, shown before Blender follows. */
@@ -272,6 +322,73 @@ struct StoryboardView: View {
   var body: some View {
     VStack(spacing: 0) {
       header
+      HStack(spacing: 0) {
+        if model.entered != nil && !model.layers.isEmpty {
+          layerList
+            .frame(width: 200)
+            .transition(.move(edge: .leading).combined(with: .opacity))
+          Divider()
+        }
+        lanes
+      }
+      .animation(.spring(response: 0.35, dampingFraction: 0.9), value: model.entered)
+    }
+    .alert("Rename Shot", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+      TextField("Name", text: $newName)
+      Button("Rename") {
+        if let shot = renaming, !newName.isEmpty { model.send("rename", ["name": shot.name, "value": newName]) }
+        renaming = nil
+      }
+      Button("Cancel", role: .cancel) { renaming = nil }
+    }
+    .accessibilityIdentifier("blender.storyboard")
+  }
+
+  /** The opened shot's layers, the top one first: tapped to draw on, dragged to reorder. */
+  private var layerList: some View {
+    VStack(spacing: 0) {
+      HStack {
+        Text("Layers").font(.subheadline.weight(.semibold))
+        Spacer()
+        Button("Add Layer", systemImage: "plus") { model.send("layer_add") }
+          .labelStyle(.iconOnly)
+          .buttonStyle(.borderless)
+      }
+      .padding(.horizontal, 12)
+      .frame(height: 32)
+      List {
+        ForEach(model.layers) { layer in
+          HStack(spacing: 8) {
+            Button {
+              model.setLayerVisible(layer, !layer.visible)
+            } label: {
+              Image(systemName: layer.visible ? "eye" : "eye.slash")
+                .foregroundStyle(layer.visible ? .primary : .secondary)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(layer.visible ? "Hide \(layer.name)" : "Show \(layer.name)")
+            Text(layer.name)
+              .lineLimit(1)
+              .foregroundStyle(layer.visible ? .primary : .secondary)
+            Spacer(minLength: 0)
+            if layer.locked { Image(systemName: "lock.fill").font(.caption).foregroundStyle(.secondary) }
+          }
+          .font(.subheadline)
+          .contentShape(Rectangle())
+          .onTapGesture { model.activateLayer(layer) }
+          .listRowBackground(layer.active ? PanelStyle.activeRow : Color.clear)
+          .listRowInsets(EdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 10))
+          .accessibilityAddTraits(layer.active ? .isSelected : [])
+        }
+        .onMove { model.moveLayers(from: $0, to: $1) }
+      }
+      .listStyle(.plain)
+      .scrollContentBackground(.hidden)
+      .environment(\.defaultMinListRowHeight, 34)
+    }
+  }
+
+  private var lanes: some View {
       GeometryReader { proxy in
         /* An empty lane below the shots, to move one into. */
         let lanes = model.channels + 1
@@ -279,16 +396,14 @@ struct StoryboardView: View {
         let fit = max(28, min(120, (proxy.size.height - rulerHeight - scrubberHeight - 4) / CGFloat(lanes)))
         let laneHeight = min(240, fit * laneZoom)
         let width = max(proxy.size.width, x(model.end + 1) + 160)
-        ScrollViewReader { scroller in
+        ScrollViewReader { _ in
           ScrollView([.horizontal, .vertical]) {
             ZStack(alignment: .topLeading) {
               ruler(width: width)
               ForEach(model.shots) { shot in
                 shotView(shot, laneHeight: laneHeight, lanes: lanes)
-                  .id(shot.id)
               }
               playhead(height: rulerHeight + CGFloat(lanes) * laneHeight)
-                .id("playhead")
             }
             .frame(width: width, height: rulerHeight + CGFloat(lanes) * laneHeight, alignment: .topLeading)
           }
@@ -304,19 +419,37 @@ struct StoryboardView: View {
             scrollOffset = offset
           }
           .onChange(of: model.entered) { _, entered in
-            /* Opened, the shot fills the width, to work in its frames. */
-            guard let shot = model.shots.first(where: { $0.id == entered }) else { return }
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) {
-              scale = min(40, max(0.5, (proxy.size.width - 40) / CGFloat(max(1, shot.end - shot.start))))
-              scroller.scrollTo(shot.id, anchor: .leading)
+            /* Opened, the shot fills the width, to work in its frames, once the layers beside it
+             * have taken their room; closed, the zoom from before. */
+            guard let shot = model.shots.first(where: { $0.id == entered }) else {
+              if let zoom = zoomBeforeEntering {
+                zoomBeforeEntering = nil
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { scale = zoom }
+              }
+              return
+            }
+            if zoomBeforeEntering == nil { zoomBeforeEntering = scale }
+            Task { @MainActor in
+              try? await Task.sleep(for: .milliseconds(80))
+              withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) {
+                scale = min(40, max(0.5, (lanesWidth - 48) / CGFloat(max(1, shot.end - shot.start))))
+              }
+              withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) {
+                position.scrollTo(x: max(0, x(shot.start) - 24))
+              }
             }
           }
+          .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { lanesWidth = $0 }
           .scrollIndicators(.hidden)
           .scrollDisabled(drag != nil)
+          .scrollPosition($position)
           .clipped()
-          .onChange(of: model.frame) { _, _ in
-            /* Playback keeps the playhead in view. */
-            if model.playing { scroller.scrollTo("playhead", anchor: .center) }
+          .onChange(of: model.frame) { _, frame in
+            /* Playback keeps the playhead in view, a page at a time. */
+            let at = x(frame)
+            if model.playing && (at < scrollOffset || at > scrollOffset + lanesWidth - 24) {
+              withAnimation(.easeInOut(duration: 0.3)) { position.scrollTo(x: max(0, at - 40)) }
+            }
           }
         }
         .gesture(AxisPinch { stretch in
@@ -338,16 +471,6 @@ struct StoryboardView: View {
           requestPictures(request)
         }
       }
-    }
-    .alert("Rename Shot", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-      TextField("Name", text: $newName)
-      Button("Rename") {
-        if let shot = renaming, !newName.isEmpty { model.send("rename", ["name": shot.name, "value": newName]) }
-        renaming = nil
-      }
-      Button("Cancel", role: .cancel) { renaming = nil }
-    }
-    .accessibilityIdentifier("blender.storyboard")
   }
 
   private struct PictureRequest: Equatable {

@@ -29,6 +29,8 @@
 #include "BLI_string_ref.hh"
 #include "BLI_vector.hh"
 
+#include "DNA_grease_pencil_types.h"
+#include "DNA_object_types.h"
 #include "DNA_scene_types.h"
 #include "DNA_screen_types.h"
 #include "DNA_sequence_types.h"
@@ -38,6 +40,8 @@
 #include "BKE_appdir.hh"
 #include "BKE_context.hh"
 #include "BKE_global.hh"
+#include "BKE_grease_pencil.hh"
+#include "BKE_layer.hh"
 #include "BKE_lib_id.hh"
 #include "BKE_main.hh"
 #include "BKE_scene.hh"
@@ -138,6 +142,41 @@ const void *last_undo_step = nullptr;
 /** When the shot drawn in last changed: its pictures wait for a pause in the drawing. */
 std::chrono::steady_clock::time_point last_change;
 int picture_count = 0;
+
+/** The Grease Pencil the shot shown is drawn on: the active object, or none. */
+GreasePencil *shown_grease_pencil(bContext *C)
+{
+  Object *object = CTX_data_active_object(C);
+  return object && object->type == OB_GREASE_PENCIL ? reinterpret_cast<GreasePencil *>(object->data) :
+                                                      nullptr;
+}
+
+/** Its layers, the top one first as Blender's layer list shows them. */
+void append_layers(bContext *C, DictionaryValue &result)
+{
+  GreasePencil *grease_pencil = shown_grease_pencil(C);
+  if (!grease_pencil) {
+    return;
+  }
+  result.append_str("layers_owner", grease_pencil->id.name + 2);
+  auto layers = result.append_array("layers");
+  const bke::greasepencil::Layer *active = grease_pencil->get_active_layer();
+  const Span<const bke::greasepencil::Layer *> all = grease_pencil->layers();
+  for (int i = all.size() - 1; i >= 0; i--) {
+    const bke::greasepencil::Layer &layer = *all[i];
+    auto item = layers->append_dict();
+    item->append_str("name", layer.name());
+    item->append_int("visible", layer.is_visible());
+    item->append_int("locked", layer.is_locked());
+    item->append_int("active", &layer == active);
+  }
+}
+
+bke::greasepencil::Layer *find_layer(GreasePencil &grease_pencil, const std::string &name)
+{
+  bke::greasepencil::TreeNode *node = grease_pencil.find_node_by_name(name);
+  return node && node->is_layer() ? &node->as_layer() : nullptr;
+}
 
 /** Undo steps of the storyboard's own edits, which change no shot's pictures. */
 bool storyboard_step(const char *name)
@@ -243,6 +282,8 @@ std::string read_storyboard(bContext *C, const DictionaryValue *state, const boo
       last_change = std::chrono::steady_clock::now();
     }
   }
+
+  append_layers(C, result);
 
   /* Pictures every so many frames along each shot, as many as fit side by side where the native
    * interface shows them, `height` pixels high. */
@@ -473,6 +514,48 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
             int(query.lookup_int("frame").value_or(0)));
     sync_active_scene_and_time_with_scene_strip(*C);
     return left ? "Trim Shot Start" : "Trim Shot End";
+  }
+  if (action == "layer_active" || action == "layer_visible" || action == "layer_move") {
+    GreasePencil *grease_pencil = shown_grease_pencil(C);
+    bke::greasepencil::Layer *layer = grease_pencil ?
+                                          find_layer(*grease_pencil, query.lookup_str("layer").value_or("")) :
+                                          nullptr;
+    if (!layer) {
+      return std::nullopt;
+    }
+    std::string undo;
+    if (action == "layer_active") {
+      grease_pencil->set_active_layer(layer);
+      undo = "Set Active Layer";
+    }
+    else if (action == "layer_visible") {
+      layer->set_visible(query.lookup_int("value").value_or(1));
+      undo = "Show Layer";
+    }
+    else {
+      /* Dropped above another layer in the list, which shows the top one first: after it in
+       * Blender's order, drawn over it. */
+      bke::greasepencil::Layer *target = find_layer(*grease_pencil,
+                                                    query.lookup_str("target").value_or(""));
+      if (!target || target == layer) {
+        return std::nullopt;
+      }
+      if (query.lookup_int("above").value_or(1)) {
+        grease_pencil->move_node_after(layer->as_node(), target->as_node());
+      }
+      else {
+        grease_pencil->move_node_before(layer->as_node(), target->as_node());
+      }
+      undo = "Move Layer";
+    }
+    DEG_id_tag_update(&grease_pencil->id, ID_RECALC_GEOMETRY);
+    WM_event_add_notifier(C, NC_GPENCIL | NA_EDITED, nullptr);
+    return undo;
+  }
+  if (action == "layer_add") {
+    WM_operator_name_call(C, "GREASE_PENCIL_OT_layer_add", wm::OpCallContext::ExecDefault, nullptr,
+                          nullptr);
+    return "";
   }
   if (action == "set_scene") {
     if (!strip || strip->type != STRIP_TYPE_SCENE) {
