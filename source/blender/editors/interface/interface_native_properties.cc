@@ -3121,8 +3121,10 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
             field->append_str("toggle_group", candidate.id + ":" + std::to_string(group->second.first));
             field->append_str("toggle_caption", group->second.second);
           }
+          /* The short text Blender draws, for the tool settings and for a row of toggles, such
+           * as the Axes' X, Y and Z, rather than each property's full name. */
           if (const auto found = tool_labels.find(&but);
-              tool_settings && found != tool_labels.end()) {
+              found != tool_labels.end() && (tool_settings || toggle_groups.count(&but))) {
             field->append_str("toolbar_label", found->second);
           }
           if (const auto found = field_modes.find(key); found != field_modes.end()) {
