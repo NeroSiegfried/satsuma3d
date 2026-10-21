@@ -1572,12 +1572,17 @@ struct SidebarContent: Equatable {
   var strength = false
   var buttons = false
   var smooth = false
+  /** Face Control, where the front camera tracks faces: the face plays the brush. */
+  var face = false
 
   init(brush: JSON?, buttons: Bool, smooth: Bool = false) {
     size = brush?.dict("size") != nil
     strength = brush?.dict("strength") != nil
     self.buttons = buttons
     self.smooth = smooth
+#if !os(visionOS)
+    face = (size || strength) && FaceControl.supported
+#endif
   }
 
   var isEmpty: Bool { !size && !strength && !buttons && !smooth }
@@ -1585,9 +1590,9 @@ struct SidebarContent: Equatable {
   var buttonsOnly: Bool { (buttons || smooth) && !size && !strength }
 
   let sliderHeight: CGFloat = 148
-  /** The + and -, and Smooth below them, each 52 high. */
+  /** The + and -, Smooth and Face Control below them, each 52 high. */
   var buttonsHeight: CGFloat {
-    let count = (buttons ? 2 : 0) + (smooth ? 1 : 0)
+    let count = (buttons ? 2 : 0) + (smooth ? 1 : 0) + (face ? 1 : 0)
     return count == 0 ? 0 : CGFloat(count) * 52 + CGFloat(count - 1) * 4
   }
 
@@ -1627,13 +1632,16 @@ struct PaintSidebar: View {
                       logarithmic: false, height: content.sliderHeight, leading: leading, unit: "%",
                       preview: .strength, format: { String(Int(($0 * 100).rounded())) })
       }
-      if content.buttons || content.smooth {
+      if content.buttons || content.smooth || content.face {
         VStack(spacing: 4) {
           if content.buttons {
             button(.add, symbol: "plus", label: state.strokes?.addName ?? "Add to Selection")
             button(.subtract, symbol: "minus", label: state.strokes?.subtractName ?? "Subtract from Selection")
           }
           if content.smooth { smoothButton }
+#if !os(visionOS)
+          if content.face { faceButton }
+#endif
         }
         .transition(.opacity.combined(with: .scale(scale: 0.9)))
       }
@@ -1658,6 +1666,30 @@ struct PaintSidebar: View {
     .accessibilityElement(children: .contain)
     .accessibilityIdentifier("blender.sidebar")
   }
+
+#if !os(visionOS)
+  /** Face Control on or off: the mouth sets the strength, the eyebrows the size, see #FaceControl. */
+  private var faceButton: some View {
+    let on = FaceControl.shared.running
+    return Button {
+      FaceControl.shared.toggle()
+    } label: {
+      Image(systemName: on ? "face.smiling.inverse" : "face.smiling")
+        .font(.system(size: 20, weight: .semibold))
+        .foregroundStyle(on ? Color.white : Color.primary)
+        .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
+        .background {
+          if on { Capsule().fill(.clear).panelGlass(.tinted(.blue), in: Capsule()) }
+        }
+        .contentShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .hoverHighlight(Capsule())
+    .accessibilityLabel("Face Control")
+    .accessibilityHint("Your mouth sets the brush's strength, your eyebrows its size")
+    .accessibilityAddTraits(on ? .isSelected : [])
+  }
+#endif
 
   /** Held, strokes smooth, as Shift does with a keyboard; let go, the brush is back. Not a brush to
    * choose: a key to hold with one hand while the other strokes. */

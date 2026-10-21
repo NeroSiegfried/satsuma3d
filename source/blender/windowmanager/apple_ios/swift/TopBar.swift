@@ -489,11 +489,16 @@ struct DocumentToolbar: ToolbarContent {
       if let presenter = commands.presenter { wm_apple_ios_new_document(presenter) }
     }
 #if !os(visionOS)
-    if FaceControl.supported && (model.brush?.dict("size") != nil || model.brush?.dict("strength") != nil) {
+    if model.brush?.dict("size") != nil || model.brush?.dict("strength") != nil {
       Section {
         /* The face plays the brush: the mouth its strength, the eyebrows its size. */
         sidebarToggle("Face Control", icon: UIImage(systemName: "face.smiling"),
                       isOn: FaceControl.shared.running) { FaceControl.shared.toggle() }
+          .disabled(!FaceControl.supported)
+      } footer: {
+        if !FaceControl.supported {
+          Text("Needs a front camera that tracks faces, as iPads with Face ID have.")
+        }
       }
     }
 #endif

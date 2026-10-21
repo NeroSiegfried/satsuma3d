@@ -19,7 +19,7 @@ final class FaceControl: NSObject, ARSessionDelegate {
   static let shared = FaceControl()
 
   /** Only with a camera that tracks faces, as iPads with Face ID have. */
-  static var supported: Bool { ARFaceTrackingConfiguration.isSupported }
+  nonisolated static var supported: Bool { ARFaceTrackingConfiguration.isSupported }
 
   private(set) var running = false
   /** A face is in view. */
