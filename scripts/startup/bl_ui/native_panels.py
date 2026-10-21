@@ -18,13 +18,21 @@ def _uid(item):
 
 def _object_actions(context, obj):
     actions = ['visibility']
-    if context.mode == 'OBJECT' and obj.is_editable:
+    # Renaming, moving into collections and parenting only change data: in any mode, as in the
+    # Outliner, though not for an object being edited.
+    if obj.is_editable and obj.mode != 'EDIT':
         actions += ['rename', 'move']
+    if context.mode == 'OBJECT' and obj.is_editable:
         if obj.visible_get(view_layer=context.view_layer) and not obj.hide_select:
             actions.append('duplicate')
         if not obj.library and not obj.override_library:
             actions.append('delete')
     return actions
+
+
+def _accepts_children(context, obj):
+    """Whether objects can be dropped onto this one to be parented to it."""
+    return obj.is_editable and obj.mode != 'EDIT' and not obj.library
 
 
 def _collection_actions(context, layer):
@@ -33,16 +41,17 @@ def _collection_actions(context, layer):
         return []
     coll = layer.collection
     actions = ['visibility']
-    if context.mode == 'OBJECT' and coll.is_editable and not coll.override_library:
-        actions += ['rename', 'delete', 'move']
+    if coll.is_editable and not coll.override_library:
+        actions += ['rename', 'move']
+        if context.mode == 'OBJECT':
+            actions.append('delete')
     return actions
 
 
 def _accepts_drop(context, layer):
     """Whether objects and collections can be moved into this collection."""
     coll = layer.collection
-    return (context.mode == 'OBJECT' and not layer.exclude and coll.is_editable and
-            not coll.override_library)
+    return not layer.exclude and coll.is_editable and not coll.override_library
 
 
 def _scene_collections(context):
@@ -176,6 +185,7 @@ def _hierarchy(context):
                              "selected": obj.select_get(view_layer=context.view_layer),
                              "hidden": obj.hide_get(view_layer=context.view_layer),
                              "actions": _object_actions(context, obj),
+                             "accepts": _accepts_children(context, obj),
                              "enabled": obj.visible_get(view_layer=context.view_layer)
                              and not obj.hide_select and context.mode == 'OBJECT'})
                 object_rows(obj.name, level + 1, obj_key)
@@ -232,6 +242,8 @@ class WM_OT_native_panel_edit(bpy.types.Operator):
                                        if _uid(item) == request.get('target')), None)
                         if parent is None:
                             raise ValueError("That object is no longer in the current view layer.")
+                        if not _accepts_children(context, parent):
+                            raise ValueError("Objects cannot be parented to that object now.")
                         _parent_objects(context, objects, parent)
                     else:
                         target = _collection_by_uid(context, request.get('target'))

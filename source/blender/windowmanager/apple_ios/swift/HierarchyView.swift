@@ -110,7 +110,7 @@ final class HierarchyStore: ObservableObject {
     }
     if target.string("kind") == "collection" { return target.bool("accepts") }
     /* Objects drop onto objects to be parented; collections only into collections. */
-    return kind == "object" && target.string("kind") == "object" && target.bool("enabled")
+    return kind == "object" && target.string("kind") == "object" && target.bool("accepts")
   }
 
   func move(_ moving: [JSON], to target: JSON) {
