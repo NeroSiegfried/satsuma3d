@@ -33,6 +33,8 @@ struct StoryboardShot: Equatable, Identifiable {
   /** Width over height of its scene's frames. */
   var aspect: Double
   var pictures: [StoryboardPicture]
+  /** Where its drawings begin, in the edit's frames: its Grease Pencil keys. */
+  var keys: [Int]
 
   var id: String { name }
 
@@ -48,6 +50,7 @@ struct StoryboardShot: Equatable, Identifiable {
     muted = json.bool("muted")
     color = json.int("color") ?? 0
     aspect = json.double("aspect") ?? 16.0 / 9.0
+    keys = ((json["keys"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.intValue }
     pictures = ((json["pictures"] as? [Any]) ?? []).compactMap { entry in
       guard let pair = entry as? [Any], pair.count == 2, let frame = (pair[0] as? NSNumber)?.intValue,
             let path = pair[1] as? String else { return nil }
@@ -143,6 +146,7 @@ final class StoryboardModel {
       if kept.shot.end - kept.shot.start == shot.end - shot.start {
         let delta = kept.shot.start - shot.start
         shown.pictures = shot.pictures.map { StoryboardPicture(frame: $0.frame + delta, path: $0.path) }
+        shown.keys = shot.keys.map { $0 + delta }
       }
       shown.start = kept.shot.start
       shown.end = kept.shot.end
@@ -189,7 +193,7 @@ final class StoryboardModel {
 
   func setLayerVisible(_ layer: StoryboardLayer, _ visible: Bool) {
     if let index = layers.firstIndex(where: { $0.id == layer.id }) { layers[index].visible = visible }
-    send("layer_visible", ["layer": layer.name, "value": visible])
+    send("layer_visible", ["layer": layer.name, "value": visible ? 1 : 0])
   }
 
   /** A layer dragged in the list, which shows the top one first: placed above the layer now at
@@ -201,7 +205,7 @@ final class StoryboardModel {
     let target = above ? layers[destination] : layers[destination - 1]
     layers.move(fromOffsets: source, toOffset: destination)
     expectedLayers = (layers.map(\.name), Date().addingTimeInterval(1.5))
-    send("layer_move", ["layer": layer.name, "target": target.name, "above": above])
+    send("layer_move", ["layer": layer.name, "target": target.name, "above": above ? 1 : 0])
   }
 
   /** Opens a shot: the window shows it, the timeline its own scene's time. */
@@ -245,6 +249,7 @@ final class StoryboardModel {
       $0.start = start
       $0.channel = channel
       $0.pictures = $0.pictures.map { StoryboardPicture(frame: $0.frame + delta, path: $0.path) }
+      $0.keys = $0.keys.map { $0 + delta }
     }
     send("move", ["name": shot.name, "start": start, "channel": channel])
   }
@@ -299,6 +304,8 @@ struct StoryboardView: View {
   /** The snap the drag last made, to tap once as it takes. */
   @State private var snappedTo: Int?
   @State private var renaming: StoryboardShot?
+  @State private var renamingLayer: StoryboardLayer?
+  @State private var newLayerName = ""
   @State private var newName = ""
   @Environment(\.displayScale) private var displayScale
   @State private var lanesWidth: CGFloat = 0
@@ -341,6 +348,16 @@ struct StoryboardView: View {
       }
       Button("Cancel", role: .cancel) { renaming = nil }
     }
+    .alert("Rename Layer", isPresented: Binding(get: { renamingLayer != nil }, set: { if !$0 { renamingLayer = nil } })) {
+      TextField("Name", text: $newLayerName)
+      Button("Rename") {
+        if let layer = renamingLayer, !newLayerName.isEmpty {
+          model.send("layer_rename", ["layer": layer.name, "value": newLayerName])
+        }
+        renamingLayer = nil
+      }
+      Button("Cancel", role: .cancel) { renamingLayer = nil }
+    }
     .accessibilityIdentifier("blender.storyboard")
   }
 
@@ -372,6 +389,29 @@ struct StoryboardView: View {
               .foregroundStyle(layer.visible ? .primary : .secondary)
             Spacer(minLength: 0)
             if layer.locked { Image(systemName: "lock.fill").font(.caption).foregroundStyle(.secondary) }
+            Menu {
+              Button("Clear Drawing", systemImage: "eraser") { model.send("layer_clear", ["layer": layer.name]) }
+              Button("Duplicate", systemImage: "plus.square.on.square") {
+                model.send("layer_duplicate", ["layer": layer.name])
+              }
+              Button(layer.locked ? "Unlock" : "Lock", systemImage: layer.locked ? "lock.open" : "lock") {
+                model.send("layer_lock", ["layer": layer.name, "value": layer.locked ? 0 : 1])
+              }
+              Button("Rename…", systemImage: "pencil") {
+                newLayerName = layer.name
+                renamingLayer = layer
+              }
+              Divider()
+              Button("Delete", systemImage: "trash", role: .destructive) {
+                model.send("layer_delete", ["layer": layer.name])
+              }
+            } label: {
+              Image(systemName: "ellipsis")
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("\(layer.name) Actions")
           }
           .font(.subheadline)
           .contentShape(Rectangle())
@@ -486,8 +526,10 @@ struct StoryboardView: View {
     model.requestPictures(step: step, height: Int(height * displayScale))
   }
 
-  private func x(_ frame: Int) -> CGFloat { 12 + CGFloat(frame - model.start) * scale }
-  private func frame(at x: CGFloat) -> Int { model.start + Int(((x - 12) / scale).rounded(.down)) }
+  /** Room before the first frame for the scrubber's knob, centred on it. */
+  private let leading: CGFloat = 30
+  private func x(_ frame: Int) -> CGFloat { leading + CGFloat(frame - model.start) * scale }
+  private func frame(at x: CGFloat) -> Int { model.start + Int(((x - leading) / scale).rounded(.down)) }
 
   /* -------------------------------------------------------------------- */
   /* Header, ruler and playhead */
@@ -808,6 +850,26 @@ struct StoryboardView: View {
           context.draw(image, in: CGRect(x: cell, y: 0, width: pictureWidth, height: size.height))
           cell += pictureWidth
         } while cell < next
+      }
+      /* Where each drawing begins: a line through the strip and a key on it, as the timeline
+       * marks keys. */
+      for key in shot.keys {
+        let at = x(key + offset) - x(start)
+        guard at >= 0, at < size.width else { continue }
+        if at > 1 {
+          context.fill(Path(CGRect(x: at - 0.5, y: 0, width: 1.5, height: size.height)),
+                       with: .color(.black.opacity(0.45)))
+        }
+        let center = CGPoint(x: max(6, at), y: size.height - 8)
+        let diamond = Path { path in
+          path.move(to: CGPoint(x: center.x, y: center.y - 5))
+          path.addLine(to: CGPoint(x: center.x + 5, y: center.y))
+          path.addLine(to: CGPoint(x: center.x, y: center.y + 5))
+          path.addLine(to: CGPoint(x: center.x - 5, y: center.y))
+          path.closeSubpath()
+        }
+        context.fill(diamond, with: .color(.white))
+        context.stroke(diamond, with: .color(.black.opacity(0.6)), lineWidth: 1)
       }
     }
     .frame(width: width, height: height)
