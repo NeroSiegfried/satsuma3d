@@ -1736,6 +1736,9 @@ static UIBezierPath *pointer_move()
         orbit_gesture_id = ++next_orbit_gesture_id;
       }
       [sender setCachedTranslation:translation];
+      if (sender.state == UIGestureRecognizerStateBegan) {
+        navigation_from_orbit = orbits && orbiting_fingers == 1;
+      }
       navigation_touches = touches;
       navigation_orbits = orbits;
     }
@@ -1768,6 +1771,7 @@ static UIBezierPath *pointer_move()
     const bool was_orbiting = navigation_orbits;
     navigation_touches = 0;
     navigation_orbits = false;
+    navigation_from_orbit = false;
     /* Spinning on only from an orbit. */
     if (sender.state == UIGestureRecognizerStateEnded && !pencil_button_active && was_orbiting &&
         ![self fingerTweakHolds])
@@ -1941,11 +1945,18 @@ static UIBezierPath *pointer_move()
 {
   /* Ignore any calls where don't have two touches to work with. */
   if ([sender numberOfTouches] < 2) {
+    zoom_restart = true;
+    return;
+  }
+  /* A one-finger orbit that a second finger turned into a pan: no zoom. */
+  if (navigation_from_orbit) {
+    zoom_restart = true;
     return;
   }
 
   /* Pinch/Zoom gestures */
-  if (sender.state == UIGestureRecognizerStateBegan) {
+  if (sender.state == UIGestureRecognizerStateBegan || zoom_restart) {
+    zoom_restart = false;
     /* Set an initial distance value. */
     CGFloat point_distance = [sender getScaledDistance:window];
     [sender setCachedDistance:point_distance];
@@ -1982,6 +1993,17 @@ static UIBezierPath *pointer_move()
   if (sender.state == UIGestureRecognizerStateBegan ||
       sender.state == UIGestureRecognizerStateChanged)
   {
+    /* Twisting needs two fingers, and not a one-finger orbit's second one. */
+    if (sender.numberOfTouches < 2 || navigation_from_orbit) {
+      rotation_restart = true;
+      sender.rotation = 0.0;
+      return;
+    }
+    if (rotation_restart) {
+      rotation_restart = false;
+      sender.rotation = 0.0;
+      return;
+    }
     const CGFloat relative_rotation = sender.rotation;
     sender.rotation = 0.0;
 

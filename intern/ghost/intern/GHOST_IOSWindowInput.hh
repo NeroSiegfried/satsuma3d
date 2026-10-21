@@ -212,6 +212,12 @@ typedef struct UserInputEvent {
    * and goes on from where it is when that changes. */
   NSUInteger navigation_touches;
   bool navigation_orbits;
+  /* The drag began orbiting with one finger: it goes on from orbit to pan and back as fingers
+   * come and go, without pinch or twist ever taking part, until every finger has lifted. */
+  bool navigation_from_orbit;
+  /* The pinch or twist lost its second finger: the next one starts it afresh, not jumping. */
+  bool zoom_restart;
+  bool rotation_restart;
 
   /* Keyboard handling. */
   /** Text is edited by Blender from hardware key events, not in #text_field. */
