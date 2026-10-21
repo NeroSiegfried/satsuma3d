@@ -426,7 +426,9 @@ struct DocumentToolbar: ToolbarContent {
         Label { Text("Overlays") } icon: { iconImage(BlenderIcon.image("OVERLAY")) }
       }
       Menu {
-        ForEach(ViewCommand.pie(locked: model.viewport?.bool("lock_camera") == true), id: \.title) { command in
+        ForEach(ViewCommand.pie(locked: model.viewport?.bool("lock_camera") == true,
+                                kept: model.viewport?.bool("keep_camera_view") == true,
+                                camera: model.viewport?.bool("camera_view") == true), id: \.title) { command in
           Button { command.run() } label: { Label { Text(command.title) } icon: { iconImage(command.image) } }
         }
       } label: {

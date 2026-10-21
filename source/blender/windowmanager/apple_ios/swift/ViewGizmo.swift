@@ -18,12 +18,19 @@ struct ViewCommand {
   /** `WMIOSUICommand`, or a viewport option to toggle instead. */
   var command: Int32 = -1
   var toggle: String?
+  /** Or an operator of Blender's to run in the viewport. */
+  var operatorName: String?
 
-  /** The views, then Lock Camera to View: navigating then moves the camera, staying in its
-   * view. */
-  static func pie(locked: Bool) -> [ViewCommand] {
-    views + [ViewCommand(title: locked ? "Unlock Camera" : "Lock Camera",
-                         symbol: locked ? "lock.open" : "lock", toggle: "lock_camera")]
+  /** The views, then Lock Camera to View, navigating then moves the camera, and Keep Camera
+   * View, navigating then stays in the camera's view without moving the camera. */
+  static func pie(locked: Bool, kept: Bool, camera: Bool = false) -> [ViewCommand] {
+    /* Looking through the camera, its whole frame filling the view again, staying in it. */
+    let fit = camera ? [ViewCommand(title: "Fit Camera View", symbol: "camera.viewfinder",
+                                    operatorName: "VIEW3D_OT_view_center_camera")] : []
+    return views + fit + [ViewCommand(title: locked ? "Unlock Camera" : "Lock Camera",
+                         symbol: locked ? "lock.open" : "lock", toggle: "lock_camera"),
+             ViewCommand(title: kept ? "Free Camera View" : "Keep Camera View",
+                         symbol: kept ? "pin.slash" : "pin", toggle: "keep_camera_view")]
   }
 
   static let views = [
@@ -44,6 +51,9 @@ struct ViewCommand {
   func run() {
     if let toggle {
       Engine.setting("viewport_toggle", toggle)
+    }
+    else if let operatorName {
+      Engine.operatorCall(operatorName)
     }
     else {
       WM_apple_ios_ui_command_enqueue(command)
@@ -74,8 +84,8 @@ struct ViewGizmoGeometry {
     /* Beside the gizmo, rising from the bottom corner; in a small window, a grid. */
     let compact = safe.height < 540 || safe.width < 430
     let gap = safe.maxX - (center.x - hotspotRadius)
-    let trailing: [CGFloat] = [gap + 16, gap + 26, gap + 42, gap + 42, gap + 16, 20, 20, 20, 20]
-    let bottom: [CGFloat] = [12, 72, 132, 192, 244, 304, 364, 424, 484]
+    let trailing: [CGFloat] = [gap + 16, gap + 26, gap + 42, gap + 42, gap + 16, 20, 20, 20, 20, 20, 20]
+    let bottom: [CGFloat] = [12, 72, 132, 192, 244, 304, 364, 424, 484, 544, 604]
     let gridWidth = min(180, (safe.width - 36) / 2)
     let base = min(136, max(68, safe.height - 300))
     for (index, view) in pie.enumerated() where index < trailing.count {
@@ -106,7 +116,7 @@ final class ViewGizmoState {
   var pointerOver = false
   var pressed = false
   @ObservationIgnored var geometry: ViewGizmoGeometry?
-  @ObservationIgnored var pie: [ViewCommand] = ViewCommand.pie(locked: false)
+  @ObservationIgnored var pie: [ViewCommand] = ViewCommand.pie(locked: false, kept: false)
 #if !os(visionOS)
   @ObservationIgnored let selectionFeedback = UISelectionFeedbackGenerator()
   @ObservationIgnored let openFeedback = UIImpactFeedbackGenerator(style: .soft)
@@ -286,16 +296,16 @@ struct ViewGizmoLayer: View {
       let safe = CGRect(origin: .zero, size: proxy.size).inset(by: UIEdgeInsets(
         top: insets.top, left: model.sideInsets.left, bottom: insets.bottom, right: model.sideInsets.right))
       let locked = model.viewport?.bool("lock_camera") == true
-      let pie = ViewCommand.pie(locked: locked)
+      let kept = model.viewport?.bool("keep_camera_view") == true
+      let camera = model.viewport?.bool("camera_view") == true
+      let pie = ViewCommand.pie(locked: locked, kept: kept, camera: camera)
       let geometry = ViewGizmoGeometry(gizmo: model.navigationGizmo, window: proxy.size, safe: safe, pie: pie)
       ZStack(alignment: .topLeading) {
         feedback(geometry)
         ViewGizmoHotspotView(model: model, state: state)
           .frame(width: geometry.hotspot.width, height: geometry.hotspot.height)
           .position(geometry.center)
-        if model.viewport?.bool("camera_view") == true {
-          cameraLock(locked: locked, geometry: geometry)
-        }
+        cameraLocks(locked: locked, kept: kept, geometry: geometry)
         ForEach(Array(pie.enumerated()), id: \.offset) { index, view in
           if index < geometry.buttons.count {
             pieButton(view, index: index, frame: geometry.buttons[index], hub: geometry.center)
@@ -307,7 +317,7 @@ struct ViewGizmoLayer: View {
         state.geometry = geometry
         state.pie = pie
       }
-      .onChange(of: locked) {
+      .onChange(of: [locked, kept, camera]) {
         state.geometry = geometry
         state.pie = pie
       }
@@ -324,26 +334,22 @@ struct ViewGizmoLayer: View {
     }
   }
 
-  /** Looking through the camera, a lock beside the gizmo: locked, navigating moves the camera and
-   * the view stays through it. */
-  private func cameraLock(locked: Bool, geometry: ViewGizmoGeometry) -> some View {
-    Button {
-      Engine.setting("viewport_toggle", "lock_camera")
-      Haptics.selection()
-    } label: {
+  /** The camera's two locks, tiny beside the gizmo, always: lit while on. They are set in its
+   * pie. */
+  private func cameraLocks(locked: Bool, kept: Bool, geometry: ViewGizmoGeometry) -> some View {
+    VStack(spacing: 6) {
       Image(systemName: locked ? "lock.fill" : "lock.open")
-        .font(.system(size: 15, weight: .semibold))
-        .foregroundStyle(locked ? Color.white : Color.primary)
-        .frame(width: 36, height: 36)
-        .contentShape(Circle())
+        .foregroundStyle(locked ? PanelStyle.selection : Color.white.opacity(0.45))
+        .accessibilityLabel(locked ? "Camera Locked to View" : "Camera Not Locked to View")
+      Image(systemName: kept ? "pin.fill" : "pin")
+        .foregroundStyle(kept ? PanelStyle.selection : Color.white.opacity(0.45))
+        .accessibilityLabel(kept ? "Camera View Kept" : "Camera View Not Kept")
     }
-    .buttonStyle(.plain)
-    .panelGlass(locked ? .tinted(.blue) : .regular, in: Circle())
-    .environment(\.colorScheme, .dark)
-    .position(x: geometry.center.x - geometry.hotspotRadius - 22, y: geometry.center.y + geometry.radius - 14)
+    .font(.system(size: 11, weight: .semibold))
+    .shadow(color: .black.opacity(0.4), radius: 1)
+    .position(x: geometry.center.x - geometry.hotspotRadius - 8, y: geometry.center.y)
     .opacity(state.pieVisible ? 0 : 1)
-    .accessibilityLabel(locked ? "Unlock Camera from View" : "Lock Camera to View")
-    .accessibilityAddTraits(locked ? .isSelected : [])
+    .allowsHitTesting(false)
   }
 
   /** A ring around Blender's gizmo while it is hovered, pressed or showing its pie. */

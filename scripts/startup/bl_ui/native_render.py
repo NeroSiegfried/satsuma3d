@@ -228,6 +228,8 @@ _TOGGLES = {
     "wireframe": lambda space: (space.overlay, "show_wireframes"),
     # Navigating moves the camera, keeping the view through it.
     "lock_camera": lambda space: (space, "lock_camera"),
+    # Navigating stays in the camera view, without moving the camera.
+    "keep_camera_view": lambda space: (space, "keep_camera_view"),
 }
 
 
