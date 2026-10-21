@@ -831,7 +831,9 @@ struct ToolRails: View {
    * it stays. */
   private func sidebarHandle(_ layout: RailLayout, content: SidebarContent) -> some View {
     Capsule()
-      .fill(.secondary.opacity(0.6))
+      /* Light over the viewport, which is dark whatever the interface's appearance. */
+      .fill(.white.opacity(0.7))
+      .shadow(color: .black.opacity(0.35), radius: 1.5)
       .frame(width: 24, height: 5)
       .frame(width: 48, height: 22)
       .contentShape(Rectangle())
