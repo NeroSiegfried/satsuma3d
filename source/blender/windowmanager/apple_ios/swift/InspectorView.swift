@@ -594,6 +594,8 @@ struct ToolSettingsItems: View {
                 }
               }
               .menuActionDismissBehavior(.disabled)
+              /* Highlighted while any of them is on, as a toggle in the bar is. */
+              .modifier(ProminentWhen(on: items.contains { (store.value($0) as? NSNumber)?.boolValue == true }))
             default:
               EmptyView()
           }
@@ -699,6 +701,14 @@ struct ToolSettingItem: View {
     else {
       Text(title)
     }
+  }
+}
+
+private struct ProminentWhen: ViewModifier {
+  let on: Bool
+
+  func body(content: Content) -> some View {
+    if on { content.buttonStyle(.borderedProminent) } else { content }
   }
 }
 
