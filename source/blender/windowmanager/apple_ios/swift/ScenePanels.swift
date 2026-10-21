@@ -177,7 +177,10 @@ final class SwiftScenePanels {
               .padding(.vertical, 12)
               .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
               .padding(.horizontal, 16)
-              .padding(.top, 8)
+              .padding(.vertical, 8)
+              /* Pinned above the overlays, which scroll under it out of sight. */
+              .frame(maxWidth: .infinity)
+              .background(Color(uiColor: .systemGroupedBackground))
               .accessibilityIdentifier("blender.overlays.toggle")
           }
         }
