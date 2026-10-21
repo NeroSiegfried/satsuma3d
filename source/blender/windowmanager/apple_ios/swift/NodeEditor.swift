@@ -212,6 +212,14 @@ final class NodeCanvasLayout {
   func set(node name: String, _ frame: CGRect) {
     if nodes[name] != frame { nodes[name] = frame }
   }
+
+  /** Nodes no longer in the tree, and their sockets. */
+  func forget(_ names: Set<String>) {
+    for name in names { nodes[name] = nil }
+    sockets = sockets.filter { key, _ in
+      !names.contains(String(key.prefix { $0 != "\u{1}" }))
+    }
+  }
 }
 
 /** Canvas points per unit of Blender's node space. */
@@ -803,21 +811,24 @@ struct NodeCanvas: View {
                 let pull = t * t * (3 - 2 * t)
                 let size = gone.size
                 let hole = min(max(size.width, size.height) * 0.75, 260) * sin(.pi * min(1, t * 1.15))
-                /* Anchors are fractions of the view, whose layout box sits at the canvas origin. */
-                let anchor = UnitPoint(x: gone.center.x / max(size.width, 1), y: gone.center.y / max(size.height, 1))
                 Circle()
                   .fill(RadialGradient(colors: [.black.opacity(0.85), .black.opacity(0.45), .clear],
                                        center: .center, startRadius: 0, endRadius: max(hole / 2, 1)))
                   .frame(width: max(hole, 1), height: max(hole, 1))
                   .blur(radius: 6)
                   .position(gone.center)
-                nodeView(gone.node, native: false)
+                /* In a box of its own where it was, turning and shrinking about its middle, so it
+                 * goes where it stood. */
+                nodeView(gone.node, native: false, placed: false)
+                  .offset(x: size.width / 2 - gone.center.x, y: size.height / 2 - gone.center.y)
+                  .frame(width: size.width, height: size.height, alignment: .topLeading)
                   .saturation(1 - t)
                   .brightness(-0.35 * pull)
                   .blur(radius: 6 * pull)
-                  .rotationEffect(.degrees(140 * pull), anchor: anchor)
-                  .scaleEffect(max(0.001, 1 - pull), anchor: anchor)
+                  .rotationEffect(.degrees(140 * pull))
+                  .scaleEffect(max(0.001, 1 - pull))
                   .opacity(1 - pow(t, 2.2))
+                  .position(gone.center)
               }
             }
             .frame(width: 1, height: 1, alignment: .topLeading)
@@ -1446,7 +1457,8 @@ struct NodeCanvas: View {
   }
 
   @ViewBuilder
-  private func nodeView(_ node: JSON, native: Bool, landed: Date? = nil) -> some View {
+  /** \a placed false for a node already deleted, which leaves no place on the canvas. */
+  private func nodeView(_ node: JSON, native: Bool, landed: Date? = nil, placed: Bool = true) -> some View {
     let name = node.string("name") ?? ""
     let point = origin(node)
     Group {
@@ -1485,6 +1497,7 @@ struct NodeCanvas: View {
     }
     .fixedSize(horizontal: false, vertical: true)
     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("nodes")) } action: { frame in
+      guard placed else { return }
       /* Recorded without a move in progress, which the wires add themselves. */
       var rest = frame
       if let drag, drag.nodes.contains(name) || ancestorDragged(node, drag.nodes) {
@@ -1693,6 +1706,10 @@ struct NodeCanvas: View {
     /* Another tree shown, not every node deleted. */
     let fresh = knownNodes.isEmpty || (!names.isEmpty && knownNodes.isDisjoint(with: names))
     knownNodes = names
+    /* Gone nodes leave no place behind, for wires or touches to find. */
+    if !removed.isEmpty {
+      layout.forget(removed)
+    }
     if !fresh, !removed.isEmpty, !UIAccessibility.isReduceMotionEnabled {
       let now = Date()
       let gone = removed.prefix(24).compactMap { name -> NodeVanish? in
@@ -1707,6 +1724,8 @@ struct NodeCanvas: View {
         UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.8)
         DispatchQueue.main.asyncAfter(deadline: .now() + NodeVanish.duration) {
           vanishing.removeAll { Date().timeIntervalSince($0.start) >= NodeVanish.duration }
+          /* What drawing them as they went placed again, unless they came back, as undoing does. */
+          layout.forget(removed.subtracting(knownNodes))
         }
       }
     }
