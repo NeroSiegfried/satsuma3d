@@ -484,10 +484,17 @@ final class CableMotion {
                                   slack: 0, from: end.from, to: end.to, moved: .distantPast, seen: date)
         continue
       }
-      if end.held || hypot(end.from.x - weight.from.x, end.from.y - weight.from.y) > 0.01 ||
-         hypot(end.to.x - weight.to.x, end.to.y - weight.to.y) > 0.01
-      {
+      /* Only one end moving against the other sets it swinging: both moving alike, as panning
+       * or a re-layout does, and it hangs as it was. */
+      let fromMoved = CGVector(dx: end.from.x - weight.from.x, dy: end.from.y - weight.from.y)
+      let toMoved = CGVector(dx: end.to.x - weight.to.x, dy: end.to.y - weight.to.y)
+      if end.held || hypot(fromMoved.dx - toMoved.dx, fromMoved.dy - toMoved.dy) > 0.5 {
         weight.moved = date
+      }
+      else {
+        /* Carried along, it keeps its shape. */
+        weight.position.x += (fromMoved.dx + toMoved.dx) / 2
+        weight.position.y += (fromMoved.dy + toMoved.dy) / 2
       }
       weight.from = end.from
       weight.to = end.to
@@ -1550,12 +1557,19 @@ struct NodeCanvas: View {
   private func rerouteView(_ node: JSON) -> some View {
     let name = node.string("name") ?? ""
     let color = node.array("inputs").first.map(socketColor) ?? .gray
+    let selected = node.bool("selected")
+    let card = RoundedRectangle(cornerRadius: 10, style: .continuous)
+    /* A small card of its own, as plain to see as any node, its cables meeting in its middle. */
     return Circle()
       .fill(color)
-      .overlay(Circle().strokeBorder(node.bool("selected") ? Color.accentColor : .black.opacity(0.4), lineWidth: 2))
-      .frame(width: 16, height: 16)
-      .frame(width: 32, height: 32)
-      .contentShape(Circle())
+      .overlay(Circle().strokeBorder(.black.opacity(0.35), lineWidth: 1.5))
+      .frame(width: 14, height: 14)
+      .frame(width: 36, height: 26)
+      .background(Color(uiColor: .systemBackground), in: card)
+      .overlay(card.strokeBorder(selected ? Color.accentColor : Color.primary.opacity(0.18), lineWidth: selected ? 2.5 : 1))
+      .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
+      .frame(width: 44, height: 34)
+      .contentShape(Rectangle())
       .onGeometryChange(for: CGPoint.self) { geometry in
         let frame = geometry.frame(in: .named("nodes"))
         return CGPoint(x: frame.midX, y: frame.midY)
@@ -1571,7 +1585,8 @@ struct NodeCanvas: View {
       .onTapGesture { tapped(node) }
       .onLongPressGesture(minimumDuration: 0.45) { showMenu(node) }
       .gesture(moveGesture(name))
-      .offset(x: -16, y: -16)
+      .offset(x: -22, y: -17)
+      .accessibilityLabel("Reroute")
   }
 
   /** A zone: a tinted region around its input, output and the nodes between, as Blender draws. */
