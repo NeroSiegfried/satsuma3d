@@ -71,6 +71,9 @@ final class AssetsStore: ObservableObject {
   var close: () -> Void = {}
   /** The asset being dragged out of the pane, for the viewport's drop interaction. */
   var dragged: JSON?
+  /** An asset pulled up out of the pane at once, without the system's hold to lift it: where
+   * the finger is, in the window. */
+  var pull: ((AssetPullPhase, JSON, CGPoint) -> Void)?
 
   private var terms: [String] { query.split(whereSeparator: \.isWhitespace).map(String.init) }
 
@@ -227,9 +230,13 @@ private extension Dictionary where Key == String, Value == Any {
   var assetID: String { string("id") ?? "" }
 }
 
+enum AssetPullPhase { case begin, move, drop }
+
 struct AssetTile: View {
   @ObservedObject var store: AssetsStore
   let item: JSON
+  /** A drag on the tile pulls the asset out, or else scrolls the pane; decided as it starts. */
+  @State private var pulling: Bool?
 
   var body: some View {
     Button {
@@ -250,6 +257,21 @@ struct AssetTile: View {
     .accessibilityHint(assetAddTitle(item.string("type")))
     .accessibilityIdentifier("blender.asset." + (item.string("name") ?? ""))
     .contextMenu { menu }
+    /* Pulled upwards, towards the scene, it lifts at once; sideways the pane scrolls. A hold
+     * lifts it too, as the system does. */
+    .simultaneousGesture(DragGesture(minimumDistance: 8, coordinateSpace: .global)
+      .onChanged { value in
+        if pulling == nil {
+          let up = -value.translation.height
+          pulling = up > abs(value.translation.width)
+          if pulling == true { store.pull?(.begin, item, value.location) }
+        }
+        if pulling == true { store.pull?(.move, item, value.location) }
+      }
+      .onEnded { value in
+        if pulling == true { store.pull?(.drop, item, value.location) }
+        pulling = nil
+      })
     .onDrag {
       store.dragged = item
       return NSItemProvider(object: (item.string("name") ?? "") as NSString)
@@ -339,7 +361,91 @@ final class SwiftAssets: NSObject, UIDropInteractionDelegate {
     super.init()
     dropInteraction = UIDropInteraction(delegate: self)
     store.close = { [weak self] in self?.toggle() }
+    store.pull = { [weak self] phase, item, point in self?.pull(phase, item, point) }
   }
+
+  /* -------------------------------------------------------------------- */
+  /** \name Pulling an asset out of the pane
+   * \{ */
+
+  /** The asset under the finger while it is pulled out: its thumbnail, or over the viewport the
+   * pill naming it. */
+  private var pullPreview: UIView?
+  private var pullOverViewport = false
+
+  private func pull(_ phase: AssetPullPhase, _ item: JSON, _ point: CGPoint) {
+    guard let view = dropInteraction.view, let window = view.window else { return }
+    let over = !store.paneFrame.contains(point)
+    let local = view.convert(point, from: nil)
+    let client = clientPoint?(local) ?? local
+    let id = item.string("id") ?? ""
+    switch phase {
+      case .begin:
+        Haptics.impact(.light)
+        pullOverViewport = false
+        showPullPreview(item, over: false, in: window)
+      case .move:
+        if over != pullOverViewport {
+          pullOverViewport = over
+          showPullPreview(item, over: over, in: window)
+          if over { Haptics.selection() }
+          withAnimation(.easeOut(duration: 0.15)) { store.overViewport = over }
+          WM_apple_ios_ui_asset_drag(over ? AssetDragPhase.begin.rawValue : AssetDragPhase.cancel.rawValue,
+                                     id, Int32(client.x.rounded()), Int32(client.y.rounded()))
+        }
+        else if over {
+          WM_apple_ios_ui_asset_drag(AssetDragPhase.move.rawValue, id, Int32(client.x.rounded()),
+                                     Int32(client.y.rounded()))
+        }
+      case .drop:
+        if pullOverViewport {
+          WM_apple_ios_ui_asset_drag(AssetDragPhase.drop.rawValue, id, Int32(client.x.rounded()),
+                                     Int32(client.y.rounded()))
+          Haptics.impact(.medium)
+        }
+        let preview = pullPreview
+        pullPreview = nil
+        UIView.animate(withDuration: 0.2, animations: {
+          preview?.alpha = 0
+          preview?.transform = CGAffineTransform(scaleX: 0.2, y: 0.2)
+        }, completion: { _ in preview?.removeFromSuperview() })
+        pullOverViewport = false
+        withAnimation(.easeOut(duration: 0.15)) { store.overViewport = false }
+        return
+    }
+    pullPreview?.center = CGPoint(x: point.x, y: point.y - (pullOverViewport ? 44 : 0))
+  }
+
+  private func showPullPreview(_ item: JSON, over: Bool, in window: UIWindow) {
+    let center = pullPreview?.center
+    pullPreview?.removeFromSuperview()
+    let preview: UIView
+    if over {
+      let pill = UIHostingController(rootView: AssetDropPill(item: item))
+      pill.view.backgroundColor = .clear
+      let size = pill.sizeThatFits(in: CGSize(width: 320, height: 56))
+      pill.view.frame = CGRect(x: 0, y: 0, width: size.width, height: 56)
+      preview = pill.view
+    }
+    else {
+      let image = UIImageView(image: PreviewCache.image(item.string("preview")) ?? assetTypeIcon(item.string("type")))
+      image.frame = CGRect(x: 0, y: 0, width: assetTile, height: assetTile)
+      image.contentMode = PreviewCache.image(item.string("preview")) != nil ? .scaleAspectFill : .center
+      image.backgroundColor = .tertiarySystemFill
+      image.layer.cornerRadius = 14
+      image.clipsToBounds = true
+      preview = image
+    }
+    preview.isUserInteractionEnabled = false
+    preview.layer.shadowColor = UIColor.black.cgColor
+    preview.layer.shadowOpacity = 0.25
+    preview.layer.shadowRadius = 12
+    window.addSubview(preview)
+    if let center { preview.center = center }
+    pullPreview = preview
+  }
+
+  /** \} */
 
   func updateSnapshot(_ snapshot: Any?) {
     /* Blender's JSON may hold null, which arrives as NSNull. */
