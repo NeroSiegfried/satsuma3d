@@ -863,10 +863,8 @@ std::string native_storyboard_query(bContext *C, const std::string &request, con
   const DictionaryValue *query = value ? value->as_dictionary_value() : nullptr;
   SequencerSpaceContext space(C);
   if (!execute) {
-    /* Not while playing, which draws the shots itself. */
-    return read_storyboard(C, query,
-                           !ED_screen_animation_playing(CTX_wm_manager(C)) &&
-                               (!query || query->lookup_int("draw").value_or(1)));
+    /* Pictures are drawn by #native_storyboard_draw, as the window draws. */
+    return read_storyboard(C, query, false);
   }
   if (!query) {
     return "This storyboard change could not be made.";
@@ -879,6 +877,18 @@ std::string native_storyboard_query(bContext *C, const std::string &request, con
     ED_undo_push(C, undo->c_str());
   }
   return "";
+}
+
+bool native_storyboard_draw(bContext *C, const std::string &request)
+{
+  if (ED_screen_animation_playing(CTX_wm_manager(C))) {
+    return false;
+  }
+  std::istringstream stream(request);
+  std::unique_ptr<Value> value = JsonFormatter().deserialize(stream);
+  SequencerSpaceContext space(C);
+  const std::string json = read_storyboard(C, value ? value->as_dictionary_value() : nullptr, true);
+  return json.find("\"pending\":1") != std::string::npos;
 }
 
 }  // namespace blender::ed::vse

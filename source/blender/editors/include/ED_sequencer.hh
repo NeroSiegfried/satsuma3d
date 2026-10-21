@@ -94,6 +94,11 @@ void sync_active_scene_and_time_with_scene_strip(bContext &C);
 
 /** The storyboard for a native interface, or an edit of it, see `sequencer_native.cc`. */
 std::string native_storyboard_query(bContext *C, const std::string &request, bool execute);
+/**
+ * Draws a few of the shots' pictures the storyboard still needs, with the window's GPU context
+ * current, as right after the window draws. Whether more are still to draw.
+ */
+bool native_storyboard_draw(bContext *C, const std::string &request);
 
 }  // namespace ed::vse
 }  // namespace blender

@@ -443,7 +443,8 @@ struct StoryboardView: View {
               ForEach(model.shots) { shot in
                 shotView(shot, laneHeight: laneHeight, lanes: lanes)
               }
-              playhead(height: rulerHeight + CGFloat(lanes) * laneHeight)
+              /* Down the whole height, to the scrubber below. */
+              playhead(height: max(rulerHeight + CGFloat(lanes) * laneHeight, proxy.size.height - scrubberHeight))
             }
             .frame(width: width, height: rulerHeight + CGFloat(lanes) * laneHeight, alignment: .topLeading)
           }
@@ -615,6 +616,11 @@ struct StoryboardView: View {
         .fill(.secondary.opacity(0.25))
         .frame(width: max(0, x(model.end + 1) - x(model.start)), height: 4)
         .offset(x: x(model.start), y: scrubberHeight / 2 - 2)
+      /* The playhead's line, on from the shots down to the knob. */
+      Rectangle()
+        .fill(PanelStyle.selection)
+        .frame(width: 2, height: scrubberHeight / 2)
+        .offset(x: x(shown) - 1)
       Text(verbatim: String(shown))
         .font(.system(size: 14, weight: .bold).monospacedDigit())
         .foregroundStyle(.white)

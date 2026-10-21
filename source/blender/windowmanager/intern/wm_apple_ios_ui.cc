@@ -2639,19 +2639,9 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
         /* Soon again while shots still need their pictures drawn, one at a time. */
         if (ios_storyboard_dirty || now >= ios_storyboard_next_check) {
           ios_storyboard_dirty = false;
-          /* Shots' pictures are drawn with the window's GPU context, as its editors draw; only
-           * made current when the last look found some to draw. Otherwise this look only finds
-           * out, and the next draws them. */
-          wmWindow *win = CTX_wm_window(C);
-          const bool draw = win && ios_storyboard_pending;
-          if (draw) {
-            wm_window_make_drawable(CTX_wm_manager(C), win);
-          }
-          std::string state = ios_storyboard_state;
-          if (!draw && state.size() >= 2 && state.back() == '}') {
-            state.insert(state.size() - 1, state.size() > 2 ? ",\"draw\":0" : "\"draw\":0");
-          }
-          ios_storyboard_json = ed::vse::native_storyboard_query(C, state, false);
+          /* Only what is there: the pictures still to draw are drawn as the window draws, see
+           * #WM_apple_ios_ui_storyboard_draw. */
+          ios_storyboard_json = ed::vse::native_storyboard_query(C, ios_storyboard_state, false);
           const bool pending = ios_storyboard_json.find("\"pending\":1") != std::string::npos;
           ios_storyboard_pending = pending;
           ios_storyboard_next_check = now + std::chrono::milliseconds(pending ? 100 : 1000);
@@ -3761,6 +3751,30 @@ static void ios_ui_dispatch(bContext *C, IOSUIMessage &message)
       message);
 }
 
+extern "C" void WM_apple_ios_ui_storyboard_draw(bContext *C)
+{
+  /* Just before the window draws, with its GPU context: the window is then drawn whole, so
+   * nothing the pictures' drawing leaves behind is ever shown. */
+  wmWindowManager *wm = CTX_wm_manager(C);
+  if (!(ios_panels_visible & 64) || !ios_storyboard_pending || !wm) {
+    return;
+  }
+  /* In the window's context, as the storyboard's snapshot is read. */
+  const IOSContextStore context_store = ios_context_push_view3d(C);
+  wmWindow *win = CTX_wm_window(C);
+  if (win) {
+    wm_window_make_drawable(wm, win);
+    ios_storyboard_pending = ed::vse::native_storyboard_draw(C, ios_storyboard_state);
+    if (bScreen *screen = WM_window_get_active_screen(win)) {
+      screen->do_draw = true;
+    }
+  }
+  ios_context_pop(C, context_store);
+  /* The new pictures, to the native interface at once. */
+  ios_storyboard_dirty = true;
+  ios_panels_next_snapshot = {};
+}
+
 extern "C" double WM_apple_ios_engine_idle_seconds(bContext *C)
 {
   /* How long Blender's loop has nothing to do: no events, notifiers or redraws pending, until
@@ -3769,6 +3783,10 @@ extern "C" double WM_apple_ios_engine_idle_seconds(bContext *C)
   wmWindowManager *wm = CTX_wm_manager(C);
   if (wm == nullptr || ios_ui_changed || !BLI_listbase_is_empty(&wm->runtime->notifier_queue)) {
     return 0.0;
+  }
+  if ((ios_panels_visible & 64) && ios_storyboard_pending) {
+    /* The storyboard's pictures still to draw, a few each pass. */
+    return 0.1;
   }
   for (wmWindow &win : wm->windows) {
     bScreen *screen = WM_window_get_active_screen(&win);
