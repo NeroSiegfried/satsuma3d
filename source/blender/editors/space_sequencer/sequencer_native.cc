@@ -13,6 +13,7 @@
  */
 
 #include <algorithm>
+#include <chrono>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -25,6 +26,7 @@
 #include "BLI_math_base.h"
 #include "BLI_serialize.hh"
 #include "BLI_string.h"
+#include "BLI_string_ref.hh"
 #include "BLI_vector.hh"
 
 #include "DNA_scene_types.h"
@@ -36,6 +38,7 @@
 #include "BKE_appdir.hh"
 #include "BKE_context.hh"
 #include "BKE_global.hh"
+#include "BKE_lib_id.hh"
 #include "BKE_main.hh"
 #include "BKE_scene.hh"
 #include "BKE_screen.hh"
@@ -118,45 +121,66 @@ std::string encode(const Value &value)
   return stream.str();
 }
 
-/** A shot's picture: which frame of which scene, and the edit it was drawn after. */
-struct Thumbnail {
-  std::string key;
+/** A picture of one frame of a shot's scene, and the version of the scene it shows. */
+struct Picture {
   std::string path;
-  /** Drawn again once the shot's scene has changed since. */
-  bool stale = false;
+  int version = -1;
 };
-std::map<std::string, Thumbnail> thumbnails;
-/** The undo step last seen: a new one means the shown shot may have changed. */
+/** By scene and frame of its content, so moving or trimming a shot keeps its pictures. */
+std::map<std::string, Picture> pictures;
+/** Counts each scene's changes: a picture of an older version is drawn again. */
+std::map<std::string, int> scene_versions;
+/** The undo step last seen: a new one means the shot drawn in may look different. */
 const void *last_undo_step = nullptr;
-int thumbnail_version = 0;
+int picture_count = 0;
 
-std::string thumbnail_key(const Strip &strip)
+/** Undo steps of the storyboard's own edits, which change no shot's pictures. */
+bool storyboard_step(const char *name)
 {
-  return std::string(strip.scene ? strip.scene->id.name + 2 : "") + "@" +
-         std::to_string(strip.left_handle()) + "/" + std::to_string(strip.start);
+  const StringRef step = name;
+  return step.endswith(" Shot") || step.startswith("Trim Shot") || step.startswith("Select") ||
+         step.startswith("Move") || step.startswith("Add Strip") || step.startswith("Delete") ||
+         step.startswith("Duplicate");
 }
 
-/** Draws a shot's first frame as the Sequencer's preview shows it, small. */
-std::string render_thumbnail(bContext *C, Scene *sequencer_scene, Strip *strip)
+std::string picture_key(const Strip &strip, const int timeline_frame)
 {
+  return std::string(strip.scene->id.name + 2) + "#" + std::to_string(timeline_frame - strip.start);
+}
+
+/** Draws one frame of a shot as the Sequencer's preview shows it, `height` pixels high, at the
+ * size it is shown rather than the scene's own. */
+std::string render_picture(bContext *C, Scene *sequencer_scene, Strip *strip,
+                           const int timeline_frame, const int height)
+{
+  Scene *shot = strip->scene;
   Main *bmain = CTX_data_main(C);
   Depsgraph *depsgraph = CTX_data_expect_evaluated_depsgraph(C);
-  const float aspect = float(sequencer_scene->r.ysch) / float(max_ii(1, sequencer_scene->r.xsch));
-  const int width = 240;
-  const int height = max_ii(1, int(width * aspect));
+  const float aspect = float(shot->r.xsch * shot->r.xasp) /
+                       float(max_ff(1.0f, shot->r.ysch * shot->r.yasp));
+  const int width = max_ii(1, int(height * aspect));
   seq::RenderData context = {};
   seq::render_new_render_data(
       bmain, depsgraph, sequencer_scene, width, height, SEQ_RENDER_SIZE_SCENE, nullptr, &context);
   context.skip_cache = true;
+  /* Rendering moves the shot's scene to the frame, and draws it at its own resolution: both put
+   * back after, so the scene being drawn in is not disturbed. */
+  const int frame = shot->r.cfra;
+  const float subframe = shot->r.subframe;
+  const short size = shot->r.size;
+  shot->r.size = short(clamp_i(int(ceilf(100.0f * height / max_ii(1, shot->r.ysch))), 1, 100));
   const short is_break = G.is_break;
   G.is_break = false;
   gpu::FrameBuffer *framebuffer = GPU_framebuffer_active_get();
   GPU_framebuffer_restore();
-  ImBuf *ibuf = seq::render_give_ibuf_direct(&context, float(strip->left_handle()), strip);
+  ImBuf *ibuf = seq::render_give_ibuf_direct(&context, float(timeline_frame), strip);
   if (framebuffer) {
     GPU_framebuffer_bind(framebuffer);
   }
   G.is_break = is_break;
+  shot->r.size = size;
+  shot->r.cfra = frame;
+  shot->r.subframe = subframe;
   if (!ibuf) {
     return "";
   }
@@ -165,16 +189,17 @@ std::string render_thumbnail(bContext *C, Scene *sequencer_scene, Strip *strip)
     IMB_byte_from_float(ibuf);
   }
   ibuf->planes = 24;
-  ibuf->ftype = IMB_FTYPE_PNG;
+  ibuf->ftype = IMB_FTYPE_JPG;
+  ibuf->foptions.quality = 85;
   /* A new name for each version, so UIKit does not show an image it cached. */
   const std::string path = std::string(BKE_tempdir_session()) + "storyboard_" +
-                           std::to_string(++thumbnail_version) + ".png";
+                           std::to_string(++picture_count) + ".jpg";
   const bool saved = IMB_save_image(ibuf, path.c_str(), IB_byte_data);
   IMB_freeImBuf(ibuf);
   return saved ? path : "";
 }
 
-std::string read_storyboard(bContext *C, const bool draw_thumbnail)
+std::string read_storyboard(bContext *C, const DictionaryValue *state, const bool draw)
 {
   DictionaryValue result;
   Scene *scene = CTX_data_sequencer_scene(C);
@@ -193,30 +218,53 @@ std::string read_storyboard(bContext *C, const bool draw_thumbnail)
   result.append_int("playing", ED_screen_animation_playing(CTX_wm_manager(C)) != nullptr);
   const Scene *window_scene = CTX_data_scene(C);
   result.append_str("shown", window_scene ? window_scene->id.name + 2 : "");
-
-  /* A new undo step: the shot being drawn in may look different now. */
-  const wmWindowManager *wm = CTX_wm_manager(C);
-  const void *undo_step = wm->runtime->undo_stack ? wm->runtime->undo_stack->step_active : nullptr;
-  if (undo_step != last_undo_step) {
-    last_undo_step = undo_step;
-    for (auto &[name, thumbnail] : thumbnails) {
-      thumbnail.stale = true;
+  /* The scenes a shot can show instead, all but the edit's own. */
+  auto scenes = result.append_array("scenes");
+  for (const Scene &other : CTX_data_main(C)->scenes) {
+    if (&other != scene) {
+      scenes->append_str(other.id.name + 2);
     }
   }
 
+  /* A new undo step, other than the storyboard's own: the shot being drawn in may look
+   * different now. */
+  const wmWindowManager *wm = CTX_wm_manager(C);
+  const UndoStep *undo_step = wm->runtime->undo_stack ? wm->runtime->undo_stack->step_active :
+                                                         nullptr;
+  if (undo_step != last_undo_step) {
+    last_undo_step = undo_step;
+    if (window_scene && !(undo_step && storyboard_step(undo_step->name))) {
+      scene_versions[window_scene->id.name + 2]++;
+    }
+  }
+
+  /* Pictures every so many frames along each shot, as many as fit side by side where the native
+   * interface shows them, `height` pixels high. */
+  const int step = state ? max_ii(1, int(state->lookup_int("step").value_or(12))) : 12;
+  const int height = state ? clamp_i(int(state->lookup_int("height").value_or(96)), 16, 256) : 96;
+
+  struct Wanted {
+    Strip *strip;
+    int frame;
+    std::string key;
+    /** Drawn first: the shot drawn in, then those nearest the playhead. */
+    int priority;
+  };
+  Vector<Wanted> wanted;
   auto strips = result.append_array("strips");
   const Strip *active = seq::select_active_get(scene);
-  bool drew = !draw_thumbnail;
   if (ed) {
     for (Strip &strip : *seq::active_seqbase_get(ed)) {
       if (strip.is_effect() || strip.type == STRIP_TYPE_SOUND) {
         continue;
       }
+      const int left = strip.left_handle();
+      const int right = strip.right_handle(scene);
       auto item = strips->append_dict();
       item->append_str("name", strip.name + 2);
       item->append_int("channel", strip.channel);
-      item->append_int("start", strip.left_handle());
-      item->append_int("end", strip.right_handle(scene));
+      item->append_int("start", left);
+      item->append_int("end", right);
       item->append_int("scene_strip", strip.type == STRIP_TYPE_SCENE);
       item->append_str("scene", strip.scene ? strip.scene->id.name + 2 : "");
       item->append_int("selected", (strip.flag & SEQ_SELECT) != 0);
@@ -226,46 +274,54 @@ std::string read_storyboard(bContext *C, const bool draw_thumbnail)
       if (strip.type != STRIP_TYPE_SCENE || !strip.scene) {
         continue;
       }
-      Thumbnail &thumbnail = thumbnails[strip.name + 2];
-      const std::string key = thumbnail_key(strip);
-      /* Drawn again when it moved or its scene may have changed, one shot at a time so the
-       * window keeps up; the shot shown is the one being drawn in. */
-      const bool redraw = thumbnail.path.empty() || thumbnail.key != key ||
-                          (thumbnail.stale && strip.scene == window_scene);
-      if (redraw && !drew) {
-        drew = true;
-        const std::string path = render_thumbnail(C, scene, &strip);
-        if (!path.empty()) {
-          if (!thumbnail.path.empty()) {
-            BLI_delete(thumbnail.path.c_str(), false, false);
-          }
-          thumbnail.path = path;
+      const Scene &shot = *strip.scene;
+      item->append_double("aspect", double(shot.r.xsch * shot.r.xasp) /
+                                        double(max_ff(1.0f, shot.r.ysch * shot.r.yasp)));
+      const int version = scene_versions[shot.id.name + 2];
+      auto list = item->append_array("pictures");
+      /* At whole steps of the shot's content, the first before or at its start. */
+      const int content = strip.start;
+      int frame = content + int(floorf(float(left - content) / step)) * step;
+      for (; frame < right; frame += step) {
+        const int at = max_ii(frame, left);
+        const std::string key = picture_key(strip, frame);
+        const auto found = pictures.find(key);
+        if (found != pictures.end() && !found->second.path.empty()) {
+          /* An older picture shows until the new one replaces it. */
+          auto pair = list->append_array();
+          pair->append_int(frame);
+          pair->append_str(found->second.path);
         }
-        thumbnail.key = key;
-        thumbnail.stale = false;
-      }
-      else if (thumbnail.stale && strip.scene != window_scene) {
-        thumbnail.stale = false;
-      }
-      item->append_str("thumbnail", thumbnail.path);
-    }
-  }
-  /* Another picture to draw: the native interface asks again soon. */
-  bool pending = false;
-  if (ed) {
-    for (Strip &strip : *seq::active_seqbase_get(ed)) {
-      if (strip.type == STRIP_TYPE_SCENE && strip.scene) {
-        const auto found = thumbnails.find(strip.name + 2);
-        if (found == thumbnails.end() || found->second.path.empty() ||
-            found->second.key != thumbnail_key(strip) ||
-            (found->second.stale && strip.scene == window_scene))
-        {
-          pending = true;
+        if (found == pictures.end() || found->second.version != version) {
+          const int distance = abs(at - scene->r.cfra);
+          wanted.append({&strip, at, key, (strip.scene == window_scene ? 0 : 100000) + distance});
         }
       }
     }
   }
-  result.append_int("pending", pending);
+  /* A few at a time, as long as the window keeps its frame rate. */
+  if (draw && !wanted.is_empty()) {
+    std::sort(wanted.begin(), wanted.end(),
+              [](const Wanted &a, const Wanted &b) { return a.priority < b.priority; });
+    const auto begin = std::chrono::steady_clock::now();
+    for (const Wanted &item : wanted) {
+      if (std::chrono::steady_clock::now() - begin > std::chrono::milliseconds(12)) {
+        break;
+      }
+      Picture &picture = pictures[item.key];
+      const std::string path = render_picture(C, scene, item.strip, item.frame, height);
+      if (!path.empty()) {
+        if (!picture.path.empty()) {
+          BLI_delete(picture.path.c_str(), false, false);
+        }
+        picture.path = path;
+      }
+      /* Tried for this version, drawn or not, so a shot that cannot be drawn is not tried
+       * over and over. */
+      picture.version = scene_versions[item.strip->scene->id.name + 2];
+    }
+  }
+  result.append_int("pending", !wanted.is_empty());
   return encode(result);
 }
 
@@ -410,6 +466,23 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     sync_active_scene_and_time_with_scene_strip(*C);
     return left ? "Trim Shot Start" : "Trim Shot End";
   }
+  if (action == "set_scene") {
+    if (!strip || strip->type != STRIP_TYPE_SCENE) {
+      return std::nullopt;
+    }
+    const std::string name = query.lookup_str("value").value_or("");
+    ID *id = BKE_libblock_find_name(CTX_data_main(C), ID_SCE, name.c_str());
+    if (!id || id == &scene->id) {
+      return std::nullopt;
+    }
+    PointerRNA ptr = RNA_pointer_create_discrete(&scene->id, RNA_Strip, strip);
+    PointerRNA value = RNA_id_pointer_create(id);
+    PropertyRNA *prop = RNA_struct_find_property(&ptr, "scene");
+    RNA_property_pointer_set(&ptr, prop, value, nullptr);
+    RNA_property_update(C, &ptr, prop);
+    sync_active_scene_and_time_with_scene_strip(*C);
+    return "Change Shot Scene";
+  }
   if (action == "rename") {
     if (!strip) {
       return std::nullopt;
@@ -449,6 +522,8 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     RNA_enum_set(&properties, "type", SCE_COPY_FULL);
     RNA_int_set(&properties, "frame_start", after);
     RNA_int_set(&properties, "channel", channel);
+    /* Placed where asked, not then moved with a pointer as the Sequencer's own Add does. */
+    RNA_boolean_set(&properties, "move_strips", false);
     WM_operator_name_call(C, "SEQUENCER_OT_scene_strip_add_new", wm::OpCallContext::ExecDefault,
                           &properties, nullptr);
     WM_operator_properties_free(&properties);
@@ -487,6 +562,8 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     RNA_enum_set(&properties, "type", template_scene ? SCE_COPY_FULL : SCE_COPY_EMPTY);
     RNA_int_set(&properties, "frame_start", frame);
     RNA_int_set(&properties, "channel", channel);
+    /* Placed where asked, not then moved with a pointer as the Sequencer's own Add does. */
+    RNA_boolean_set(&properties, "move_strips", false);
     WM_operator_name_call(C, "SEQUENCER_OT_scene_strip_add_new", wm::OpCallContext::ExecDefault,
                           &properties, nullptr);
     WM_operator_properties_free(&properties);
@@ -510,8 +587,8 @@ std::string native_storyboard_query(bContext *C, const std::string &request, con
   const DictionaryValue *query = value ? value->as_dictionary_value() : nullptr;
   SequencerSpaceContext space(C);
   if (!execute) {
-    const bool thumbnails = query && query->lookup_int("thumbnails").value_or(1);
-    return read_storyboard(C, thumbnails && !ED_screen_animation_playing(CTX_wm_manager(C)));
+    /* Not while playing, which draws the shots itself. */
+    return read_storyboard(C, query, !ED_screen_animation_playing(CTX_wm_manager(C)));
   }
   if (!query) {
     return "This storyboard change could not be made.";

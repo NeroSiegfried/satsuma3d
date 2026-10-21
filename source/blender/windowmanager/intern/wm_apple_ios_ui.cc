@@ -278,6 +278,8 @@ std::string ios_graph_json;
 std::chrono::steady_clock::time_point ios_graph_next_check;
 /* The storyboard: the sequencer scene's shots, see `sequencer_native.cc`. */
 bool ios_storyboard_dirty = true;
+/* How the native storyboard shows the shots: the frames between their pictures, and their size. */
+std::string ios_storyboard_state = "{}";
 std::string ios_storyboard_json;
 std::chrono::steady_clock::time_point ios_storyboard_next_check;
 std::string ios_properties_error;
@@ -1296,6 +1298,12 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     ios_panels_visible = (ios_panels_visible & ~64) | (command.value == "1" ? 64 : 0);
     ios_panels_next_snapshot = {};
     ios_panels_published.clear();
+    return;
+  }
+  if (command.setting == "native_storyboard_state") {
+    ios_storyboard_dirty = true;
+    ios_storyboard_state = command.value;
+    ios_panels_next_snapshot = {};
     return;
   }
   if (command.setting == "native_storyboard_edit") {
@@ -2633,9 +2641,14 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
           if (wmWindow *win = CTX_wm_window(C)) {
             wm_window_make_drawable(CTX_wm_manager(C), win);
           }
-          ios_storyboard_json = ed::vse::native_storyboard_query(C, "{}", false);
+          ios_storyboard_json = ed::vse::native_storyboard_query(C, ios_storyboard_state, false);
           const bool pending = ios_storyboard_json.find("\"pending\":1") != std::string::npos;
-          ios_storyboard_next_check = now + std::chrono::milliseconds(pending ? 250 : 1000);
+          ios_storyboard_next_check = now + std::chrono::milliseconds(pending ? 100 : 1000);
+          if (pending) {
+            /* The pictures still to draw arrive a few at a time, sooner than other changes. */
+            ios_panels_next_snapshot = std::min(ios_panels_next_snapshot,
+                                                now + std::chrono::milliseconds(100));
+          }
         }
         merged.append_str("storyboard", "@native_storyboard_json@");
       }
@@ -2895,6 +2908,10 @@ void ios_timeline_build(bContext *C)
                      ",\"storyboard\":" + (storyboard ? "true" : "false") +
                      ",\"edit_frame\":" +
                      std::to_string(sequencer_scene ? sequencer_scene->r.cfra : 0) +
+                     ",\"edit_start\":" +
+                     std::to_string(sequencer_scene ? sequencer_scene->r.sfra : 0) +
+                     ",\"edit_end\":" +
+                     std::to_string(sequencer_scene ? sequencer_scene->r.efra : 0) +
                      ",\"frame\":" + std::to_string(scene->r.cfra) +
                      ",\"start\":" + std::to_string(PSFRA) + ",\"end\":" + std::to_string(PEFRA) +
                      ",\"preview\":" + ((scene->r.flag & SCER_PRV_RANGE) ? "true" : "false") +
@@ -3659,7 +3676,8 @@ static void ios_ui_dispatch(bContext *C, IOSUIMessage &message)
                                                 setting->setting != "native_graph_visible" &&
                                                 setting->setting != "native_graph_edit" &&
                                                 setting->setting != "native_storyboard_visible" &&
-                                                setting->setting != "native_storyboard_edit")))
+                                                setting->setting != "native_storyboard_edit" &&
+                                                setting->setting != "native_storyboard_state")))
   {
     const IOSContextStore context_store = ios_context_push_view3d(C);
     ui::native_properties_interaction_finish(C);
@@ -3678,7 +3696,8 @@ static void ios_ui_dispatch(bContext *C, IOSUIMessage &message)
                                          setting->setting == "native_graph_visible" ||
                                          setting->setting == "native_graph_edit" ||
                                          setting->setting == "native_storyboard_visible" ||
-                                         setting->setting == "native_storyboard_edit");
+                                         setting->setting == "native_storyboard_edit" ||
+                                         setting->setting == "native_storyboard_state");
   if (WM_apple_ios_dialog_active(CTX_wm_window(C)) && !panel_message) {
     if (const auto *request = std::get_if<IOSMenuRequest>(&message)) {
       if (!request->execute) {
