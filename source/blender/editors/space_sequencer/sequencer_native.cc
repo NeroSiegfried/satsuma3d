@@ -76,6 +76,7 @@
 #include "WM_types.hh"
 
 #include "DEG_depsgraph.hh"
+#include "DEG_depsgraph_build.hh"
 
 namespace blender::ed::vse {
 
@@ -500,10 +501,23 @@ Scene *new_shot_template(bContext *C, Scene *sequencer_scene)
   return nullptr;
 }
 
-/** Empties every drawing in a new shot's scene, copied with its camera, layers and settings
- * from another: a blank panel to draw in. */
-void clear_drawings(Scene &shot)
+/** A new shot's scene, copied whole from another: its drawings emptied, and everything but its
+ * camera and drawings taken out, a blank panel to draw in. */
+void clear_drawings(Main &bmain, Scene &shot)
 {
+  Vector<std::pair<Collection *, Object *>> others;
+  FOREACH_SCENE_COLLECTION_BEGIN (&shot, collection) {
+    for (CollectionObject &item : collection->gobject) {
+      Object *object = item.ob;
+      if (object && object != shot.camera && object->type != OB_GREASE_PENCIL) {
+        others.append({collection, object});
+      }
+    }
+  }
+  FOREACH_SCENE_COLLECTION_END;
+  for (const auto &[collection, object] : others) {
+    BKE_collection_object_remove(&bmain, collection, object, true);
+  }
   FOREACH_SCENE_OBJECT_BEGIN (&shot, object) {
     if (object->type != OB_GREASE_PENCIL) {
       continue;
@@ -822,10 +836,12 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
         frame = max_ii(frame, other.right_handle(scene));
       }
     }
+    /* A copy of the shot it follows, to fit the sequence: its world, render settings, camera and
+     * layers, its contents then taken out. A blank panel the file keeps, without one. */
     Scene *template_scene = new_shot_template(C, scene);
-    Scene *source = template_scene ? template_scene :
-                    after && after->scene ? after->scene :
-                                            CTX_data_scene(C);
+    Scene *source = after && after->scene ? after->scene :
+                    template_scene      ? template_scene :
+                                          CTX_data_scene(C);
     const int length = source ? source->r.efra - source->r.sfra + 1 : 48;
     make_room(scene, channel, frame, length);
     Scene *previous = CTX_data_scene(C);
@@ -842,7 +858,8 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     WM_operator_properties_free(&properties);
     CTX_data_scene_set(C, previous);
     if (Strip *added = seq::select_active_get(scene); added && added->scene && added->scene != source) {
-      clear_drawings(*added->scene);
+      clear_drawings(*CTX_data_main(C), *added->scene);
+      DEG_relations_tag_update(CTX_data_main(C));
     }
     /* The playhead on the new shot, showing it to draw in. */
     scene->r.cfra = frame;
