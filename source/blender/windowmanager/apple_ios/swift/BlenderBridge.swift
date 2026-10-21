@@ -180,6 +180,10 @@ enum PanelStyle {
   static let tint = Color(uiColor: uiTint)
   /** The active item of a list. */
   static let activeRow = Color(uiColor: .systemBlue).opacity(0.22)
+  /** Behind an editor docked to the window's bottom edge: opaque, as what is under it is part
+   * of the window Blender no longer draws, whose leftover pixels a material would show changing
+   * from frame to frame. */
+  static let docked = Color(uiColor: .secondarySystemBackground)
 }
 
 func withMotion(_ animation: Animation = .smooth(duration: 0.28), _ body: () -> Void) {

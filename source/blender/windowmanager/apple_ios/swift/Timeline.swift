@@ -698,7 +698,7 @@ struct TimelinePanel: View {
     .frame(height: Self.height(store))
     .padding(.bottom, store.editorShown ? bottomInset : 0)
     .onGeometryChange(for: Bool.self) { $0.size.width < 520 } action: { store.set(\.compact, $0) }
-    .background(store.editorShown ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.clear),
+    .background(store.editorShown ? AnyShapeStyle(PanelStyle.docked) : AnyShapeStyle(.clear),
                 in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous))
     /* No corners with the curve editor open: the glass's shape would round the curves' corners
      * too. */

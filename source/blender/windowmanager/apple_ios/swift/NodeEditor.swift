@@ -3042,7 +3042,7 @@ struct NodeEditorLayer: View {
           NodeEditorPanel(model: nodes)
         }
         .frame(height: proxy.size.height * fraction)
-        .background(.regularMaterial, in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24,
+        .background(PanelStyle.docked, in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24,
                                                                   style: .continuous))
         .padding(.leading, model.sideInsets.left)
         .padding(.trailing, model.sideInsets.right)
