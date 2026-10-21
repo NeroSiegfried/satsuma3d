@@ -164,7 +164,17 @@ final class SwiftScenePanels {
    * it is open. */
   func shadingContent(model: ShellModel, done: @escaping () -> Void) -> some View {
     NavigationStack {
-      InspectorForm(store: shading)
+      /* Shading and Overlays side by side: switching slides from one to the other, Overlays in
+       * from the trailing side, as the segments sit. */
+      let overlays = shading.currentTab == "OVERLAYS"
+      ZStack {
+        InspectorForm(store: shading)
+          .id(shading.currentTab)
+          .transition(UIAccessibility.isReduceMotionEnabled ? .opacity :
+                        .asymmetric(insertion: .move(edge: overlays ? .trailing : .leading),
+                                    removal: .move(edge: overlays ? .leading : .trailing)))
+      }
+      .clipped()
         .tint(PanelStyle.tint)
         /* All of the viewport's overlays at once, as the switch beside Blender's Overlays
          * popover in its header. */
@@ -190,7 +200,9 @@ final class SwiftScenePanels {
           /* The viewport's shading and its overlays, side by side as in Blender's header. */
           ToolbarItem(placement: .principal) {
             let store = shading
-            Picker("Show", selection: Binding(get: { store.currentTab }, set: { store.selectTab($0) })) {
+            Picker("Show", selection: Binding(get: { store.currentTab }, set: { tab in
+              withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) { store.selectTab(tab) }
+            })) {
               Text("Shading").tag("SHADING")
               Text("Overlays").tag("OVERLAYS")
             }
