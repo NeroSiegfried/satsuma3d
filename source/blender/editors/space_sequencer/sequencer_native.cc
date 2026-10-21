@@ -24,9 +24,11 @@
 #include "BLI_fileops.h"
 #include "BLI_listbase.h"
 #include "BLI_math_base.h"
+#include "BLI_math_vector.h"
 #include "BLI_serialize.hh"
 #include "BLI_string.h"
 #include "BLI_string_ref.hh"
+#include "BLI_set.hh"
 #include "BLI_vector.hh"
 
 #include "DNA_grease_pencil_types.h"
@@ -38,17 +40,21 @@
 #include "DNA_workspace_types.h"
 
 #include "BKE_appdir.hh"
+#include "BKE_collection.hh"
+#include "BKE_curves.hh"
 #include "BKE_context.hh"
 #include "BKE_global.hh"
 #include "BKE_grease_pencil.hh"
 #include "BKE_layer.hh"
 #include "BKE_lib_id.hh"
 #include "BKE_main.hh"
+#include "BKE_paint.hh"
 #include "BKE_scene.hh"
 #include "BKE_screen.hh"
 #include "BKE_undo_system.hh"
 #include "BKE_wm_runtime.hh"
 
+#include "ED_object.hh"
 #include "ED_screen.hh"
 #include "ED_sequencer.hh"
 #include "ED_undo.hh"
@@ -172,10 +178,54 @@ void append_layers(bContext *C, DictionaryValue &result)
   }
 }
 
+/** A flag sent as a number or as true or false. */
+bool lookup_flag(const DictionaryValue &query, const StringRef key, const bool fallback)
+{
+  if (const std::optional<int64_t> number = query.lookup_int(key)) {
+    return *number != 0;
+  }
+  if (const auto *value = query.lookup(key)) {
+    if (const BooleanValue *flag = (*value)->as_boolean_value()) {
+      return flag->value();
+    }
+  }
+  return fallback;
+}
+
 bke::greasepencil::Layer *find_layer(GreasePencil &grease_pencil, const std::string &name)
 {
   bke::greasepencil::TreeNode *node = grease_pencil.find_node_by_name(name);
   return node && node->is_layer() ? &node->as_layer() : nullptr;
+}
+
+/** Where the shot's drawings begin: the keys of the Grease Pencil in its scene, in the edit's
+ * time, within the shot. */
+Vector<int> drawing_starts(const Scene &edit, const Strip &strip)
+{
+  Set<int> frames;
+  const Scene &shot = *strip.scene;
+  FOREACH_SCENE_OBJECT_BEGIN (const_cast<Scene *>(&shot), object) {
+    if (object->type != OB_GREASE_PENCIL) {
+      continue;
+    }
+    const GreasePencil &grease_pencil = *reinterpret_cast<const GreasePencil *>(object->data);
+    for (const bke::greasepencil::Layer *layer : grease_pencil.layers()) {
+      for (const int key : layer->sorted_keys()) {
+        frames.add(strip.start + key - shot.r.sfra - strip.anim_startofs);
+      }
+    }
+  }
+  FOREACH_SCENE_OBJECT_END;
+  const int left = strip.left_handle();
+  const int right = strip.right_handle(&edit);
+  Vector<int> result;
+  for (const int frame : frames) {
+    if (frame >= left && frame < right) {
+      result.append(frame);
+    }
+  }
+  std::sort(result.begin(), result.end());
+  return result;
 }
 
 /** Undo steps of the storyboard's own edits, which change no shot's pictures. */
@@ -325,11 +375,34 @@ std::string read_storyboard(bContext *C, const DictionaryValue *state, const boo
       item->append_double("aspect", double(shot.r.xsch * shot.r.xasp) /
                                         double(max_ff(1.0f, shot.r.ysch * shot.r.yasp)));
       const int version = scene_versions[shot.id.name + 2];
+      /* Where each drawing starts, marked on the shot, and pictured there whatever the step. */
+      const Vector<int> starts = drawing_starts(*scene, strip);
+      auto keys = item->append_array("keys");
+      for (const int start : starts) {
+        keys->append_int(start);
+      }
       auto list = item->append_array("pictures");
-      /* At whole steps of the shot's content, the first before or at its start. */
+      /* At whole steps of the shot's content, the first before or at its start, and at each
+       * drawing's start, steps just before one left out. */
+      Vector<int> frames;
       const int content = strip.start;
-      int frame = content + int(floorf(float(left - content) / step)) * step;
-      for (; frame < right; frame += step) {
+      for (int frame = content + int(floorf(float(left - content) / step)) * step; frame < right;
+           frame += step)
+      {
+        const bool crowded = std::any_of(starts.begin(), starts.end(), [&](const int start) {
+          return start > frame && start - frame < step / 2;
+        });
+        if (!crowded) {
+          frames.append(frame);
+        }
+      }
+      for (const int start : starts) {
+        if (!frames.contains(start)) {
+          frames.append(start);
+        }
+      }
+      std::sort(frames.begin(), frames.end());
+      for (const int frame : frames) {
         const int at = max_ii(frame, left);
         const std::string key = picture_key(strip, frame);
         const auto found = pictures.find(key);
@@ -427,6 +500,27 @@ Scene *new_shot_template(bContext *C, Scene *sequencer_scene)
   return nullptr;
 }
 
+/** Empties every drawing in a new shot's scene, copied with its camera, layers and settings
+ * from another: a blank panel to draw in. */
+void clear_drawings(Scene &shot)
+{
+  FOREACH_SCENE_OBJECT_BEGIN (&shot, object) {
+    if (object->type != OB_GREASE_PENCIL) {
+      continue;
+    }
+    GreasePencil &grease_pencil = *reinterpret_cast<GreasePencil *>(object->data);
+    for (GreasePencilDrawingBase *base : grease_pencil.drawings()) {
+      if (base->type == GP_DRAWING) {
+        bke::greasepencil::Drawing &drawing = reinterpret_cast<GreasePencilDrawing *>(base)->wrap();
+        drawing.strokes_for_write() = bke::CurvesGeometry();
+        drawing.tag_topology_changed();
+      }
+    }
+    DEG_id_tag_update(&grease_pencil.id, ID_RECALC_GEOMETRY);
+  }
+  FOREACH_SCENE_OBJECT_END;
+}
+
 /** Makes room after `after` on its channel, moving the shots after it later by `length`. */
 void make_room(Scene *scene, const int channel, const int frame, const int length)
 {
@@ -448,6 +542,47 @@ void make_room(Scene *scene, const int channel, const int frame, const int lengt
   }
 }
 
+/** Shows the shot under the edit's playhead, as Blender's storyboard does, keeping the tool as it
+ * was set: each shot's scene has tool settings of its own, which would change the brush, its
+ * size and strength, and the mode drawn in, from one shot to the next. */
+void sync_scene(bContext *C)
+{
+  wmWindow *win = CTX_wm_window(C);
+  Scene *before = win ? WM_window_get_active_scene(win) : nullptr;
+  const Object *object_before = CTX_data_active_object(C);
+  const eObjectMode mode = object_before ? eObjectMode(object_before->mode) : OB_MODE_OBJECT;
+  sync_active_scene_and_time_with_scene_strip(*C);
+  Scene *after = win ? WM_window_get_active_scene(win) : nullptr;
+  if (!before || !after || before == after || !before->toolsettings || !after->toolsettings) {
+    return;
+  }
+  if (GpPaint *from = before->toolsettings->gp_paint) {
+    if (GpPaint *to = after->toolsettings->gp_paint) {
+      if (Brush *brush = BKE_paint_brush(&from->paint)) {
+        BKE_paint_brush_set(&to->paint, brush);
+      }
+      to->mode = from->mode;
+      const UnifiedPaintSettings &unified = from->paint.unified_paint_settings;
+      UnifiedPaintSettings &into = to->paint.unified_paint_settings;
+      into.size = unified.size;
+      into.unprojected_size = unified.unprojected_size;
+      into.alpha = unified.alpha;
+      into.weight = unified.weight;
+      copy_v3_v3(into.color, unified.color);
+      copy_v3_v3(into.secondary_color, unified.secondary_color);
+      into.flag = unified.flag;
+    }
+  }
+  /* The same mode in the shot's drawing, as Draw Mode. */
+  Object *object = CTX_data_active_object(C);
+  if (object && object->type == OB_GREASE_PENCIL && object_before &&
+      object_before->type == OB_GREASE_PENCIL && object->mode != mode)
+  {
+    object::mode_set(C, mode);
+  }
+  WM_event_add_notifier(C, NC_SCENE | ND_TOOLSETTINGS, after);
+}
+
 /** Applies an edit; the undo step's name, empty for none, or nothing when it failed. */
 std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
 {
@@ -462,7 +597,7 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     scene->r.cfra = int(query.lookup_int("frame").value_or(scene->r.cfra));
     scene->r.subframe = 0.0f;
     DEG_id_tag_update(&scene->id, ID_RECALC_FRAME_CHANGE);
-    sync_active_scene_and_time_with_scene_strip(*C);
+    sync_scene(C);
     WM_event_add_notifier(C, NC_SCENE | ND_FRAME, scene);
     return "";
   }
@@ -475,7 +610,7 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     if (WorkSpace *workspace = CTX_wm_workspace(C)) {
       SET_FLAG_FROM_TEST(workspace->flags, query.lookup_int("value").value_or(1),
                          WORKSPACE_SYNC_SCENE_TIME);
-      sync_active_scene_and_time_with_scene_strip(*C);
+      sync_scene(C);
     }
     return "";
   }
@@ -501,7 +636,7 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
                                      scene);
     }
     DEG_id_tag_update(&scene->id, ID_RECALC_SEQUENCER_STRIPS);
-    sync_active_scene_and_time_with_scene_strip(*C);
+    sync_scene(C);
     WM_event_add_notifier(C, NC_SCENE | ND_SEQUENCER, scene);
     return "Move Shot";
   }
@@ -512,8 +647,55 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     const bool left = query.lookup_str("side").value_or("") == "left";
     set_int(C, scene, strip, left ? "frame_final_start" : "frame_final_end",
             int(query.lookup_int("frame").value_or(0)));
-    sync_active_scene_and_time_with_scene_strip(*C);
+    sync_scene(C);
     return left ? "Trim Shot Start" : "Trim Shot End";
+  }
+  if (action == "layer_delete" || action == "layer_duplicate" || action == "layer_clear" ||
+      action == "layer_lock" || action == "layer_rename")
+  {
+    GreasePencil *grease_pencil = shown_grease_pencil(C);
+    bke::greasepencil::Layer *layer = grease_pencil ?
+                                          find_layer(*grease_pencil, query.lookup_str("layer").value_or("")) :
+                                          nullptr;
+    if (!layer) {
+      return std::nullopt;
+    }
+    if (action == "layer_lock") {
+      layer->set_locked(lookup_flag(query, "value", !layer->is_locked()));
+      WM_event_add_notifier(C, NC_GPENCIL | NA_EDITED, nullptr);
+      return "Lock Layer";
+    }
+    if (action == "layer_rename") {
+      const std::string name = query.lookup_str("value").value_or("");
+      if (name.empty()) {
+        return std::nullopt;
+      }
+      grease_pencil->rename_node(*CTX_data_main(C), layer->as_node(), name);
+      WM_event_add_notifier(C, NC_GPENCIL | NA_EDITED, nullptr);
+      return "Rename Layer";
+    }
+    if (action == "layer_clear") {
+      /* The drawing shown now: its strokes gone, its key kept, to draw it again. */
+      bke::greasepencil::Drawing *drawing = grease_pencil->get_editable_drawing_at(
+          *layer, CTX_data_scene(C)->r.cfra);
+      if (!drawing) {
+        return std::nullopt;
+      }
+      drawing->strokes_for_write() = bke::CurvesGeometry();
+      drawing->tag_topology_changed();
+      DEG_id_tag_update(&grease_pencil->id, ID_RECALC_GEOMETRY);
+      WM_event_add_notifier(C, NC_GPENCIL | NA_EDITED, nullptr);
+      return "Clear Drawing";
+    }
+    /* Blender's own operators, on the layer made active. */
+    grease_pencil->set_active_layer(layer);
+    WM_operator_name_call(C,
+                          action == "layer_delete" ? "GREASE_PENCIL_OT_layer_remove" :
+                                                     "GREASE_PENCIL_OT_layer_duplicate",
+                          wm::OpCallContext::ExecDefault,
+                          nullptr,
+                          nullptr);
+    return "";
   }
   if (action == "layer_active" || action == "layer_visible" || action == "layer_move") {
     GreasePencil *grease_pencil = shown_grease_pencil(C);
@@ -529,7 +711,7 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
       undo = "Set Active Layer";
     }
     else if (action == "layer_visible") {
-      layer->set_visible(query.lookup_int("value").value_or(1));
+      layer->set_visible(lookup_flag(query, "value", true));
       undo = "Show Layer";
     }
     else {
@@ -540,7 +722,7 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
       if (!target || target == layer) {
         return std::nullopt;
       }
-      if (query.lookup_int("above").value_or(1)) {
+      if (lookup_flag(query, "above", true)) {
         grease_pencil->move_node_after(layer->as_node(), target->as_node());
       }
       else {
@@ -571,7 +753,7 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     PropertyRNA *prop = RNA_struct_find_property(&ptr, "scene");
     RNA_property_pointer_set(&ptr, prop, value, nullptr);
     RNA_property_update(C, &ptr, prop);
-    sync_active_scene_and_time_with_scene_strip(*C);
+    sync_scene(C);
     return "Change Shot Scene";
   }
   if (action == "rename") {
@@ -595,7 +777,7 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
       WM_operator_name_call(C, "SEQUENCER_OT_delete", wm::OpCallContext::ExecDefault,
                             &properties, nullptr);
       WM_operator_properties_free(&properties);
-      sync_active_scene_and_time_with_scene_strip(*C);
+      sync_scene(C);
       return "";
     }
     /* A copy of the shot and its scene, right after it, the later shots making room. */
@@ -619,7 +801,7 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
                           &properties, nullptr);
     WM_operator_properties_free(&properties);
     CTX_data_scene_set(C, previous);
-    sync_active_scene_and_time_with_scene_strip(*C);
+    sync_scene(C);
     return "";
   }
   if (action == "add") {
@@ -649,8 +831,8 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     Scene *previous = CTX_data_scene(C);
     CTX_data_scene_set(C, source);
     PointerRNA properties = WM_operator_properties_create("SEQUENCER_OT_scene_strip_add_new");
-    /* A blank panel copied whole; otherwise the shot's settings with nothing in it. */
-    RNA_enum_set(&properties, "type", template_scene ? SCE_COPY_FULL : SCE_COPY_EMPTY);
+    /* A copy whole, camera, layers and settings, its drawings then emptied. */
+    RNA_enum_set(&properties, "type", source ? SCE_COPY_FULL : SCE_COPY_EMPTY);
     RNA_int_set(&properties, "frame_start", frame);
     RNA_int_set(&properties, "channel", channel);
     /* Placed where asked, not then moved with a pointer as the Sequencer's own Add does. */
@@ -659,10 +841,13 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
                           &properties, nullptr);
     WM_operator_properties_free(&properties);
     CTX_data_scene_set(C, previous);
+    if (Strip *added = seq::select_active_get(scene); added && added->scene && added->scene != source) {
+      clear_drawings(*added->scene);
+    }
     /* The playhead on the new shot, showing it to draw in. */
     scene->r.cfra = frame;
     DEG_id_tag_update(&scene->id, ID_RECALC_FRAME_CHANGE);
-    sync_active_scene_and_time_with_scene_strip(*C);
+    sync_scene(C);
     WM_event_add_notifier(C, NC_SCENE | ND_FRAME, scene);
     return "";
   }
