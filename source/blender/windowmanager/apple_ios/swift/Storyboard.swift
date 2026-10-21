@@ -104,7 +104,7 @@ final class StoryboardModel {
     end = max(start, snapshot.int("end") ?? end)
     fps = snapshot.double("fps") ?? fps
     playing = snapshot.bool("playing")
-    if !scrubbing, let frame = snapshot.int("frame"), frame != self.frame { self.frame = frame }
+    /* The frame comes from the timeline's snapshot, every frame; this one is older. */
     let scenes = (snapshot["scenes"] as? [String]) ?? []
     if scenes != self.scenes { self.scenes = scenes }
     let now = Date()
@@ -560,10 +560,13 @@ struct StoryboardView: View {
       let pictures = shot.pictures
       guard !pictures.isEmpty else { return }
       let pictureWidth = height * shot.aspect
+      /* A picture not read yet shows its neighbour, so the strip never has a gap. */
+      var last = pictures.lazy.compactMap { ShotPictures.image($0.path) }.first
       for (index, picture) in pictures.enumerated() {
         let left = x(picture.frame + offset) - x(start)
         let next = index + 1 < pictures.count ? x(pictures[index + 1].frame + offset) - x(start) : size.width
-        guard next > 0, left < size.width, let image = ShotPictures.image(picture.path) else { continue }
+        if let image = ShotPictures.image(picture.path) { last = image }
+        guard next > 0, left < size.width, let image = last else { continue }
         /* Repeated to fill the room up to the next picture, should that be further. */
         var cell = left
         repeat {

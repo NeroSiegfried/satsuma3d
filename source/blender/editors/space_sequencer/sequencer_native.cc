@@ -124,6 +124,9 @@ std::string encode(const Value &value)
 /** A picture of one frame of a shot's scene, and the version of the scene it shows. */
 struct Picture {
   std::string path;
+  /** The one before, still on disk: the native interface may not have shown its successor yet,
+   * and a picture gone from under it would leave a gap for a moment. */
+  std::string previous;
   int version = -1;
 };
 /** By scene and frame of its content, so moving or trimming a shot keeps its pictures. */
@@ -132,6 +135,8 @@ std::map<std::string, Picture> pictures;
 std::map<std::string, int> scene_versions;
 /** The undo step last seen: a new one means the shot drawn in may look different. */
 const void *last_undo_step = nullptr;
+/** When the shot drawn in last changed: its pictures wait for a pause in the drawing. */
+std::chrono::steady_clock::time_point last_change;
 int picture_count = 0;
 
 /** Undo steps of the storyboard's own edits, which change no shot's pictures. */
@@ -171,8 +176,8 @@ std::string render_picture(bContext *C, Scene *sequencer_scene, Strip *strip,
   shot->r.size = short(clamp_i(int(ceilf(100.0f * height / max_ii(1, shot->r.ysch))), 1, 100));
   const short is_break = G.is_break;
   G.is_break = false;
+  /* Drawn offscreen; the window's own frame-buffer is bound again after, untouched. */
   gpu::FrameBuffer *framebuffer = GPU_framebuffer_active_get();
-  GPU_framebuffer_restore();
   ImBuf *ibuf = seq::render_give_ibuf_direct(&context, float(timeline_frame), strip);
   if (framebuffer) {
     GPU_framebuffer_bind(framebuffer);
@@ -235,6 +240,7 @@ std::string read_storyboard(bContext *C, const DictionaryValue *state, const boo
     last_undo_step = undo_step;
     if (window_scene && !(undo_step && storyboard_step(undo_step->name))) {
       scene_versions[window_scene->id.name + 2]++;
+      last_change = std::chrono::steady_clock::now();
     }
   }
 
@@ -299,8 +305,9 @@ std::string read_storyboard(bContext *C, const DictionaryValue *state, const boo
       }
     }
   }
-  /* A few at a time, as long as the window keeps its frame rate. */
-  if (draw && !wanted.is_empty()) {
+  /* A few at a time, as long as the window keeps its frame rate, once drawing pauses. */
+  const bool drawing = std::chrono::steady_clock::now() - last_change < std::chrono::milliseconds(600);
+  if (draw && !drawing && !wanted.is_empty()) {
     std::sort(wanted.begin(), wanted.end(),
               [](const Wanted &a, const Wanted &b) { return a.priority < b.priority; });
     const auto begin = std::chrono::steady_clock::now();
@@ -311,9 +318,10 @@ std::string read_storyboard(bContext *C, const DictionaryValue *state, const boo
       Picture &picture = pictures[item.key];
       const std::string path = render_picture(C, scene, item.strip, item.frame, height);
       if (!path.empty()) {
-        if (!picture.path.empty()) {
-          BLI_delete(picture.path.c_str(), false, false);
+        if (!picture.previous.empty()) {
+          BLI_delete(picture.previous.c_str(), false, false);
         }
+        picture.previous = picture.path;
         picture.path = path;
       }
       /* Tried for this version, drawn or not, so a shot that cannot be drawn is not tried
@@ -588,7 +596,9 @@ std::string native_storyboard_query(bContext *C, const std::string &request, con
   SequencerSpaceContext space(C);
   if (!execute) {
     /* Not while playing, which draws the shots itself. */
-    return read_storyboard(C, query, !ED_screen_animation_playing(CTX_wm_manager(C)));
+    return read_storyboard(C, query,
+                           !ED_screen_animation_playing(CTX_wm_manager(C)) &&
+                               (!query || query->lookup_int("draw").value_or(1)));
   }
   if (!query) {
     return "This storyboard change could not be made.";

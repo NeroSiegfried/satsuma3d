@@ -280,6 +280,8 @@ std::chrono::steady_clock::time_point ios_graph_next_check;
 bool ios_storyboard_dirty = true;
 /* How the native storyboard shows the shots: the frames between their pictures, and their size. */
 std::string ios_storyboard_state = "{}";
+/* Pictures of shots were still to draw at the last look, or it has not looked yet. */
+bool ios_storyboard_pending = true;
 std::string ios_storyboard_json;
 std::chrono::steady_clock::time_point ios_storyboard_next_check;
 std::string ios_properties_error;
@@ -2637,12 +2639,21 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
         /* Soon again while shots still need their pictures drawn, one at a time. */
         if (ios_storyboard_dirty || now >= ios_storyboard_next_check) {
           ios_storyboard_dirty = false;
-          /* Shots' pictures are drawn with the window's GPU context, as its editors draw. */
-          if (wmWindow *win = CTX_wm_window(C)) {
+          /* Shots' pictures are drawn with the window's GPU context, as its editors draw; only
+           * made current when the last look found some to draw. Otherwise this look only finds
+           * out, and the next draws them. */
+          wmWindow *win = CTX_wm_window(C);
+          const bool draw = win && ios_storyboard_pending;
+          if (draw) {
             wm_window_make_drawable(CTX_wm_manager(C), win);
           }
-          ios_storyboard_json = ed::vse::native_storyboard_query(C, ios_storyboard_state, false);
+          std::string state = ios_storyboard_state;
+          if (!draw && state.size() >= 2 && state.back() == '}') {
+            state.insert(state.size() - 1, state.size() > 2 ? ",\"draw\":0" : "\"draw\":0");
+          }
+          ios_storyboard_json = ed::vse::native_storyboard_query(C, state, false);
           const bool pending = ios_storyboard_json.find("\"pending\":1") != std::string::npos;
+          ios_storyboard_pending = pending;
           ios_storyboard_next_check = now + std::chrono::milliseconds(pending ? 100 : 1000);
           if (pending) {
             /* The pictures still to draw arrive a few at a time, sooner than other changes. */
