@@ -183,6 +183,11 @@ void append_layers(bContext *C, DictionaryValue &result)
     item->append_int("visible", layer.is_visible());
     item->append_int("locked", layer.is_locked());
     item->append_int("active", &layer == active);
+    /* Where its drawings begin, in its scene's frames. */
+    auto keys = item->append_array("keys");
+    for (const int frame : layer.sorted_keys()) {
+      keys->append_int(frame);
+    }
   }
 }
 
@@ -737,7 +742,8 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     return left ? "Trim Shot Start" : "Trim Shot End";
   }
   if (action == "layer_delete" || action == "layer_duplicate" || action == "layer_clear" ||
-      action == "layer_lock" || action == "layer_rename")
+      action == "layer_lock" || action == "layer_rename" || action == "layer_keys_move" ||
+      action == "layer_keys_delete")
   {
     GreasePencil *grease_pencil = shown_grease_pencil(C);
     bke::greasepencil::Layer *layer = grease_pencil ?
@@ -745,6 +751,51 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
                                           nullptr;
     if (!layer) {
       return std::nullopt;
+    }
+    if (action == "layer_keys_move" || action == "layer_keys_delete") {
+      /* A layer's drawings moved by some frames: those landing on others replace them, as keys
+       * do. */
+      const int delta = int(query.lookup_int("delta").value_or(0));
+      Vector<int> frames;
+      if (const io::serialize::ArrayValue *list = query.lookup_array("frames")) {
+        for (const std::shared_ptr<Value> &element : list->elements()) {
+          if (const io::serialize::IntValue *number = element->as_int_value()) {
+            if (layer->frames().contains(int(number->value()))) {
+              frames.append(int(number->value()));
+            }
+          }
+        }
+      }
+      if (action == "layer_keys_delete") {
+        if (frames.is_empty()) {
+          return std::nullopt;
+        }
+        grease_pencil->remove_frames(*layer, frames);
+        DEG_id_tag_update(&grease_pencil->id, ID_RECALC_GEOMETRY);
+        WM_event_add_notifier(C, NC_GPENCIL | NA_EDITED, nullptr);
+        return "Delete Drawings";
+      }
+      if (delta == 0 || frames.is_empty()) {
+        return std::nullopt;
+      }
+      std::sort(frames.begin(), frames.end());
+      if (delta > 0) {
+        std::reverse(frames.begin(), frames.end());
+      }
+      const Set<int> moving(frames);
+      for (const int frame : frames) {
+        const int target = frame + delta;
+        if (!moving.contains(target) && layer->frames().contains(target)) {
+          grease_pencil->remove_frames(*layer, {target});
+        }
+      }
+      for (const int frame : frames) {
+        grease_pencil->insert_duplicate_frame(*layer, frame, frame + delta, true);
+        grease_pencil->remove_frames(*layer, {frame});
+      }
+      DEG_id_tag_update(&grease_pencil->id, ID_RECALC_GEOMETRY);
+      WM_event_add_notifier(C, NC_GPENCIL | NA_EDITED, nullptr);
+      return "Move Drawings";
     }
     if (action == "layer_lock") {
       layer->set_locked(lookup_flag(query, "value", !layer->is_locked()));
