@@ -437,6 +437,9 @@ struct StoryboardView: View {
   @State private var scrollOffset: CGFloat = 0
   /** The frame under the finger on the scrubber, shown before Blender follows. */
   @State private var scrubbing: Int?
+  /** The frame before scrubbing, back to it when a pinch turns out to be meant. */
+  @State private var scrubFrom: Int?
+  @State private var scrubCancelled = false
 
   private struct ShotDrag: Equatable {
     enum Kind { case move, left, right }
@@ -534,7 +537,8 @@ struct StoryboardView: View {
   /** Playback keeps the playhead in view, a page at a time. */
   private func followPlayhead(_ frame: Int) {
     let at = x(frame)
-    guard model.playing, at < scrollOffset || at > scrollOffset + lanesWidth - 24 else { return }
+    /* Looping, the view is what loops: it stays put as playback wraps around. */
+    guard model.playing, !model.loop, at < scrollOffset || at > scrollOffset + lanesWidth - 24 else { return }
     withAnimation(.easeInOut(duration: 0.3)) { position.scrollTo(x: max(0, at - 40)) }
   }
 
@@ -544,6 +548,13 @@ struct StoryboardView: View {
       /* A second finger: a pinch, not a shot moved by the first one. */
       drag = nil
       pinchCancelled = true
+      /* Nor the playhead moved by a finger that landed on the ruler first. */
+      if scrubbing != nil, let from = scrubFrom {
+        model.setFrame(from, final: true)
+        model.scrubbing = false
+        scrubbing = nil
+        scrubCancelled = true
+      }
       /* The frame between the fingers, which stays there as it zooms. */
       pinchAnchor = (scrollOffset + center.x - leading) / max(0.01, scale)
     }
@@ -622,7 +633,9 @@ struct StoryboardView: View {
           .onChange(of: model.entered) { _, entered in enteredChanged(entered) }
           .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { lanesWidth = $0 }
           .scrollIndicators(.hidden)
-          .scrollDisabled(drag != nil)
+          /* Pinching, the zoom alone places the view: the scroll view's own panning and its
+           * momentum after would carry it off the frames between the fingers. */
+          .scrollDisabled(drag != nil || pinchStart != nil)
           .scrollPosition($position)
           /* At the sides only: the scrubber's knob grows as it is held. */
           .mask(Rectangle().padding(.vertical, -40))
@@ -824,14 +837,12 @@ struct StoryboardView: View {
           .frame(width: 26, height: keyRailHeight)
           .contentShape(Rectangle())
           .position(x: x(frame + (isSelected ? shift : 0)) - x(start), y: keyRailHeight / 2)
-          .onTapGesture {
-            selectedKeys = KeySelection(owner: owner, frames: isSelected && selected.count == 1 ? [] : [frame])
-            touched()
-            Haptics.selection()
-          }
-          .gesture(DragGesture(minimumDistance: 4)
+          /* Taken at the touch, before the lanes can scroll: the key follows the finger from the
+           * first point it moves, and a touch that does not move selects it. */
+          .highPriorityGesture(DragGesture(minimumDistance: 0)
             .onChanged { value in
               if keyDrag == nil {
+                guard abs(value.translation.width) >= 1 else { return }
                 if !isSelected { selectedKeys = KeySelection(owner: owner, frames: [frame]) }
                 touched()
                 Haptics.selection()
@@ -843,6 +854,12 @@ struct StoryboardView: View {
               }
             }
             .onEnded { _ in
+              guard keyDrag != nil else {
+                selectedKeys = KeySelection(owner: owner, frames: isSelected && selected.count == 1 ? [] : [frame])
+                touched()
+                Haptics.selection()
+                return
+              }
               let keys = Array(selectedKeys.frames(of: owner))
               if let drag = keyDrag, drag.frames != 0 {
                 moved(keys, drag.frames)
@@ -1038,6 +1055,8 @@ struct StoryboardView: View {
   private var scrub: some Gesture {
     DragGesture(minimumDistance: 0)
       .onChanged { value in
+        guard !scrubCancelled, pinchStart == nil else { return }
+        if scrubbing == nil { scrubFrom = model.frame }
         let frame = min(model.end, max(model.start, frame(at: value.location.x)))
         if frame != scrubbing { Haptics.selection() }
         scrubbing = frame
@@ -1045,6 +1064,11 @@ struct StoryboardView: View {
         model.setFrame(frame, final: false)
       }
       .onEnded { value in
+        scrubFrom = nil
+        guard !scrubCancelled, pinchStart == nil else {
+          scrubCancelled = false
+          return
+        }
         model.setFrame(min(model.end, max(model.start, frame(at: value.location.x))), final: true)
         model.scrubbing = false
         scrubbing = nil
