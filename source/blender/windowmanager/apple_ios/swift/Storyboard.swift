@@ -35,6 +35,8 @@ struct StoryboardShot: Equatable, Identifiable {
   var pictures: [StoryboardPicture]
   /** Where its drawings begin, in the edit's frames: its Grease Pencil keys. */
   var keys: [Int]
+  /** Its scene's frames in the edit's: plus this. */
+  var offset: Int
 
   var id: String { name }
 
@@ -51,6 +53,7 @@ struct StoryboardShot: Equatable, Identifiable {
     color = json.int("color") ?? 0
     aspect = json.double("aspect") ?? 16.0 / 9.0
     keys = ((json["keys"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.intValue }
+    offset = json.int("offset") ?? 0
     pictures = ((json["pictures"] as? [Any]) ?? []).compactMap { entry in
       guard let pair = entry as? [Any], pair.count == 2, let frame = (pair[0] as? NSNumber)?.intValue,
             let path = pair[1] as? String else { return nil }
@@ -78,6 +81,9 @@ final class StoryboardModel {
   var frame = 1
   private(set) var fps = 24.0
   private(set) var playing = false
+  /** Playback loops within the frames in view, as Blender's preview range. */
+  private(set) var loop = false
+  private(set) var loopRange = 1...250
   private(set) var shots: [StoryboardShot] = []
   /** The scenes a shot can show instead. */
   private(set) var scenes: [String] = []
@@ -104,6 +110,22 @@ final class StoryboardModel {
 
   var channels: Int { max(1, shots.map(\.channel).max() ?? 1) }
 
+  /** Set here, until Blender's snapshot shows it. */
+  @ObservationIgnored private var loopPending = false
+
+  /** Loops playback within `range`, the frames in view, or stops looping within it. */
+  func setLoop(_ enabled: Bool, range: ClosedRange<Int>) {
+    guard enabled != loop || (enabled && range != loopRange) else { return }
+    loop = enabled
+    loopRange = range
+    loopPending = true
+    send("loop", ["enabled": enabled ? 1 : 0, "start": range.lowerBound, "end": range.upperBound])
+    Task { @MainActor in
+      try? await Task.sleep(for: .milliseconds(400))
+      self.loopPending = false
+    }
+  }
+
   func setShown(_ shown: Bool) {
     guard shown != self.shown else { return }
     self.shown = shown
@@ -119,6 +141,11 @@ final class StoryboardModel {
     end = max(start, snapshot.int("end") ?? end)
     fps = snapshot.double("fps") ?? fps
     playing = snapshot.bool("playing")
+    if !loopPending {
+      loop = snapshot.bool("loop")
+      let low = snapshot.int("loop_start") ?? start
+      loopRange = low...max(low, snapshot.int("loop_end") ?? end)
+    }
     /* The frame comes from the timeline's snapshot, every frame; this one is older. */
     let scenes = (snapshot["scenes"] as? [String]) ?? []
     if scenes != self.scenes { self.scenes = scenes }
@@ -156,8 +183,13 @@ final class StoryboardModel {
     if next != shots { shots = next }
   }
 
-  /** The edit's frame from the timeline's snapshot, which playback updates every frame. */
-  func follow(frame: Int) {
+  /** The edit's frame from the timeline's snapshot, which playback updates every frame; with a
+   * shot opened, its own scene's frame, which then plays alone, in the edit's time. */
+  func follow(frame: Int, sceneFrame: Int) {
+    var frame = frame
+    if let entered, let shot = shots.first(where: { $0.id == entered }) {
+      frame = sceneFrame + shot.offset
+    }
     if !scrubbing, frame != self.frame { self.frame = frame }
   }
 
@@ -178,7 +210,11 @@ final class StoryboardModel {
 
   /** Moves the playhead, the window following the shot under it. */
   func setFrame(_ frame: Int, final: Bool) {
-    let frame = min(end, max(start, frame))
+    var frame = min(end, max(start, frame))
+    /* A shot opened keeps the playhead within it. */
+    if let entered, let shot = shots.first(where: { $0.id == entered }) {
+      frame = min(shot.end - 1, max(shot.start, frame))
+    }
     self.frame = frame
     /* Each frame sent switches scenes as needed: often enough to follow, not every touch. */
     guard final || Date().timeIntervalSince(lastFrameSent) > 1.0 / 30 else { return }
@@ -287,6 +323,8 @@ private let headerHeight: CGFloat = 44
 private let rulerHeight: CGFloat = 24
 /** The scrubber along the bottom, its knob showing the frame. */
 private let scrubberHeight: CGFloat = 40
+/** An opened shot's keys, above the scrubber, to retime. */
+private let keyTrackHeight: CGFloat = 30
 private let gripWidth: CGFloat = 18
 
 struct StoryboardView: View {
@@ -306,11 +344,26 @@ struct StoryboardView: View {
   /** The snap the drag last made, to tap once as it takes. */
   @State private var snappedTo: Int?
   @State private var renaming: StoryboardShot?
+  /** The shot whose edit menu was asked for, and how often, which shows it again each time. */
+  @State private var editMenuShot: String?
+  @State private var editMenuRequest = 0
   @State private var renamingLayer: StoryboardLayer?
   @State private var newLayerName = ""
   @State private var newName = ""
   @Environment(\.displayScale) private var displayScale
   @State private var lanesWidth: CGFloat = 0
+  /** The shot a hold on the lanes picked up, while it is moved. */
+  @State private var movingShot: String?
+  private let lanesSpace = "storyboard.lanes"
+  /** The frames the selected keys are being dragged by. */
+  @State private var keyDrag: Int?
+  @State private var loopFollow: Task<Void, Never>?
+
+  private struct LoopView: Equatable {
+    var offset: CGFloat
+    var scale: CGFloat
+    var width: CGFloat
+  }
   /** Where the shots are scrolled to: shots and the playhead are placed by offsets, so scrolled
    * to by position rather than by view. */
   @State private var position = ScrollPosition(edge: .leading)
@@ -435,7 +488,8 @@ struct StoryboardView: View {
         /* An empty lane below the shots, to move one into. */
         let lanes = model.channels + 1
         /* All of them in the panel's height, unless pinched taller, then scrolled to. */
-        let fit = max(28, min(120, (proxy.size.height - rulerHeight - scrubberHeight - 4) / CGFloat(lanes)))
+        let bottom = scrubberHeight + (model.entered != nil ? keyTrackHeight : 0)
+        let fit = max(28, min(120, (proxy.size.height - rulerHeight - bottom - 4) / CGFloat(lanes)))
         let laneHeight = max(20, min(240, fit * laneZoom))
         let width = max(proxy.size.width, x(model.end + 1) + 160)
         ScrollViewReader { _ in
@@ -445,21 +499,61 @@ struct StoryboardView: View {
               ForEach(model.shots) { shot in
                 shotView(shot, laneHeight: laneHeight, lanes: lanes)
               }
+              /* Before the edit's start and after its end, darker: shots reaching there are out
+               * of it. */
+              Rectangle()
+                .fill(Color.black.opacity(0.14))
+                .frame(width: max(0, x(model.start)), height: rulerHeight + CGFloat(lanes) * laneHeight)
+                .allowsHitTesting(false)
+              Rectangle()
+                .fill(Color.black.opacity(0.14))
+                .frame(width: max(0, width - x(model.end + 1)), height: rulerHeight + CGFloat(lanes) * laneHeight)
+                .offset(x: x(model.end + 1))
+                .allowsHitTesting(false)
               /* Down the whole height, to the scrubber below. */
               playhead(height: max(rulerHeight + CGFloat(lanes) * laneHeight, proxy.size.height - scrubberHeight))
             }
             .frame(width: width, height: rulerHeight + CGFloat(lanes) * laneHeight, alignment: .topLeading)
+            .coordinateSpace(.named(lanesSpace))
+            .gesture(laneMove(laneHeight: laneHeight, lanes: lanes))
           }
           .safeAreaInset(edge: .bottom, spacing: 0) {
             /* In step with the shots above: the same frames at the same places, scrolled with
              * them. */
-            scrubber(width: width)
-              .offset(x: -scrollOffset)
-              .frame(width: proxy.size.width, height: scrubberHeight, alignment: .leading)
-              .clipped()
+            VStack(spacing: 0) {
+              if let shot = model.shots.first(where: { $0.id == model.entered }) {
+                keyTrack(shot, width: width)
+                  .offset(x: -scrollOffset)
+                  .frame(width: proxy.size.width, height: keyTrackHeight, alignment: .leading)
+                  .clipped()
+                  .overlay(alignment: .trailing) {
+                    if timeline.keys.contains(where: \.selected) {
+                      Button("Delete Keys", systemImage: "trash", role: .destructive) { timeline.deleteSelected() }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .frame(width: 44, height: keyTrackHeight)
+                        .background(PanelStyle.docked)
+                    }
+                  }
+              }
+              scrubber(width: width)
+                .offset(x: -scrollOffset)
+                .frame(width: proxy.size.width, height: scrubberHeight, alignment: .leading)
+                .clipped()
+            }
           }
           .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, offset in
             scrollOffset = offset
+          }
+          .onChange(of: LoopView(offset: scrollOffset, scale: scale, width: lanesWidth)) {
+            /* Looping, within the frames now in view, once the view settles. */
+            guard model.loop else { return }
+            loopFollow?.cancel()
+            loopFollow = Task { @MainActor in
+              try? await Task.sleep(for: .milliseconds(250))
+              guard !Task.isCancelled else { return }
+              model.setLoop(true, range: visibleFrames)
+            }
           }
           .onChange(of: model.entered) { _, entered in
             /* Opened, the shot fills the width, to work in its frames, once the layers beside it
@@ -562,6 +656,7 @@ struct StoryboardView: View {
       }
       Spacer(minLength: 8)
       transport
+      loopButton
       Spacer(minLength: 8)
       Button {
         model.send("add")
@@ -584,6 +679,30 @@ struct StoryboardView: View {
     }
     .padding(.horizontal, 12)
     .frame(height: headerHeight)
+  }
+
+  /** Loops playback within the frames in view, following as they are scrolled and zoomed. */
+  private var loopButton: some View {
+    Button {
+      model.setLoop(!model.loop, range: visibleFrames)
+      Haptics.selection()
+    } label: {
+      Image(systemName: "repeat")
+        .foregroundStyle(model.loop ? PanelStyle.selection : .primary)
+        .frame(width: 40, height: 40)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .font(.system(size: 17))
+    .accessibilityLabel("Loop Frames in View")
+    .accessibilityAddTraits(model.loop ? .isSelected : [])
+  }
+
+  /** The edit's frames the shots show now, scrolled and zoomed. */
+  private var visibleFrames: ClosedRange<Int> {
+    let first = max(model.start, frame(at: scrollOffset))
+    let last = min(model.end, frame(at: scrollOffset + max(1, lanesWidth)) - 1)
+    return first...max(first, last)
   }
 
   /** Playback, as the timeline's: in the edit's time, from shot to shot. */
@@ -613,6 +732,48 @@ struct StoryboardView: View {
       Image(systemName: symbol).frame(width: 40, height: 40).contentShape(Rectangle())
     }
     .accessibilityLabel(label)
+  }
+
+  /** The opened shot's keys, its drawings and other keys, in the edit's time: tapped to select,
+   * dragged to move the selected ones to other frames. */
+  private func keyTrack(_ shot: StoryboardShot, width: CGFloat) -> some View {
+    ZStack(alignment: .topLeading) {
+      Rectangle()
+        .fill(.secondary.opacity(0.08))
+        .frame(width: max(0, x(shot.end) - x(shot.start)), height: keyTrackHeight)
+        .offset(x: x(shot.start))
+      ForEach(timeline.keys, id: \.frame) { key in
+        let moved = key.selected ? keyDrag ?? 0 : 0
+        let at = x(key.frame + shot.offset + moved)
+        Image(systemName: "diamond.fill")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(key.selected ? PanelStyle.selection : Color.primary.opacity(0.7))
+          .shadow(color: .black.opacity(0.2), radius: 1)
+          .frame(width: 28, height: keyTrackHeight)
+          .contentShape(Rectangle())
+          .position(x: at, y: keyTrackHeight / 2)
+          .onTapGesture { timeline.select([key.frame]) }
+          .gesture(DragGesture(minimumDistance: 4)
+            .onChanged { value in
+              if keyDrag == nil {
+                if !key.selected { timeline.select([key.frame]) }
+                Haptics.selection()
+              }
+              let frames = Int((value.translation.width / scale).rounded())
+              if frames != keyDrag {
+                if keyDrag != nil { Haptics.selection() }
+                keyDrag = frames
+              }
+            }
+            .onEnded { _ in
+              if let frames = keyDrag, frames != 0 { timeline.moveSelected(by: frames) }
+              keyDrag = nil
+            })
+          .accessibilityLabel("Key at frame \(key.frame)")
+          .accessibilityAddTraits(key.selected ? .isSelected : [])
+      }
+    }
+    .frame(width: width, height: keyTrackHeight, alignment: .topLeading)
   }
 
   /** The playhead's knob along the bottom at its frame, dragged anywhere along it to scrub. */
@@ -666,6 +827,13 @@ struct StoryboardView: View {
   private func ruler(width: CGFloat) -> some View {
     let step = rulerStep
     return Canvas { context, size in
+      if model.loop {
+        /* The frames playback loops within. */
+        let band = CGRect(x: x(model.loopRange.lowerBound), y: 0,
+                          width: x(model.loopRange.upperBound + 1) - x(model.loopRange.lowerBound),
+                          height: rulerHeight)
+        context.fill(Path(band), with: .color(PanelStyle.selection.opacity(0.18)))
+      }
       var frame = (model.start / step) * step
       while x(frame) < size.width {
         let px = x(frame)
@@ -774,24 +942,24 @@ struct StoryboardView: View {
     .shadow(color: .black.opacity(moving ? 0.35 : 0), radius: 10, y: 5)
     .scaleEffect(moving ? 1.03 : 1)
     .onTapGesture {
+      /* Tapped again once chosen, what can be done with it, in the system's edit menu over it. */
+      if shot.selected && shot.active {
+        editMenuShot = shot.name
+        editMenuRequest += 1
+        return
+      }
       /* Choosing a shot shows it, to draw in; another than the one opened goes back to the edit. */
       if model.entered != shot.name { model.leave() }
       model.select(shot)
       if !(shot.start..<shot.end).contains(model.frame) { model.setFrame(shot.start, final: true) }
     }
+    .background {
+      if shot.selected {
+        EditMenuHost(request: editMenuShot == shot.name ? editMenuRequest : 0) { shotMenu(shot) }
+      }
+    }
     /* Twice opens it, to work in its own time. */
     .simultaneousGesture(TapGesture(count: 2).onEnded { model.enter(shot) })
-    .gesture(shotMove(shot, laneHeight: laneHeight))
-    .contextMenu {
-      Button("Open Shot", systemImage: "arrow.up.forward.square") { model.enter(shot) }
-      Button("Duplicate", systemImage: "plus.square.on.square") { model.send("duplicate", ["name": shot.name]) }
-      Button("Rename…", systemImage: "pencil") {
-        newName = shot.name
-        renaming = shot
-      }
-      Divider()
-      Button("Delete", systemImage: "trash", role: .destructive) { model.send("delete", ["name": shot.name]) }
-    }
     .offset(x: x(place.start) + 1, y: top)
     .zIndex(drag?.name == shot.name ? 1 : 0)
     .animation(.spring(response: 0.18, dampingFraction: 0.9), value: moving)
@@ -799,6 +967,23 @@ struct StoryboardView: View {
     .accessibilityLabel(shot.name)
     .accessibilityValue("Frames \(shot.start) to \(shot.end - 1)")
     .accessibilityAddTraits(shot.selected ? [.isSelected, .isButton] : .isButton)
+  }
+
+  /** What can be done with a chosen shot, as the system's edit menu over it. */
+  private func shotMenu(_ shot: StoryboardShot) -> UIMenu {
+    UIMenu(children: [
+      UIAction(title: "Edit", image: UIImage(systemName: "arrow.up.forward.square")) { _ in model.enter(shot) },
+      UIAction(title: "Duplicate", image: UIImage(systemName: "plus.square.on.square")) { _ in
+        model.send("duplicate", ["name": shot.name])
+      },
+      UIAction(title: "Rename…", image: UIImage(systemName: "pencil")) { _ in
+        newName = shot.name
+        renaming = shot
+      },
+      UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { _ in
+        model.send("delete", ["name": shot.name])
+      },
+    ])
   }
 
   /** The shot's name, tapped for what to do with it: show another scene, rename it, and so on. */
@@ -909,15 +1094,34 @@ struct StoryboardView: View {
   }
 
   /** Moving a shot waits for a hold, so a swipe over the shots scrolls them and never moves one
-   * by accident. */
-  private func shotMove(_ shot: StoryboardShot, laneHeight: CGFloat) -> some Gesture {
-    LongPressGesture(minimumDuration: 0.25, maximumDistance: 10)
-      .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
+   * by accident. One gesture over the lanes, which finds the shot under the finger where it is
+   * drawn, whichever it is. */
+  private func laneMove(laneHeight: CGFloat, lanes: Int) -> some Gesture {
+    LongPressGesture(minimumDuration: 0.25, maximumDistance: 12)
+      .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(lanesSpace)))
       .onChanged { value in
-        guard case .second(true, let drag) = value else { return }
-        dragChanged(shot, kind: .move, translation: drag?.translation ?? .zero, laneHeight: laneHeight)
+        guard case .second(true, let drag?) = value else { return }
+        if movingShot == nil {
+          guard let shot = shot(at: drag.startLocation, laneHeight: laneHeight, lanes: lanes) else { return }
+          movingShot = shot.name
+        }
+        guard let name = movingShot, let shot = model.shots.first(where: { $0.name == name }) else { return }
+        dragChanged(shot, kind: .move, translation: drag.translation, laneHeight: laneHeight)
       }
-      .onEnded { _ in dragEnded(shot, kind: .move) }
+      .onEnded { _ in
+        defer { movingShot = nil }
+        guard let name = movingShot, let shot = model.shots.first(where: { $0.name == name }) else { return }
+        dragEnded(shot, kind: .move)
+      }
+  }
+
+  /** The shot drawn at a point of the lanes, the topmost where they overlap. */
+  private func shot(at point: CGPoint, laneHeight: CGFloat, lanes: Int) -> StoryboardShot? {
+    model.shots.last { shot in
+      let top = rulerHeight + CGFloat(shot.channel - 1) * laneHeight + 3
+      return CGRect(x: x(shot.start), y: top, width: x(shot.end) - x(shot.start), height: laneHeight - 6)
+        .contains(point)
+    }
   }
 
   private func dragChanged(_ shot: StoryboardShot, kind: ShotDrag.Kind, translation: CGSize, laneHeight: CGFloat) {
@@ -1051,3 +1255,39 @@ private struct AxisPinch: UIGestureRecognizerRepresentable {
 }
 
 /** \} */
+
+/** Shows the system's edit menu over its view each time `request` changes, as a selected item
+ * does when tapped again. */
+private struct EditMenuHost: UIViewRepresentable {
+  let request: Int
+  let menu: () -> UIMenu
+
+  final class Coordinator: NSObject, UIEditMenuInteractionDelegate {
+    var menu: () -> UIMenu = { UIMenu(children: []) }
+    var shown = 0
+
+    func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration,
+                             suggestedActions: [UIMenuElement]) -> UIMenu? {
+      menu()
+    }
+  }
+
+  func makeCoordinator() -> Coordinator { Coordinator() }
+
+  func makeUIView(context: Context) -> UIView {
+    let view = UIView()
+    view.isUserInteractionEnabled = false
+    view.addInteraction(UIEditMenuInteraction(delegate: context.coordinator))
+    context.coordinator.shown = request
+    return view
+  }
+
+  func updateUIView(_ view: UIView, context: Context) {
+    context.coordinator.menu = menu
+    guard request != context.coordinator.shown, request > 0 else { return }
+    context.coordinator.shown = request
+    guard let interaction = view.interactions.compactMap({ $0 as? UIEditMenuInteraction }).first else { return }
+    let point = CGPoint(x: view.bounds.midX, y: view.bounds.minY)
+    interaction.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+  }
+}

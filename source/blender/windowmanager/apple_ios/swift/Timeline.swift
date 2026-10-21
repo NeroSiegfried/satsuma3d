@@ -776,7 +776,9 @@ final class SwiftTimeline {
     store.set(\.recording, json.bool("autokey"))
     let storyboard = json.bool("storyboard")
     store.set(\.storyboardAvailable, storyboard)
-    if let editFrame = json.int("edit_frame") { store.storyboard.follow(frame: editFrame) }
+    if let editFrame = json.int("edit_frame") {
+      store.storyboard.follow(frame: editFrame, sceneFrame: json.int("frame") ?? 0)
+    }
 #if !os(visionOS)
     /* A storyboard opens with its shots showing, once. */
     if storyboard && !storyboardOpened {
