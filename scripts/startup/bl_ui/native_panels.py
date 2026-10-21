@@ -399,9 +399,6 @@ class VIEW3D_PT_native_sculpt_settings(bpy.types.Panel):
             else:
                 layout.prop(sculpt, "detail_size", text="Detail")
         _draw_mirror(layout, context)
-        # Blender's Mask and Face Sets menus, as its header has them in Sculpt Mode.
-        layout.menu("VIEW3D_MT_mask", text="Mask")
-        layout.menu("VIEW3D_MT_face_sets", text="Face Sets")
 
 
 class VIEW3D_PT_native_sculpt_remesh_popout_settings(bpy.types.Panel):
