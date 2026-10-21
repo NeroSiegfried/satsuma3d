@@ -1148,7 +1148,7 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
       let paints = brush?.dict("color") != nil
       let toolItems = items.map { item -> PKToolPickerItem in
         var configuration = PKToolPickerCustomItem.Configuration(identifier: item.id, name: item.title)
-        let image = Self.toolImage(item.image ?? UIImage(systemName: "circle")!)
+        let image = item.image ?? UIImage(systemName: "circle")!
         configuration.imageProvider = { _ in image }
         if brushes {
           /* The brush's options, as the palette's own controls. */
@@ -1234,16 +1234,6 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
       }
       return (width, image.withRenderingMode(.alwaysTemplate))
     })
-
-  /** The palette lays its items out as slim tools standing side by side, as its pens are: the
-   * icon at the top of one, so round brush icons sit next to each other rather than over. */
-  private static func toolImage(_ icon: UIImage) -> UIImage {
-    let width: CGFloat = 36
-    let size = CGSize(width: width, height: width * 3)
-    return UIGraphicsImageRenderer(size: size).image { _ in
-      icon.draw(in: CGRect(x: 2, y: 2, width: width - 4, height: width - 4))
-    }
-  }
 
   /** The palette's item showing the brush as Blender has it: its size as the nearest width, its
    * strength as opacity, and its color. */
