@@ -470,27 +470,42 @@ public struct DocumentWindow: View {
   }
 
   private var columnLayout: some View {
-    HStack(spacing: 0) {
-      if model.hierarchyShown && controlsShown {
-        HierarchyPanel(store: shell.panels.hierarchy) { shell.panels.setHierarchyShown(false) }
-          .environment(\.panelInWindow, true)
-          .frame(width: 320)
-          .background(Color(uiColor: .secondarySystemBackground).ignoresSafeArea())
-          .transition(.move(edge: .leading))
-          .accessibilityIdentifier("blender.hierarchy.panel")
+    /* The sidebars end above the editors docked along the bottom, which keep the window's whole
+     * width: opening one does not narrow the node editor, the Story or the timeline. */
+    /* Under their rounded top, as the viewport is. */
+    let docked = viewportCover
+    let hierarchy = model.hierarchyShown && controlsShown
+    let inspector = model.inspectorShown && controlsShown
+    return ZStack(alignment: .bottom) {
+      HStack(spacing: 0) {
+        if hierarchy {
+          HierarchyPanel(store: shell.panels.hierarchy) { shell.panels.setHierarchyShown(false) }
+            .environment(\.panelInWindow, true)
+            .frame(width: Self.hierarchyWidth)
+            .background(Color(uiColor: .secondarySystemBackground).ignoresSafeArea(edges: .top))
+            .padding(.bottom, docked)
+            .transition(.move(edge: .leading))
+            .accessibilityIdentifier("blender.hierarchy.panel")
+        }
+        layers(bottom: false)
+        if inspector {
+          InspectorPanel(store: shell.panels.inspector) { shell.panels.setInspectorShown(false) }
+            .environment(\.panelInWindow, true)
+            .frame(width: Self.inspectorWidth)
+            .background(Color(uiColor: .secondarySystemBackground).ignoresSafeArea(edges: .top))
+            .padding(.bottom, docked)
+            .transition(.move(edge: .trailing))
+            .accessibilityIdentifier("blender.inspector.panel")
+        }
       }
-      layers
-      if model.inspectorShown && controlsShown {
-        InspectorPanel(store: shell.panels.inspector) { shell.panels.setInspectorShown(false) }
-          .environment(\.panelInWindow, true)
-          .frame(width: 336)
-        .background(Color(uiColor: .secondarySystemBackground).ignoresSafeArea())
-        .transition(.move(edge: .trailing))
-        .accessibilityIdentifier("blender.inspector.panel")
-      }
+      bottomLayers(leading: hierarchy ? Self.hierarchyWidth : 0, trailing: inspector ? Self.inspectorWidth : 0)
     }
+    .animation(.easeOut(duration: 0.42), value: docked)
     .onGeometryChange(for: Bool.self) { $0.size.width < 1000 } action: { shell.panels.narrow = $0 }
   }
+
+  static let hierarchyWidth: CGFloat = 320
+  static let inspectorWidth: CGFloat = 336
 #endif
 
   private var hierarchySheet: Binding<Bool> {
@@ -520,14 +535,35 @@ public struct DocumentWindow: View {
 
   /** The viewport and the controls over it, then Properties and the Outliner, which keep below the
    * toolbar. */
-  private var layers: some View {
+  private var layers: some View { layers(bottom: true) }
+
+  /** \a bottom: the editors along the bottom in the viewport's column too, as on a phone. */
+  private func layers(bottom: Bool) -> some View {
     ZStack {
       /* Under the bars, but beside the sidebar and inspector, which are the side safe areas: the
        * viewport and its controls move with the columns as they slide. */
-      viewportLayers
+      viewportLayers(bottom: bottom)
         .ignoresSafeArea(edges: .vertical)
       CompileIndicator(progress: shell.compile)
     }
+  }
+
+  /** The timeline, assets and node editor along the bottom. Docked, they span the window; floating,
+   * they keep over the viewport, beside the sidebars \a leading and \a trailing wide. */
+  private func bottomLayers(leading: CGFloat = 0, trailing: CGFloat = 0) -> some View {
+    let docked = shell.timeline.store.editorShown && shell.timeline.store.visible
+    return ZStack {
+      BottomTrayLayer(model: model, timeline: shell.timeline.store, assets: shell.assets.store, shown: controlsShown)
+        .padding(.leading, docked ? 0 : leading)
+        .padding(.trailing, docked ? 0 : trailing)
+#if !os(visionOS) /* A window of its own there. */
+      if controlsShown && model.nodesShown {
+        NodeEditorLayer(model: model, nodes: shell.panels.nodes)
+          .transition(.move(edge: .bottom).combined(with: .opacity))
+      }
+#endif
+    }
+    .ignoresSafeArea(edges: .vertical)
   }
 
   /** How much of the window's bottom the viewport leaves to the node editor. */
@@ -535,7 +571,7 @@ public struct DocumentWindow: View {
     controlsShown ? max(model.nodesShown ? model.nodesCover : 0, model.curvesCover) : 0
   }
 
-  private var viewportLayers: some View {
+  private func viewportLayers(bottom: Bool) -> some View {
     ZStack {
       /* Edge to edge, under a phone's toolbar column too. */
       ViewportView(container: viewport, bottomCover: viewportCover, live: model.nodesCoverDragging)
@@ -563,13 +599,9 @@ public struct DocumentWindow: View {
         }
         .padding(.bottom, viewportCover)
       }
-      BottomTrayLayer(model: model, timeline: shell.timeline.store, assets: shell.assets.store, shown: controlsShown)
-#if !os(visionOS) /* A window of its own there. */
-      if controlsShown && model.nodesShown {
-        NodeEditorLayer(model: model, nodes: shell.panels.nodes)
-          .transition(.move(edge: .bottom).combined(with: .opacity))
+      if bottom {
+        bottomLayers()
       }
-#endif
       if let pencilMenu {
         /* Frontmost; it passes touches through while it is closed. */
         PencilMenuView(menu: pencilMenu)
