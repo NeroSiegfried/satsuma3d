@@ -1034,6 +1034,9 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
   private var items: [RailItem] = []
   /** Set here from Blender, not chosen in the palette. */
   private var following = false
+  /** When the palette was last made: a new one selects its first item by itself, which is not a
+   * choice, and reports it a moment later. */
+  private var builtAt = Date.distantPast
   private var observer: NSObjectProtocol?
 
   private override init() {
@@ -1176,6 +1179,7 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
       let toolItems = (tool.map { [toolItem($0)] } ?? []) + items.map { brushes ? brushItem($0) : toolItem($0, prefixed: false) }
       guard !toolItems.isEmpty else { return }
       let picker = PKToolPicker(toolItems: toolItems)
+      builtAt = Date()
       picker.accessoryItem = UIBarButtonItem(title: "More", image: nil, menu: moreMenu())
       picker.addObserver(self)
       self.picker = picker
@@ -1400,6 +1404,9 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
   nonisolated func toolPickerSelectedToolItemDidChange(_ toolPicker: PKToolPicker) {
     MainActor.assumeIsolated {
       guard !following, let id = toolPicker.selectedToolItem.identifier as String? else { return }
+      /* Only what is picked in it, never what a palette just made selects on its own, which would
+       * change the tool picked in Blender. */
+      guard toolPicker === full || Date().timeIntervalSince(builtAt) > 1 else { return }
       /* Chosen from every tool and brush: then back to the palette a squeeze shows. */
       let fromFull = toolPicker === full
       defer { if fromFull { collapse() } }
