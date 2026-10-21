@@ -62,11 +62,14 @@ final class TimelineStore {
   let storyboard = StoryboardModel()
   /** The workspace has shots, the window following the one under the edit's playhead. */
   var storyboardAvailable = false
-  var storyboardHeight: CGFloat = CGFloat(UserDefaults.standard.object(forKey: "BlenderStoryboardHeight") as? Double ?? 200) {
+  var storyboardHeight: CGFloat = CGFloat(UserDefaults.standard.object(forKey: "BlenderStoryboardHeight") as? Double ?? 260) {
     didSet { UserDefaults.standard.set(Double(storyboardHeight), forKey: "BlenderStoryboardHeight") }
   }
   /** An editor grown out of the timeline, docked to the bottom with it. */
   var editorShown: Bool { curvesShown || storyboardShown }
+  /** The timeline shows the storyboard's edit, rather than the scene in the window: its frames,
+   * the playhead moving across shots. Opening a shot shows its own scene's time again. */
+  var editTime: Bool { storyboardShown && storyboard.entered == nil }
   /** Blender's frame; the knob follows it unless a finger holds the knob. */
   let frame = TimelineFrame()
   @ObservationIgnored var toggleExpanded: () -> Void = {}
@@ -107,13 +110,23 @@ final class TimelineStore {
 /** \name Scrubber
  * \{ */
 
+/** The knob's width for a frame's number. */
+private func knobWidth(_ label: String) -> CGFloat {
+  max(knobMinWidth, ceil((label as NSString).size(withAttributes: [
+    .font: UIFont.monospacedDigitSystemFont(ofSize: 14, weight: .bold)]).width) + 20)
+}
+
 /** One frame mapping places the knob, its playhead line and the keys. */
 struct FrameMapping: Equatable {
   let start: Int
   let end: Int
   let width: CGFloat
 
-  private var inset: CGFloat { knobSize / 2 + 4 }
+  /** Room for the knob at either end: as wide as the widest frame of the range shows, grown as
+   * when held, so it never covers the controls beside the scrubber. */
+  private var inset: CGFloat {
+    knobWidth(String(max(abs(start), abs(end)))) * 0.6 + 4
+  }
   private var cells: CGFloat { CGFloat(max(1, end - start + 1)) }
 
   /** Frames map to whole-frame cells, inset so the knob stays inside at the first and last frame. */
@@ -222,7 +235,8 @@ struct Scrubber: View {
     }
     if frame != sent {
       sent = frame
-      store.send("timeline_frame", "\(frame)")
+      if store.editTime { store.storyboard.setFrame(frame, final: true) }
+      else { store.send("timeline_frame", "\(frame)") }
     }
   }
 
@@ -392,8 +406,7 @@ private struct TimelineKnob: View {
   var body: some View {
     let shown = playhead ?? frame.blender
     let label = "\(shown)"
-    let width = max(knobMinWidth, ceil((label as NSString).size(withAttributes: [
-      .font: UIFont.monospacedDigitSystemFont(ofSize: 14, weight: .bold)]).width) + 20)
+    let width = knobWidth(label)
     Text(label)
       .font(.system(size: 14, weight: .bold).monospacedDigit())
       .minimumScaleFactor(0.7)
@@ -554,12 +567,15 @@ struct TimelineContent: View {
 
   private func transportButton(_ symbol: String, _ label: String, _ command: String) -> some View {
     Button {
-      /* With the storyboard open, the edit plays, the window following its shots. */
-      if store.storyboardShown && ["play", "start", "end"].contains(command) {
+      /* In the edit's time, the edit plays, the window following its shots, and the previous
+       * and next buttons go from cut to cut. */
+      if store.editTime {
         let board = store.storyboard
         switch command {
           case "start": board.setFrame(board.start, final: true)
           case "end": board.setFrame(board.end, final: true)
+          case "prev_key": if let cut = board.cut(after: false) { board.setFrame(cut, final: true) }
+          case "next_key": if let cut = board.cut(after: true) { board.setFrame(cut, final: true) }
           default: board.send("play")
         }
       }
@@ -700,6 +716,7 @@ final class SwiftTimeline {
     store.toggleExpanded = { [weak self] in self?.toggleExpanded() }
     store.toggleCurves = { [weak self] in self?.setCurvesShown(!(self?.store.curvesShown ?? true)) }
     store.toggleStoryboard = { [weak self] in self?.setStoryboardShown(!(self?.store.storyboardShown ?? true)) }
+    store.storyboard.enteredChanged = { [weak self] in self?.timeChanged() }
 #if os(visionOS)
     Self.current = self
 #endif
@@ -734,13 +751,20 @@ final class SwiftTimeline {
     guard let snapshot = snapshot as? NSDictionary, !(self.snapshot?.isEqual(snapshot) ?? false),
           let json = snapshot as? JSON else { return }
     self.snapshot = snapshot
+    apply(json)
+  }
+
+  /** Shows the scene's time, or in the storyboard the edit's, from Blender's snapshot. */
+  private func apply(_ json: JSON) {
+    let edit = store.editTime
+    shownEditTime = edit
     /* Playing, usually only the frame changes: leave the rest untouched so nothing else redraws. */
-    let start = json.int("start") ?? 1
+    let start = (edit ? json.int("edit_start") : nil) ?? json.int("start") ?? 1
     store.set(\.start, start)
-    store.set(\.end, max(start, json.int("end") ?? start))
-    store.set(\.preview, json.bool("preview"))
-    store.set(\.keys, json.array("keys").map { TimelineKey(frame: $0.int("f") ?? 0, selected: $0.bool("s")) })
-    let frame = json.int("frame") ?? start
+    store.set(\.end, max(start, (edit ? json.int("edit_end") : nil) ?? json.int("end") ?? start))
+    store.set(\.preview, !edit && json.bool("preview"))
+    store.set(\.keys, edit ? [] : json.array("keys").map { TimelineKey(frame: $0.int("f") ?? 0, selected: $0.bool("s")) })
+    let frame = (edit ? json.int("edit_frame") : nil) ?? json.int("frame") ?? start
     if store.frame.blender != frame { store.frame.blender = frame }
     store.set(\.playing, json.bool("playing"))
     store.set(\.recording, json.bool("autokey"))
@@ -758,6 +782,13 @@ final class SwiftTimeline {
   }
 
   @ObservationIgnored private var storyboardOpened = false
+  @ObservationIgnored private var shownEditTime = false
+
+  /** The edit's time or the scene's, as the storyboard opens and closes and shots are opened. */
+  func timeChanged() {
+    guard store.editTime != shownEditTime, let json = snapshot as? JSON else { return }
+    apply(json)
+  }
 
   func setStoryboardShown(_ shown: Bool) {
     guard shown != store.storyboardShown else { return }
@@ -771,6 +802,7 @@ final class SwiftTimeline {
     if shown { store.curves.setShown(false) }
     store.storyboard.setShown(shown)
     if shown { curvesDidOpen?() }
+    timeChanged()
     visibilityDidChange?()
   }
 
@@ -784,6 +816,7 @@ final class SwiftTimeline {
     }
     store.curves.setShown(store.curvesShown)
     store.storyboard.setShown(store.storyboardShown)
+    timeChanged()
     visibilityDidChange?()
   }
 
@@ -798,6 +831,7 @@ final class SwiftTimeline {
     }
     store.curves.setShown(shown)
     store.storyboard.setShown(store.storyboardShown)
+    timeChanged()
     if shown { curvesDidOpen?() }
     visibilityDidChange?()
 #if os(visionOS)
