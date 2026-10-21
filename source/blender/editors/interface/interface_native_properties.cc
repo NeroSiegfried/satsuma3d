@@ -4919,7 +4919,30 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
     void *lock;
     ImageUser user = {};
     ImBuf *ibuf = BKE_image_acquire_ibuf(viewer, &user, &lock);
-    const std::string path = native_preview_path(read.scene, ibuf, "backdrop");
+    /* Nothing rendered yet, its picture is all black: no backdrop, rather than a black canvas. */
+    const auto empty = [](const ImBuf *ibuf) {
+      if (!ibuf || ibuf->x <= 0 || ibuf->y <= 0) {
+        return true;
+      }
+      const int64_t count = int64_t(ibuf->x) * ibuf->y;
+      const int64_t step = std::max<int64_t>(1, count / 4096);
+      for (int64_t i = 0; i < count; i += step) {
+        if (const float *pixel = ibuf->float_buffer.data ? ibuf->float_buffer.data + i * 4 : nullptr) {
+          if (pixel[0] > 0.004f || pixel[1] > 0.004f || pixel[2] > 0.004f) {
+            return false;
+          }
+        }
+        else if (const uint8_t *pixel = ibuf->byte_buffer.data ? ibuf->byte_buffer.data + i * 4 : nullptr)
+        {
+          if (pixel[0] > 1 || pixel[1] > 1 || pixel[2] > 1) {
+            return false;
+          }
+        }
+      }
+      return true;
+    };
+    const std::string path = empty(ibuf) ? std::string() :
+                                           native_preview_path(read.scene, ibuf, "backdrop");
     BKE_image_release_ibuf(viewer, ibuf, lock);
     if (!path.empty()) {
       result.append_str("backdrop", path);
