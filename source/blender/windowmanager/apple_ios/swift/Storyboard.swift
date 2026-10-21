@@ -248,6 +248,21 @@ final class StoryboardModel {
     send("layer_active", ["layer": layer.name])
   }
 
+  /** A shot's drawings starting at these frames of the edit, in all its layers, moved by some
+   * frames, shown at once. */
+  func moveShotKeys(_ shot: StoryboardShot, frames: [Int], by delta: Int) {
+    guard delta != 0, !frames.isEmpty, let index = shots.firstIndex(where: { $0.id == shot.id }) else { return }
+    let moved = Set(frames.map { $0 + delta })
+    shots[index].keys = (shots[index].keys.filter { !frames.contains($0) && !moved.contains($0) } + moved).sorted()
+    send("shot_keys_move", ["name": shot.name, "frames": frames, "delta": delta])
+  }
+
+  func deleteShotKeys(_ shot: StoryboardShot, frames: [Int]) {
+    guard !frames.isEmpty, let index = shots.firstIndex(where: { $0.id == shot.id }) else { return }
+    shots[index].keys.removeAll { frames.contains($0) }
+    send("shot_keys_delete", ["name": shot.name, "frames": frames])
+  }
+
   /** A layer's drawings from these frames of its scene moved by some frames, shown at once. */
   func moveLayerKeys(_ layer: StoryboardLayer, frames: [Int], by delta: Int) {
     guard delta != 0, !frames.isEmpty, let index = layers.firstIndex(where: { $0.id == layer.id }) else { return }
@@ -360,7 +375,10 @@ private let rulerHeight: CGFloat = 24
 private let scrubberHeight: CGFloat = 40
 /** An opened shot's keys, above the scrubber, to retime. */
 /** A layer's strip below an opened shot. */
-private let layerRowHeight: CGFloat = 34
+/** Inside a shot, a layer's strip, its key rail below it. */
+private let layerStripHeight: CGFloat = 40
+private let keyRailHeight: CGFloat = 26
+private let layerRowHeight: CGFloat = layerStripHeight + keyRailHeight + 6
 private let layerHeaderWidth: CGFloat = 130
 private let gripWidth: CGFloat = 18
 
@@ -368,6 +386,8 @@ struct StoryboardView: View {
   let model: StoryboardModel
   /** The timeline it grew out of: its playback, and its other editors to switch to. */
   let timeline: TimelineStore
+  /** Below each shot in keyframe mode, its key rail. */
+  private var railHeight: CGFloat { keysShown ? keyRailHeight : 0 }
   /** Points per frame, pinched apart sideways to zoom in time. */
   @State private var scale: CGFloat = 4
   /** How much taller than fits the lanes are, pinched apart up and down. */
@@ -397,8 +417,10 @@ struct StoryboardView: View {
   private let lanesSpace = "storyboard.lanes"
   /** The opened shot's selected drawings, by layer, in its scene's frames, and how far they are
    * being dragged. */
-  @State private var selectedLayerKeys: [String: Set<Int>] = [:]
-  @State private var layerKeyDrag: (layer: String, frames: Int)?
+  @State private var selectedKeys = KeySelection()
+  @State private var keyDrag: (owner: String, frames: Int)?
+  /** Each shot's keys on a rail of its own below it, to move them. */
+  @AppStorage("BlenderStoryKeys") private var keysShown = false
   @State private var loopFollow: Task<Void, Never>?
 
   private struct LoopView: Equatable {
@@ -455,16 +477,21 @@ struct StoryboardView: View {
                             lanes: Int, playheadHeight: CGFloat) -> some View {
     ZStack(alignment: .topLeading) {
       ruler(width: width)
+      /* Inside a shot, its layers take the shots' place; leaving, it is one shot among them
+       * again. */
       ForEach(model.shots) { shot in
-        /* Inside a shot, the others make way; leaving, it is one shot among them again. */
-        let hidden = opened != nil && opened?.id != shot.id
-        shotView(shot, laneHeight: laneHeight, lanes: lanes, channel: opened?.id == shot.id ? 1 : nil)
-          .opacity(hidden ? 0 : 1)
-          .allowsHitTesting(!hidden)
+        shotView(shot, laneHeight: laneHeight, lanes: lanes)
+          .opacity(opened != nil ? 0 : 1)
+          .scaleEffect(opened != nil ? (opened?.id == shot.id ? 1.04 : 0.96) : 1)
+          .allowsHitTesting(opened == nil)
+        if keysShown && opened == nil {
+          shotRail(shot, laneHeight: laneHeight, lanes: lanes)
+            .transition(.opacity.combined(with: .offset(y: -keyRailHeight)))
+        }
       }
       if let opened {
-        layerStrips(opened, top: rulerHeight + laneHeight - 3)
-          .transition(.opacity.combined(with: .move(edge: .top)))
+        layerStrips(opened, top: rulerHeight + 2)
+          .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
       }
       /* Before the edit's start and after its end, darker: shots reaching there are out of it. */
       Rectangle()
@@ -550,15 +577,14 @@ struct StoryboardView: View {
   private var lanes: some View {
       GeometryReader { proxy in
         let opened = model.shots.first { $0.id == model.entered }
-        /* An empty lane below the shots, to move one into; inside a shot, its lane alone, its
-         * layers below it. */
-        let lanes: Int = opened != nil ? 1 : model.channels + 1
-        let layerRows: CGFloat = opened != nil ? CGFloat(model.layers.count) * layerRowHeight : 0
+        /* An empty lane below the shots, to move one into; inside a shot, its layers instead. */
+        let lanes: Int = model.channels + 1
+        let layerRows: CGFloat = CGFloat(model.layers.count) * layerRowHeight
         /* All of them in the panel's height, unless pinched taller, then scrolled to. */
-        let room: CGFloat = proxy.size.height - rulerHeight - scrubberHeight - layerRows - 4
-        let fit: CGFloat = max(28, min(120, room / CGFloat(lanes)))
+        let room: CGFloat = proxy.size.height - rulerHeight - scrubberHeight - 4
+        let fit: CGFloat = max(28, min(120, room / CGFloat(lanes) - railHeight))
         let laneHeight: CGFloat = max(20, min(240, fit * laneZoom))
-        let content: CGFloat = rulerHeight + CGFloat(lanes) * laneHeight + layerRows
+        let content: CGFloat = rulerHeight + (opened != nil ? layerRows : CGFloat(lanes) * (laneHeight + railHeight))
         let width: CGFloat = max(proxy.size.width, x(model.end + 1) + 160)
         ScrollViewReader { _ in
           ScrollView([.horizontal, .vertical]) {
@@ -660,6 +686,7 @@ struct StoryboardView: View {
       Spacer(minLength: 8)
       transport
       loopButton
+      keysButton
       Spacer(minLength: 8)
       Menu {
         if model.entered != nil {
@@ -701,6 +728,24 @@ struct StoryboardView: View {
     }
     .padding(.horizontal, 12)
     .frame(height: headerHeight)
+  }
+
+  /** Keyframe mode: each shot's keys on a rail of their own below it, to move them. */
+  private var keysButton: some View {
+    Button {
+      withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { keysShown.toggle() }
+      Haptics.selection()
+    } label: {
+      Image(systemName: keysShown ? "diamond.fill" : "diamond")
+        .foregroundStyle(keysShown ? PanelStyle.selection : .primary)
+        .frame(width: 40, height: 40)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .font(.system(size: 15))
+    .accessibilityLabel("Keyframes")
+    .accessibilityAddTraits(keysShown ? .isSelected : [])
+    .disabled(model.entered != nil)
   }
 
   /** Loops playback within the frames in view, following as they are scrolled and zoomed. */
@@ -760,12 +805,81 @@ struct StoryboardView: View {
     .accessibilityLabel(label)
   }
 
-  /** The opened shot's layers, the top one first, each a strip joined below the shot with the
-   * keys where its drawings begin, in the edit's time: tapped to draw on, keys tapped to select
-   * and dragged to move them. Leaving the shot, they fold back into it. */
+  /** Selected keys, on one shot's rail or one layer's, in the edit's frames. */
+  struct KeySelection: Equatable {
+    var owner = ""
+    var frames: Set<Int> = []
+    func frames(of owner: String) -> Set<Int> { self.owner == owner ? frames : [] }
+  }
+
+  /** Keys on a rail \a width wide from \a start, in the edit's frames: tapped to select, dragged
+   * to move the selected ones, \a moved by as many frames. */
+  private func keyRail(owner: String, keys: [Int], start: Int, width: CGFloat,
+                       moved: @escaping ([Int], Int) -> Void) -> some View {
+    let selected = selectedKeys.frames(of: owner)
+    let shift = keyDrag?.owner == owner ? keyDrag?.frames ?? 0 : 0
+    return ZStack(alignment: .leading) {
+      Capsule()
+        .fill(Color.primary.opacity(0.07))
+        .frame(width: width, height: keyRailHeight - 6)
+      ForEach(keys, id: \.self) { frame in
+        let isSelected = selected.contains(frame)
+        Image(systemName: "diamond.fill")
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(isSelected ? PanelStyle.selection : Color.primary.opacity(0.7))
+          .shadow(color: .black.opacity(0.2), radius: 1)
+          .frame(width: 26, height: keyRailHeight)
+          .contentShape(Rectangle())
+          .position(x: x(frame + (isSelected ? shift : 0)) - x(start), y: keyRailHeight / 2)
+          .onTapGesture {
+            selectedKeys = KeySelection(owner: owner, frames: isSelected && selected.count == 1 ? [] : [frame])
+            Haptics.selection()
+          }
+          .gesture(DragGesture(minimumDistance: 4)
+            .onChanged { value in
+              if keyDrag == nil {
+                if !isSelected { selectedKeys = KeySelection(owner: owner, frames: [frame]) }
+                Haptics.selection()
+              }
+              let frames = Int((value.translation.width / scale).rounded())
+              if frames != keyDrag?.frames {
+                if keyDrag != nil { Haptics.selection() }
+                keyDrag = (owner, frames)
+              }
+            }
+            .onEnded { _ in
+              let keys = Array(selectedKeys.frames(of: owner))
+              if let drag = keyDrag, drag.frames != 0 {
+                moved(keys, drag.frames)
+                selectedKeys = KeySelection(owner: owner, frames: Set(keys.map { $0 + drag.frames }))
+              }
+              keyDrag = nil
+            })
+          .accessibilityLabel("Drawing at frame \(frame)")
+          .accessibilityAddTraits(isSelected ? .isSelected : [])
+      }
+    }
+    .frame(width: width, height: keyRailHeight, alignment: .leading)
+  }
+
+  /** A shot's keys on a rail of its own below it, in keyframe mode. */
+  private func shotRail(_ shot: StoryboardShot, laneHeight: CGFloat, lanes: Int) -> some View {
+    let place = placement(shot, lanes: lanes)
+    let moving = drag?.name == shot.name && drag?.kind == .move ? drag?.frames ?? 0 : 0
+    let width = max(8, x(place.end) - x(place.start) - 2)
+    let top = rulerHeight + CGFloat(place.channel - 1) * (laneHeight + keyRailHeight) + laneHeight
+    return keyRail(owner: "shot:" + shot.name, keys: shot.keys.map { $0 + moving }, start: place.start,
+                   width: width) { frames, delta in
+      model.moveShotKeys(shot, frames: frames.map { $0 - moving }, by: delta)
+    }
+    .offset(x: x(place.start) + 1, y: top - 2)
+  }
+
+  /** Inside a shot, its layers are what is seen: each a strip with its key rail below it, the top
+   * one first, in the edit's time. Tapped to draw on; keys tapped to select and dragged to move
+   * them. Leaving the shot, they are one shot again. */
   private func layerStrips(_ shot: StoryboardShot, top: CGFloat) -> some View {
     let width = max(8, x(shot.end) - x(shot.start) - 2)
-    let shape = UnevenRoundedRectangle(bottomLeadingRadius: 8, bottomTrailingRadius: 8, style: .continuous)
     /* Their names and controls just before them, staying in view as they are scrolled past. */
     let headers = max(scrollOffset + 4, x(shot.start) - layerHeaderWidth - 4)
     return ZStack(alignment: .topLeading) {
@@ -774,9 +888,6 @@ struct StoryboardView: View {
           layerStrip(layer, shot: shot, width: width)
         }
       }
-      .frame(width: width, alignment: .top)
-      .background(tagColor(shot.color).opacity(0.12), in: shape)
-      .overlay(shape.strokeBorder(Color.white.opacity(0.2), lineWidth: 1).allowsHitTesting(false))
       .offset(x: x(shot.start) + 1)
       VStack(spacing: 0) {
         ForEach(model.layers) { layer in
@@ -788,7 +899,7 @@ struct StoryboardView: View {
     .offset(y: top)
   }
 
-  /** A layer's visibility and its menu. */
+  /** A layer's visibility and its menu, beside its strip. */
   private func layerHeader(_ layer: StoryboardLayer) -> some View {
     HStack(spacing: 2) {
       Button {
@@ -797,7 +908,7 @@ struct StoryboardView: View {
         Image(systemName: layer.visible ? "eye" : "eye.slash")
           .font(.system(size: 13))
           .foregroundStyle(layer.visible ? .primary : .secondary)
-          .frame(width: 26, height: layerRowHeight)
+          .frame(width: 26, height: layerStripHeight)
           .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
@@ -805,73 +916,44 @@ struct StoryboardView: View {
       layerMenu(layer)
       Spacer(minLength: 0)
     }
-    .frame(width: layerHeaderWidth, height: layerRowHeight)
+    .frame(width: layerHeaderWidth, height: layerStripHeight)
+    .frame(height: layerRowHeight, alignment: .top)
+    .padding(.top, 3)
   }
 
   private func layerStrip(_ layer: StoryboardLayer, shot: StoryboardShot, width: CGFloat) -> some View {
-    let selected = selectedLayerKeys[layer.name] ?? []
-    return ZStack(alignment: .leading) {
-      Rectangle()
-        .fill(layer.active ? PanelStyle.selection.opacity(0.18) : Color.clear)
-        .contentShape(Rectangle())
+    let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+    return VStack(spacing: 0) {
+      shape
+        .fill(tagColor(shot.color).opacity(layer.active ? 0.45 : 0.22))
+        .overlay(shape.strokeBorder(layer.active ? PanelStyle.selection : Color.white.opacity(0.2),
+                                    lineWidth: layer.active ? 2 : 1))
+        .frame(width: width, height: layerStripHeight)
+        .contentShape(shape)
         .onTapGesture { model.activateLayer(layer) }
-      Rectangle()
-        .fill(Color.white.opacity(0.12))
-        .frame(height: 1)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .allowsHitTesting(false)
-      ForEach(layer.keys, id: \.self) { frame in
-        let isSelected = selected.contains(frame)
-        let moved = isSelected && layerKeyDrag?.layer == layer.name ? layerKeyDrag?.frames ?? 0 : 0
-        Image(systemName: "diamond.fill")
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(isSelected ? PanelStyle.selection : Color.primary.opacity(0.7))
-          .shadow(color: .black.opacity(0.2), radius: 1)
-          .frame(width: 26, height: layerRowHeight)
-          .contentShape(Rectangle())
-          .position(x: x(frame + shot.offset + moved) - x(shot.start) - 1, y: layerRowHeight / 2)
-          .onTapGesture {
-            selectedLayerKeys = [layer.name: isSelected && selected.count == 1 ? [] : [frame]]
-            Haptics.selection()
-          }
-          .gesture(DragGesture(minimumDistance: 4)
-            .onChanged { value in
-              if layerKeyDrag == nil {
-                if !isSelected { selectedLayerKeys = [layer.name: [frame]] }
-                Haptics.selection()
-              }
-              let frames = Int((value.translation.width / scale).rounded())
-              if frames != layerKeyDrag?.frames {
-                if layerKeyDrag != nil { Haptics.selection() }
-                layerKeyDrag = (layer.name, frames)
-              }
-            }
-            .onEnded { _ in
-              let keys = Array(selectedLayerKeys[layer.name] ?? [])
-              if let drag = layerKeyDrag, drag.frames != 0 {
-                model.moveLayerKeys(layer, frames: keys, by: drag.frames)
-                selectedLayerKeys = [layer.name: Set(keys.map { $0 + drag.frames })]
-              }
-              layerKeyDrag = nil
-            })
-          .accessibilityLabel("\(layer.name) drawing at frame \(frame)")
-          .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityLabel(layer.name)
+        .accessibilityAddTraits(layer.active ? [.isSelected, .isButton] : .isButton)
+      keyRail(owner: "layer:" + layer.name, keys: layer.keys.map { $0 + shot.offset }, start: shot.start,
+              width: width) { frames, delta in
+        model.moveLayerKeys(layer, frames: frames.map { $0 - shot.offset }, by: delta)
       }
     }
-    .frame(width: width, height: layerRowHeight, alignment: .leading)
+    .padding(.vertical, 3)
+    .frame(height: layerRowHeight, alignment: .top)
     .opacity(layer.visible ? 1 : 0.6)
   }
 
   /** A layer's name, tapped for what to do with it. */
   private func layerMenu(_ layer: StoryboardLayer) -> some View {
-    let selected = Array(selectedLayerKeys[layer.name] ?? [])
+    let offset = model.shots.first { $0.id == model.entered }?.offset ?? 0
+    let selected = selectedKeys.frames(of: "layer:" + layer.name).map { $0 - offset }
     let index = model.layers.firstIndex { $0.id == layer.id } ?? 0
     return Menu {
       if !selected.isEmpty {
         Button(selected.count == 1 ? "Delete Drawing" : "Delete \(selected.count) Drawings",
                systemImage: "trash", role: .destructive) {
           model.deleteLayerKeys(layer, frames: selected)
-          selectedLayerKeys = [:]
+          selectedKeys = KeySelection()
         }
         Divider()
       }
@@ -1028,14 +1110,13 @@ struct StoryboardView: View {
     return (start, end, channel)
   }
 
-  private func shotView(_ shot: StoryboardShot, laneHeight: CGFloat, lanes: Int, channel: Int? = nil) -> some View {
-    var place = placement(shot, lanes: lanes)
-    if let channel { place.channel = channel }
+  private func shotView(_ shot: StoryboardShot, laneHeight: CGFloat, lanes: Int) -> some View {
+    let place = placement(shot, lanes: lanes)
     let moving = drag?.name == shot.name && drag?.kind == .move
     let width = max(8, x(place.end) - x(place.start) - 2)
     let height = laneHeight - 6
     /* Channel 1 at the top, the lanes going down from it, so taller lanes keep it in view. */
-    let top = rulerHeight + CGFloat(place.channel - 1) * laneHeight + 3
+    let top = rulerHeight + CGFloat(place.channel - 1) * (laneHeight + railHeight) + 3
     let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
     return ZStack(alignment: .bottomLeading) {
       filmStrip(shot, start: place.start, end: place.end, width: width, height: height)
@@ -1148,6 +1229,14 @@ struct StoryboardView: View {
         renaming = shot
       }
       Button("Duplicate", systemImage: "plus.square.on.square") { model.send("duplicate", ["name": shot.name]) }
+      let drawings = Array(selectedKeys.frames(of: "shot:" + shot.name))
+      if !drawings.isEmpty {
+        Button(drawings.count == 1 ? "Delete Drawing" : "Delete \(drawings.count) Drawings", systemImage: "trash",
+               role: .destructive) {
+          model.deleteShotKeys(shot, frames: drawings)
+          selectedKeys = KeySelection()
+        }
+      }
       if shot.sceneStrip {
         Toggle("Save as Template", systemImage: "square.on.square.dashed", isOn: Binding(
           get: { shot.template },
@@ -1274,7 +1363,7 @@ struct StoryboardView: View {
   /** The shot drawn at a point of the lanes, the topmost where they overlap. */
   private func shot(at point: CGPoint, laneHeight: CGFloat, lanes: Int) -> StoryboardShot? {
     model.shots.last { shot in
-      let top = rulerHeight + CGFloat(shot.channel - 1) * laneHeight + 3
+      let top = rulerHeight + CGFloat(shot.channel - 1) * (laneHeight + railHeight) + 3
       return CGRect(x: x(shot.start), y: top, width: x(shot.end) - x(shot.start), height: laneHeight - 6)
         .contains(point)
     }
@@ -1290,7 +1379,7 @@ struct StoryboardView: View {
     }
     guard var current = drag else { return }
     let frames = snapped(shot, kind: kind, frames: Int((translation.width / scale).rounded()))
-    let channels = kind == .move ? Int((translation.height / laneHeight).rounded()) : 0
+    let channels = kind == .move ? Int((translation.height / (laneHeight + railHeight)).rounded()) : 0
     if frames != current.frames || channels != current.channels {
       current.frames = frames
       current.channels = channels
