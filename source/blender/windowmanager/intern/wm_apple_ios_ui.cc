@@ -3162,12 +3162,15 @@ void WM_apple_ios_ui_operator_input_adjust(bContext *C, wmOperator *op)
   PointerRNA *ptr = op->ptr;
 
   if (intent == IOSSelectIntent::Smooth) {
-    if (PropertyRNA *mode = RNA_struct_find_property(ptr, "mode");
-        mode && RNA_property_type(mode) == PROP_ENUM)
-    {
+    /* The stroke's temporary brush, as Shift sets it; operators without one smooth by mode. */
+    for (const char *name : {"brush_toggle", "mode"}) {
+      PropertyRNA *prop = RNA_struct_find_property(ptr, name);
       int value;
-      if (RNA_property_enum_value(C, ptr, mode, "SMOOTH", &value)) {
-        RNA_property_enum_set(ptr, mode, value);
+      if (prop && RNA_property_type(prop) == PROP_ENUM &&
+          RNA_property_enum_value(C, ptr, prop, "SMOOTH", &value))
+      {
+        RNA_property_enum_set(ptr, prop, value);
+        break;
       }
     }
     return;
