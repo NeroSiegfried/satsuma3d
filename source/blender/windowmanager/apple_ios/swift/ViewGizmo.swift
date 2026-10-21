@@ -24,13 +24,14 @@ struct ViewCommand {
   /** The views, then Lock Camera to View, navigating then moves the camera, and Keep Camera
    * View, navigating then stays in the camera's view without moving the camera. */
   static func pie(locked: Bool, kept: Bool, camera: Bool = false) -> [ViewCommand] {
-    /* Looking through the camera, its whole frame filling the view again, staying in it. */
-    let fit = camera ? [ViewCommand(title: "Fit Camera View", symbol: "camera.viewfinder",
-                                    operatorName: "VIEW3D_OT_view_center_camera")] : []
-    return views + fit + [ViewCommand(title: locked ? "Unlock Camera" : "Lock Camera",
-                         symbol: locked ? "lock.open" : "lock", toggle: "lock_camera"),
-             ViewCommand(title: kept ? "Free Camera View" : "Keep Camera View",
-                         symbol: kept ? "pin.slash" : "pin", toggle: "keep_camera_view")]
+    /* Looking through the camera: its whole frame filling the view again, and the locks. */
+    guard camera else { return views }
+    return views + [ViewCommand(title: "Fit Camera View", symbol: "camera.viewfinder",
+                                operatorName: "VIEW3D_OT_view_center_camera"),
+                    ViewCommand(title: locked ? "Unlock Camera" : "Lock Camera",
+                                symbol: locked ? "lock.open" : "lock", toggle: "lock_camera"),
+                    ViewCommand(title: kept ? "Free Camera View" : "Keep Camera View",
+                                symbol: kept ? "pin.slash" : "pin", toggle: "keep_camera_view")]
   }
 
   static let views = [
@@ -348,7 +349,10 @@ struct ViewGizmoLayer: View {
         ViewGizmoHotspotView(model: model, state: state)
           .frame(width: geometry.hotspot.width, height: geometry.hotspot.height)
           .position(geometry.center)
-        cameraLocks(locked: locked, kept: kept, geometry: geometry)
+        /* Only looking through the camera, where they apply. */
+        if camera {
+          cameraLocks(locked: locked, kept: kept, geometry: geometry)
+        }
         ForEach(Array(pie.enumerated()), id: \.offset) { index, view in
           if index < geometry.buttons.count {
             pieButton(view, index: index, frame: geometry.buttons[index], hub: geometry.center)
