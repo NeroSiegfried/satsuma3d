@@ -375,10 +375,9 @@ private let rulerHeight: CGFloat = 24
 private let scrubberHeight: CGFloat = 40
 /** An opened shot's keys, above the scrubber, to retime. */
 /** A layer's strip below an opened shot. */
-/** Inside a shot, a layer's strip, its key rail below it. */
-private let layerStripHeight: CGFloat = 40
+/** Inside a shot, a layer's row: its key rail. */
 private let keyRailHeight: CGFloat = 26
-private let layerRowHeight: CGFloat = layerStripHeight + keyRailHeight + 6
+private let layerRowHeight: CGFloat = 36
 private let layerHeaderWidth: CGFloat = 130
 private let gripWidth: CGFloat = 18
 
@@ -477,20 +476,20 @@ struct StoryboardView: View {
                             lanes: Int, playheadHeight: CGFloat) -> some View {
     ZStack(alignment: .topLeading) {
       ruler(width: width)
-      /* Inside a shot, its layers take the shots' place; leaving, it is one shot among them
-       * again. */
+      /* Inside a shot, it alone at the top, its pictures for all its layers, and their keys below
+       * it; leaving, it is one shot among the others again. */
       ForEach(model.shots) { shot in
-        shotView(shot, laneHeight: laneHeight, lanes: lanes)
-          .opacity(opened != nil ? 0 : 1)
-          .scaleEffect(opened != nil ? (opened?.id == shot.id ? 1.04 : 0.96) : 1)
-          .allowsHitTesting(opened == nil)
+        let hidden = opened != nil && opened?.id != shot.id
+        shotView(shot, laneHeight: laneHeight, lanes: lanes, channel: opened?.id == shot.id ? 1 : nil)
+          .opacity(hidden ? 0 : 1)
+          .allowsHitTesting(!hidden)
         if keysShown && opened == nil {
           shotRail(shot, laneHeight: laneHeight, lanes: lanes)
             .transition(.opacity.combined(with: .offset(y: -keyRailHeight)))
         }
       }
       if let opened {
-        layerStrips(opened, top: rulerHeight + 2)
+        layerStrips(opened, top: rulerHeight + laneHeight)
           .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
       }
       /* Before the edit's start and after its end, darker: shots reaching there are out of it. */
@@ -584,7 +583,7 @@ struct StoryboardView: View {
         let room: CGFloat = proxy.size.height - rulerHeight - scrubberHeight - 4
         let fit: CGFloat = max(28, min(120, room / CGFloat(lanes) - railHeight))
         let laneHeight: CGFloat = max(20, min(240, fit * laneZoom))
-        let content: CGFloat = rulerHeight + (opened != nil ? layerRows : CGFloat(lanes) * (laneHeight + railHeight))
+        let content: CGFloat = rulerHeight + (opened != nil ? laneHeight + layerRows : CGFloat(lanes) * (laneHeight + railHeight))
         let width: CGFloat = max(proxy.size.width, x(model.end + 1) + 160)
         ScrollViewReader { _ in
           ScrollView([.horizontal, .vertical]) {
@@ -875,9 +874,8 @@ struct StoryboardView: View {
     .offset(x: x(place.start) + 1, y: top - 2)
   }
 
-  /** Inside a shot, its layers are what is seen: each a strip with its key rail below it, the top
-   * one first, in the edit's time. Tapped to draw on; keys tapped to select and dragged to move
-   * them. Leaving the shot, they are one shot again. */
+  /** Inside a shot, its layers below it, the top one first: each its keys on a rail, in the
+   * edit's time. Tapped to draw on; keys tapped to select and dragged to move them. */
   private func layerStrips(_ shot: StoryboardShot, top: CGFloat) -> some View {
     let width = max(8, x(shot.end) - x(shot.start) - 2)
     /* Their names and controls just before them, staying in view as they are scrolled past. */
@@ -908,7 +906,7 @@ struct StoryboardView: View {
         Image(systemName: layer.visible ? "eye" : "eye.slash")
           .font(.system(size: 13))
           .foregroundStyle(layer.visible ? .primary : .secondary)
-          .frame(width: 26, height: layerStripHeight)
+          .frame(width: 26, height: layerRowHeight)
           .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
@@ -916,31 +914,24 @@ struct StoryboardView: View {
       layerMenu(layer)
       Spacer(minLength: 0)
     }
-    .frame(width: layerHeaderWidth, height: layerStripHeight)
-    .frame(height: layerRowHeight, alignment: .top)
-    .padding(.top, 3)
+    .frame(width: layerHeaderWidth, height: layerRowHeight)
   }
 
   private func layerStrip(_ layer: StoryboardLayer, shot: StoryboardShot, width: CGFloat) -> some View {
-    let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
-    return VStack(spacing: 0) {
-      shape
-        .fill(tagColor(shot.color).opacity(layer.active ? 0.45 : 0.22))
-        .overlay(shape.strokeBorder(layer.active ? PanelStyle.selection : Color.white.opacity(0.2),
-                                    lineWidth: layer.active ? 2 : 1))
-        .frame(width: width, height: layerStripHeight)
-        .contentShape(shape)
-        .onTapGesture { model.activateLayer(layer) }
-        .accessibilityLabel(layer.name)
-        .accessibilityAddTraits(layer.active ? [.isSelected, .isButton] : .isButton)
-      keyRail(owner: "layer:" + layer.name, keys: layer.keys.map { $0 + shot.offset }, start: shot.start,
-              width: width) { frames, delta in
-        model.moveLayerKeys(layer, frames: frames.map { $0 - shot.offset }, by: delta)
-      }
+    keyRail(owner: "layer:" + layer.name, keys: layer.keys.map { $0 + shot.offset }, start: shot.start,
+            width: width) { frames, delta in
+      model.moveLayerKeys(layer, frames: frames.map { $0 - shot.offset }, by: delta)
     }
-    .padding(.vertical, 3)
-    .frame(height: layerRowHeight, alignment: .top)
-    .opacity(layer.visible ? 1 : 0.6)
+    .frame(height: layerRowHeight)
+    /* The layer drawn on, highlighted; tapped, it is. */
+    .background(layer.active ? PanelStyle.selection.opacity(0.14) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .contentShape(Rectangle())
+    .onTapGesture { model.activateLayer(layer) }
+    .opacity(layer.visible ? 1 : 0.5)
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel(layer.name)
+    .accessibilityAddTraits(layer.active ? .isSelected : [])
   }
 
   /** A layer's name, tapped for what to do with it. */
@@ -1110,8 +1101,9 @@ struct StoryboardView: View {
     return (start, end, channel)
   }
 
-  private func shotView(_ shot: StoryboardShot, laneHeight: CGFloat, lanes: Int) -> some View {
-    let place = placement(shot, lanes: lanes)
+  private func shotView(_ shot: StoryboardShot, laneHeight: CGFloat, lanes: Int, channel: Int? = nil) -> some View {
+    var place = placement(shot, lanes: lanes)
+    if let channel { place.channel = channel }
     let moving = drag?.name == shot.name && drag?.kind == .move
     let width = max(8, x(place.end) - x(place.start) - 2)
     let height = laneHeight - 6
