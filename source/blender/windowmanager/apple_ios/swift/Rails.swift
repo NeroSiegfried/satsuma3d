@@ -1154,7 +1154,7 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
           /* The brush's options, as the palette's own controls. */
           configuration.toolAttributeControls = [.width, .opacity]
           configuration.defaultWidth = Self.widths[2]
-          configuration.widthVariants = Self.widthDots
+          configuration.widthVariants = Self.widthVariants(image)
           configuration.allowsColorSelection = paints
           configuration.defaultColor = paints ? .black : .label
         }
@@ -1223,17 +1223,19 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
     return result
   }
 
-  /** The palette's width choices as its own pens show them: a dot for each, growing. */
-  private static let widthDots: [CGFloat: UIImage] = Dictionary(uniqueKeysWithValues:
-    widths.enumerated().map { index, width in
-      let side: CGFloat = 24
-      let diameter = 4 + CGFloat(index) * 3.5
-      let image = UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { _ in
-        UIBezierPath(ovalIn: CGRect(x: (side - diameter) / 2, y: (side - diameter) / 2,
-                                    width: diameter, height: diameter)).fill()
+  /** The palette shows an item by its width's image, and its width choices by theirs: the
+   * brush's own preview for each, smaller for the thinner ones. */
+  private static func widthVariants(_ image: UIImage) -> [CGFloat: UIImage] {
+    let side = max(image.size.width, image.size.height, 1)
+    return Dictionary(uniqueKeysWithValues: widths.enumerated().map { index, width in
+      let scale = 0.6 + 0.4 * CGFloat(index) / CGFloat(widths.count - 1)
+      let inset = side * (1 - scale) / 2
+      let variant = UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { _ in
+        image.draw(in: CGRect(x: inset, y: inset, width: side - 2 * inset, height: side - 2 * inset))
       }
-      return (width, image.withRenderingMode(.alwaysTemplate))
+      return (width, variant)
     })
+  }
 
   /** The palette's item showing the brush as Blender has it: its size as the nearest width, its
    * strength as opacity, and its color. */
