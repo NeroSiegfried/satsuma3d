@@ -6384,6 +6384,7 @@ class VIEW3D_PT_view3d_lock(Panel):
         if not lock_object:
             col.prop(view, "lock_cursor", text="To 3D Cursor")
         col.prop(view, "lock_camera", text="Camera to View")
+        col.prop(view, "keep_camera_view", text="Camera View")
         col.prop(view.region_3d, "lock_rotation", text="Rotation")
 
 

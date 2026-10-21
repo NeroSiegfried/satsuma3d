@@ -541,7 +541,7 @@ bool ED_view3d_persp_ensure(const Depsgraph *depsgraph, View3D *v3d, ARegion *re
 
   BLI_assert((RV3D_LOCK_FLAGS(rv3d) & RV3D_LOCK_ANY_TRANSFORM) == 0);
 
-  if (ED_view3d_camera_lock_check(v3d, rv3d)) {
+  if (ED_view3d_camera_lock_check(v3d, rv3d) || ED_view3d_camera_view_keep_check(v3d, rv3d)) {
     return false;
   }
 
@@ -606,6 +606,12 @@ bool ED_view3d_camera_lock_check(const View3D *v3d, const RegionView3D *rv3d)
 {
   return ((v3d->camera) && ID_IS_EDITABLE(v3d->camera) && (v3d->flag2 & V3D_LOCK_CAMERA) &&
           (rv3d->persp == RV3D_CAMOB));
+}
+
+bool ED_view3d_camera_view_keep_check(const View3D *v3d, const RegionView3D *rv3d)
+{
+  return v3d && rv3d && (v3d->flag2 & V3D_KEEP_CAMERA_VIEW) && rv3d->persp == RV3D_CAMOB &&
+         !ED_view3d_camera_lock_check(v3d, rv3d);
 }
 
 void ED_view3d_camera_lock_init_ex(const Depsgraph *depsgraph,

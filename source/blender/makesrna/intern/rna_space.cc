@@ -5646,6 +5646,15 @@ static void rna_def_space_view3d(BlenderRNA *brna)
       prop, "Lock Camera to View", "Enable view navigation within the camera view");
   RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
 
+  prop = RNA_def_property(srna, "keep_camera_view", PROP_BOOLEAN, PROP_NONE);
+  RNA_def_property_boolean_sdna(prop, nullptr, "flag2", V3D_KEEP_CAMERA_VIEW);
+  RNA_def_property_ui_text(
+      prop,
+      "Keep Camera View",
+      "Stay in the camera view while navigating, without moving the camera: orbiting is "
+      "ignored, panning and zooming frame the camera's view");
+  RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+
   prop = RNA_def_property(srna, "show_gizmo", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_negative_sdna(prop, nullptr, "gizmo_flag", V3D_GIZMO_HIDE);
   RNA_def_property_ui_text(prop, "Show Gizmo", "Show gizmos of all types");

@@ -1227,6 +1227,11 @@ bool ED_view3d_camera_view_pan(ARegion *region, const float event_ofs[2]);
  */
 bool ED_view3d_camera_lock_check(const View3D *v3d, const RegionView3D *rv3d);
 /**
+ * In camera view with Keep Camera View on, and the camera not locked to the view: navigation
+ * that would leave the camera view is ignored.
+ */
+bool ED_view3d_camera_view_keep_check(const View3D *v3d, const RegionView3D *rv3d);
+/**
  * Copy the camera to the view before starting a view transformation.
  *
  * Apply the camera object transformation to the 3D Viewport.

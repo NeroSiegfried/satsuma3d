@@ -247,6 +247,10 @@ static wmOperatorStatus viewdolly_invoke(bContext *C, wmOperator *op, const wmEv
   if (viewdolly_offset_lock_check(C, op)) {
     return OPERATOR_CANCELLED;
   }
+  /* Dolly leaves the camera view, which is kept. */
+  if (ED_view3d_camera_view_keep_check(CTX_wm_view3d(C), CTX_wm_region_view3d(C))) {
+    return OPERATOR_CANCELLED;
+  }
 
   const bool use_cursor_init = RNA_boolean_get(op->ptr, "use_cursor_init");
 

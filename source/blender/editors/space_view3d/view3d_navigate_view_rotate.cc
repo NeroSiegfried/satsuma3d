@@ -402,6 +402,10 @@ static wmOperatorStatus viewrotate_invoke(bContext *C, wmOperator *op, const wmE
   }
 #endif
 
+  /* Orbiting would leave the camera view kept. */
+  if (ED_view3d_camera_view_keep_check(CTX_wm_view3d(C), CTX_wm_region_view3d(C))) {
+    return OPERATOR_CANCELLED;
+  }
   return view3d_navigate_invoke_impl(C, op, event, &ViewOpsType_rotate);
 }
 
