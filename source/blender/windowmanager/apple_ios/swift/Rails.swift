@@ -1073,9 +1073,13 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
   var brush: JSON? {
     didSet {
       SqueezeBrushState.shared.brush = brush
+      /* A brush that paints with a color now, or no longer: the palette offers it, or not. */
+      if (brush?["color"] != nil) != paints { rebuild?() }
       followBrush()
     }
   }
+  /** The last update again, for the brush's color to come or go. */
+  private var rebuild: (() -> Void)?
   /** The palette's widths, the brush sizes it offers, in pixels. */
   private static let widths: [CGFloat] = [8, 20, 40, 80, 160]
   /** Its items are brushes, with their options. */
@@ -1198,6 +1202,7 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
   func update(items all: [RailItem], active: String, brushes: Bool, choose: @escaping (RailItem) -> Void) {
     self.brushes = brushes
     allItems = all
+    rebuild = { [weak self] in self?.update(items: all, active: active, brushes: brushes, choose: choose) }
     if !active.isEmpty, recent.first != active {
       recent = [active] + recent.filter { $0 != active }
     }
@@ -1214,7 +1219,8 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
     let shownTools = toolIDs.compactMap { id in tools.first { $0.id == id } }.prefix(Self.toolCapacity)
     let tool = shownTools.first
     let ids = shownTools.map { Self.toolPrefix + $0.id } + items.map(\.id) + [Self.allID]
-    let paints = brush?.dict("color") != nil
+    /* The color is a list of its channels. */
+    let paints = brush?["color"] != nil
     if ids != self.ids || picker == nil || brushes != builtForBrushes || paints != self.paints {
       self.ids = ids
       builtForBrushes = brushes
