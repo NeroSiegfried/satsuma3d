@@ -616,6 +616,16 @@ struct ToolSettingItem: View {
   var body: some View {
     switch type {
       /* A switch beside its name in the bar; a checkmark item in its overflow menu. */
+      case "BOOLEAN" where property.string("icon").map { !$0.hasPrefix("CHECKBOX") && BlenderIcon.image($0) != nil } ?? false:
+        /* With an icon of its own, as Onion Skin: a button lit while on, as the bar's toggles are. */
+        Toggle(isOn: Binding(
+          get: { (store.value(property) as? NSNumber)?.boolValue ?? false },
+          set: { store.edit(property, value: $0) }))
+        {
+          Label { Text(title) } icon: { IconView(name: property.string("icon")) }
+        }
+        .toggleStyle(.button)
+        .disabled(!property.bool("editable"))
       case "BOOLEAN":
         Toggle(isOn: Binding(
           get: { (store.value(property) as? NSNumber)?.boolValue ?? false },
@@ -648,6 +658,21 @@ struct ToolSettingItem: View {
           .prefetchingBlenderMenu(route)
           .disabled(!property.bool("editable"))
         }
+      case "ENUM" where property.bool("expand") && (2...4).contains(property.array("options").count):
+        /* A few choices laid out side by side, as Grease Pencil's Material or Color Attribute: a
+         * segmented switch. */
+        Picker(title, selection: Binding(
+          get: { store.value(property) as? String ?? "" },
+          set: { store.edit(property, value: $0) }))
+        {
+          ForEach(Array(property.array("options").enumerated()), id: \.offset) { _, option in
+            Text(option.string("label") ?? option.string("name") ?? "")
+              .tag(option.string("value") ?? "")
+          }
+        }
+        .pickerStyle(.segmented)
+        .fixedSize()
+        .disabled(!property.bool("editable"))
       case "ENUM":
         let options = property.array("options")
         Menu {
@@ -659,18 +684,29 @@ struct ToolSettingItem: View {
               Label {
                 Text(option.string("label") ?? option.string("name") ?? "")
               } icon: {
-                IconView(name: option.string("icon"))
+                optionIcon(option)
               }
               .tag(option.string("value") ?? "")
             }
           }
         } label: {
-          /* The choice made, as the bar has room to name it. */
+          /* The choice made, as the bar has room to name it, with its preview where it has one,
+           * as a material's. */
           let current = options.first { jsonEqual($0["value"], store.value(property)) }
-          Label {
-            Text(current.flatMap { $0.string("label") ?? $0.string("name") } ?? title)
-          } icon: {
-            IconView(name: current?.string("icon") ?? property.string("icon"))
+          let name = current.flatMap { $0.string("label") ?? $0.string("name") } ?? title
+          if let current, current.string("preview") != nil {
+            /* A preview names its choice too, as a material's: it alone would not say which. */
+            HStack(spacing: 6) {
+              optionIcon(current)
+              Text(name).lineLimit(1)
+            }
+          }
+          else {
+            Label {
+              Text(name)
+            } icon: {
+              IconView(name: current?.string("icon") ?? property.string("icon"))
+            }
           }
         }
         .disabled(!property.bool("editable"))
@@ -701,6 +737,21 @@ struct ToolSettingItem: View {
           PropertyRow(store: store, property: property)
         }
         .disabled(!property.bool("editable"))
+    }
+  }
+
+  /** An option's picture: its preview, as a material's swatch, or else its icon. */
+  @ViewBuilder
+  private func optionIcon(_ option: JSON) -> some View {
+    if let path = option.string("preview"), let image = UIImage(contentsOfFile: path) {
+      Image(uiImage: image)
+        .resizable()
+        .scaledToFill()
+        .frame(width: 22, height: 22)
+        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+    }
+    else {
+      IconView(name: option.string("icon"))
     }
   }
 
@@ -906,3 +957,4 @@ struct StripColumn: View, Equatable {
 }
 
 /** \} */
+

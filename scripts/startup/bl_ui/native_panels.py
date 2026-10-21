@@ -481,6 +481,14 @@ def _grease_pencil_material_set(_self, value):
         obj.active_material_index = value
 
 
+def _grease_pencil_color_mode_get(_self):
+    return 0 if bpy.context.tool_settings.gpencil_paint.color_mode == 'MATERIAL' else 1
+
+
+def _grease_pencil_color_mode_set(_self, value):
+    bpy.context.tool_settings.gpencil_paint.color_mode = 'MATERIAL' if value == 0 else 'VERTEXCOLOR'
+
+
 class VIEW3D_PT_native_brush_settings(bpy.types.Panel):
     """Key brush settings of the paint modes other than Sculpt for the native iPadOS top bar."""
     bl_space_type = 'VIEW_3D'
@@ -497,10 +505,22 @@ class VIEW3D_PT_native_brush_settings(bpy.types.Panel):
             get=_grease_pencil_material_get,
             set=_grease_pencil_material_set,
         )
+        # Draw Mode's Color Mode, named short enough for the top bar.
+        bpy.types.WindowManager.native_grease_pencil_color_mode = bpy.props.EnumProperty(
+            name="Color",
+            description="Draw with the material's color, or a color of the stroke's own",
+            items=(
+                ('MATERIAL', "Material", "Draw with the material's color", 'MATERIAL', 0),
+                ('COLOR', "Color", "Draw with a color of the stroke's own", 'VPAINT_HLT', 1),
+            ),
+            get=_grease_pencil_color_mode_get,
+            set=_grease_pencil_color_mode_set,
+        )
 
     @classmethod
     def unregister(cls):
         del bpy.types.WindowManager.native_grease_pencil_material
+        del bpy.types.WindowManager.native_grease_pencil_color_mode
 
     @classmethod
     def poll(cls, context):
@@ -525,9 +545,13 @@ class VIEW3D_PT_native_brush_settings(bpy.types.Panel):
         # the brushes, see `bl_ui.native_brush`.
         if draw_type in {'DRAW', 'FILL'}:
             paint = context.tool_settings.gpencil_paint
-            layout.prop(paint, "color_mode", text="Color Mode", expand=True)
+            layout.prop(context.window_manager, "native_grease_pencil_color_mode", expand=True)
             if paint.color_mode != 'VERTEXCOLOR':
                 layout.prop(context.window_manager, "native_grease_pencil_material", text="Material")
+        if mode == 'PAINT_GREASE_PENCIL' and context.space_data and context.space_data.type == 'VIEW_3D':
+            # The neighbouring frames shown faintly, to draw in between.
+            layout.prop(context.space_data.overlay, "use_gpencil_onion_skin", text="Onion Skin",
+                        icon='ONIONSKIN_ON')
         if draw_type == 'FILL':
             layout.prop(brush.gpencil_settings, "fill_direction", text="Direction", expand=True)
         elif draw_type == 'ERASE':
