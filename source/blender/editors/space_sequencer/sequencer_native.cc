@@ -311,6 +311,10 @@ std::string read_storyboard(bContext *C, const DictionaryValue *state, const boo
   result.append_double("fps", double(scene->r.frs_sec) / double(max_ff(scene->r.frs_sec_base, 1e-6f)));
   result.append_int("sync", workspace && (workspace->flags & WORKSPACE_SYNC_SCENE_TIME));
   result.append_int("playing", ED_screen_animation_playing(CTX_wm_manager(C)) != nullptr);
+  /* Playing loops within the preview range, which the storyboard sets to the frames in view. */
+  result.append_int("loop", (scene->r.flag & SCER_PRV_RANGE) != 0);
+  result.append_int("loop_start", scene->r.psfra);
+  result.append_int("loop_end", scene->r.pefra);
   const Scene *window_scene = CTX_data_scene(C);
   result.append_str("shown", window_scene ? window_scene->id.name + 2 : "");
   /* The scenes a shot can show instead, all but the edit's own. */
@@ -373,6 +377,8 @@ std::string read_storyboard(bContext *C, const DictionaryValue *state, const boo
         continue;
       }
       const Scene &shot = *strip.scene;
+      /* Its scene's frames in the edit's: plus this. */
+      item->append_int("offset", strip.start - shot.r.sfra - strip.anim_startofs);
       item->append_double("aspect", double(shot.r.xsch * shot.r.xasp) /
                                         double(max_ff(1.0f, shot.r.ysch * shot.r.yasp)));
       const int version = scene_versions[shot.id.name + 2];
@@ -567,32 +573,41 @@ void sync_scene(bContext *C)
   const eObjectMode mode = object_before ? eObjectMode(object_before->mode) : OB_MODE_OBJECT;
   sync_active_scene_and_time_with_scene_strip(*C);
   Scene *after = win ? WM_window_get_active_scene(win) : nullptr;
+
+  /* First the shot's drawing in the mode drawn in before, or Draw Mode: a storyboard is drawn,
+   * never left in Object Mode with its tools. Entering a mode can pick its own brush, so the
+   * brush is set after. */
+  Object *object = CTX_data_active_object(C);
+  const eObjectMode drawing_mode = object_before && object_before->type == OB_GREASE_PENCIL &&
+                                           mode != OB_MODE_OBJECT ?
+                                       mode :
+                                       OB_MODE_PAINT_GREASE_PENCIL;
+  if (object && object->type == OB_GREASE_PENCIL && object->mode != drawing_mode) {
+    object::mode_set(C, drawing_mode);
+  }
   if (!before || !after || before == after || !before->toolsettings || !after->toolsettings) {
     return;
   }
-  if (GpPaint *from = before->toolsettings->gp_paint) {
-    if (GpPaint *to = after->toolsettings->gp_paint) {
-      if (Brush *brush = BKE_paint_brush(&from->paint)) {
-        BKE_paint_brush_set(&to->paint, brush);
-      }
-      to->mode = from->mode;
-      const UnifiedPaintSettings &unified = from->paint.unified_paint_settings;
-      UnifiedPaintSettings &into = to->paint.unified_paint_settings;
-      into.size = unified.size;
-      into.unprojected_size = unified.unprojected_size;
-      into.alpha = unified.alpha;
-      into.weight = unified.weight;
-      copy_v3_v3(into.color, unified.color);
-      copy_v3_v3(into.secondary_color, unified.secondary_color);
-      into.flag = unified.flag;
+  /* Then the brush, its size, strength and color, and the color mode, as they were set. */
+  GpPaint *from = before->toolsettings->gp_paint;
+  GpPaint *to = after->toolsettings->gp_paint;
+  if (from && to) {
+    if (from->paint.brush_asset_reference) {
+      BKE_paint_brush_set(CTX_data_main(C), &to->paint, *from->paint.brush_asset_reference);
     }
-  }
-  /* The same mode in the shot's drawing, as Draw Mode. */
-  Object *object = CTX_data_active_object(C);
-  if (object && object->type == OB_GREASE_PENCIL && object_before &&
-      object_before->type == OB_GREASE_PENCIL && object->mode != mode)
-  {
-    object::mode_set(C, mode);
+    else if (Brush *brush = BKE_paint_brush(&from->paint)) {
+      BKE_paint_brush_set(&to->paint, brush);
+    }
+    to->mode = from->mode;
+    const UnifiedPaintSettings &unified = from->paint.unified_paint_settings;
+    UnifiedPaintSettings &into = to->paint.unified_paint_settings;
+    into.size = unified.size;
+    into.unprojected_size = unified.unprojected_size;
+    into.alpha = unified.alpha;
+    into.weight = unified.weight;
+    copy_v3_v3(into.color, unified.color);
+    copy_v3_v3(into.secondary_color, unified.secondary_color);
+    into.flag = unified.flag;
   }
   WM_event_add_notifier(C, NC_SCENE | ND_TOOLSETTINGS, after);
 }
@@ -613,6 +628,21 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     DEG_id_tag_update(&scene->id, ID_RECALC_FRAME_CHANGE);
     sync_scene(C);
     WM_event_add_notifier(C, NC_SCENE | ND_FRAME, scene);
+    return "";
+  }
+  if (action == "loop") {
+    /* Within the frames in view: as the preview range, which playback loops within. */
+    if (lookup_flag(query, "enabled", true)) {
+      const int start = int(query.lookup_int("start").value_or(scene->r.sfra));
+      const int end = int(query.lookup_int("end").value_or(scene->r.efra));
+      scene->r.flag |= SCER_PRV_RANGE;
+      scene->r.psfra = max_ii(MINFRAME, start);
+      scene->r.pefra = max_ii(scene->r.psfra, end);
+    }
+    else {
+      scene->r.flag &= ~SCER_PRV_RANGE;
+    }
+    WM_event_add_notifier(C, NC_SCENE | ND_FRAME_RANGE, scene);
     return "";
   }
   if (action == "play") {
