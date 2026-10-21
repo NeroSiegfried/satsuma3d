@@ -298,6 +298,8 @@ struct StoryboardView: View {
   /** How much taller than fits the lanes are, pinched apart up and down. */
   @State private var laneZoom: CGFloat = 1
   @State private var pinchStart: (scale: CGFloat, laneZoom: CGFloat)?
+  /** A pinch began during a shot's drag: the drag ends without moving it. */
+  @State private var pinchCancelled = false
   @State private var fitted = false
   /** A shot being moved or trimmed: by how many frames, and lanes. */
   @State private var drag: ShotDrag?
@@ -434,7 +436,7 @@ struct StoryboardView: View {
         let lanes = model.channels + 1
         /* All of them in the panel's height, unless pinched taller, then scrolled to. */
         let fit = max(28, min(120, (proxy.size.height - rulerHeight - scrubberHeight - 4) / CGFloat(lanes)))
-        let laneHeight = min(240, fit * laneZoom)
+        let laneHeight = max(20, min(240, fit * laneZoom))
         let width = max(proxy.size.width, x(model.end + 1) + 160)
         ScrollViewReader { _ in
           ScrollView([.horizontal, .vertical]) {
@@ -495,9 +497,14 @@ struct StoryboardView: View {
         }
         .gesture(AxisPinch { stretch in
           let base = pinchStart ?? (scale, laneZoom)
+          if pinchStart == nil {
+            /* A second finger: a pinch, not a shot moved by the first one. */
+            drag = nil
+            pinchCancelled = true
+          }
           pinchStart = base
           scale = min(40, max(0.5, base.scale * stretch.width))
-          laneZoom = min(4, max(1, base.laneZoom * stretch.height))
+          laneZoom = min(4, max(0.4, base.laneZoom * stretch.height))
         } ended: {
           pinchStart = nil
         })
@@ -774,7 +781,7 @@ struct StoryboardView: View {
     }
     /* Twice opens it, to work in its own time. */
     .simultaneousGesture(TapGesture(count: 2).onEnded { model.enter(shot) })
-    .gesture(shotDrag(shot, kind: .move, laneHeight: laneHeight))
+    .gesture(shotMove(shot, laneHeight: laneHeight))
     .contextMenu {
       Button("Open Shot", systemImage: "arrow.up.forward.square") { model.enter(shot) }
       Button("Duplicate", systemImage: "plus.square.on.square") { model.send("duplicate", ["name": shot.name]) }
@@ -896,42 +903,64 @@ struct StoryboardView: View {
   /** Measured in the window, which stays put while the shot follows the finger. Edges snap to
    * the other shots' and to the playhead. */
   private func shotDrag(_ shot: StoryboardShot, kind: ShotDrag.Kind, laneHeight: CGFloat) -> some Gesture {
-    DragGesture(minimumDistance: kind == .move ? 8 : 2, coordinateSpace: .global)
+    DragGesture(minimumDistance: 2, coordinateSpace: .global)
+      .onChanged { dragChanged(shot, kind: kind, translation: $0.translation, laneHeight: laneHeight) }
+      .onEnded { _ in dragEnded(shot, kind: kind) }
+  }
+
+  /** Moving a shot waits for a hold, so a swipe over the shots scrolls them and never moves one
+   * by accident. */
+  private func shotMove(_ shot: StoryboardShot, laneHeight: CGFloat) -> some Gesture {
+    LongPressGesture(minimumDuration: 0.25, maximumDistance: 10)
+      .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
       .onChanged { value in
-        if drag == nil {
-          drag = ShotDrag(name: shot.name, kind: kind, frames: 0, channels: 0)
-          snappedTo = nil
-          Haptics.selection()
-          model.select(shot)
-        }
-        guard var current = drag else { return }
-        let frames = snapped(shot, kind: kind, frames: Int((value.translation.width / scale).rounded()))
-        let channels = kind == .move ? Int((value.translation.height / laneHeight).rounded()) : 0
-        if frames != current.frames || channels != current.channels {
-          current.frames = frames
-          current.channels = channels
-          drag = current
-        }
+        guard case .second(true, let drag) = value else { return }
+        dragChanged(shot, kind: .move, translation: drag?.translation ?? .zero, laneHeight: laneHeight)
       }
-      .onEnded { _ in
-        guard let current = drag else { return }
-        /* The shot is placed where it was let go in the same update the drag ends in, so it does
-         * not jump back first. */
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-          switch kind {
-            case .move:
-              model.move(shot, start: shot.start + current.frames,
-                         channel: max(1, min(model.channels + 1, shot.channel + current.channels)))
-            case .left:
-              if current.frames != 0 { model.trim(shot, left: true, frame: shot.start + current.frames) }
-            case .right:
-              if current.frames != 0 { model.trim(shot, left: false, frame: shot.end + current.frames) }
-          }
-          drag = nil
-        }
+      .onEnded { _ in dragEnded(shot, kind: .move) }
+  }
+
+  private func dragChanged(_ shot: StoryboardShot, kind: ShotDrag.Kind, translation: CGSize, laneHeight: CGFloat) {
+    guard pinchStart == nil, !pinchCancelled else { return }
+    if drag == nil {
+      drag = ShotDrag(name: shot.name, kind: kind, frames: 0, channels: 0)
+      snappedTo = nil
+      if kind == .move { Haptics.impact(.light) } else { Haptics.selection() }
+      model.select(shot)
+    }
+    guard var current = drag else { return }
+    let frames = snapped(shot, kind: kind, frames: Int((translation.width / scale).rounded()))
+    let channels = kind == .move ? Int((translation.height / laneHeight).rounded()) : 0
+    if frames != current.frames || channels != current.channels {
+      current.frames = frames
+      current.channels = channels
+      drag = current
+    }
+  }
+
+  private func dragEnded(_ shot: StoryboardShot, kind: ShotDrag.Kind) {
+    if pinchCancelled {
+      pinchCancelled = false
+      drag = nil
+      return
+    }
+    guard let current = drag else { return }
+    /* The shot is placed where it was let go in the same update the drag ends in, so it does
+     * not jump back first. */
+    var transaction = Transaction()
+    transaction.disablesAnimations = true
+    withTransaction(transaction) {
+      switch kind {
+        case .move:
+          model.move(shot, start: shot.start + current.frames,
+                     channel: max(1, min(model.channels + 1, shot.channel + current.channels)))
+        case .left:
+          if current.frames != 0 { model.trim(shot, left: true, frame: shot.start + current.frames) }
+        case .right:
+          if current.frames != 0 { model.trim(shot, left: false, frame: shot.end + current.frames) }
       }
+      drag = nil
+    }
   }
 
   /** The frames moved, snapped so an edge meets another shot's edge or the playhead nearby. */
