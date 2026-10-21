@@ -81,19 +81,62 @@ struct ViewGizmoGeometry {
     hotspotRadius = max(44, radius + 10)
     buttons = []
     guard !safe.isEmpty else { return }
-    /* Beside the gizmo, rising from the bottom corner; in a small window, a grid. */
-    let compact = safe.height < 540 || safe.width < 430
-    let gap = safe.maxX - (center.x - hotspotRadius)
-    let trailing: [CGFloat] = [gap + 16, gap + 26, gap + 42, gap + 42, gap + 16, 20, 20, 20, 20, 20, 20]
-    let bottom: [CGFloat] = [12, 72, 132, 192, 244, 304, 364, 424, 484, 544, 604]
-    let gridWidth = min(180, (safe.width - 36) / 2)
-    let base = min(136, max(68, safe.height - 300))
-    for (index, view) in pie.enumerated() where index < trailing.count {
-      let x = compact ? 12 + CGFloat(index % 2) * (gridWidth + 12) : trailing[index]
-      let y = compact ? base + CGFloat(index / 2) * 52 : bottom[index]
-      let width = compact ? gridWidth : min(180, ViewGizmoGeometry.buttonWidth(view))
-      buttons.append(CGRect(x: safe.maxX - x - width, y: safe.maxY - y - 44, width: width, height: 44))
+    /* A fan around the gizmo, opening toward the middle of the window: two arcs, each button
+     * pointing away from the gizmo, the whole fan moved to stay in view. In a window too small for
+     * it, a grid. */
+    let widths = pie.map { min(180, ViewGizmoGeometry.buttonWidth($0)) }
+    if let fan = ViewGizmoGeometry.fan(widths: widths, center: center, inner: hotspotRadius + 10, safe: safe) {
+      buttons = fan
+      return
     }
+    let gridWidth = min(180, (safe.width - 36) / 2)
+    let rows = CGFloat((pie.count + 1) / 2)
+    let top = max(safe.minY + 12, safe.maxY - 12 - rows * 52)
+    for index in pie.indices {
+      buttons.append(CGRect(x: safe.minX + 12 + CGFloat(index % 2) * (gridWidth + 12),
+                            y: top + CGFloat(index / 2) * 52, width: gridWidth, height: 44))
+    }
+  }
+
+  /** Buttons of these widths fanned out from the center: a quarter circle around it toward the
+   * window's middle, in an inner and an outer arc, rows evenly apart. Nil if they don't fit in
+   * the safe area. */
+  private static func fan(widths: [CGFloat], center: CGPoint, inner: CGFloat, safe: CGRect) -> [CGRect]? {
+    let height: CGFloat = 44
+    let row: CGFloat = 52
+    let left: CGFloat = center.x > safe.midX ? -1 : 1
+    let up: CGFloat = center.y > safe.midY ? -1 : 1
+    let arcs = widths.count > 6 ? 2 : 1
+    let perArc = (widths.count + arcs - 1) / arcs
+    let rise = CGFloat(max(0, perArc - 1)) * row
+
+    var rects = [CGRect](repeating: .zero, count: widths.count)
+    /* How far out the arc is at its foot, and at its top. */
+    let foot = inner + 110
+    let top = inner
+    for arc in 0..<arcs {
+      let indices = Array(widths.indices.dropFirst(arc * perArc).prefix(perArc))
+      for (slot, index) in indices.enumerated() {
+        /* On a quarter ellipse around the center: the first beside it, the last above it. */
+        let along = rise > 0 ? CGFloat(slot) * row / rise : 0
+        let reach = top + (foot - top) * (1 - along * along).squareRoot()
+        let rowRise = CGFloat(slot) * row
+        /* An outer arc's button snug beside the inner one on its row, following its curve. */
+        let previous = arc > 0 && slot < perArc ? rects[(arc - 1) * perArc + slot] : nil
+        let near = previous.map { left < 0 ? $0.minX - 8 : $0.maxX + 8 } ?? center.x + left * reach
+        let width = widths[index]
+        rects[index] = CGRect(x: left < 0 ? near - width : near, y: center.y + up * rowRise - height / 2,
+                              width: width, height: height)
+      }
+    }
+
+    /* Moved as a whole into the safe area, keeping its shape. */
+    let bounds = rects.reduce(CGRect.null) { $0.union($1) }
+    let area = safe.insetBy(dx: 8, dy: 8)
+    guard bounds.width <= area.width, bounds.height <= area.height else { return nil }
+    let dx = max(area.minX - bounds.minX, min(0, area.maxX - bounds.maxX))
+    let dy = max(area.minY - bounds.minY, min(0, area.maxY - bounds.maxY))
+    return rects.map { $0.offsetBy(dx: dx, dy: dy) }
   }
 
   /** A pie button's natural width: its icon and title between the glass's margins. */
