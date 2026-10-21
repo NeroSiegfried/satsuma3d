@@ -176,6 +176,8 @@ final class StoryboardModel {
     else {
       expectedLayers = nil
       if layers != self.layers { self.layers = layers }
+      /* One layer is always the one drawn on. */
+      if let top = layers.first, !layers.contains(where: \.active) { activateLayer(top) }
     }
     let now = Date()
     let next = snapshot.array("strips").map(StoryboardShot.init).map { shot in
@@ -814,6 +816,7 @@ struct StoryboardView: View {
   /** Keys on a rail \a width wide from \a start, in the edit's frames: tapped to select, dragged
    * to move the selected ones, \a moved by as many frames. */
   private func keyRail(owner: String, keys: [Int], start: Int, width: CGFloat,
+                       touched: @escaping () -> Void = {},
                        moved: @escaping ([Int], Int) -> Void) -> some View {
     let selected = selectedKeys.frames(of: owner)
     let shift = keyDrag?.owner == owner ? keyDrag?.frames ?? 0 : 0
@@ -832,12 +835,14 @@ struct StoryboardView: View {
           .position(x: x(frame + (isSelected ? shift : 0)) - x(start), y: keyRailHeight / 2)
           .onTapGesture {
             selectedKeys = KeySelection(owner: owner, frames: isSelected && selected.count == 1 ? [] : [frame])
+            touched()
             Haptics.selection()
           }
           .gesture(DragGesture(minimumDistance: 4)
             .onChanged { value in
               if keyDrag == nil {
                 if !isSelected { selectedKeys = KeySelection(owner: owner, frames: [frame]) }
+                touched()
                 Haptics.selection()
               }
               let frames = Int((value.translation.width / scale).rounded())
@@ -897,7 +902,14 @@ struct StoryboardView: View {
     .offset(y: top)
   }
 
-  /** A layer's visibility and its menu, beside its strip. */
+  /** One layer is always the one drawn on: tapping another makes it so, felt as it does. */
+  private func activate(_ layer: StoryboardLayer) {
+    guard !layer.active else { return }
+    model.activateLayer(layer)
+    Haptics.selection()
+  }
+
+  /** A layer's visibility and its menu, beside its strip; tapped, it is drawn on. */
   private func layerHeader(_ layer: StoryboardLayer) -> some View {
     HStack(spacing: 2) {
       Button {
@@ -915,19 +927,26 @@ struct StoryboardView: View {
       Spacer(minLength: 0)
     }
     .frame(width: layerHeaderWidth, height: layerRowHeight)
+    .background(layer.active ? PanelStyle.selection.opacity(0.22) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .contentShape(Rectangle())
+    .onTapGesture { activate(layer) }
   }
 
   private func layerStrip(_ layer: StoryboardLayer, shot: StoryboardShot, width: CGFloat) -> some View {
     keyRail(owner: "layer:" + layer.name, keys: layer.keys.map { $0 + shot.offset }, start: shot.start,
-            width: width) { frames, delta in
+            width: width, touched: { activate(layer) }) { frames, delta in
       model.moveLayerKeys(layer, frames: frames.map { $0 - shot.offset }, by: delta)
     }
     .frame(height: layerRowHeight)
-    /* The layer drawn on, highlighted; tapped, it is. */
-    .background(layer.active ? PanelStyle.selection.opacity(0.14) : Color.clear,
+    /* The layer drawn on, highlighted; tapped anywhere, it is. */
+    .background(layer.active ? PanelStyle.selection.opacity(0.22) : Color.clear,
                 in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+      .strokeBorder(layer.active ? PanelStyle.selection : Color.clear, lineWidth: 2)
+      .allowsHitTesting(false))
     .contentShape(Rectangle())
-    .onTapGesture { model.activateLayer(layer) }
+    .onTapGesture { activate(layer) }
     .opacity(layer.visible ? 1 : 0.5)
     .accessibilityElement(children: .contain)
     .accessibilityLabel(layer.name)
@@ -972,6 +991,7 @@ struct StoryboardView: View {
         if layer.locked { Image(systemName: "lock.fill").font(.system(size: 9)) }
         Text(layer.name)
           .lineLimit(1)
+          .fontWeight(layer.active ? .bold : .semibold)
         Image(systemName: "chevron.down")
           .font(.system(size: 8, weight: .bold))
       }
