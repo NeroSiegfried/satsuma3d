@@ -14,6 +14,10 @@ import UIKit
 
 @MainActor
 final class SwiftScenePanels {
+  /** The window's panels, for views apart from the editor's, such as Properties in a window of its
+   * own and the Properties' Tool tab. */
+  static weak var current: SwiftScenePanels?
+
   let inspector = InspectorStore(mode: .properties)
   /** The native node editor, which Blender's panel snapshots also feed. */
   let nodes = NodeEditorModel()
@@ -39,9 +43,7 @@ final class SwiftScenePanels {
 
   init() {
     inspector.visible = false
-#if os(visionOS)
     Self.current = self
-#endif
   }
 
   /* -------------------------------------------------------------------- */
@@ -135,8 +137,6 @@ final class SwiftScenePanels {
    * On Apple Vision Pro, Properties and the Outliner open as windows beside the editor, which
    * the person can place, resize and keep open, instead of covering the viewport.
    * \{ */
-
-  static weak var current: SwiftScenePanels?
 
   /** The panel a window shows: the same store as the editor's, so both stay in step. */
   func windowContent(_ kind: PanelWindow) -> AnyView {
