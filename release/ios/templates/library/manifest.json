@@ -58,6 +58,20 @@
       }
     },
     {
+      "id": "storyboard",
+      "title": "Storyboard",
+      "file": "storyboard.blend",
+      "preview": "storyboard.png",
+      "minimumBlender": [
+        5,
+        1,
+        0
+      ],
+      "presentation": {
+        "timeline": true
+      }
+    },
+    {
       "id": "animation-3d",
       "title": "3D Animation",
       "file": "animation-3d.blend",
