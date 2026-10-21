@@ -80,6 +80,7 @@
 #include "SEQ_transform.hh"
 
 #include "WM_api.hh"
+#include "WM_toolsystem.hh"
 #include "WM_types.hh"
 
 #include "DEG_depsgraph.hh"
@@ -639,10 +640,27 @@ void make_room(Scene *scene, const int channel, const int frame, const int lengt
 /** Shows the shot under the edit's playhead, as Blender's storyboard does, keeping the tool as it
  * was set: each shot's scene has tool settings of its own, which would change the brush, its
  * size and strength, and the mode drawn in, from one shot to the next. */
+/** The 3D Viewport's tool for the window's mode now, and that mode. */
+std::pair<std::string, int> viewport_tool(bContext *C)
+{
+  WorkSpace *workspace = CTX_wm_workspace(C);
+  Scene *scene = CTX_data_scene(C);
+  ViewLayer *view_layer = CTX_data_view_layer(C);
+  if (!workspace || !scene || !view_layer) {
+    return {"", -1};
+  }
+  bToolKey key = {SPACE_VIEW3D,
+                  WM_toolsystem_mode_from_spacetype(scene, view_layer, nullptr, SPACE_VIEW3D)};
+  const bToolRef *tool = WM_toolsystem_ref_find(workspace, &key);
+  return {tool ? tool->idname : "", key.mode};
+}
+
 void sync_scene(bContext *C)
 {
   wmWindow *win = CTX_wm_window(C);
   Scene *before = win ? WM_window_get_active_scene(win) : nullptr;
+  /* The tool picked, which is the user's: kept from shot to shot, whatever it is. */
+  const std::pair<std::string, int> tool_before = viewport_tool(C);
   const Object *object_before = CTX_data_active_object(C);
   const eObjectMode mode = object_before ? eObjectMode(object_before->mode) : OB_MODE_OBJECT;
   sync_active_scene_and_time_with_scene_strip(*C);
@@ -672,6 +690,13 @@ void sync_scene(bContext *C)
                                        OB_MODE_PAINT_GREASE_PENCIL;
   if (object && object->type == OB_GREASE_PENCIL && object->mode != drawing_mode) {
     object::mode_set(C, drawing_mode);
+  }
+  if (WorkSpace *workspace = CTX_wm_workspace(C); workspace && !tool_before.first.empty()) {
+    const std::pair<std::string, int> tool_after = viewport_tool(C);
+    if (tool_after.second == tool_before.second && tool_after.first != tool_before.first) {
+      bToolKey key = {SPACE_VIEW3D, tool_after.second};
+      WM_toolsystem_ref_set_by_id_ex(C, workspace, &key, tool_before.first.c_str(), false);
+    }
   }
   if (!before || !after || before == after || !before->toolsettings || !after->toolsettings) {
     return;
