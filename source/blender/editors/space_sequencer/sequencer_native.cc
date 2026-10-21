@@ -1,0 +1,529 @@
+/* SPDX-FileCopyrightText: 2026 Blender Authors
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later */
+
+/** \file
+ * \ingroup spseq
+ *
+ * The storyboard for a native interface: the workspace's sequencer scene and the shots in it,
+ * each a scene strip with a small picture of its first frame, and edits on them. A hidden
+ * Sequencer stands in for the one the native interface draws, so its operators run as they do
+ * there, and moving its playhead switches the window to the shot under it, as Blender's
+ * Storyboarding workspace does.
+ */
+
+#include <algorithm>
+#include <map>
+#include <optional>
+#include <sstream>
+#include <string>
+
+#include "MEM_guardedalloc.h"
+
+#include "BLI_fileops.h"
+#include "BLI_listbase.h"
+#include "BLI_math_base.h"
+#include "BLI_serialize.hh"
+#include "BLI_string.h"
+#include "BLI_vector.hh"
+
+#include "DNA_scene_types.h"
+#include "DNA_screen_types.h"
+#include "DNA_sequence_types.h"
+#include "DNA_space_types.h"
+#include "DNA_workspace_types.h"
+
+#include "BKE_appdir.hh"
+#include "BKE_context.hh"
+#include "BKE_global.hh"
+#include "BKE_main.hh"
+#include "BKE_scene.hh"
+#include "BKE_screen.hh"
+#include "BKE_undo_system.hh"
+#include "BKE_wm_runtime.hh"
+
+#include "ED_screen.hh"
+#include "ED_sequencer.hh"
+#include "ED_undo.hh"
+
+#include "GPU_framebuffer.hh"
+
+#include "IMB_imbuf.hh"
+#include "IMB_imbuf_types.hh"
+
+#include "RNA_access.hh"
+#include "RNA_prototypes.hh"
+
+#include "SEQ_render.hh"
+#include "SEQ_select.hh"
+#include "SEQ_sequencer.hh"
+#include "SEQ_transform.hh"
+
+#include "WM_api.hh"
+#include "WM_types.hh"
+
+#include "DEG_depsgraph.hh"
+
+namespace blender::ed::vse {
+
+using namespace io::serialize;
+
+namespace {
+
+/** Kept for the session, as Blender's own would be. */
+ScrArea *native_sequencer_area(bContext *C)
+{
+  static ScrArea *area = nullptr;
+  if (area == nullptr) {
+    area = MEM_new<ScrArea>("native sequencer");
+    area->spacetype = SPACE_SEQ;
+    area->type = BKE_spacetype_from_id(SPACE_SEQ);
+    SpaceLink *link = area->type->create(area, CTX_data_scene(C));
+    BLI_addtail(&area->spacedata, link);
+    std::swap(area->regionbase, link->regionbase);
+    for (ARegion &region : area->regionbase) {
+      region.runtime->type = BKE_regiontype_from_id(area->type, region.regiontype);
+    }
+    reinterpret_cast<SpaceSeq *>(link)->view = SEQ_VIEW_SEQUENCE;
+  }
+  return area;
+}
+
+/** The hidden Sequencer as the context's area while shots are read or edited. */
+struct SequencerSpaceContext {
+  bContext *C;
+  ScrArea *previous_area;
+  ARegion *previous_region;
+
+  explicit SequencerSpaceContext(bContext *context) : C(context)
+  {
+    previous_area = CTX_wm_area(C);
+    previous_region = CTX_wm_region(C);
+    ScrArea *area = native_sequencer_area(C);
+    CTX_wm_area_set(C, area);
+    CTX_wm_region_set(C, BKE_area_find_region_type(area, RGN_TYPE_WINDOW));
+  }
+
+  ~SequencerSpaceContext()
+  {
+    CTX_wm_area_set(C, previous_area);
+    CTX_wm_region_set(C, previous_region);
+  }
+};
+
+std::string encode(const Value &value)
+{
+  std::ostringstream stream;
+  JsonFormatter().serialize(stream, value);
+  return stream.str();
+}
+
+/** A shot's picture: which frame of which scene, and the edit it was drawn after. */
+struct Thumbnail {
+  std::string key;
+  std::string path;
+  /** Drawn again once the shot's scene has changed since. */
+  bool stale = false;
+};
+std::map<std::string, Thumbnail> thumbnails;
+/** The undo step last seen: a new one means the shown shot may have changed. */
+const void *last_undo_step = nullptr;
+int thumbnail_version = 0;
+
+std::string thumbnail_key(const Strip &strip)
+{
+  return std::string(strip.scene ? strip.scene->id.name + 2 : "") + "@" +
+         std::to_string(strip.left_handle()) + "/" + std::to_string(strip.start);
+}
+
+/** Draws a shot's first frame as the Sequencer's preview shows it, small. */
+std::string render_thumbnail(bContext *C, Scene *sequencer_scene, Strip *strip)
+{
+  Main *bmain = CTX_data_main(C);
+  Depsgraph *depsgraph = CTX_data_expect_evaluated_depsgraph(C);
+  const float aspect = float(sequencer_scene->r.ysch) / float(max_ii(1, sequencer_scene->r.xsch));
+  const int width = 240;
+  const int height = max_ii(1, int(width * aspect));
+  seq::RenderData context = {};
+  seq::render_new_render_data(
+      bmain, depsgraph, sequencer_scene, width, height, SEQ_RENDER_SIZE_SCENE, nullptr, &context);
+  context.skip_cache = true;
+  const short is_break = G.is_break;
+  G.is_break = false;
+  gpu::FrameBuffer *framebuffer = GPU_framebuffer_active_get();
+  GPU_framebuffer_restore();
+  ImBuf *ibuf = seq::render_give_ibuf_direct(&context, float(strip->left_handle()), strip);
+  if (framebuffer) {
+    GPU_framebuffer_bind(framebuffer);
+  }
+  G.is_break = is_break;
+  if (!ibuf) {
+    return "";
+  }
+  if (ibuf->float_buffer.data) {
+    seq::render_imbuf_from_sequencer_space(sequencer_scene, ibuf);
+    IMB_byte_from_float(ibuf);
+  }
+  ibuf->planes = 24;
+  ibuf->ftype = IMB_FTYPE_PNG;
+  /* A new name for each version, so UIKit does not show an image it cached. */
+  const std::string path = std::string(BKE_tempdir_session()) + "storyboard_" +
+                           std::to_string(++thumbnail_version) + ".png";
+  const bool saved = IMB_save_image(ibuf, path.c_str(), IB_byte_data);
+  IMB_freeImBuf(ibuf);
+  return saved ? path : "";
+}
+
+std::string read_storyboard(bContext *C, const bool draw_thumbnail)
+{
+  DictionaryValue result;
+  Scene *scene = CTX_data_sequencer_scene(C);
+  WorkSpace *workspace = CTX_wm_workspace(C);
+  Editing *ed = scene ? seq::editing_get(scene) : nullptr;
+  result.append_int("available", scene != nullptr);
+  if (!scene) {
+    return encode(result);
+  }
+  result.append_str("scene", scene->id.name + 2);
+  result.append_int("start", scene->r.sfra);
+  result.append_int("end", scene->r.efra);
+  result.append_int("frame", scene->r.cfra);
+  result.append_double("fps", double(scene->r.frs_sec) / double(max_ff(scene->r.frs_sec_base, 1e-6f)));
+  result.append_int("sync", workspace && (workspace->flags & WORKSPACE_SYNC_SCENE_TIME));
+  result.append_int("playing", ED_screen_animation_playing(CTX_wm_manager(C)) != nullptr);
+  const Scene *window_scene = CTX_data_scene(C);
+  result.append_str("shown", window_scene ? window_scene->id.name + 2 : "");
+
+  /* A new undo step: the shot being drawn in may look different now. */
+  const wmWindowManager *wm = CTX_wm_manager(C);
+  const void *undo_step = wm->runtime->undo_stack ? wm->runtime->undo_stack->step_active : nullptr;
+  if (undo_step != last_undo_step) {
+    last_undo_step = undo_step;
+    for (auto &[name, thumbnail] : thumbnails) {
+      thumbnail.stale = true;
+    }
+  }
+
+  auto strips = result.append_array("strips");
+  const Strip *active = seq::select_active_get(scene);
+  bool drew = !draw_thumbnail;
+  if (ed) {
+    for (Strip &strip : *seq::active_seqbase_get(ed)) {
+      if (strip.is_effect() || strip.type == STRIP_TYPE_SOUND) {
+        continue;
+      }
+      auto item = strips->append_dict();
+      item->append_str("name", strip.name + 2);
+      item->append_int("channel", strip.channel);
+      item->append_int("start", strip.left_handle());
+      item->append_int("end", strip.right_handle(scene));
+      item->append_int("scene_strip", strip.type == STRIP_TYPE_SCENE);
+      item->append_str("scene", strip.scene ? strip.scene->id.name + 2 : "");
+      item->append_int("selected", (strip.flag & SEQ_SELECT) != 0);
+      item->append_int("active", &strip == active);
+      item->append_int("muted", (strip.flag & SEQ_MUTE) != 0);
+      item->append_int("color", strip.color_tag);
+      if (strip.type != STRIP_TYPE_SCENE || !strip.scene) {
+        continue;
+      }
+      Thumbnail &thumbnail = thumbnails[strip.name + 2];
+      const std::string key = thumbnail_key(strip);
+      /* Drawn again when it moved or its scene may have changed, one shot at a time so the
+       * window keeps up; the shot shown is the one being drawn in. */
+      const bool redraw = thumbnail.path.empty() || thumbnail.key != key ||
+                          (thumbnail.stale && strip.scene == window_scene);
+      if (redraw && !drew) {
+        drew = true;
+        const std::string path = render_thumbnail(C, scene, &strip);
+        if (!path.empty()) {
+          if (!thumbnail.path.empty()) {
+            BLI_delete(thumbnail.path.c_str(), false, false);
+          }
+          thumbnail.path = path;
+        }
+        thumbnail.key = key;
+        thumbnail.stale = false;
+      }
+      else if (thumbnail.stale && strip.scene != window_scene) {
+        thumbnail.stale = false;
+      }
+      item->append_str("thumbnail", thumbnail.path);
+    }
+  }
+  /* Another picture to draw: the native interface asks again soon. */
+  bool pending = false;
+  if (ed) {
+    for (Strip &strip : *seq::active_seqbase_get(ed)) {
+      if (strip.type == STRIP_TYPE_SCENE && strip.scene) {
+        const auto found = thumbnails.find(strip.name + 2);
+        if (found == thumbnails.end() || found->second.path.empty() ||
+            found->second.key != thumbnail_key(strip) ||
+            (found->second.stale && strip.scene == window_scene))
+        {
+          pending = true;
+        }
+      }
+    }
+  }
+  result.append_int("pending", pending);
+  return encode(result);
+}
+
+Strip *find_strip(Scene *scene, const DictionaryValue &query)
+{
+  Editing *ed = seq::editing_get(scene);
+  const std::string name = query.lookup_str("name").value_or("");
+  return ed && !name.empty() ? seq::lookup_strip_by_name(ed, name.c_str()) : nullptr;
+}
+
+void set_int(bContext *C, Scene *scene, Strip *strip, const char *property, const int value)
+{
+  PointerRNA ptr = RNA_pointer_create_discrete(&scene->id, RNA_Strip, strip);
+  PropertyRNA *prop = RNA_struct_find_property(&ptr, property);
+  if (prop && RNA_property_int_get(&ptr, prop) != value) {
+    RNA_property_int_set(&ptr, prop, value);
+    RNA_property_update(C, &ptr, prop);
+  }
+}
+
+void select_only(Scene *scene, Strip *strip)
+{
+  if (Editing *ed = seq::editing_get(scene)) {
+    for (Strip &other : *seq::active_seqbase_get(ed)) {
+      other.flag &= ~STRIP_ALLSEL;
+    }
+  }
+  if (strip) {
+    strip->flag |= SEQ_SELECT;
+  }
+  seq::select_active_set(scene, strip);
+}
+
+/** The scene new shots are copies of: one no shot shows, as the Storyboarding template keeps for
+ * a blank panel, or else the shot under the playhead. */
+Scene *new_shot_template(bContext *C, Scene *sequencer_scene)
+{
+  Main *bmain = CTX_data_main(C);
+  Editing *ed = seq::editing_get(sequencer_scene);
+  for (Scene &candidate : bmain->scenes) {
+    if (&candidate == sequencer_scene || candidate.camera == nullptr) {
+      continue;
+    }
+    bool used = false;
+    if (ed) {
+      for (Strip &strip : *seq::active_seqbase_get(ed)) {
+        used |= strip.scene == &candidate;
+      }
+    }
+    if (!used) {
+      return &candidate;
+    }
+  }
+  return nullptr;
+}
+
+/** Makes room after `after` on its channel, moving the shots after it later by `length`. */
+void make_room(Scene *scene, const int channel, const int frame, const int length)
+{
+  Editing *ed = seq::editing_get(scene);
+  if (!ed) {
+    return;
+  }
+  Vector<Strip *> later;
+  for (Strip &strip : *seq::active_seqbase_get(ed)) {
+    if (strip.channel == channel && strip.left_handle() >= frame) {
+      later.append(&strip);
+    }
+  }
+  std::sort(later.begin(), later.end(), [](const Strip *a, const Strip *b) {
+    return a->left_handle() > b->left_handle();
+  });
+  for (Strip *strip : later) {
+    seq::transform_translate_strip(scene, strip, length);
+  }
+}
+
+/** Applies an edit; the undo step's name, empty for none, or nothing when it failed. */
+std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
+{
+  Scene *scene = CTX_data_sequencer_scene(C);
+  if (!scene) {
+    return std::nullopt;
+  }
+  const std::string action = query.lookup_str("action").value_or("");
+  Strip *strip = find_strip(scene, query);
+
+  if (action == "frame") {
+    scene->r.cfra = int(query.lookup_int("frame").value_or(scene->r.cfra));
+    scene->r.subframe = 0.0f;
+    DEG_id_tag_update(&scene->id, ID_RECALC_FRAME_CHANGE);
+    sync_active_scene_and_time_with_scene_strip(*C);
+    WM_event_add_notifier(C, NC_SCENE | ND_FRAME, scene);
+    return "";
+  }
+  if (action == "play") {
+    WM_operator_name_call(C, "SCREEN_OT_animation_play", wm::OpCallContext::InvokeDefault,
+                          nullptr, nullptr);
+    return "";
+  }
+  if (action == "sync") {
+    if (WorkSpace *workspace = CTX_wm_workspace(C)) {
+      SET_FLAG_FROM_TEST(workspace->flags, query.lookup_int("value").value_or(1),
+                         WORKSPACE_SYNC_SCENE_TIME);
+      sync_active_scene_and_time_with_scene_strip(*C);
+    }
+    return "";
+  }
+  if (action == "select") {
+    if (!strip) {
+      return std::nullopt;
+    }
+    select_only(scene, strip);
+    WM_event_add_notifier(C, NC_SCENE | ND_SEQUENCER | NA_SELECTED, scene);
+    return "Select Shot";
+  }
+  if (action == "move") {
+    if (!strip) {
+      return std::nullopt;
+    }
+    const int start = int(query.lookup_int("start").value_or(strip->left_handle()));
+    const int channel = int(query.lookup_int("channel").value_or(strip->channel));
+    seq::transform_translate_strip(scene, strip, start - strip->left_handle());
+    seq::strip_channel_set(strip, max_ii(1, channel));
+    if (seq::transform_test_overlap(scene, seq::active_seqbase_get(seq::editing_get(scene)), strip))
+    {
+      seq::transform_seqbase_shuffle(seq::active_seqbase_get(seq::editing_get(scene)), strip,
+                                     scene);
+    }
+    DEG_id_tag_update(&scene->id, ID_RECALC_SEQUENCER_STRIPS);
+    sync_active_scene_and_time_with_scene_strip(*C);
+    WM_event_add_notifier(C, NC_SCENE | ND_SEQUENCER, scene);
+    return "Move Shot";
+  }
+  if (action == "trim") {
+    if (!strip) {
+      return std::nullopt;
+    }
+    const bool left = query.lookup_str("side").value_or("") == "left";
+    set_int(C, scene, strip, left ? "frame_final_start" : "frame_final_end",
+            int(query.lookup_int("frame").value_or(0)));
+    sync_active_scene_and_time_with_scene_strip(*C);
+    return left ? "Trim Shot Start" : "Trim Shot End";
+  }
+  if (action == "rename") {
+    if (!strip) {
+      return std::nullopt;
+    }
+    PointerRNA ptr = RNA_pointer_create_discrete(&scene->id, RNA_Strip, strip);
+    const std::string name = query.lookup_str("value").value_or("");
+    RNA_string_set(&ptr, "name", name.c_str());
+    WM_event_add_notifier(C, NC_SCENE | ND_SEQUENCER, scene);
+    return "Rename Shot";
+  }
+  if (action == "delete" || action == "duplicate") {
+    if (!strip) {
+      return std::nullopt;
+    }
+    select_only(scene, strip);
+    if (action == "delete") {
+      PointerRNA properties = WM_operator_properties_create("SEQUENCER_OT_delete");
+      RNA_boolean_set(&properties, "delete_data", false);
+      WM_operator_name_call(C, "SEQUENCER_OT_delete", wm::OpCallContext::ExecDefault,
+                            &properties, nullptr);
+      WM_operator_properties_free(&properties);
+      sync_active_scene_and_time_with_scene_strip(*C);
+      return "";
+    }
+    /* A copy of the shot and its scene, right after it, the later shots making room. */
+    const int length = strip->right_handle(scene) - strip->left_handle();
+    const int after = strip->right_handle(scene);
+    const int channel = strip->channel;
+    Scene *shot_scene = strip->scene;
+    make_room(scene, channel, after, length);
+    if (!shot_scene) {
+      return std::nullopt;
+    }
+    Scene *previous = CTX_data_scene(C);
+    CTX_data_scene_set(C, shot_scene);
+    PointerRNA properties = WM_operator_properties_create("SEQUENCER_OT_scene_strip_add_new");
+    RNA_enum_set(&properties, "type", SCE_COPY_FULL);
+    RNA_int_set(&properties, "frame_start", after);
+    RNA_int_set(&properties, "channel", channel);
+    WM_operator_name_call(C, "SEQUENCER_OT_scene_strip_add_new", wm::OpCallContext::ExecDefault,
+                          &properties, nullptr);
+    WM_operator_properties_free(&properties);
+    CTX_data_scene_set(C, previous);
+    sync_active_scene_and_time_with_scene_strip(*C);
+    return "";
+  }
+  if (action == "add") {
+    /* After the selected shot, or the shot under the playhead, or at the end. */
+    Editing *ed = seq::editing_ensure(scene);
+    Strip *after = seq::select_active_get(scene);
+    if (!after) {
+      after = const_cast<Strip *>(get_scene_strip_for_time_sync(scene));
+    }
+    int frame = scene->r.sfra;
+    int channel = 1;
+    if (after) {
+      frame = after->right_handle(scene);
+      channel = after->channel;
+    }
+    else {
+      for (Strip &other : *seq::active_seqbase_get(ed)) {
+        frame = max_ii(frame, other.right_handle(scene));
+      }
+    }
+    Scene *template_scene = new_shot_template(C, scene);
+    Scene *source = template_scene ? template_scene :
+                    after && after->scene ? after->scene :
+                                            CTX_data_scene(C);
+    const int length = source ? source->r.efra - source->r.sfra + 1 : 48;
+    make_room(scene, channel, frame, length);
+    Scene *previous = CTX_data_scene(C);
+    CTX_data_scene_set(C, source);
+    PointerRNA properties = WM_operator_properties_create("SEQUENCER_OT_scene_strip_add_new");
+    /* A blank panel copied whole; otherwise the shot's settings with nothing in it. */
+    RNA_enum_set(&properties, "type", template_scene ? SCE_COPY_FULL : SCE_COPY_EMPTY);
+    RNA_int_set(&properties, "frame_start", frame);
+    RNA_int_set(&properties, "channel", channel);
+    WM_operator_name_call(C, "SEQUENCER_OT_scene_strip_add_new", wm::OpCallContext::ExecDefault,
+                          &properties, nullptr);
+    WM_operator_properties_free(&properties);
+    CTX_data_scene_set(C, previous);
+    /* The playhead on the new shot, showing it to draw in. */
+    scene->r.cfra = frame;
+    DEG_id_tag_update(&scene->id, ID_RECALC_FRAME_CHANGE);
+    sync_active_scene_and_time_with_scene_strip(*C);
+    WM_event_add_notifier(C, NC_SCENE | ND_FRAME, scene);
+    return "";
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
+std::string native_storyboard_query(bContext *C, const std::string &request, const bool execute)
+{
+  std::istringstream stream(request);
+  std::unique_ptr<Value> value = JsonFormatter().deserialize(stream);
+  const DictionaryValue *query = value ? value->as_dictionary_value() : nullptr;
+  SequencerSpaceContext space(C);
+  if (!execute) {
+    const bool thumbnails = query && query->lookup_int("thumbnails").value_or(1);
+    return read_storyboard(C, thumbnails && !ED_screen_animation_playing(CTX_wm_manager(C)));
+  }
+  if (!query) {
+    return "This storyboard change could not be made.";
+  }
+  const std::optional<std::string> undo = apply_edit(C, *query);
+  if (!undo) {
+    return "This storyboard change could not be made.";
+  }
+  if (!undo->empty()) {
+    ED_undo_push(C, undo->c_str());
+  }
+  return "";
+}
+
+}  // namespace blender::ed::vse

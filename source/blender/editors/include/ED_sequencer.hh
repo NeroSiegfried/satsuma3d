@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <string>
+
 #include "BLI_vector_set.hh"
 
 namespace blender {
@@ -89,6 +91,9 @@ bool is_scene_time_sync_needed(const bContext &C);
  */
 const Strip *get_scene_strip_for_time_sync(const Scene *sequencer_scene);
 void sync_active_scene_and_time_with_scene_strip(bContext &C);
+
+/** The storyboard for a native interface, or an edit of it, see `sequencer_native.cc`. */
+std::string native_storyboard_query(bContext *C, const std::string &request, bool execute);
 
 }  // namespace ed::vse
 }  // namespace blender

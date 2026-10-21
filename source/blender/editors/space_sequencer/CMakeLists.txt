@@ -22,6 +22,7 @@ set(SRC
   sequencer_clipboard.cc
   sequencer_drag_drop.cc
   sequencer_edit.cc
+  sequencer_native.cc
   sequencer_modifier.cc
   sequencer_ops.cc
   sequencer_preview.cc

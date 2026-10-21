@@ -63,6 +63,7 @@
 #include "ED_asset_menu_utils.hh"
 #include "ED_object.hh"
 #include "ED_screen.hh"
+#include "ED_sequencer.hh"
 #include "ED_transform.hh"
 #include "ED_undo.hh"
 #include "ED_view3d.hh"
@@ -74,6 +75,8 @@
 #include "MEM_guardedalloc.h"
 
 #include "RNA_access.hh"
+
+#include "SEQ_sequencer.hh"
 #include "RNA_define.hh"
 
 #include "RNA_enum_types.hh"
@@ -273,6 +276,10 @@ std::string ios_graph_state = "{}";
 bool ios_graph_dirty = true;
 std::string ios_graph_json;
 std::chrono::steady_clock::time_point ios_graph_next_check;
+/* The storyboard: the sequencer scene's shots, see `sequencer_native.cc`. */
+bool ios_storyboard_dirty = true;
+std::string ios_storyboard_json;
+std::chrono::steady_clock::time_point ios_storyboard_next_check;
 std::string ios_properties_error;
 int64_t ios_panels_sequence = 0;
 std::atomic<bool> ios_navigation_hover_active{false};
@@ -1284,6 +1291,24 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     ios_panels_published.clear();
     return;
   }
+  if (command.setting == "native_storyboard_visible") {
+    ios_storyboard_dirty = true;
+    ios_panels_visible = (ios_panels_visible & ~64) | (command.value == "1" ? 64 : 0);
+    ios_panels_next_snapshot = {};
+    ios_panels_published.clear();
+    return;
+  }
+  if (command.setting == "native_storyboard_edit") {
+    ios_storyboard_dirty = true;
+    std::istringstream stream(command.value);
+    auto value = io::serialize::JsonFormatter().deserialize(stream);
+    if (const auto *request = value ? value->as_dictionary_value() : nullptr) {
+      ios_panels_sequence = request->lookup_int("sequence").value_or(ios_panels_sequence);
+    }
+    ios_panels_next_snapshot = {};
+    ios_properties_error = ed::vse::native_storyboard_query(C, command.value, true);
+    return;
+  }
   if (command.setting == "native_graph_edit") {
     ios_graph_dirty = true;
     std::istringstream stream(command.value);
@@ -1390,7 +1415,7 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     ios_panels_next_snapshot = {};
     ios_panels_published.clear();
     /* Settings, open over the window, stays as it is. */
-    ios_panels_visible = (ios_panels_visible & (4 | 32)) | (command.value == "3" ? 3 :
+    ios_panels_visible = (ios_panels_visible & (4 | 32 | 64)) | (command.value == "3" ? 3 :
                                                      command.value == "2" ? 2 :
                                                      command.value == "1" ? 1 :
                                                                             0);
@@ -2600,6 +2625,20 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
         }
         merged.append_str("graph", "@native_graph_json@");
       }
+      if (ios_panels_visible & 64) {
+        /* Soon again while shots still need their pictures drawn, one at a time. */
+        if (ios_storyboard_dirty || now >= ios_storyboard_next_check) {
+          ios_storyboard_dirty = false;
+          /* Shots' pictures are drawn with the window's GPU context, as its editors draw. */
+          if (wmWindow *win = CTX_wm_window(C)) {
+            wm_window_make_drawable(CTX_wm_manager(C), win);
+          }
+          ios_storyboard_json = ed::vse::native_storyboard_query(C, "{}", false);
+          const bool pending = ios_storyboard_json.find("\"pending\":1") != std::string::npos;
+          ios_storyboard_next_check = now + std::chrono::milliseconds(pending ? 250 : 1000);
+        }
+        merged.append_str("storyboard", "@native_storyboard_json@");
+      }
       if (ios_panels_visible & 32) {
         ios_preferences_save_when_changed(C, now);
         std::istringstream preferences_stream(
@@ -2648,6 +2687,13 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
         const std::string placeholder = "\"@native_graph_json@\"";
         if (const size_t at = ios_panels_json.find(placeholder); at != std::string::npos) {
           ios_panels_json.replace(at, placeholder.size(), ios_graph_json.empty() ? "null" : ios_graph_json);
+        }
+      }
+      if (ios_panels_visible & 64) {
+        const std::string placeholder = "\"@native_storyboard_json@\"";
+        if (const size_t at = ios_panels_json.find(placeholder); at != std::string::npos) {
+          ios_panels_json.replace(at, placeholder.size(),
+                                  ios_storyboard_json.empty() ? "null" : ios_storyboard_json);
         }
       }
       if (ios_panels_visible & 8) {
@@ -2836,8 +2882,19 @@ void ios_timeline_build(bContext *C)
     }
   }
 #endif
+  /* A storyboard: the workspace's sequencer scene has shots, the window following the one under
+   * its playhead. Its frame too, which playback moves. */
+  const Scene *sequencer_scene = CTX_data_sequencer_scene(C);
+  const WorkSpace *workspace = CTX_wm_workspace(C);
+  const bool storyboard = sequencer_scene && workspace &&
+                          (workspace->flags & WORKSPACE_SYNC_SCENE_TIME) &&
+                          sequencer_scene->ed &&
+                          !BLI_listbase_is_empty(seq::active_seqbase_get(sequencer_scene->ed));
   /* Playback changes the frame every redraw; publish only what UIKit has not seen. */
   std::string json = "{\"keys\":" + (ios_timeline_visible ? ios_timeline_keys_json : "[]") +
+                     ",\"storyboard\":" + (storyboard ? "true" : "false") +
+                     ",\"edit_frame\":" +
+                     std::to_string(sequencer_scene ? sequencer_scene->r.cfra : 0) +
                      ",\"frame\":" + std::to_string(scene->r.cfra) +
                      ",\"start\":" + std::to_string(PSFRA) + ",\"end\":" + std::to_string(PEFRA) +
                      ",\"preview\":" + ((scene->r.flag & SCER_PRV_RANGE) ? "true" : "false") +
@@ -3600,7 +3657,9 @@ static void ios_ui_dispatch(bContext *C, IOSUIMessage &message)
                                                 setting->setting != "native_nodes_edit" &&
                                                 setting->setting != "native_graph_state" &&
                                                 setting->setting != "native_graph_visible" &&
-                                                setting->setting != "native_graph_edit")))
+                                                setting->setting != "native_graph_edit" &&
+                                                setting->setting != "native_storyboard_visible" &&
+                                                setting->setting != "native_storyboard_edit")))
   {
     const IOSContextStore context_store = ios_context_push_view3d(C);
     ui::native_properties_interaction_finish(C);
@@ -3617,7 +3676,9 @@ static void ios_ui_dispatch(bContext *C, IOSUIMessage &message)
                                          setting->setting == "native_nodes_edit" ||
                                          setting->setting == "native_graph_state" ||
                                          setting->setting == "native_graph_visible" ||
-                                         setting->setting == "native_graph_edit");
+                                         setting->setting == "native_graph_edit" ||
+                                         setting->setting == "native_storyboard_visible" ||
+                                         setting->setting == "native_storyboard_edit");
   if (WM_apple_ios_dialog_active(CTX_wm_window(C)) && !panel_message) {
     if (const auto *request = std::get_if<IOSMenuRequest>(&message)) {
       if (!request->execute) {
