@@ -95,6 +95,11 @@ static void ios_view_roll(float angle)
 static bool ios_finger_tweak_active()
 {
   const GHOST_IOSNativeInterface *native = GHOST_ios_native_interface();
+  /* Only while Settings has fingers drag objects: otherwise a finger landing on an object starts
+   * an orbit there as on empty space. */
+  if (![NSUserDefaults.standardUserDefaults boolForKey:@"BlenderFingerDragsObjects"]) {
+    return false;
+  }
   return native && native->finger_tweak_active && native->finger_tweak_active();
 }
 

@@ -240,6 +240,7 @@ private struct PencilPressureControl: View {
 /** The iPad's own settings, the first page. */
 private struct IPadSettingsPage: View {
   @ObservedObject var model: SettingsModel
+  @AppStorage("BlenderFingerDragsObjects") private var fingerDragsObjects = false
   @AppStorage("BlenderPencilSqueeze") private var squeeze = "palette"
 
   var body: some View {
@@ -255,8 +256,18 @@ private struct IPadSettingsPage: View {
                   selected: model.touchInput == .pencilAndFingers) {
           model.touchInput = .pencilAndFingers
         }
+        if model.touchInput == .pencilAndFingers {
+          Toggle(isOn: $fingerDragsObjects) {
+            Label("Drag Objects with Fingers", systemImage: "hand.draw")
+          }
+        }
       } header: {
         Text("Apple Pencil & Touch")
+      } footer: {
+        if model.touchInput == .pencilAndFingers {
+          Text("With Tweak, each finger landing on an object moves it, several at once. Fingers on "
+            + "objects then don't orbit the view.")
+        }
       }
 
       Section {
