@@ -797,19 +797,27 @@ struct NodeCanvas: View {
           TimelineView(.animation) { timeline in
             ZStack(alignment: .topLeading) {
               ForEach(vanishing) { gone in
-                /* Dissolving as it collapses into its middle: losing its colour, blurring and
-                 * fading, faster toward the end. */
+                /* A void opens where it was and swallows it: the node spins and shrinks into its
+                 * dark middle, losing its colour, then the void closes. */
                 let t = min(1, timeline.date.timeIntervalSince(gone.start) / NodeVanish.duration)
-                let pull = t * t
+                let pull = t * t * (3 - 2 * t)
                 let size = gone.size
+                let hole = min(max(size.width, size.height) * 0.75, 260) * sin(.pi * min(1, t * 1.15))
                 /* Anchors are fractions of the view, whose layout box sits at the canvas origin. */
                 let anchor = UnitPoint(x: gone.center.x / max(size.width, 1), y: gone.center.y / max(size.height, 1))
+                Circle()
+                  .fill(RadialGradient(colors: [.black.opacity(0.85), .black.opacity(0.45), .clear],
+                                       center: .center, startRadius: 0, endRadius: max(hole / 2, 1)))
+                  .frame(width: max(hole, 1), height: max(hole, 1))
+                  .blur(radius: 6)
+                  .position(gone.center)
                 nodeView(gone.node, native: false)
                   .saturation(1 - t)
-                  .brightness(0.25 * t)
-                  .blur(radius: 9 * pull)
-                  .scaleEffect(x: 1 - 0.85 * pull, y: 1 - 0.95 * pull, anchor: anchor)
-                  .opacity(1 - pow(t, 1.6))
+                  .brightness(-0.35 * pull)
+                  .blur(radius: 6 * pull)
+                  .rotationEffect(.degrees(140 * pull), anchor: anchor)
+                  .scaleEffect(max(0.001, 1 - pull), anchor: anchor)
+                  .opacity(1 - pow(t, 2.2))
               }
             }
             .frame(width: 1, height: 1, alignment: .topLeading)
@@ -1682,7 +1690,8 @@ struct NodeCanvas: View {
   private func landed(_ names: Set<String>) {
     let added = names.subtracting(knownNodes)
     let removed = knownNodes.subtracting(names)
-    let fresh = knownNodes.isEmpty || knownNodes.isDisjoint(with: names)
+    /* Another tree shown, not every node deleted. */
+    let fresh = knownNodes.isEmpty || (!names.isEmpty && knownNodes.isDisjoint(with: names))
     knownNodes = names
     if !fresh, !removed.isEmpty, !UIAccessibility.isReduceMotionEnabled {
       let now = Date()
@@ -2824,7 +2833,7 @@ struct NodeMenuAnchor: UIViewRepresentable {
 
 /** A node just deleted: as it was, where its middle was on the canvas, and when. */
 struct NodeVanish: Identifiable {
-  static let duration: TimeInterval = 0.42
+  static let duration: TimeInterval = 0.6
   let id = UUID()
   let node: JSON
   let center: CGPoint
