@@ -4895,7 +4895,25 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
     project_node(C, tree, node, linked, *nodes->append_dict(), read);
   }
   /* The compositor's Viewer, behind the nodes as Blender's backdrop. */
-  if (tree.type == NTREE_COMPOSIT && query->lookup_int("backdrop").value_or(0)) {
+  /* Only with a node plugged into a Viewer, through any reroutes: otherwise its result is an
+   * empty, black frame. */
+  const auto fed = [](const bNodeSocket &input) {
+    const bNodeLink *link = input.link;
+    for (int depth = 0; link && depth < 64; depth++) {
+      const bNode *from = link->fromnode;
+      if (!from || !from->is_reroute()) {
+        return from != nullptr && !link->is_muted();
+      }
+      const bNodeSocket *through = static_cast<const bNodeSocket *>(from->inputs.first);
+      link = through ? through->link : nullptr;
+    }
+    return false;
+  };
+  const bool viewed = std::any_of(tree.nodes.begin(), tree.nodes.end(), [&](const bNode &node) {
+    return STREQ(node.idname, "CompositorNodeViewer") &&
+           std::any_of(node.inputs.begin(), node.inputs.end(), fed);
+  });
+  if (tree.type == NTREE_COMPOSIT && viewed && query->lookup_int("backdrop").value_or(0)) {
     Main *bmain = CTX_data_main(C);
     Image *viewer = BKE_image_ensure_viewer(bmain, IMA_TYPE_COMPOSITE, "Viewer Node");
     void *lock;
