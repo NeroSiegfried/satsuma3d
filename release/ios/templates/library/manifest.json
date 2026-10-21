@@ -59,7 +59,7 @@
     },
     {
       "id": "storyboard",
-      "title": "Storyboard",
+      "title": "Story",
       "file": "storyboard.blend",
       "preview": "storyboard.png",
       "minimumBlender": [
