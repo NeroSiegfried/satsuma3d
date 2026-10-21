@@ -665,6 +665,8 @@ struct ToolRails: View {
   @State private var intent = SelectIntentState()
   /** While asset libraries reload, the brush rail stays rather than flickering away. */
   @State private var brushesAvailable = false
+  /** The sliders pinched into dials. */
+  @AppStorage("BlenderSidebarDials") private var sidebarDials = false
   @AppStorage(leftHandedInterfaceKey) private var leftHanded = false
   /** Where the sidebar was moved along its edge, from the top of its travel (0) to the bottom
    * (1); below 0 it rests halfway down. */
@@ -680,17 +682,27 @@ struct ToolRails: View {
       let safe = CGRect(origin: .zero, size: proxy.size).inset(by: insets)
       let toolItems = RailItem.tools(model.tools, mode: model.mode)
       let brushItems = RailItem.brushes(model.brushes)
-      let content = SidebarContent(brush: model.brush,
-                                   buttons: model.direction?.bool("hidden") != true || model.transforming,
-                                   smooth: model.direction?.bool("smooth") == true && !model.transforming)
       let color = (model.brush?["color"] as? [NSNumber])?.map(\.doubleValue)
       let gizmo = model.navigationGizmo
       let gizmoTop = gizmo.count == 3 ? CGFloat(gizmo[1]) * proxy.size.height - CGFloat(gizmo[2]) * proxy.size.width :
                                         safe.maxY - 100
-      let layout = RailLayout(safe: safe, tray: model.bottomTray, tools: tools, toolCount: toolItems.count,
-                              brushes: brushesAvailable ? brushes : nil, brushCount: brushItems.count,
-                              sidebar: content, sidebarPosition: sidebarPosition >= 0 ? sidebarPosition : nil,
-                              colorWell: color != nil, leftHanded: leftHanded, gizmoTop: gizmoTop)
+      let arrange = { (dial: Bool) -> (SidebarContent, RailLayout) in
+        let content = SidebarContent(brush: model.brush,
+                                     buttons: model.direction?.bool("hidden") != true || model.transforming,
+                                     smooth: model.direction?.bool("smooth") == true && !model.transforming,
+                                     dial: dial)
+        return (content, RailLayout(safe: safe, tray: model.bottomTray, tools: tools, toolCount: toolItems.count,
+                                    brushes: brushesAvailable ? brushes : nil, brushCount: brushItems.count,
+                                    sidebar: content,
+                                    sidebarPosition: sidebarPosition >= 0 ? sidebarPosition : nil,
+                                    colorWell: color != nil, leftHanded: leftHanded, gizmoTop: gizmoTop))
+      }
+      /* Where the sliders do not fit beside the tools, they become dials. */
+      let (content, layout) = { () -> (SidebarContent, RailLayout) in
+        let full = arrange(sidebarDials)
+        guard !sidebarDials, full.1.sidebarTucked || (tools.listVisible && full.1.toolsCompact) else { return full }
+        return arrange(true)
+      }()
       ZStack(alignment: .topLeading) {
         if let color {
           BrushColorWell(color: color)
@@ -726,6 +738,14 @@ struct ToolRails: View {
             .overlay(alignment: .top) {
               if !content.buttonsOnly { sidebarHandle(layout, content: content) }
             }
+            /* Pinched in, the sliders become dials; pinched out, sliders again. */
+            .simultaneousGesture(MagnifyGesture().onEnded { value in
+              guard content.size || content.strength else { return }
+              let dials = value.magnification < 0.85 ? true : value.magnification > 1.18 ? false : sidebarDials
+              guard dials != sidebarDials else { return }
+              Haptics.selection()
+              withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) { sidebarDials = dials }
+            })
             .position(layout.sidebarCenter)
             /* An open tool list takes the edge: the sidebar steps aside until it closes. */
             .offset(x: layout.sidebarTucked ? (layout.sidebarLeading ? -96 : 96) : 0)
@@ -2007,7 +2027,11 @@ struct SidebarContent: Equatable {
   /** Face Control, where the front camera tracks faces: the face plays the brush. */
   var face = false
 
-  init(brush: JSON?, buttons: Bool, smooth: Bool = false) {
+  /** Size and strength as rings, where the edge has no room for sliders or they were pinched in. */
+  var dial = false
+
+  init(brush: JSON?, buttons: Bool, smooth: Bool = false, dial: Bool = false) {
+    self.dial = dial
     size = brush?.dict("size") != nil
     strength = brush?.dict("strength") != nil
     self.buttons = buttons
@@ -2021,7 +2045,7 @@ struct SidebarContent: Equatable {
   /** Only buttons: small enough to sit above the tool rail. */
   var buttonsOnly: Bool { (buttons || smooth) && !size && !strength }
 
-  let sliderHeight: CGFloat = 148
+  var sliderHeight: CGFloat { dial ? 52 : 148 }
   /** The + and -, Smooth and Face Control below them, each 52 high. */
   var buttonsHeight: CGFloat {
     let count = (buttons ? 2 : 0) + (smooth ? 1 : 0) + (face ? 1 : 0)
@@ -2061,13 +2085,14 @@ struct PaintSidebar: View {
       if content.size, let size = brush?.dict("size") {
         let pixels = size.bool("pixels")
         SidebarSlider(key: "size", title: size.string("label") ?? "Radius", symbol: "circle.dashed",
-                      json: size, logarithmic: true, height: content.sliderHeight, leading: leading,
+                      json: size, logarithmic: true, height: content.sliderHeight, dial: content.dial, leading: leading,
                       unit: pixels ? "px" : "m", preview: .size(pixels: pixels),
                       format: { pixels ? String(Int($0.rounded())) : String(format: "%.3g", $0) })
       }
       if content.strength, let strength = brush?.dict("strength") {
         SidebarSlider(key: "strength", title: "Strength", symbol: "drop.fill", json: strength,
-                      logarithmic: false, height: content.sliderHeight, leading: leading, unit: "%",
+                      logarithmic: false, height: content.sliderHeight, dial: content.dial, leading: leading,
+                      unit: "%",
                       preview: .strength, format: { String(Int(($0 * 100).rounded())) })
       }
       if content.buttons || content.smooth || content.face {
@@ -2267,6 +2292,8 @@ struct SidebarSlider: View {
   /** Along a curve, so small sizes get as much of the slider as large ones. */
   let logarithmic: Bool
   let height: CGFloat
+  /** A ring the value goes around; holding or dragging it brings out a tall slider beside it. */
+  var dial = false
   let leading: Bool
   let unit: String
   /** What dragging shows beside the slider, towards the viewport. */
@@ -2295,6 +2322,14 @@ struct SidebarSlider: View {
   @State private var local: (value: Double, until: Date)?
   @State private var entering = false
   @State private var entry = ""
+  /** A dial held still long enough to bring out its slider. */
+  @State private var held = false
+  @State private var holding: Task<Void, Never>?
+
+  /** The slider a dial brings out, and how far the finger moves the value along it. */
+  private static let trackHeight: CGFloat = 220
+  private var travel: CGFloat { (dial ? Self.trackHeight : height) - 52 }
+  private var trackShown: Bool { dial && (held || drag?.moved == true) }
 
   private var low: Double { json.double("min") ?? 0 }
   private var high: Double { max(low + 1e-6, json.double("max") ?? 1) }
@@ -2316,11 +2351,11 @@ struct SidebarSlider: View {
     logarithmic && low > 0 ? low * pow(high / low, position) : low + (high - low) * position
   }
 
-  var body: some View {
+  /** The value filling a capsule from the bottom, the symbol at its top. */
+  private func capsule(height: CGFloat) -> some View {
     let width: CGFloat = 52
-    let t = position(value)
-    let fill = width + (height - width) * t
-    ZStack(alignment: .bottom) {
+    let fill = width + (height - width) * position(value)
+    return ZStack(alignment: .bottom) {
       Capsule().fill(Color.primary.opacity(0.08))
       Capsule()
         .fill(Color.accentColor.opacity(drag != nil ? 1 : 0.85))
@@ -2340,32 +2375,87 @@ struct SidebarSlider: View {
         .allowsHitTesting(false)
     }
     .frame(width: width, height: height)
+  }
+
+  /** The value going around a ring, with the number inside. */
+  private var ring: some View {
+    ZStack {
+      Circle().fill(Color.primary.opacity(drag != nil ? 0.14 : 0.08))
+      Circle()
+        .stroke(Color.primary.opacity(0.12), lineWidth: 4)
+        .padding(5)
+      Circle()
+        .trim(from: 0, to: max(0.001, position(value)))
+        .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+        .rotationEffect(.degrees(-90))
+        .padding(5)
+      Text(format(value))
+        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+        .lineLimit(1)
+        .minimumScaleFactor(0.5)
+        .padding(.horizontal, 11)
+    }
+    .frame(width: 52, height: 52)
+  }
+
+  /** The setting, and below it the brush as it will paint. */
+  private var readout: some View {
+    VStack(spacing: 12) {
+      VStack(spacing: 2) {
+        Text(title)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        Text("\(format(value)) \(unit)")
+          .font(.headline.monospacedDigit())
+      }
+      previewDab
+    }
+    .padding(16)
+    .frame(minWidth: 112, minHeight: 112)
+    .panelGlass(in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    .fixedSize()
+  }
+
+  var body: some View {
+    let width: CGFloat = 52
+    let t = position(value)
+    Group {
+      if dial { ring }
+      else { capsule(height: height) }
+    }
     .overlay(alignment: leading ? .leading : .trailing) {
-      if drag?.moved == true {
-        /* The setting, and below it the brush as it will paint. */
-        VStack(spacing: 12) {
-          VStack(spacing: 2) {
-            Text(title)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-            Text("\(format(value)) \(unit)")
-              .font(.headline.monospacedDigit())
-          }
-          previewDab
+      if trackShown {
+        /* Held, the dial brings out a slider towards the viewport, and the readout beside it. */
+        HStack(spacing: 14) {
+          if !leading, drag?.moved == true { readout }
+          capsule(height: Self.trackHeight)
+            .panelGlass(in: Capsule())
+          if leading, drag?.moved == true { readout }
         }
-        .padding(16)
-        .frame(minWidth: 112, minHeight: 112)
-        .panelGlass(in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .fixedSize()
-        .offset(x: (leading ? 1 : -1) * (width + 18))
+        .offset(x: (leading ? 1 : -1) * (width + 14))
         .allowsHitTesting(false)
-        .transition(.opacity.combined(with: .scale(scale: 0.92)))
+        .transition(.opacity.combined(with: .scale(scale: 0.6, anchor: leading ? .leading : .trailing)))
+      }
+      else if drag?.moved == true {
+        readout
+          .offset(x: (leading ? 1 : -1) * (width + 18))
+          .allowsHitTesting(false)
+          .transition(.opacity.combined(with: .scale(scale: 0.92)))
       }
     }
-    .contentShape(Capsule())
+    .contentShape(dial ? AnyShape(Circle()) : AnyShape(Capsule()))
     .gesture(
       DragGesture(minimumDistance: 0)
         .onChanged { gesture in
+          if drag == nil, dial {
+            holding = Task {
+              try? await Task.sleep(for: .milliseconds(250))
+              guard !Task.isCancelled, drag != nil else { return }
+              Haptics.selection()
+              held = true
+            }
+          }
           var current = drag ?? Drag(position: position(value), lastY: gesture.startLocation.y)
           /* A tap types a value instead; the slightest drag moves it, from where the finger
            * landed, so no movement is lost to telling the two apart. */
@@ -2382,7 +2472,7 @@ struct SidebarSlider: View {
           let side = max(0, abs(gesture.location.x - width / 2) - width)
           let fine = 1 / (1 + Double(side) / 60)
           let before = current.position
-          current.position = min(1, max(0, current.position - Double(dy / (height - width)) * fine))
+          current.position = min(1, max(0, current.position - Double(dy / travel) * fine))
           drag = current
           tick(from: before, to: current.position)
           let next = value(at: current.position)
@@ -2391,17 +2481,22 @@ struct SidebarSlider: View {
         }
         .onEnded { _ in
           let moved = drag?.moved == true
+          let wasHeld = held
+          holding?.cancel()
+          holding = nil
+          held = false
           drag = nil
           if moved, let local {
             self.local = (local.value, Date().addingTimeInterval(1))
             sendBrushValue(key, local.value, commit: true)
           }
-          else {
+          else if !wasHeld {
             entry = format(value)
             entering = true
           }
         })
     .animation(.easeOut(duration: 0.15), value: drag?.moved == true)
+    .animation(.spring(response: 0.28, dampingFraction: 0.82), value: trackShown)
     /* Held with a Pencil, rolling it turns the value: half a turn from one end to the other.
      * Only read while held, so the Pencil's roll elsewhere does not redraw the slider. */
     .onChange(of: drag != nil ? PencilRoll.shared.turned : 0) { _, turned in
