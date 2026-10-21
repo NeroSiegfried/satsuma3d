@@ -711,6 +711,14 @@ struct ToolRails: View {
           WM_apple_ios_ui_tool_set_by_id(item.id)
         }
         .position(layout.toolCenter)
+        .onChange(of: layout.toolsCompact) { _, compact in
+          /* No room beside the sliders for the open list: closed, the active tool alone. */
+          guard compact else { return }
+          withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+            tools.expanded = false
+            tools.docked = false
+          }
+        }
         if !content.isEmpty {
           PaintSidebar(state: intent, direction: model.direction, brush: model.brush, content: content,
                        leading: layout.sidebarLeading)
@@ -2640,6 +2648,8 @@ struct ColorRollLayer: View {
 struct RailLayout: Equatable {
   var toolWidth: CGFloat
   var toolHeight: CGFloat
+  /** No room for the open tool list beside the sliders: the rail is closed. */
+  var toolsCompact = false
   var brushWidth: CGFloat
   var brushHeight: CGFloat
   /** The tool rail's top edge, in the window. */
@@ -2660,7 +2670,8 @@ struct RailLayout: Equatable {
   var brushStops: (middle: CGFloat, other: CGFloat)
 
   static func == (a: RailLayout, b: RailLayout) -> Bool {
-    a.toolWidth == b.toolWidth && a.toolHeight == b.toolHeight && a.brushWidth == b.brushWidth &&
+    a.toolWidth == b.toolWidth && a.toolHeight == b.toolHeight && a.toolsCompact == b.toolsCompact &&
+      a.brushWidth == b.brushWidth &&
       a.brushHeight == b.brushHeight && a.toolTop == b.toolTop && a.dockDistance == b.dockDistance &&
       a.toolCenter == b.toolCenter && a.brushCenter == b.brushCenter && a.colorCenter == b.colorCenter &&
       a.sidebarCenter == b.sidebarCenter && a.sidebarLeading == b.sidebarLeading &&
@@ -2692,13 +2703,16 @@ struct RailLayout: Equatable {
     let sidebarRoom = shareEdge ? sidebar.height + gap + 18 : 0
     var maxList = min(max(64, (safe.height - reserve) * 0.58), max(64, safe.height - reserve - 112))
     if shareEdge {
-      maxList = max(compact * 2, min(maxList, height - topInset - bottomInset - sidebarRoom))
+      maxList = max(compact, min(maxList, height - topInset - bottomInset - sidebarRoom))
     }
-    toolWidth = tools.expanded ? expandedWidth : compact
+    /* The sliders come first: with no room left for an open list of tools, the rail stays closed,
+     * showing the active tool alone, until there is. */
+    toolsCompact = shareEdge && tools.listVisible && maxList < compact * 2 + 12
+    toolWidth = tools.expanded && !toolsCompact ? expandedWidth : compact
     /* As tall as its tools (the handle, then 52 points each, 12 apart), as the room allows: a
      * mode with few tools leaves no empty space below them. */
     let toolList = 44 + 12 + CGFloat(toolCount) * 52 + CGFloat(max(0, toolCount - 1)) * 12
-    toolHeight = tools.listVisible ? max(compact, min(toolList, maxList)) : compact
+    toolHeight = tools.listVisible && !toolsCompact ? max(compact, min(toolList, maxList)) : compact
     /* Docking centers the rail, unless the sliders need the room above it; otherwise it rests at
      * the bottom. */
     let centered = tools.docked && !shareEdge
