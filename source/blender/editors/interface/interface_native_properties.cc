@@ -2033,7 +2033,11 @@ std::string preferences_tabs(bContext *C,
   };
   static const std::set<std::string> external_sections = {"ADDONS"};
   /* Getting extensions downloads code to run, which apps on iPad may not do. */
-  static const std::set<std::string> hidden_sections = {"EXTENSIONS"};
+  /* Getting extensions downloads code to run. Themes and the interface's own settings are for
+   * Blender's drawn interface, which the native one does not use, and file paths for folders on a
+   * desktop computer, where on the iPad documents are in Files. */
+  static const std::set<std::string> hidden_sections = {
+      "EXTENSIONS", "THEMES", "INTERFACE", "FILE_PATHS"};
   const std::string requested = requested_tab.substr(strlen(PREFERENCES_TAB_PREFIX));
   PointerRNA prefs_ptr = RNA_pointer_create_discrete(nullptr, RNA_Preferences, &U);
   PropertyRNA *section_prop = RNA_struct_find_property(&prefs_ptr, "active_section");
