@@ -1147,6 +1147,27 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
 
   /** The tool items' identifiers, apart from the brushes'. */
   private static let toolPrefix = "tool:"
+  /** The item that opens every tool and brush. */
+  private static let allID = "show:all"
+  /** Where it holds brushes, how many of the tools used last it shows beside them. */
+  private static let toolCapacity = 2
+
+  /** The tools used last, most recent first, kept beside the brushes. */
+  private static var recentTools: [String] {
+    get { UserDefaults.standard.stringArray(forKey: "BlenderSqueezeRecentTools") ?? [] }
+    set { UserDefaults.standard.set(Array(newValue.prefix(4)), forKey: "BlenderSqueezeRecentTools") }
+  }
+
+  /** Every tool and brush, opened from the palette itself. */
+  private func allItem() -> PKToolPickerItem {
+    var configuration = PKToolPickerCustomItem.Configuration(identifier: Self.allID,
+                                                            name: brushes ? "All Tools and Brushes" : "All Tools")
+    let image = UIImage(systemName: "square.grid.2x2")!
+    configuration.imageProvider = { _ in image }
+    configuration.allowsColorSelection = false
+    configuration.toolAttributeControls = []
+    return PKToolPickerCustomItem(configuration: configuration)
+  }
   /** Every brush, from which the recent are taken and which All shows. */
   private var allItems: [RailItem] = []
   /** Whether the brushes paint with a color, which the palette then offers. */
@@ -1167,16 +1188,20 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
     let items = all.filter { chosen.contains($0.id) }
     self.items = items
     self.choose = choose
-    /* Painting, the tool too, before the brushes: both shown, as the rails show them. */
-    let tool = brushes ? tools.first { $0.id == activeTool } : nil
-    let ids = (tool.map { [Self.toolPrefix + $0.id] } ?? []) + items.map(\.id)
+    /* Painting, the tools used last too, the active one first, before the brushes: both shown,
+     * as the rails show them; then the item that shows all. */
+    let toolIDs = brushes ? ([activeTool] + Self.recentTools.filter { $0 != activeTool }) : []
+    let shownTools = toolIDs.compactMap { id in tools.first { $0.id == id } }.prefix(Self.toolCapacity)
+    let tool = shownTools.first
+    let ids = shownTools.map { Self.toolPrefix + $0.id } + items.map(\.id) + [Self.allID]
     let paints = brush?.dict("color") != nil
     if ids != self.ids || picker == nil || brushes != builtForBrushes || paints != self.paints {
       self.ids = ids
       builtForBrushes = brushes
       self.paints = paints
       picker?.removeObserver(self)
-      let toolItems = (tool.map { [toolItem($0)] } ?? []) + items.map { brushes ? brushItem($0) : toolItem($0, prefixed: false) }
+      let toolItems = shownTools.map { toolItem($0) } +
+        items.map { brushes ? brushItem($0) : toolItem($0, prefixed: false) } + [allItem()]
       guard !toolItems.isEmpty else { return }
       let picker = PKToolPicker(toolItems: toolItems)
       builtAt = Date()
@@ -1269,6 +1294,10 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
               chooseTool: @escaping (RailItem) -> Void, setDirection: @escaping (Bool) -> Void) {
     self.tools = tools
     activeTool = active
+    if !active.isEmpty {
+      let recent = Self.recentTools
+      if recent.first != active { Self.recentTools = [active] + recent.filter { $0 != active } }
+    }
     self.direction = direction
     self.chooseTool = chooseTool
     self.setDirection = setDirection
@@ -1410,6 +1439,16 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
       /* Chosen from every tool and brush: then back to the palette a squeeze shows. */
       let fromFull = toolPicker === full
       defer { if fromFull { collapse() } }
+      if id == Self.allID {
+        /* Not a tool: every tool and brush open, and the palette back on what was picked. */
+        following = true
+        let selected = brushes && !activeTool.contains("brush") ? Self.toolPrefix + activeTool :
+          (brushes ? RollDial.shared.activeBrush ?? "" : activeTool)
+        if ids.contains(selected) { toolPicker.selectedToolItemIdentifier = selected }
+        following = false
+        expand()
+        return
+      }
       if id.hasPrefix(Self.toolPrefix) {
         let toolID = String(id.dropFirst(Self.toolPrefix.count))
         if toolID != activeTool, let tool = tools.first(where: { $0.id == toolID }) { chooseTool?(tool) }
