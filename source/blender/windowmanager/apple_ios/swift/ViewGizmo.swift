@@ -15,10 +15,18 @@ import UIKit
 struct ViewCommand {
   let title: String
   let symbol: String
-  /** `WMIOSUICommand`. */
-  let command: Int32
+  /** `WMIOSUICommand`, or a viewport option to toggle instead. */
+  var command: Int32 = -1
+  var toggle: String?
 
-  static let pie = [
+  /** The views, then Lock Camera to View: navigating then moves the camera, staying in its
+   * view. */
+  static func pie(locked: Bool) -> [ViewCommand] {
+    views + [ViewCommand(title: locked ? "Unlock Camera" : "Lock Camera",
+                         symbol: locked ? "lock.open" : "lock", toggle: "lock_camera")]
+  }
+
+  static let views = [
     ViewCommand(title: "Frame All", symbol: "rectangle.expand.vertical", command: 24),
     ViewCommand(title: "Frame Selected", symbol: "viewfinder", command: 14),
     ViewCommand(title: "Camera", symbol: "camera", command: 26),
@@ -30,11 +38,16 @@ struct ViewCommand {
   ]
 
   var image: UIImage? {
-    wm_apple_ios_command_icon(command, symbol) ?? UIImage(systemName: "circle")
+    (command >= 0 ? wm_apple_ios_command_icon(command, symbol) : nil) ?? UIImage(systemName: symbol)
   }
 
   func run() {
-    WM_apple_ios_ui_command_enqueue(command)
+    if let toggle {
+      Engine.setting("viewport_toggle", toggle)
+    }
+    else {
+      WM_apple_ios_ui_command_enqueue(command)
+    }
   }
 }
 
@@ -51,7 +64,7 @@ struct ViewGizmoGeometry {
            width: hotspotRadius * 2, height: hotspotRadius * 2)
   }
 
-  init(gizmo: [Double], window: CGSize, safe: CGRect) {
+  init(gizmo: [Double], window: CGSize, safe: CGRect, pie: [ViewCommand]) {
     radius = gizmo.count == 3 ? gizmo[2] * window.width : 40
     center = gizmo.count == 3 ? CGPoint(x: gizmo[0] * window.width, y: gizmo[1] * window.height) :
       CGPoint(x: window.width - 50, y: window.height - 50)
@@ -61,11 +74,11 @@ struct ViewGizmoGeometry {
     /* Beside the gizmo, rising from the bottom corner; in a small window, a grid. */
     let compact = safe.height < 540 || safe.width < 430
     let gap = safe.maxX - (center.x - hotspotRadius)
-    let trailing: [CGFloat] = [gap + 16, gap + 26, gap + 42, gap + 42, gap + 16, 20, 20, 20]
-    let bottom: [CGFloat] = [12, 72, 132, 192, 244, 304, 364, 424]
+    let trailing: [CGFloat] = [gap + 16, gap + 26, gap + 42, gap + 42, gap + 16, 20, 20, 20, 20]
+    let bottom: [CGFloat] = [12, 72, 132, 192, 244, 304, 364, 424, 484]
     let gridWidth = min(180, (safe.width - 36) / 2)
     let base = min(136, max(68, safe.height - 300))
-    for (index, view) in ViewCommand.pie.enumerated() {
+    for (index, view) in pie.enumerated() where index < trailing.count {
       let x = compact ? 12 + CGFloat(index % 2) * (gridWidth + 12) : trailing[index]
       let y = compact ? base + CGFloat(index / 2) * 52 : bottom[index]
       let width = compact ? gridWidth : min(180, ViewGizmoGeometry.buttonWidth(view))
@@ -93,6 +106,7 @@ final class ViewGizmoState {
   var pointerOver = false
   var pressed = false
   @ObservationIgnored var geometry: ViewGizmoGeometry?
+  @ObservationIgnored var pie: [ViewCommand] = ViewCommand.pie(locked: false)
 #if !os(visionOS)
   @ObservationIgnored let selectionFeedback = UISelectionFeedbackGenerator()
   @ObservationIgnored let openFeedback = UIImpactFeedbackGenerator(style: .soft)
@@ -110,7 +124,7 @@ final class ViewGizmoState {
   /** Choose the view under the point, if any, and close the pie. */
   func release(at point: CGPoint?) {
     if let point, let button = geometry?.button(at: point) {
-      ViewCommand.pie[button].run()
+      if button < pie.count { pie[button].run() }
     }
     pieVisible = false
     hovered = nil
@@ -271,20 +285,32 @@ struct ViewGizmoLayer: View {
       let insets = model.safeAreaInsets
       let safe = CGRect(origin: .zero, size: proxy.size).inset(by: UIEdgeInsets(
         top: insets.top, left: model.sideInsets.left, bottom: insets.bottom, right: model.sideInsets.right))
-      let geometry = ViewGizmoGeometry(gizmo: model.navigationGizmo, window: proxy.size, safe: safe)
+      let locked = model.viewport?.bool("lock_camera") == true
+      let pie = ViewCommand.pie(locked: locked)
+      let geometry = ViewGizmoGeometry(gizmo: model.navigationGizmo, window: proxy.size, safe: safe, pie: pie)
       ZStack(alignment: .topLeading) {
         feedback(geometry)
         ViewGizmoHotspotView(model: model, state: state)
           .frame(width: geometry.hotspot.width, height: geometry.hotspot.height)
           .position(geometry.center)
-        ForEach(Array(ViewCommand.pie.enumerated()), id: \.offset) { index, view in
+        if model.viewport?.bool("camera_view") == true {
+          cameraLock(locked: locked, geometry: geometry)
+        }
+        ForEach(Array(pie.enumerated()), id: \.offset) { index, view in
           if index < geometry.buttons.count {
             pieButton(view, index: index, frame: geometry.buttons[index], hub: geometry.center)
           }
         }
       }
       .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
-      .onChange(of: proxy.size, initial: true) { state.geometry = geometry }
+      .onChange(of: proxy.size, initial: true) {
+        state.geometry = geometry
+        state.pie = pie
+      }
+      .onChange(of: locked) {
+        state.geometry = geometry
+        state.pie = pie
+      }
       .onChange(of: model.navigationGizmo) { state.geometry = geometry }
       .onChange(of: model.safeAreaInsets) { state.geometry = geometry }
       .onChange(of: model.sideInsets) { state.geometry = geometry }
@@ -296,6 +322,28 @@ struct ViewGizmoLayer: View {
       state.pressed = false
       state.pointerOver = false
     }
+  }
+
+  /** Looking through the camera, a lock beside the gizmo: locked, navigating moves the camera and
+   * the view stays through it. */
+  private func cameraLock(locked: Bool, geometry: ViewGizmoGeometry) -> some View {
+    Button {
+      Engine.setting("viewport_toggle", "lock_camera")
+      Haptics.selection()
+    } label: {
+      Image(systemName: locked ? "lock.fill" : "lock.open")
+        .font(.system(size: 15, weight: .semibold))
+        .foregroundStyle(locked ? Color.white : Color.primary)
+        .frame(width: 36, height: 36)
+        .contentShape(Circle())
+    }
+    .buttonStyle(.plain)
+    .panelGlass(locked ? .tinted(.blue) : .regular, in: Circle())
+    .environment(\.colorScheme, .dark)
+    .position(x: geometry.center.x - geometry.hotspotRadius - 22, y: geometry.center.y + geometry.radius - 14)
+    .opacity(state.pieVisible ? 0 : 1)
+    .accessibilityLabel(locked ? "Unlock Camera from View" : "Lock Camera to View")
+    .accessibilityAddTraits(locked ? .isSelected : [])
   }
 
   /** A ring around Blender's gizmo while it is hovered, pressed or showing its pie. */

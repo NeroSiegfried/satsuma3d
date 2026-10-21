@@ -226,6 +226,8 @@ _TOGGLES = {
     "gizmos": lambda space: (space, "show_gizmo"),
     "statistics": lambda space: (space.overlay, "show_stats"),
     "wireframe": lambda space: (space.overlay, "show_wireframes"),
+    # Navigating moves the camera, keeping the view through it.
+    "lock_camera": lambda space: (space, "lock_camera"),
 }
 
 
@@ -237,6 +239,8 @@ def viewport_json(context):
     for name, owner_and_property in _TOGGLES.items():
         owner, prop = owner_and_property(space)
         result[name] = bool(getattr(owner, prop))
+    region = space.region_3d
+    result["camera_view"] = region is not None and region.view_perspective == 'CAMERA'
     return json.dumps(result)
 
 
