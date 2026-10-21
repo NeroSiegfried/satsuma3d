@@ -567,16 +567,25 @@ struct ToolSettingsItems: View {
             case .property(let property):
               ToolSettingItem(store: store, property: property)
             case .toggles(let caption, let items):
-              /* A row of toggles, such as Mirror's axes: a menu of them. */
+              /* A row of toggles, such as Mirror's axes: a menu of them, with its icon, that stays
+               * open while they are set. */
               Menu {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                  Toggle(item.string("label") ?? "", isOn: Binding(
+                  Toggle(isOn: Binding(
                     get: { (store.value(item) as? NSNumber)?.boolValue ?? false },
                     set: { store.edit(item, value: $0) }))
+                  {
+                    Text(item.string("toolbar_label") ?? item.string("label") ?? "")
+                  }
                 }
               } label: {
-                Text(caption)
+                Label {
+                  Text(caption)
+                } icon: {
+                  if caption == "Mirror" { IconView(name: "MOD_MIRROR") }
+                }
               }
+              .menuActionDismissBehavior(.disabled)
             default:
               EmptyView()
           }
@@ -596,30 +605,37 @@ struct ToolSettingItem: View {
 
   var body: some View {
     switch type {
+      /* A switch beside its name in the bar; a checkmark item in its overflow menu. */
       case "BOOLEAN":
         Toggle(isOn: Binding(
           get: { (store.value(property) as? NSNumber)?.boolValue ?? false },
           set: { store.edit(property, value: $0) }))
         {
-          label(systemImage: "checkmark.circle")
+          Text(title)
         }
+        .toggleStyle(.switch)
+        .fixedSize()
         .disabled(!property.bool("editable"))
       case "OPERATOR" where property.bool("checkbox"):
         Toggle(isOn: Binding(get: { property.bool("value") }, set: { _ in store.runOperator(property) })) {
-          label(systemImage: "checkmark.circle")
+          Text(title)
         }
+        .toggleStyle(.switch)
+        .fixedSize()
         .disabled(!property.bool("editable"))
       case "OPERATOR":
         Button { store.runOperator(property) } label: { label(systemImage: "play") }
           .disabled(!property.bool("editable"))
       case "MENU":
         if let menu = property.string("menu") {
+          /* The 3D Viewport's menus, such as Sculpt Mode's Mask: run there, not in Properties. */
+          let route = BlenderMenus.route(menu)
           Menu {
-            BlenderMenuItems(route: BlenderMenus.route(menu, tab: property.string("tab")))
+            BlenderMenuItems(route: route)
           } label: {
             label(systemImage: "ellipsis.circle")
           }
-          .prefetchingBlenderMenu(BlenderMenus.route(menu, tab: property.string("tab")))
+          .prefetchingBlenderMenu(route)
           .disabled(!property.bool("editable"))
         }
       case "ENUM":
