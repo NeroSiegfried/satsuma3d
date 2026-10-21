@@ -11,6 +11,7 @@
 #include "BLI_math_matrix.h"
 #include "BLI_math_rotation.h"
 #include "BLI_math_vector.h"
+#include "BLI_math_vector.hh"
 #include "BLI_task.hh"
 
 #include "BKE_context.hh"
@@ -308,6 +309,17 @@ static void applyRotation(TransInfo *t)
     if (!(transform_snap_is_active(t) && validSnap(t))) {
       transform_snap_increment(t, &final);
     }
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+    /* A finger far from the pivot turns in steps of the rotation increment, near it freely, as
+     * the further a turn's lever, the more precisely it sets a step. Not while snapping already
+     * does, nor with precision held. */
+    if (!(t->tsnap.flag & SCE_SNAP) && !(t->modifiers & MOD_PRECISION) && t->region) {
+      const float reach = 0.33f * float(std::min(t->region->winx, t->region->winy));
+      if (math::distance(float2(t->mval), float2(t->center2d)) > reach && t->increment[0] > 0.0f) {
+        final = roundf(final / t->increment[0]) * t->increment[0];
+      }
+    }
+#endif
   }
 
   t->values_final[0] = final;
