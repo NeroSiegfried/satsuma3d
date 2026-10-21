@@ -130,13 +130,18 @@ struct PropertiesTabs: View {
         updateMore()
       }
       .mask {
+        /* Wide and eased, so tabs clearly run on past the edge. */
+        let fade = Gradient(stops: [.init(color: .clear, location: 0), .init(color: .black.opacity(0.25), location: 0.35),
+                                    .init(color: .black, location: 1)])
         HStack(spacing: 0) {
-          LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
-            .frame(width: more.leading ? 28 : 0)
+          LinearGradient(gradient: fade, startPoint: .leading, endPoint: .trailing)
+            .frame(width: more.leading ? 64 : 0)
           Color.black
-          LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
-            .frame(width: more.trailing ? 28 : 0)
+          LinearGradient(gradient: fade, startPoint: .trailing, endPoint: .leading)
+            .frame(width: more.trailing ? 64 : 0)
         }
+        .animation(.easeOut(duration: 0.2), value: more.leading)
+        .animation(.easeOut(duration: 0.2), value: more.trailing)
       }
       .onChange(of: store.selectedTab) { _, tab in
         if let tab { withMotion { reader.scrollTo(tab, anchor: .center) } }
