@@ -409,6 +409,9 @@ public struct DocumentWindow: View {
 
   /** The native controls are hidden in full screen, and over Blender's own interface. */
   private var controlsShown: Bool { !model.desktop && !model.interfaceHidden }
+  /** The editors docked along the bottom, such as the timeline, Story and nodes: work, not
+   * controls, so they stay as the interface hides. */
+  private var editorsShown: Bool { !model.desktop }
 
   /** The Outliner is the sidebar, which slides in and pushes the viewport over, and
    * Properties the inspector on the other side. A phone shows both as sheets. On Apple Vision Pro
@@ -553,11 +556,11 @@ public struct DocumentWindow: View {
   private func bottomLayers(leading: CGFloat = 0, trailing: CGFloat = 0) -> some View {
     let docked = shell.timeline.store.editorShown && shell.timeline.store.visible
     return ZStack {
-      BottomTrayLayer(model: model, timeline: shell.timeline.store, assets: shell.assets.store, shown: controlsShown)
+      BottomTrayLayer(model: model, timeline: shell.timeline.store, assets: shell.assets.store, shown: editorsShown)
         .padding(.leading, docked ? 0 : leading)
         .padding(.trailing, docked ? 0 : trailing)
 #if !os(visionOS) /* A window of its own there. */
-      if controlsShown && model.nodesShown {
+      if editorsShown && model.nodesShown {
         NodeEditorLayer(model: model, nodes: shell.panels.nodes)
           .transition(.move(edge: .bottom).combined(with: .opacity))
       }
@@ -568,7 +571,7 @@ public struct DocumentWindow: View {
 
   /** How much of the window's bottom the viewport leaves to the node editor. */
   private var viewportCover: CGFloat {
-    controlsShown ? max(model.nodesShown ? model.nodesCover : 0, model.curvesCover) : 0
+    editorsShown ? max(model.nodesShown ? model.nodesCover : 0, model.curvesCover) : 0
   }
 
   private func viewportLayers(bottom: Bool) -> some View {
