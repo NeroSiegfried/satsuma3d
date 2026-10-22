@@ -938,7 +938,8 @@ NativeOptionSets *native_option_sets = nullptr;
 
 void project_property(bContext *C, Button &but, int index, DictionaryValue &field,
                       const PropertyPair *pair = nullptr, const std::string *layout_name = nullptr,
-                      const SelectedOthers *others = nullptr)
+                      const SelectedOthers *others = nullptr,
+                      const std::string *own_name = nullptr)
 {
   PointerRNA *ptr = &but.rnapoin;
   PropertyRNA *prop = but.rnaprop;
@@ -947,6 +948,7 @@ void project_property(bContext *C, Button &but, int index, DictionaryValue &fiel
   const bool socket_value = RNA_struct_is_a(ptr->type, RNA_NodeSocket) &&
                             STREQ(RNA_property_identifier(prop), "default_value");
   const std::string name =
+      own_name && !own_name->empty() ? *own_name :
       layout_name && !layout_name->empty() && RNA_property_is_idprop(prop) ? *layout_name :
       socket_value ? std::string(ed::space_node::node_socket_get_label(
                          static_cast<const bNodeSocket *>(ptr->data))) :
@@ -2853,6 +2855,19 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
         previous = &but;
       }
     }
+    std::set<const PropertyRNA *> shared_properties;
+    {
+      std::map<const PropertyRNA *, const void *> owners;
+      for (const auto &button : block->buttons) {
+        if (!button->rnaprop || !button->rnapoin.data || combined.count(button.get())) {
+          continue;
+        }
+        const auto [found, added] = owners.try_emplace(button->rnaprop, button->rnapoin.data);
+        if (!added && found->second != button->rnapoin.data) {
+          shared_properties.insert(button->rnaprop);
+        }
+      }
+    }
     std::set<std::string> seen;
     int named_row_count = 0;
     for (const auto &button : block->buttons) {
@@ -3240,9 +3255,14 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
           auto field = append_field();
           const auto pair = pairs.find(&but);
           const auto layout_name = layout_names.find(but.rnaprop);
+          /* One property on several items, such as each bone collection's visibility: the
+           * property's name is the same on all of them, the text Blender draws tells them apart. */
+          const auto own_name = shared_properties.count(but.rnaprop) ? tool_labels.find(&but) :
+                                                                       tool_labels.end();
           project_property(C, but, index, *field, pair == pairs.end() ? nullptr : &pair->second,
                            layout_name == layout_names.end() ? nullptr : &layout_name->second,
-                           &others);
+                           &others,
+                           own_name == tool_labels.end() ? nullptr : &own_name->second);
           if (but.type == ButtonType::Row && RNA_property_type(but.rnaprop) == PROP_ENUM) {
             /* Authored as an expanded row (e.g. selection mode), not a dropdown. */
             field->append_int("expand", 1);
