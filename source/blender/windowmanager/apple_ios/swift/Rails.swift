@@ -1217,7 +1217,6 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
      * as the rails show them; then the item that shows all. */
     let toolIDs = brushes ? ([activeTool] + Self.recentTools.filter { $0 != activeTool }) : []
     let shownTools = toolIDs.compactMap { id in tools.first { $0.id == id } }.prefix(Self.toolCapacity)
-    let tool = shownTools.first
     let ids = shownTools.map { Self.toolPrefix + $0.id } + items.map(\.id) + [Self.allID]
     /* The color is a list of its channels. */
     let paints = brush?["color"] != nil
@@ -1235,13 +1234,7 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
       picker.addObserver(self)
       self.picker = picker
     }
-    /* The brush selected while the tool paints with brushes, or else the tool. */
-    let selected = brushes && !activeTool.contains("brush") && tool != nil ? Self.toolPrefix + activeTool : active
-    if let picker, ids.contains(selected), picker.selectedToolItemIdentifier != selected {
-      following = true
-      picker.selectedToolItemIdentifier = selected
-      following = false
-    }
+    followSelection()
     followBrush()
     followTool()
     attach()
@@ -1279,6 +1272,18 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
     configuration.allowsColorSelection = false
     configuration.toolAttributeControls = []
     return PKToolPickerCustomItem(configuration: configuration)
+  }
+
+  /** The palette on what Blender has: the brush while the tool paints with brushes, or else the
+   * tool. */
+  private func followSelection() {
+    let tool = ids.contains(Self.toolPrefix + activeTool)
+    let selected = brushes && !activeTool.contains("brush") && tool ? Self.toolPrefix + activeTool :
+      (brushes ? RollDial.shared.activeBrush ?? "" : activeTool)
+    guard let picker, ids.contains(selected), picker.selectedToolItemIdentifier != selected else { return }
+    following = true
+    picker.selectedToolItemIdentifier = selected
+    following = false
   }
 
   /** Every tool and brush, in the system's full palette, until one is chosen. */
@@ -1440,7 +1445,7 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
     if full != nil { return }
     if PencilSqueeze.showsPalette, let picker {
       if state.activeToolPicker !== picker { state.activeToolPicker = picker }
-      state.toolPickerVisibility = .hidden
+      state.toolPickerVisibility = ProcessInfo.processInfo.environment["DEBUGPALETTE"] != nil ? .visible : .hidden
       if !holder.isFirstResponder && !Self.typing(in: window) { holder.becomeFirstResponder() }
     }
     else {
@@ -1459,9 +1464,13 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
   nonisolated func toolPickerSelectedToolItemDidChange(_ toolPicker: PKToolPicker) {
     MainActor.assumeIsolated {
       guard !following, let id = toolPicker.selectedToolItem.identifier as String? else { return }
-      /* Only what is picked in it, never what a palette just made selects on its own, which would
-       * change the tool picked in Blender. */
-      guard toolPicker === full || Date().timeIntervalSince(builtAt) > 1 else { return }
+      /* Only what is picked in it, never what a palette selects on its own: a new one picks its
+       * first item while out of sight, which would change the tool picked in Blender. Back to
+       * Blender's then. */
+      guard toolPicker === full || (toolPicker.isVisible && Date().timeIntervalSince(builtAt) > 0.3) else {
+        if toolPicker === picker { followSelection() }
+        return
+      }
       /* Chosen from every tool and brush: then back to the palette a squeeze shows. */
       let fromFull = toolPicker === full
       defer { if fromFull { collapse() } }
