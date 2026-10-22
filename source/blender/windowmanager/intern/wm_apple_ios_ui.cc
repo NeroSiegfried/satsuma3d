@@ -2086,12 +2086,23 @@ std::optional<PointerRNA> ios_brush_direction_ptr(bContext *C)
 /**
  * The + and - pill in modes that stroke brushes: which way strokes go, and for brushes with a
  * Direction, its two choices' names (such as Inflate and Deflate). Painting colors has no two
- * ways to go, and hides it. Null elsewhere, where the pill adds to or subtracts from the
- * selection. In Sculpt Mode, "smooth" adds a Smooth button to hold, as Shift is with a keyboard.
+ * ways to go, and hides it, as do drawing Grease Pencil strokes and tools that never select.
+ * Null elsewhere, where the pill adds to or subtracts from the selection. In Sculpt Mode,
+ * "smooth" adds a Smooth button to hold, as Shift is with a keyboard.
  */
 std::string ios_direction_json(bContext *C, const eContextObjectMode mode)
 {
   if (!ios_mode_strokes(mode)) {
+    /* Drawing Grease Pencil strokes, and the tools that never select, such as the 3D Cursor,
+     * have nothing to add to or subtract from: no pill. */
+    const bToolRef *tref = WM_toolsystem_ref_from_context(C);
+    const StringRef tool = tref ? StringRef(tref->idname) : StringRef();
+    if (mode == CTX_MODE_PAINT_GREASE_PENCIL ||
+        ELEM(tool, "builtin.cursor", "builtin.measure") || tool.startswith("builtin.annotate") ||
+        tool.startswith("builtin.primitive_"))
+    {
+      return "{\"hidden\":true}";
+    }
     return "null";
   }
   std::optional<PointerRNA> brush_ptr = ios_brush_direction_ptr(C);
