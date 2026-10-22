@@ -2133,15 +2133,36 @@ bool gpu::MTLTexture::init_internal(VertBuf *vbo)
   texture_descriptor_.usage =
       MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite |
       MTLTextureUsagePixelFormatView; /* TODO(Metal): Optimize usage flags. */
-  texture_descriptor_.storageMode = [source_buffer storageMode];
+  id<MTLBuffer> texture_buffer = source_buffer;
+#if TARGET_OS_SIMULATOR
+  /* The simulator only makes linear textures from private buffers: a private copy, which the
+   * texture keeps alive. */
+  if ([source_buffer storageMode] != MTLStorageModePrivate) {
+    texture_buffer = [mtl_ctx->device newBufferWithLength:[source_buffer length]
+                                                  options:MTLResourceStorageModePrivate];
+    id<MTLBlitCommandEncoder> blit_encoder =
+        mtl_ctx->main_command_buffer.ensure_begin_blit_encoder();
+    [blit_encoder copyFromBuffer:source_buffer
+                    sourceOffset:0
+                        toBuffer:texture_buffer
+               destinationOffset:0
+                            size:[source_buffer length]];
+  }
+#endif
+  texture_descriptor_.storageMode = [texture_buffer storageMode];
   texture_descriptor_.sampleCount = 1;
-  texture_descriptor_.cpuCacheMode = [source_buffer cpuCacheMode];
-  texture_descriptor_.hazardTrackingMode = [source_buffer hazardTrackingMode];
+  texture_descriptor_.cpuCacheMode = [texture_buffer cpuCacheMode];
+  texture_descriptor_.hazardTrackingMode = [texture_buffer hazardTrackingMode];
 
-  texture_ = [source_buffer
+  texture_ = [texture_buffer
       newTextureWithDescriptor:texture_descriptor_
                         offset:0
                    bytesPerRow:ceil_to_multiple_ul(bytes_per_row, align_requirement)];
+#if TARGET_OS_SIMULATOR
+  if (texture_buffer != source_buffer) {
+    [texture_buffer release];
+  }
+#endif
   aligned_w_ = bytes_per_row / bytes_per_pixel;
 
   BLI_assert(texture_);
