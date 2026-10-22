@@ -414,6 +414,8 @@ struct StoryboardView: View {
   @State private var lanesWidth: CGFloat = 0
   /** The shot a hold on the lanes picked up, while it is moved. */
   @State private var movingShot: String?
+  /** The pinch and the hold that lifts a shot, on the lanes' scroll view. */
+  @State private var laneGestures = LaneGestures()
   @State private var moveStart = CGPoint.zero
   private let lanesSpace = "storyboard.lanes"
   /** The opened shot's selected drawings, by layer, in its scene's frames, and how far they are
@@ -604,7 +606,11 @@ struct StoryboardView: View {
                          playheadHeight: max(content, proxy.size.height - scrubberHeight))
             .frame(width: width, height: content, alignment: .topLeading)
             .coordinateSpace(.named(lanesSpace))
-            .gesture(laneMove(laneHeight: laneHeight, lanes: lanes))
+            .background(EnclosingScrollView {
+              laneGestures.pinch = (pinchChanged, pinchEnded)
+              laneGestures.hold = laneMove(laneHeight: laneHeight, lanes: lanes)
+              laneGestures.install(on: $0)
+            })
           }
           .safeAreaInset(edge: .bottom, spacing: 0) {
             /* In step with the shots above: the same frames at the same places, scrolled with
@@ -641,7 +647,6 @@ struct StoryboardView: View {
           .mask(Rectangle().padding(.vertical, -40))
           .onChange(of: model.frame) { _, frame in followPlayhead(frame) }
         }
-        .gesture(AxisPinch(changed: pinchChanged, ended: pinchEnded))
         .onChange(of: model.shots.isEmpty, initial: true) { _, empty in
           fitShots(empty: empty, width: proxy.size.width)
         }
@@ -1360,8 +1365,8 @@ struct StoryboardView: View {
   /** Moving a shot waits for a hold, so a swipe over the shots scrolls them and never moves one
    * by accident. The shot under the finger lifts the moment the hold takes, and follows the
    * finger from there, whichever shot it is where they overlap. */
-  private func laneMove(laneHeight: CGFloat, lanes: Int) -> some UIGestureRecognizerRepresentable {
-    LaneHold { phase, location in
+  private func laneMove(laneHeight: CGFloat, lanes: Int) -> (UIGestureRecognizer.State, CGPoint) -> Bool {
+    { phase, location in
       switch phase {
         case .began:
           /* Inside a shot, its layers are worked on rather than shots moved. */
@@ -1480,27 +1485,40 @@ struct StoryboardView: View {
   }
 }
 
-/** A pinch measured along each axis: how far apart the fingers are across and up and down,
- * against where they began. Fingers close together along an axis leave it unchanged. */
-private struct AxisPinch: UIGestureRecognizerRepresentable {
-  /** How far apart across and up and down, against where they began, and where between them. */
-  let changed: (CGSize, CGPoint) -> Void
-  let ended: () -> Void
+/**
+ * The lanes' gestures, on their scroll view itself so they go along with its panning, on iPad
+ * and Apple Vision Pro alike. A pinch measured along each axis: how far apart the fingers are
+ * across and up and down, against where they began; fingers close together along an axis leave
+ * it unchanged. And a hold that picks up what is under the finger and then follows it, as lifting
+ * an item to drag it does everywhere else; away from a shot it lets go at once, leaving the scroll
+ * view to pan.
+ */
+@MainActor
+private final class LaneGestures: NSObject, UIGestureRecognizerDelegate {
+  /** How far apart across and up and down, against where they began, and where between them in
+   * the visible lanes; then the end. */
+  var pinch: ((CGSize, CGPoint) -> Void, () -> Void)?
+  /** Whether there was something to pick up, asked as the hold takes, at a point of the lanes. */
+  var hold: ((UIGestureRecognizer.State, CGPoint) -> Bool)?
+  private weak var scrollView: UIScrollView?
+  private var start = CGSize.zero
 
-  /** Alongside the scroll view's own panning, which stops as two fingers pinch. */
-  final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-    var start = CGSize.zero
-
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+  func install(on view: UIScrollView) {
+    guard scrollView !== view else { return }
+    scrollView = view
+    let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:)))
+    pinch.delegate = self
+    view.addGestureRecognizer(pinch)
+    let hold = UILongPressGestureRecognizer(target: self, action: #selector(held(_:)))
+    hold.minimumPressDuration = 0.2
+    hold.allowableMovement = 10
+    view.addGestureRecognizer(hold)
   }
 
-  func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
-
-  func makeUIGestureRecognizer(context: Context) -> UIPinchGestureRecognizer {
-    let recognizer = UIPinchGestureRecognizer()
-    recognizer.delegate = context.coordinator
-    return recognizer
+  /** The pinch alongside the scroll view's own panning, which stops as two fingers pinch. */
+  nonisolated func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                                     shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+    gestureRecognizer is UIPinchGestureRecognizer
   }
 
   private func spread(_ recognizer: UIPinchGestureRecognizer) -> CGSize? {
@@ -1510,42 +1528,60 @@ private struct AxisPinch: UIGestureRecognizerRepresentable {
     return CGSize(width: abs(a.x - b.x), height: abs(a.y - b.y))
   }
 
-  func handleUIGestureRecognizerAction(_ recognizer: UIPinchGestureRecognizer, context: Context) {
+  @objc private func pinched(_ recognizer: UIPinchGestureRecognizer) {
+    guard let view = scrollView, let (changed, ended) = pinch else { return }
     switch recognizer.state {
       case .began:
-        context.coordinator.start = spread(recognizer) ?? .zero
+        start = spread(recognizer) ?? .zero
       case .changed:
         guard let now = spread(recognizer) else { return }
-        let start = context.coordinator.start
         /* Under a finger's width apart, that axis is not being pinched. */
         let across = start.width > 40 ? now.width / start.width : 1
         let up = start.height > 40 ? now.height / start.height : 1
-        changed(CGSize(width: across, height: up), context.converter.localLocation)
+        /* Where the fingers are in the lanes as they show, not in the scrolled content. */
+        let point = recognizer.location(in: view)
+        changed(CGSize(width: across, height: up),
+                CGPoint(x: point.x - view.bounds.minX, y: point.y - view.bounds.minY))
       default:
         ended()
     }
   }
-}
 
-/** A hold that picks up what is under the finger and then follows it, as lifting an item to drag
- * it does everywhere else. Away from a shot it lets go at once, leaving the scroll view to pan. */
-private struct LaneHold: UIGestureRecognizerRepresentable {
-  /** Whether there was something to pick up, asked as the hold takes. */
-  let changed: (UIGestureRecognizer.State, CGPoint) -> Bool
-
-  func makeUIGestureRecognizer(context: Context) -> UILongPressGestureRecognizer {
-    let recognizer = UILongPressGestureRecognizer()
-    recognizer.minimumPressDuration = 0.2
-    recognizer.allowableMovement = 10
-    return recognizer
-  }
-
-  func handleUIGestureRecognizerAction(_ recognizer: UILongPressGestureRecognizer, context: Context) {
-    let location = context.converter.localLocation
-    if !changed(recognizer.state, location), recognizer.state == .began {
+  @objc private func held(_ recognizer: UILongPressGestureRecognizer) {
+    guard let view = scrollView, let hold else { return }
+    if !hold(recognizer.state, recognizer.location(in: view)), recognizer.state == .began {
       /* Nothing there: let go, so the next touch is free. */
       recognizer.isEnabled = false
       recognizer.isEnabled = true
+    }
+  }
+}
+
+/** Hands over the scroll view this sits in. */
+private struct EnclosingScrollView: UIViewRepresentable {
+  let found: (UIScrollView) -> Void
+
+  func makeUIView(context: Context) -> FinderView { FinderView() }
+  func updateUIView(_ view: FinderView, context: Context) {
+    view.found = found
+    view.report()
+  }
+
+  final class FinderView: UIView {
+    var found: ((UIScrollView) -> Void)?
+    override init(frame: CGRect) {
+      super.init(frame: frame)
+      isUserInteractionEnabled = false
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func didMoveToWindow() {
+      super.didMoveToWindow()
+      report()
+    }
+    func report() {
+      var view = superview
+      while let current = view, !(current is UIScrollView) { view = current.superview }
+      if let scroll = view as? UIScrollView { found?(scroll) }
     }
   }
 }
