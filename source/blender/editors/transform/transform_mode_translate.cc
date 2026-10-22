@@ -722,11 +722,14 @@ static void initTranslation(TransInfo *t, wmOperator * /*op*/)
 
   TranslateCustomData *custom_data = MEM_new_zeroed<TranslateCustomData>(__func__);
   custom_data->prev.rotate_mode = TRANSLATE_ROTATE_OFF;
-  /* Moved with a Pencil in the 3D Viewport, rolling it turns things around the view axis. */
+  /* Moved with a Pencil by Tweak in the 3D Viewport, rolling it turns things around the view
+   * axis and tilting it turns them over, as Tweak's settings say. Other tools only move. */
   const wmNativeInterface *native = WM_native_interface();
+  const bToolRef *tool = t->spacetype == SPACE_VIEW3D ? WM_toolsystem_ref_from_context(t->context) :
+                                                        nullptr;
   float pencil_roll;
   float2 pencil_tilt;
-  if (t->spacetype == SPACE_VIEW3D && native && native->pencil_roll &&
+  if (tool && STREQ(tool->idname, "builtin.select") && native && native->pencil_roll &&
       native->pencil_roll(&pencil_roll, pencil_tilt))
   {
     custom_data->roll.active = true;
@@ -737,8 +740,6 @@ static void initTranslation(TransInfo *t, wmOperator * /*op*/)
   custom_data->roll.rolls = true;
   custom_data->roll.tilts = true;
   /* With Tweak, its settings say which of these a drag does, however it drags. */
-  const bToolRef *tool = t->spacetype == SPACE_VIEW3D ? WM_toolsystem_ref_from_context(t->context) :
-                                                        nullptr;
   if (tool && STREQ(tool->idname, "builtin.select") && native && native->tweak_drag) {
     native->tweak_drag(&custom_data->roll.move, &custom_data->roll.rolls, &custom_data->roll.tilts);
   }
