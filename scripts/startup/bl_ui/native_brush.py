@@ -13,7 +13,6 @@ brush.
 import json
 
 import bpy
-from mathutils import Color
 
 __all__ = (
     "brush_json",
@@ -101,33 +100,10 @@ def brush_json(context):
             "max": float(high),
             "default": float(default),
         }
+    # Drawing with the material's color has no color of the brush's own: no color well.
     if color is not None:
         result["color"] = [float(c) for c in color.color]
-    elif (stroke := _material_color(context)) is not None:
-        # Drawing with the material's color: shown as the color drawn with, which picking
-        # another turns into the stroke's own.
-        result["color"] = stroke
     return json.dumps(result)
-
-
-def _material_draws(context):
-    """Grease Pencil drawing with its material's color rather than one of the stroke's own."""
-    if context.mode != 'PAINT_GREASE_PENCIL':
-        return False
-    _, brush = _settings(context)
-    return (brush is not None and brush.gpencil_brush_type in {'DRAW', 'FILL'} and
-            context.tool_settings.gpencil_paint.color_mode == 'MATERIAL')
-
-
-def _material_color(context):
-    if not _material_draws(context):
-        return None
-    material = context.object.active_material if context.object else None
-    if material is None or material.grease_pencil is None:
-        return None
-    # The material's color is linear, the brush's as it shows.
-    color = Color(material.grease_pencil.color[:3]).from_scene_linear_to_srgb()
-    return [float(c) for c in color]
 
 
 def brush_set(context, payload):
@@ -143,10 +119,6 @@ def brush_set(context, payload):
         strength.strength = float(value)
     elif key == "color" and color is not None:
         color.color = [float(c) for c in value[:3]]
-    elif key == "color" and _material_draws(context):
-        # A color picked while drawing with the material's: drawn with that color from now on.
-        context.tool_settings.gpencil_paint.color_mode = 'VERTEXCOLOR'
-        _settings(context)[1].color = [float(c) for c in value[:3]]
 
 
 classes = ()
