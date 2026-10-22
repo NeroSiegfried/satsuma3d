@@ -1,0 +1,12 @@
+{
+  "info" : {
+    "author" : "Blender",
+    "version" : 1
+  },
+  "symbols" : [
+    {
+      "filename" : "bulge.in.svg",
+      "idiom" : "universal"
+    }
+  ]
+}

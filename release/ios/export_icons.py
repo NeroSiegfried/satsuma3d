@@ -507,6 +507,12 @@ def export_catalog(source, manifest, output, header=ICON_HEADER, dark_theme=DARK
             'info': info,
             'properties': {'preserves-vector-representation': True, 'template-rendering-intent': 'original'},
         }, indent=2) + '\n')
+    # The app's own SF Symbols, for what the system has none of, such as sculpting's bulge out and in.
+    symbols = Path(__file__).resolve().parent / "symbols"
+    for stale in output.glob("*.symbolset"):
+        shutil.rmtree(stale)
+    for symbol_set in sorted(symbols.glob("*.symbolset")):
+        shutil.copytree(symbol_set, output / symbol_set.name)
     # The app's accent colour, Blender's orange: system controls take it, such as the document
     # launcher's buttons. Named by `NSAccentColorName` in the app's Info.plist.
     accent = output / "AccentColor.colorset"

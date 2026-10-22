@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Sculpting's stroke direction: the surface pressed in. Written by release/ios/symbols/generate_symbols.swift. -->
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="3300" height="2200">
+ <g id="Notes">
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;" transform="matrix(1 0 0 1 263 322)">bulge.in</text>
+  <text id="template-version" style="stroke:none;fill:black;font-family:sans-serif;font-size:13;" transform="matrix(1 0 0 1 3036 1933)">Template v.3.0</text>
+ </g>
+ <g id="Guides">
+  <line id="Baseline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="696" y2="696"/>
+  <line id="Capline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="625.541" y2="625.541"/>
+  <line id="Baseline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1126" y2="1126"/>
+  <line id="Capline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1055.54" y2="1055.54"/>
+  <line id="Baseline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1556" y2="1556"/>
+  <line id="Capline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1485.54" y2="1485.54"/>
+  <line id="left-margin-Regular-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1491.187" x2="1491.187" y1="1030.79" y2="1150.12"/>
+  <line id="right-margin-Regular-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1633.628" x2="1633.628" y1="1030.79" y2="1150.12"/>
+ </g>
+ <g id="Symbols">
+  <g id="Regular-M">
+   <path d="M1500.000 1074.740L1515.602 1074.740C1521.328 1074.740 1524.837 1078.646 1531.231 1091.090C1531.392 1091.403 1532.201 1092.981 1532.431 1093.429C1536.577 1101.490 1539.200 1105.780 1542.966 1109.775C1548.253 1115.382 1554.627 1118.426 1562.407 1118.426C1570.188 1118.426 1576.562 1115.382 1581.849 1109.775C1585.615 1105.780 1588.238 1101.490 1592.384 1093.429C1592.614 1092.981 1593.423 1091.403 1593.583 1091.090C1599.978 1078.646 1603.487 1074.740 1609.213 1074.740L1624.815 1074.740C1628.025 1074.740 1630.628 1072.138 1630.628 1068.927C1630.628 1065.717 1628.025 1063.114 1624.815 1063.114L1609.213 1063.114C1602.572 1063.114 1597.104 1065.912 1592.521 1071.012C1589.320 1074.576 1587.053 1078.362 1583.243 1085.777C1583.079 1086.096 1582.271 1087.673 1582.045 1088.111C1574.841 1102.119 1570.428 1106.800 1562.407 1106.800C1554.387 1106.800 1549.974 1102.119 1542.770 1088.111C1542.544 1087.673 1541.736 1086.096 1541.572 1085.777C1537.762 1078.362 1535.495 1074.576 1532.293 1071.012C1527.711 1065.912 1522.243 1063.114 1515.602 1063.114L1500.000 1063.114C1496.790 1063.114 1494.187 1065.717 1494.187 1068.927C1494.187 1072.138 1496.790 1074.740 1500.000 1074.740Z"/>
+  </g>
+ </g>
+</svg>

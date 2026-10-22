@@ -2083,12 +2083,42 @@ std::optional<PointerRNA> ios_brush_direction_ptr(bContext *C)
   return brush_ptr;
 }
 
+/** Symbols for a brush's two Direction choices, by their untranslated names, one mirroring the
+ * other. Up and down for a pair without its own. */
+static std::pair<const char *, const char *> ios_brush_direction_symbols(const char *add,
+                                                                         const char *subtract)
+{
+  struct Pair {
+    const char *add, *subtract, *add_symbol, *subtract_symbol;
+  };
+  static const Pair pairs[] = {
+      {"Smooth", "Enhance Details", "drop.halffull", "sparkles"},
+      {"Sharpen", "Soften", "sparkles", "drop.halffull"},
+      {"Magnify",
+       "Pinch",
+       "arrow.left.and.line.vertical.and.arrow.right",
+       "arrow.right.and.line.vertical.and.arrow.left"},
+      {"Pinch",
+       "Inflate",
+       "arrow.right.and.line.vertical.and.arrow.left",
+       "arrow.left.and.line.vertical.and.arrow.right"},
+      {"Inflate", "Deflate", "largecircle.fill.circle", "smallcircle.filled.circle"},
+      {"Counter-Clockwise", "Clockwise", "arrow.counterclockwise", "arrow.clockwise"},
+  };
+  for (const Pair &pair : pairs) {
+    if (STREQ(add, pair.add) && STREQ(subtract, pair.subtract)) {
+      return {pair.add_symbol, pair.subtract_symbol};
+    }
+  }
+  return {"arrowshape.up", "arrowshape.down"};
+}
+
 /**
  * The + and - pill in modes that stroke brushes: which way strokes go, and for brushes with a
- * Direction, its two choices' names (such as Inflate and Deflate). Painting colors has no two
- * ways to go, and hides it, as do drawing Grease Pencil strokes and tools that never select.
- * Null elsewhere, where the pill adds to or subtracts from the selection. In Sculpt Mode,
- * "smooth" adds a Smooth button to hold, as Shift is with a keyboard.
+ * Direction, its two choices' names (such as Inflate and Deflate) and symbols. Painting colors
+ * has no two ways to go, and hides it, as do drawing Grease Pencil strokes and tools that never
+ * select. Null elsewhere, where the pill adds to or subtracts from the selection. In Sculpt
+ * Mode, "smooth" adds a Smooth button to hold, as Shift is with a keyboard.
  */
 std::string ios_direction_json(bContext *C, const eContextObjectMode mode)
 {
@@ -2131,10 +2161,31 @@ std::string ios_direction_json(bContext *C, const eContextObjectMode mode)
   if (free) {
     MEM_delete(items);
   }
+  /* Symbols go by the untranslated names. */
+  const char *untranslated[2] = {"", ""};
+  RNA_property_enum_items(C, &*brush_ptr, prop, &items, &count, &free);
+  for (int i = 0, n = 0; i < count && n < 2; i++) {
+    if (items[i].identifier[0] != '\0') {
+      untranslated[n++] = items[i].name;
+    }
+  }
+  auto [add_symbol, subtract_symbol] = ios_brush_direction_symbols(untranslated[0],
+                                                                   untranslated[1]);
+  if (free) {
+    MEM_delete(items);
+  }
   const Brush *brush = static_cast<const Brush *>(brush_ptr->data);
+  /* Sculpting adds to the surface or carves into it, drawn by the app as a bulge out or in. */
+  if (mode == CTX_MODE_SCULPT && brush->sculpt_brush_type != SCULPT_BRUSH_TYPE_MASK &&
+      STREQ(untranslated[0], "Add") && STREQ(untranslated[1], "Subtract"))
+  {
+    add_symbol = "bulge.out";
+    subtract_symbol = "bulge.in";
+  }
   return "{\"brush\":true,\"inverted\":" +
          std::string((brush->flag & BRUSH_DIR_IN) ? "true" : "false") + ",\"add\":\"" +
          ios_json_escape(names[0]) + "\",\"subtract\":\"" + ios_json_escape(names[1]) +
+         "\",\"addSymbol\":\"" + add_symbol + "\",\"subtractSymbol\":\"" + subtract_symbol +
          "\",\"smooth\":" + (mode == CTX_MODE_SCULPT ? "true" : "false") + "}";
 }
 

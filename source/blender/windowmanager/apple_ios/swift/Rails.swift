@@ -828,7 +828,8 @@ struct ToolRails: View {
       let strokes = model.direction?.bool("hidden") == true ? nil : intent.strokes
       SqueezePalette.shared.update(
         tools: toolItems, active: tools.active(model.activeTool),
-        direction: strokes.map { .init(inverted: $0.inverted, add: $0.addName, subtract: $0.subtractName) },
+        direction: strokes.map { .init(inverted: $0.inverted, add: $0.addName, subtract: $0.subtractName,
+                                      addSymbol: $0.addSymbol, subtractSymbol: $0.subtractSymbol) },
         chooseTool: { WM_apple_ios_ui_tool_set_by_id($0.id) },
         setDirection: { [intent] inverted in intent.choose(inverted ? .subtract : .add) })
       let tools = tools, brushes = brushes
@@ -928,6 +929,16 @@ struct ToolRails: View {
  * holding the other strokes the other way while held.
  * \{ */
 
+/** Symbols for which way strokes go: SF Symbols, or the app's own where the system has none, such as
+ * "bulge.out" and "bulge.in", sculpting adding to the surface or carving into it. */
+enum DirectionSymbol {
+  static func image(_ name: String) -> UIImage? { UIImage(systemName: name) ?? UIImage(named: name) }
+
+  static func view(_ name: String) -> Image {
+    UIImage(systemName: name) == nil ? Image(name) : Image(systemName: name)
+  }
+}
+
 enum SelectIntent: Int {
   case none = 0, add = 1, subtract = 2
 }
@@ -942,6 +953,8 @@ final class SelectIntentState {
     var inverted: Bool
     var addName: String
     var subtractName: String
+    var addSymbol: String
+    var subtractSymbol: String
   }
 
   /** The one shown on. */
@@ -961,7 +974,9 @@ final class SelectIntentState {
   func update(strokes json: JSON?) {
     let next = json.map {
       Strokes(brush: $0.bool("brush"), inverted: $0.bool("inverted"),
-              addName: $0.string("add") ?? "Add", subtractName: $0.string("subtract") ?? "Subtract")
+              addName: $0.string("add") ?? "Add", subtractName: $0.string("subtract") ?? "Subtract",
+              addSymbol: $0.string("addSymbol") ?? "arrowshape.up",
+              subtractSymbol: $0.string("subtractSymbol") ?? "arrowshape.down")
     }
     if let pending = pendingInverted, next?.inverted == pending.value || Date() > pending.until {
       pendingInverted = nil
@@ -1131,13 +1146,13 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
     }
     if let direction {
       let choice = { (inverted: Bool, title: String, symbol: String) in
-        UIAction(title: title, image: UIImage(systemName: symbol),
+        UIAction(title: title, image: DirectionSymbol.image(symbol),
                  state: direction.inverted == inverted ? .on : .off) { _ in
           MainActor.assumeIsolated { SqueezePalette.shared.setDirection?(inverted) }
         }
       }
       rows.append(UIMenu(title: "Direction", options: [.displayInline, .displayAsPalette], children: [
-        choice(false, direction.add, "plus"), choice(true, direction.subtract, "minus"),
+        choice(false, direction.add, direction.addSymbol), choice(true, direction.subtract, direction.subtractSymbol),
       ]))
     }
     return rows
@@ -1321,6 +1336,8 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
     var inverted: Bool
     var add: String
     var subtract: String
+    var addSymbol: String
+    var subtractSymbol: String
   }
   private var direction: Direction?
   private var setDirection: ((Bool) -> Void)?
@@ -1544,8 +1561,8 @@ struct SqueezeBrushOptions: View {
       }
       if let direction = state.direction {
         Picker("Direction", selection: Binding(get: { direction.inverted }, set: { state.setDirection?($0) })) {
-          Label(direction.add, systemImage: "plus").tag(false)
-          Label(direction.subtract, systemImage: "minus").tag(true)
+          Label { Text(direction.add) } icon: { DirectionSymbol.view(direction.addSymbol) }.tag(false)
+          Label { Text(direction.subtract) } icon: { DirectionSymbol.view(direction.subtractSymbol) }.tag(true)
         }
         .pickerStyle(.segmented)
       }
@@ -2219,9 +2236,17 @@ struct PaintSidebar: View {
             modifierButton("ctrl", symbol: "magnet", label: "Snap")
             modifierButton("shift", symbol: "scope", label: "Precision")
           }
+          else if content.buttons, let strokes = state.strokes {
+            /* One way or the other, never both: a segmented control, its selection sliding between. */
+            VStack(spacing: 4) {
+              button(.add, symbol: strokes.addSymbol, marquee: false, label: strokes.addName)
+              button(.subtract, symbol: strokes.subtractSymbol, marquee: false, label: strokes.subtractName)
+            }
+            .background(Capsule().fill(Color.primary.opacity(0.08)))
+          }
           else if content.buttons {
-            button(.add, symbol: "plus", label: state.strokes?.addName ?? "Add to Selection")
-            button(.subtract, symbol: "minus", label: state.strokes?.subtractName ?? "Subtract from Selection")
+            button(.add, symbol: "plus", marquee: true, label: "Add to Selection")
+            button(.subtract, symbol: "minus", marquee: true, label: "Subtract from Selection")
           }
           if content.smooth { smoothButton }
 #if !os(visionOS)
@@ -2347,10 +2372,17 @@ struct PaintSidebar: View {
       .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
   }
 
-  private func button(_ intent: SelectIntent, symbol: String, label: String) -> some View {
+  /** With \a marquee, \a symbol sits in a dashed square, so + and - for the selection mirror each
+   * other: there is no minus.square.dashed to go with plus.square.dashed. */
+  private func button(_ intent: SelectIntent, symbol: String, marquee: Bool, label: String) -> some View {
     let on = state.active == intent
-    return Image(systemName: symbol)
+    return DirectionSymbol.view(marquee ? "square.dashed" : symbol)
       .font(.system(size: 20, weight: .semibold))
+      .overlay {
+        if marquee {
+          Image(systemName: symbol).font(.system(size: 10, weight: .bold))
+        }
+      }
       .foregroundStyle(on ? Color.white : Color.primary)
       .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
       .contentTransition(.symbolEffect(.replace))

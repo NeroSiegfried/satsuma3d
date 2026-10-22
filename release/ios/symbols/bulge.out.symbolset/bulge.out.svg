@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Sculpting's stroke direction: the surface bulging out. Written by release/ios/symbols/generate_symbols.swift. -->
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="3300" height="2200">
+ <g id="Notes">
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;" transform="matrix(1 0 0 1 263 322)">bulge.out</text>
+  <text id="template-version" style="stroke:none;fill:black;font-family:sans-serif;font-size:13;" transform="matrix(1 0 0 1 3036 1933)">Template v.3.0</text>
+ </g>
+ <g id="Guides">
+  <line id="Baseline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="696" y2="696"/>
+  <line id="Capline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="625.541" y2="625.541"/>
+  <line id="Baseline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1126" y2="1126"/>
+  <line id="Capline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1055.54" y2="1055.54"/>
+  <line id="Baseline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1556" y2="1556"/>
+  <line id="Capline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1485.54" y2="1485.54"/>
+  <line id="left-margin-Regular-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1491.187" x2="1491.187" y1="1030.79" y2="1150.12"/>
+  <line id="right-margin-Regular-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1633.628" x2="1633.628" y1="1030.79" y2="1150.12"/>
+ </g>
+ <g id="Symbols">
+  <g id="Regular-M">
+   <path d="M1500.000 1118.426L1515.602 1118.426C1522.243 1118.426 1527.711 1115.628 1532.293 1110.528C1535.495 1106.964 1537.762 1103.178 1541.572 1095.763C1541.736 1095.444 1542.544 1093.867 1542.770 1093.429C1549.974 1079.421 1554.387 1074.740 1562.407 1074.740C1570.428 1074.740 1574.841 1079.421 1582.045 1093.429C1582.271 1093.867 1583.079 1095.444 1583.243 1095.763C1587.053 1103.178 1589.320 1106.964 1592.521 1110.528C1597.104 1115.628 1602.572 1118.426 1609.213 1118.426L1624.815 1118.426C1628.025 1118.426 1630.628 1115.823 1630.628 1112.613C1630.628 1109.402 1628.025 1106.800 1624.815 1106.800L1609.213 1106.800C1603.487 1106.800 1599.978 1102.894 1593.583 1090.450C1593.423 1090.137 1592.614 1088.559 1592.384 1088.111C1588.238 1080.050 1585.615 1075.760 1581.849 1071.765C1576.562 1066.158 1570.188 1063.114 1562.407 1063.114C1554.627 1063.114 1548.253 1066.158 1542.966 1071.765C1539.200 1075.760 1536.577 1080.050 1532.431 1088.111C1532.201 1088.559 1531.392 1090.137 1531.231 1090.450C1524.837 1102.894 1521.328 1106.800 1515.602 1106.800L1500.000 1106.800C1496.790 1106.800 1494.187 1109.402 1494.187 1112.613C1494.187 1115.823 1496.790 1118.426 1500.000 1118.426Z"/>
+  </g>
+ </g>
+</svg>
