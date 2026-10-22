@@ -1196,8 +1196,6 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
   private var allItems: [RailItem] = []
   /** Whether the brushes paint with a color, which the palette then offers. */
   private var paints = false
-  /** The palette with every tool and brush, shown on asking, see #expand. */
-  private var full: PKToolPicker?
 
   func update(items all: [RailItem], active: String, brushes: Bool, choose: @escaping (RailItem) -> Void) {
     self.brushes = brushes
@@ -1231,6 +1229,7 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
       let picker = PKToolPicker(toolItems: toolItems)
       builtAt = Date()
       picker.accessoryItem = UIBarButtonItem(title: "More", image: nil, menu: moreMenu())
+      picker.showsDrawingPolicyControls = false
       picker.addObserver(self)
       self.picker = picker
     }
@@ -1286,26 +1285,31 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
     following = false
   }
 
-  /** Every tool and brush, in the system's full palette, until one is chosen. */
+  /** Every tool, those of each group too, and every brush, in a sheet: the palette's arc holds
+   * only a few. */
   private func expand() {
-    full?.removeObserver(self)
-    let items = (brushes ? tools.map { toolItem($0) } : []) +
-      allItems.map { brushes ? brushItem($0) : toolItem($0, prefixed: false) }
-    guard !items.isEmpty else { return }
-    let picker = PKToolPicker(toolItems: items)
-    picker.addObserver(self)
-    full = picker
-    let state = holder.pencilKitResponderState
-    state.activeToolPicker = picker
-    state.toolPickerVisibility = .visible
-  }
-
-  /** Back to the palette a squeeze shows. */
-  private func collapse() {
-    guard let full else { return }
-    full.removeObserver(self)
-    self.full = nil
-    attach()
+    guard let window = holder.window, var top = window.rootViewController else { return }
+    while let presented = top.presentedViewController { top = presented }
+    guard !(top is UIHostingController<SqueezeAllView>) else { return }
+    /* Each tool of a group, as its menu on the rail lists them. */
+    var seen = Set<String>()
+    let everyTool = tools.flatMap { $0.grouped ? $0.group : [$0] }.filter { seen.insert($0.id).inserted }
+    let brushItems = brushes ? allItems : []
+    let view = SqueezeAllView(
+      tools: brushes ? everyTool : allItems.flatMap { $0.grouped ? $0.group : [$0] },
+      brushes: brushItems, activeTool: activeTool, activeBrush: brushes ? RollDial.shared.activeBrush : nil,
+      chooseTool: { [weak self] tool in
+        guard let self else { return }
+        if brushes { chooseTool?(tool) } else { choose?(tool) }
+      },
+      chooseBrush: { [weak self] brush in self?.choose?(brush) })
+    let sheet = UIHostingController(rootView: view)
+    sheet.modalPresentationStyle = .formSheet
+    if let controller = sheet.sheetPresentationController {
+      controller.detents = [.medium(), .large()]
+      controller.prefersGrabberVisible = true
+    }
+    top.present(sheet, animated: true)
   }
 
   /** Where the palette holds brushes, the tool they paint with, to see and change beside them,
@@ -1377,8 +1381,17 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
     guard brushes, let item = picker?.selectedToolItem as? PKToolPickerCustomItem else { return }
     following = true
     defer { following = false }
-    if let size = brush?.dict("size")?.double("value") {
-      let width = Self.widths.min { abs(Double($0) - size) < abs(Double($1) - size) } ?? Self.widths[2]
+    if let json = brush?.dict("size"), let size = json.double("value") {
+      let width: CGFloat
+      if json.bool("pixels") {
+        width = Self.widths.min { abs(Double($0) - size) < abs(Double($1) - size) } ?? Self.widths[2]
+      }
+      else {
+        /* A size in the scene, such as Grease Pencil's: its place along its range. */
+        let low = max(1e-4, json.double("min") ?? 1e-3), high = max(low * 1.01, json.double("max") ?? 1)
+        let t = min(1, max(0, log(max(size, low) / low) / log(high / low)))
+        width = Self.widths[Int((t * Double(Self.widths.count - 1)).rounded())]
+      }
       if item.width != width { item.width = width }
     }
     var color = item.color
@@ -1441,8 +1454,6 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
         }
     }
     let state = holder.pencilKitResponderState
-    /* Every tool and brush showing, until one is chosen. */
-    if full != nil { return }
     if PencilSqueeze.showsPalette, let picker {
       if state.activeToolPicker !== picker { state.activeToolPicker = picker }
       state.toolPickerVisibility = ProcessInfo.processInfo.environment["DEBUGPALETTE"] != nil ? .visible : .hidden
@@ -1467,20 +1478,14 @@ final class SqueezePalette: NSObject, PKToolPickerObserver {
       /* Only what is picked in it, never what a palette selects on its own: a new one picks its
        * first item while out of sight, which would change the tool picked in Blender. Back to
        * Blender's then. */
-      guard toolPicker === full || (toolPicker.isVisible && Date().timeIntervalSince(builtAt) > 0.3) else {
-        if toolPicker === picker { followSelection() }
+      guard toolPicker === picker, toolPicker.isVisible, Date().timeIntervalSince(builtAt) > 0.3 else {
+        followSelection()
         return
       }
-      /* Chosen from every tool and brush: then back to the palette a squeeze shows. */
-      let fromFull = toolPicker === full
-      defer { if fromFull { collapse() } }
       if id == Self.allID {
-        /* Not a tool: every tool and brush open, and the palette back on what was picked. */
-        following = true
-        let selected = brushes && !activeTool.contains("brush") ? Self.toolPrefix + activeTool :
-          (brushes ? RollDial.shared.activeBrush ?? "" : activeTool)
-        if ids.contains(selected) { toolPicker.selectedToolItemIdentifier = selected }
-        following = false
+        /* Not a tool: the palette back on what was picked, and every tool and brush open. */
+        followSelection()
+        holder.pencilKitResponderState.toolPickerVisibility = .hidden
         expand()
         return
       }
@@ -1547,6 +1552,104 @@ struct SqueezeBrushOptions: View {
     }
     .padding(16)
     .frame(width: 300)
+  }
+}
+
+/** Every tool and brush, from the squeeze palette, whose arc holds only a few: tapped, one is
+ * picked and the sheet closes. */
+@available(iOS 26.0, *)
+struct SqueezeAllView: View {
+  let tools: [RailItem]
+  let brushes: [RailItem]
+  let activeTool: String
+  let activeBrush: String?
+  let chooseTool: (RailItem) -> Void
+  let chooseBrush: (RailItem) -> Void
+  @Environment(\.dismiss) private var dismiss
+
+  var body: some View {
+    NavigationStack {
+      ScrollView {
+        VStack(alignment: .leading, spacing: 20) {
+          if !tools.isEmpty {
+            section(brushes.isEmpty ? nil : "Tools", items: tools, brush: false) { item in
+              item.id == activeTool
+            } choose: { chooseTool($0) }
+          }
+          /* The brushes by catalog, as the rail separates them. */
+          ForEach(Array(catalogs.enumerated()), id: \.offset) { index, catalog in
+            section(index == 0 ? "Brushes" : nil, items: catalog, brush: true) { $0.id == activeBrush } choose: {
+              chooseBrush($0)
+            }
+          }
+        }
+        .padding(20)
+      }
+      .navigationTitle(brushes.isEmpty ? "Tools" : "Tools and Brushes")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Done", systemImage: "checkmark") { dismiss() }
+        }
+      }
+    }
+  }
+
+  private var catalogs: [[RailItem]] {
+    var result: [[RailItem]] = []
+    for brush in brushes {
+      if brush.gapBefore || result.isEmpty { result.append([]) }
+      result[result.count - 1].append(brush)
+    }
+    return result
+  }
+
+  private func section(_ title: String?, items: [RailItem], brush: Bool, selected: @escaping (RailItem) -> Bool,
+                       choose: @escaping (RailItem) -> Void) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      if let title {
+        Text(title).font(.headline)
+      }
+      LazyVGrid(columns: [GridItem(.adaptive(minimum: 84), spacing: 8)], spacing: 8) {
+        ForEach(items) { item in
+          let on = selected(item)
+          Button {
+            choose(item)
+            Haptics.selection()
+            dismiss()
+          } label: {
+            VStack(spacing: 6) {
+              if let image = on ? item.selectedImage ?? item.image : item.image {
+                Image(uiImage: image)
+                  .renderingMode(image.renderingMode == .alwaysOriginal || brush ? .original : .template)
+                  .resizable()
+                  .scaledToFit()
+                  .frame(width: brush ? 48 : 30, height: brush ? 48 : 30)
+                  .frame(height: 48)
+              }
+              Text(item.title)
+                .font(.caption)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 4)
+            .frame(maxWidth: .infinity)
+            .background(on ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.05),
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+              if on {
+                RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.accentColor, lineWidth: 2)
+              }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+          }
+          .buttonStyle(.plain)
+          .accessibilityAddTraits(on ? .isSelected : [])
+        }
+      }
+    }
   }
 }
 
