@@ -583,7 +583,7 @@ final class InspectorStore {
           }
           continue
         }
-        if ["ID", "LIST", "PREVIEW", "OPERATOR_MENU"].contains(type) {
+        if ["ID", "LIST", "ITEM_ROW", "PREVIEW", "OPERATOR_MENU"].contains(type) {
           if strip { continue }
           model.rows.append(InspectorRow(id: uniqueID("property:" + key), kind: .composite(property)))
           continue

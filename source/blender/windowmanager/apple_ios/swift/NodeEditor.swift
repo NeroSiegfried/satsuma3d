@@ -2386,7 +2386,7 @@ struct NodeCanvasField: View, Equatable {
     else {
       VStack(alignment: .leading) {
         switch type {
-          case "LIST", "PREVIEW", "OPERATOR_MENU":
+          case "LIST", "ITEM_ROW", "PREVIEW", "OPERATOR_MENU":
             CompositeRow(store: store, property: property)
           default:
             PropertyRow(store: store, property: property)
@@ -2689,7 +2689,7 @@ struct NodeFieldRows: View {
     var vectors: [String: Int] = [:]
     for field in fields {
       let key = propertyKey(field)
-      if ["ID", "LIST", "PREVIEW", "OPERATOR_MENU"].contains(field.string("type") ?? "") {
+      if ["ID", "LIST", "ITEM_ROW", "PREVIEW", "OPERATOR_MENU"].contains(field.string("type") ?? "") {
         rows.append(InspectorRow(id: "composite:" + key, kind: .composite(field)))
         continue
       }

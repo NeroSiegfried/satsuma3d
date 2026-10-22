@@ -2786,6 +2786,40 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
       }
       empty_lists.emplace_back(&add, side);
     }
+    /* A name with buttons beside it that have no text of their own, such as each of a bone's
+     * collections with its visibility and solo toggles: one row, named by its label. */
+    std::map<const Button *, std::vector<const Button *>> named_rows;
+    for (int64_t i = 0; i < block->buttons.size(); i++) {
+      const Button &label = *block->buttons[i];
+      if (label.type != ButtonType::Label || label.str.empty() || (label.drawflag & BUT_TEXT_RIGHT) ||
+          (label.flag & UI_HIDDEN) || combined.count(&label))
+      {
+        continue;
+      }
+      const float line = BLI_rctf_cent_y(&label.rect);
+      std::vector<const Button *> items;
+      bool toggles = false;
+      for (int64_t j = i + 1; j < block->buttons.size(); j++) {
+        const Button &item = *block->buttons[j];
+        if (item.rect.ymin > line || item.rect.ymax < line || !item.str.empty() ||
+            button_icon(&item) == ICON_NONE || combined.count(&item) || item.type == ButtonType::Row)
+        {
+          break;
+        }
+        const bool toggle = item.rnaprop && item.rnapoin.data &&
+                            RNA_property_type(item.rnaprop) == PROP_BOOLEAN &&
+                            !RNA_property_array_check(item.rnaprop);
+        if (!toggle && !item.optype) {
+          break;
+        }
+        toggles |= toggle;
+        items.push_back(&item);
+      }
+      if (toggles) {
+        named_rows[&label] = items;
+        combined.insert(items.begin(), items.end());
+      }
+    }
     auto tree_key = [&](const size_t index) {
       return "tree:" + candidate.id + ":" + std::to_string(index);
     };
@@ -2820,6 +2854,7 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
       }
     }
     std::set<std::string> seen;
+    int named_row_count = 0;
     for (const auto &button : block->buttons) {
       Button &but = *button;
       if (!execute) {
@@ -2841,6 +2876,34 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
         }
       }
       if (!execute && combined.count(&but)) {
+        continue;
+      }
+      if (const auto named = named_rows.find(&but); named != named_rows.end()) {
+        if (!execute && open) {
+          auto field = append_field();
+          field->append_str("type", "ITEM_ROW");
+          field->append_str("key", "row:" + candidate.id + ":" + std::to_string(named_row_count++));
+          field->append_str("label", but.str);
+          field->append_str("icon", icon_name(button_icon(&but)));
+          auto controls = field->append_array("controls");
+          auto operators = field->append_array("operators");
+          for (const Button *item : named->second) {
+            if (item->optype) {
+              auto entry = operators->append_dict();
+              entry->append_str("key", operator_key(C, *item, object));
+              entry->append_str("label", WM_operatortype_name(item->optype, item->opptr));
+              entry->append_str("icon", icon_name(button_icon(item)));
+              entry->append_int("editable", !(item->flag & (BUT_DISABLED | BUT_INACTIVE)));
+              continue;
+            }
+            auto control = controls->append_dict();
+            project_property(C, const_cast<Button &>(*item), -1, *control);
+            control->append_int("native", 1);
+          }
+          field->append_str("panel", candidate.id);
+          field->append_str("tab", tab_id);
+          field->append_int("native", 1);
+        }
         continue;
       }
       PointerRNA template_ptr;

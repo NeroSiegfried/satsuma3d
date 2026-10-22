@@ -30,6 +30,7 @@ struct CompositeRow: View, Equatable {
           DataPicker(store: store, property: property)
         }
       case "LIST": ListOutliner(store: store, property: property)
+      case "ITEM_ROW": ItemRow(store: store, property: property)
       case "PREVIEW": PreviewRow(store: store, property: property)
       case "OPERATOR_MENU": OperatorMenuRow(store: store, property: property)
       default: EmptyView()
@@ -883,6 +884,59 @@ struct PreviewRow: View {
       }
     }
     .frame(maxWidth: .infinity)
+  }
+}
+
+/** A name with the toggles and buttons Blender draws beside it, such as a bone's collection with
+ * its visibility and solo: a row like a list's, without one to select in. */
+struct ItemRow: View {
+  let store: InspectorStore
+  let property: JSON
+
+  var body: some View {
+    HStack(spacing: 10) {
+      if let icon = BlenderIcon.image(property.string("icon")) {
+        Image(uiImage: icon).resizable().scaledToFit().frame(width: 22, height: 22)
+      }
+      Text(property.string("label") ?? "")
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .layoutPriority(1)
+      ForEach(Array(property.array("controls").enumerated()), id: \.offset) { _, control in
+        RowControl(store: store, control: placed(control))
+      }
+      ForEach(Array(property.array("operators").enumerated()), id: \.offset) { _, op in
+        Button {
+          store.request(placed(op), extra: ["type": "OPERATOR"])
+          Haptics.selection()
+        } label: {
+          Group {
+            if let image = BlenderIcon.image(op.string("icon")) {
+              Image(uiImage: image).resizable().scaledToFit().frame(width: 16, height: 16)
+            }
+          }
+          .frame(width: 32, height: 32)
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!op.bool("editable"))
+        .accessibilityLabel(op.string("label") ?? "")
+        .help(op.string("label") ?? "")
+      }
+    }
+    .padding(.horizontal, 10)
+    .frame(maxWidth: .infinity, minHeight: ListRows.rowHeight - 2)
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel(property.string("label") ?? "")
+  }
+
+  /** The row's controls are edited in its panel and tab. */
+  private func placed(_ item: JSON) -> JSON {
+    var result = item
+    result["panel"] = property.string("panel") ?? ""
+    result["tab"] = property.string("tab") ?? ""
+    return result
   }
 }
 
