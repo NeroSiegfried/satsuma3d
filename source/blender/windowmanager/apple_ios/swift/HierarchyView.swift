@@ -289,10 +289,8 @@ struct OutlineList: View {
   @State private var dropTarget: String?
   /** Rows are open until closed, as in Blender's Outliner. */
   @State private var collapsed = Set<String>()
-#if !os(visionOS)
   /** Drops onto rows, which the system's list does not pass to them itself. */
   @State private var dropper = OutlineDropper()
-#endif
 
   private static func selected(_ nodes: [JSON]) -> Set<String> {
     Set(nodes.filter { $0.string("kind") == "object" && $0.bool("selected") }.compactMap { $0.string("key") })
@@ -330,11 +328,9 @@ struct OutlineList: View {
    */
   var body: some View {
     let rows = shownRows(children)
-#if !os(visionOS)
     dropper.rows = rows.map(\.keyString)
     dropper.store = store
     dropper.target = { key in if dropTarget != key { dropTarget = key } }
-#endif
     return List {
       ForEach(rows, id: \.keyString) { node in
         row(node)
@@ -454,31 +450,10 @@ struct OutlineList: View {
     .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     .onTapGesture { tap(node) }
     .contextMenu { menu(store.targets(store.byKey[key] ?? node)) }
-    /* Touch and hold lifts the row; moving it drags it into a collection or onto an object. */
-#if os(visionOS)
-    /* Apple Vision Pro lifts rows only through Transferable drags. */
-    .draggable(dragPayload(key, node)) { dragPreview(node) }
-    .dropDestination(for: String.self) { payloads, _ in
-      guard let payload = payloads.first, !DraggedRows.keys(payload).isEmpty else { return false }
-      drop(payload, onto: key)
-      return true
-    } isTargeted: { over in
-      if over { dropTarget = key } else if dropTarget == key { dropTarget = nil }
-    }
-#else
-    .onDrag {
-      let payload = dragPayload(key, node)
-      /* The list asks again for a row beside it as the drag begins: the first is the one lifted. */
-      if Date().timeIntervalSince(DraggedRows.since) > 0.5 {
-        DraggedRows.current = DraggedRows.keys(payload)
-        DraggedRows.since = Date()
-      }
-      return payload.isEmpty ? NSItemProvider() : NSItemProvider(object: payload as NSString)
-    } preview: {
-      dragPreview(node)
-    }
+    /* Touch and hold lifts the row; moving it drags it into a collection or onto an object,
+     * which the list's own view takes, see #OutlineDropper. */
+    .draggable(startDrag(key, node)) { dragPreview(node) }
     .background(CollectionViewFinder { dropper.install(on: $0) })
-#endif
     .accessibilityElement(children: .combine)
     .accessibilityAddTraits(selection.contains(key) ? [.isButton, .isSelected] : .isButton)
     .accessibilityIdentifier("blender.hierarchy." + (node.string("id") ?? ""))
@@ -488,6 +463,17 @@ struct OutlineList: View {
   private func dragPayload(_ key: String, _ node: JSON) -> String {
     let rows = store.targets(store.byKey[key] ?? node)
     return store.allow(rows, "move") ? DraggedRows.payload(rows) : ""
+  }
+
+  /** The payload as a drag begins, kept to tell where its rows can go while it moves. */
+  private func startDrag(_ key: String, _ node: JSON) -> String {
+    let payload = dragPayload(key, node)
+    /* The list asks again for a row beside it as the drag begins: the first is the one lifted. */
+    if Date().timeIntervalSince(DraggedRows.since) > 0.5 {
+      DraggedRows.current = DraggedRows.keys(payload)
+      DraggedRows.since = Date()
+    }
+    return payload
   }
 
   /** The row as it looks while dragged, with its own icon. */
@@ -501,11 +487,6 @@ struct OutlineList: View {
     .padding(.horizontal, 14)
     .padding(.vertical, 8)
     .background(.regularMaterial, in: Capsule())
-  }
-
-  private func drop(_ payload: String, onto key: String) {
-    guard let target = store.byKey[key] else { return }
-    store.move(DraggedRows.keys(payload).compactMap { store.byKey[$0] }, to: target)
   }
 
   /** The actions a swipe shows, as Blender allows them for the row now, outermost first. */
@@ -613,7 +594,6 @@ extension Dictionary where Key == String, Value == Any {
 
 /** \} */
 
-#if !os(visionOS)
 /**
  * Drops onto the Outliner's rows. The system's list hands drops to no row of its own, so its
  * collection view takes them here and finds the row under the finger, lit while the dragged rows
@@ -701,4 +681,3 @@ private struct CollectionViewFinder: UIViewRepresentable {
     }
   }
 }
-#endif
