@@ -2527,6 +2527,9 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
 #ifdef WITH_PYTHON
   if (has_view3d_context) {
     const char *imports[] = {"bpy", "bl_ui", nullptr};
+    /* Dragging with Move and the like selects rather than tweaking, see the function. */
+    BPY_run_string_eval(
+        C, imports, "bl_ui.space_toolsystem_common.native_select_fallback_keep(bpy.context)");
     char *result = nullptr;
     if (BPY_run_string_as_string(C,
                                  imports,

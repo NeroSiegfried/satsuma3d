@@ -188,6 +188,28 @@ class ToolActivePanelHelper:
         )
 
 
+def native_select_fallback_keep(context):
+    """
+    Tweak is a tool of its own on the iPad, not one of the select tools: dragging away from things
+    with Move, Rotate and the like selects, with the select tool used last, rather than tweaking
+    because Tweak was used before. Mends documents where it already does.
+    """
+    tool = context.workspace.tools.from_space_view3d_mode(context.mode, create=False)
+    if tool is None:
+        return
+    cls = ToolSelectPanelHelper._tool_class_from_space_type('VIEW_3D')
+    tweak = cls.tool_fallback_id
+    if tool.idname != tweak and tool.idname_fallback and tool.idname_fallback != tweak:
+        cls._native_select_fallback = tool.idname_fallback
+    if tool.idname == tweak or tool.idname_fallback != tweak:
+        return
+    bpy.ops.wm.tool_set_by_id(
+        name=getattr(cls, "_native_select_fallback", "builtin.select_box"),
+        as_fallback=True,
+        space_type='VIEW_3D',
+    )
+
+
 def native_toolbar_json(context):
     """Snapshot the same context-dependent groups and remembered tools as draw_cls."""
     import json
