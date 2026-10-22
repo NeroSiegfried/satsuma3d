@@ -312,7 +312,8 @@ struct QuickActionsRow: View {
           .frame(width: width, height: ShellMetrics.rowHeight, alignment: .leading)
         }
       }
-      .padding(.bottom, model.safeAreaInsets.bottom + ShellMetrics.rowBottom + model.bottomTray)
+      .padding(.bottom, model.safeAreaInsets.bottom + ShellMetrics.rowBottom + model.bottomTray +
+                        model.bottomRailHeight)
       .ignoresSafeArea(edges: .bottom)
     }
     .ignoresSafeArea(edges: .horizontal)

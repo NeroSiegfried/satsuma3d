@@ -95,6 +95,8 @@ final class ShellModel {
   var interfaceHidden = false
   /** The tool rail's width, which the controls beside it keep clear of. */
   var toolRailWidth: CGFloat = 64
+  /** A tool or brush row along the bottom, which the quick actions rise above. */
+  var bottomRailHeight: CGFloat = 0
   /** The room the toolbar leaves for the tool settings strip between its other items. */
   var toolStripRoom: CGFloat = 320
   /** A narrow window, such as a phone's: the toolbar keeps its most used items and puts the rest

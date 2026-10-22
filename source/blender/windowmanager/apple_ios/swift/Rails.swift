@@ -11,6 +11,9 @@
  * up, a rail docks open at the middle of the window, where it stays until its handle closes it.
  * Tools in a group show the others in a menu while the list is open. A label beside the rail
  * names an item while a pointer or the Pencil hovers it, and briefly after choosing one.
+ *
+ * Dragged away from its edge, a rail comes loose and follows the finger, and lands on the edge
+ * nearest where it is let go: either side, or along the top or the bottom as a row.
  */
 
 #if !os(visionOS)
@@ -122,6 +125,14 @@ struct RailItem: Identifiable {
 /** \name State
  * \{ */
 
+/** The window edge a rail sits along. */
+enum RailEdge: String {
+  case leading, trailing, top, bottom
+
+  /** Along the top or the bottom: a row rather than a column. */
+  var horizontal: Bool { self == .top || self == .bottom }
+}
+
 @MainActor
 @Observable
 final class RailState {
@@ -139,6 +150,9 @@ final class RailState {
   var hovered: String?
   /** The rail following a drag, before it docks. */
   var dragOffset: CGFloat = 0
+  /** Dragged away from its edge, the rail follows the finger to another. */
+  var moving = false
+  var moveOffset = CGSize.zero
   /** A hold ended over an item: its tap, which ends with it, is not one. */
   @ObservationIgnored var suppressTap = false
   /** Chosen here, until Blender's snapshot shows it. */
@@ -220,6 +234,8 @@ struct RailItemView: View {
   let selected: Bool
   let emphasized: Bool
   let showsTitle: Bool
+  /** In a row along the top or the bottom, as wide as it is tall. */
+  var inRow = false
   /** Brushes' previews sit closer to the edges than tool icons. */
   let brush: Bool
   let namespace: Namespace.ID
@@ -252,7 +268,7 @@ struct RailItemView: View {
     .foregroundStyle(selected ? Color.white : Color.primary)
     .padding(.leading, showsTitle ? (brush ? 4 : 12) : (brush ? 3 : 8))
     .padding(.trailing, showsTitle ? 14 : (brush ? 3 : 8))
-    .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
+    .frame(minWidth: inRow ? 52 : nil, maxWidth: inRow ? 52 : .infinity, minHeight: 52, maxHeight: 52)
     .background {
       if selected {
         /* The selection slides from item to item. */
@@ -288,11 +304,14 @@ struct Rail: View {
   let height: CGFloat
   /** Brushes rather than tools. */
   let brush: Bool
+  let edge: RailEdge
   /** Where the rail would rest at the middle and at the bottom, to dock it by its drag. */
   let dockDistance: CGFloat
   /** The closed brushes' other places, from where they rest: docked open halfway down their
    * edge, and their other resting place, at the top or the bottom. */
   var brushStops: (middle: CGFloat, other: CGFloat) = (0, 0)
+  /** Let go away from its edge, at this point in the window: the rail moves to the nearest. */
+  let move: (CGPoint) -> Void
   let choose: (RailItem) -> Void
   @Namespace private var namespace
   @State private var railFrame = CGRect.zero
@@ -320,6 +339,8 @@ struct Rail: View {
     UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: 0.32, dampingFraction: 0.84)
   }
 
+  private var lifted: Bool { state.moving || state.dragOffset != 0 }
+
   /** The compact rail shows the active item, or the first while none is active. */
   private var shown: [RailItem] {
     if state.listVisible { return items }
@@ -327,14 +348,16 @@ struct Rail: View {
   }
 
   var body: some View {
-    VStack(spacing: 0) {
+    let stack = edge.horizontal ? AnyLayout(HStackLayout(spacing: 0)) : AnyLayout(VStackLayout(spacing: 0))
+    stack {
       if state.listVisible {
         handle
       }
       ScrollViewReader { scroller in
-        ScrollView(.vertical, showsIndicators: false) {
+        ScrollView(edge.horizontal ? .horizontal : .vertical, showsIndicators: false) {
           /* Evenly spaced, as wide apart as the gaps between groups. */
-          VStack(spacing: 12) {
+          let items = edge.horizontal ? AnyLayout(HStackLayout(spacing: 12)) : AnyLayout(VStackLayout(spacing: 12))
+          items {
             ForEach(shown) { item in
               itemView(item)
                 .id(item.id)
@@ -345,7 +368,7 @@ struct Rail: View {
           .animation(animation, value: active)
         }
         /* Not while a hold slides along it: the scroll view would take the finger. */
-        .scrollDisabled(!state.listVisible || state.pressSelecting)
+        .scrollDisabled(!state.listVisible || state.pressSelecting || state.moving)
         .scrollBounceBehavior(.basedOnSize)
         .onChange(of: state.listVisible) { _, visible in
           if visible { scroller.scrollTo(active, anchor: .center) }
@@ -355,12 +378,24 @@ struct Rail: View {
     .frame(width: width, height: height)
     .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
     .panelGlass(in: RoundedRectangle(cornerRadius: 32, style: .continuous))
-    .offset(y: state.dragOffset)
+    /* Lifted off the window while dragged, to move or to dock it. */
+    .scaleEffect(lifted ? 1.06 : 1)
+    .shadow(color: .black.opacity(lifted ? 0.32 : 0), radius: lifted ? 20 : 0, y: lifted ? 12 : 0)
+    .animation(.spring(response: 0.25, dampingFraction: 0.8), value: lifted)
+    .offset(x: state.moveOffset.width, y: state.moveOffset.height + (edge.horizontal ? 0 : state.dragOffset))
     /* The finger on the rail: dragging the closed rail up or down docks it, and holding an item
      * slides to another. An open list scrolls instead. */
     /* Only on the closed rail: on an open list, even a drag that does nothing takes the finger
      * from the scroll view, which then cannot scroll. */
     .simultaneousGesture(dockDrag, including: state.listVisible && !state.pressSelecting ? .subviews : .all)
+    /* Pulled off its edge from anywhere on it, open or closed, held first or not. */
+    .gesture(RailMoveGesture(horizontal: edge.horizontal,
+                             allowed: { [state] in !state.pressSelecting && !RollDial.shared.showing }) { translation in
+      if !state.moving { beginMove() }
+      state.moveOffset = translation
+    } ended: { point in
+      endMove(at: point)
+    })
     /* A Pencil on the rail turns its dial as soon as it rolls. */
     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
       railFrame = frame
@@ -384,7 +419,8 @@ struct Rail: View {
     let selected = state.listVisible && item.id == active
     return RailItemView(item: item, selected: selected,
                         emphasized: state.listVisible && state.hovered == item.id,
-                        showsTitle: state.expanded, brush: brush, namespace: namespace)
+                        showsTitle: state.expanded && !edge.horizontal, inRow: edge.horizontal, brush: brush,
+                        namespace: namespace)
       .onTapGesture { tap(item) }
       /* Kept while a hold slides on: the list opening under the finger would otherwise end it. */
       .simultaneousGesture(pressSelect(item), including: state.listVisible && !state.pressSelecting ? .subviews : .all)
@@ -462,7 +498,7 @@ struct Rail: View {
        * start. */
       label.hide()
       withAnimation(animation) {
-        if brush { state.docked = true } else { state.expanded = true }
+        if brush || edge.horizontal { state.docked = true } else { state.expanded = true }
       }
       return
     }
@@ -530,6 +566,31 @@ struct Rail: View {
   }
 
   /* -------------------------------------------------------------------- */
+  /* Moving to another edge */
+
+  /** The rail comes loose. */
+  private func beginMove() {
+    Haptics.selection()
+    label.hide()
+    state.hovered = nil
+    state.dragOffset = 0
+    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { state.moving = true }
+  }
+
+  /** Lands the rail on the edge nearest \a point, carried on by a flick, or back on its own. */
+  private func endMove(at point: CGPoint?) {
+    guard state.moving else { return }
+    state.suppressTap = true
+    DispatchQueue.main.async { state.suppressTap = false }
+    withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) {
+      if let point { move(point) }
+      state.moving = false
+      state.moveOffset = .zero
+      state.dragOffset = 0
+    }
+  }
+
+  /* -------------------------------------------------------------------- */
   /* Docking */
 
   private func collapse() {
@@ -563,8 +624,9 @@ struct Rail: View {
           if state.dragOffset != 0 { state.dragOffset = 0 }
           return
         }
-        guard !state.listVisible, !state.pressSelecting,
-              abs(value.translation.height) > abs(value.translation.width) * 0.4,
+        /* Once docking, it stays a dock drag, wherever the finger then wanders. */
+        guard !state.moving, !state.listVisible, !state.pressSelecting, !edge.horizontal,
+              state.dragOffset != 0 || RailMoveGesture.isAlong(value.translation, horizontal: false),
               !PencilRoll.shared.down || abs(value.translation.height) > 30
         else { return }
         state.dragOffset = value.translation.height
@@ -572,9 +634,10 @@ struct Rail: View {
       .onEnded { value in
         if RollDial.shared.showing || RollDial.shared.justClosed {
           state.dragOffset = 0
+          endMove(at: nil)
           return
         }
-        guard !state.listVisible, !state.pressSelecting, state.dragOffset != 0 else { return }
+        guard !state.moving, !state.listVisible, !state.pressSelecting, state.dragOffset != 0 else { return }
         state.suppressTap = true
         DispatchQueue.main.async { state.suppressTap = false }
         let velocity = value.velocity.height
@@ -606,11 +669,21 @@ struct Rail: View {
    * opened tool list up to dock it. */
   private var handle: some View {
     Button(action: collapse) {
-      Capsule()
-        .fill(Color.secondary)
-        .frame(width: 28, height: 5)
-        .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44)
-        .contentShape(Rectangle())
+      if edge.horizontal {
+        Capsule()
+          .fill(Color.secondary)
+          .frame(width: 5, height: 28)
+          .frame(maxHeight: .infinity)
+          .frame(width: 44)
+          .contentShape(Rectangle())
+      }
+      else {
+        Capsule()
+          .fill(Color.secondary)
+          .frame(width: 28, height: 5)
+          .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44)
+          .contentShape(Rectangle())
+      }
     }
     .buttonStyle(.plain)
     .help(brush ? "Collapse Brushes" : "Collapse Toolbar")
@@ -619,11 +692,15 @@ struct Rail: View {
     .highPriorityGesture(
       DragGesture(minimumDistance: 8, coordinateSpace: .global)
         .onChanged { value in
+          guard !state.moving, !edge.horizontal,
+                state.dragOffset != 0 || RailMoveGesture.isAlong(value.translation, horizontal: false)
+          else { return }
           let y = value.translation.height
           let canRaise = !brush && !state.docked
           state.dragOffset = y < 0 && canRaise ? max(-dockDistance, y) : min(32, max(0, y * 0.3))
         }
         .onEnded { value in
+          guard !state.moving, !edge.horizontal else { return }
           let y = value.translation.height
           let velocity = value.velocity.height
           if !brush && !state.docked && dockDistance > 0 &&
@@ -643,6 +720,72 @@ struct Rail: View {
 }
 
 /** \} */
+
+/** A pan that begins only across the rail's edge, beside the list's own scrolling along it. Which
+ * way a drag first goes decides once what it does: across, it moves the rail; along, it docks or
+ * closes it as before; after a hold, it slides between items. Reports the translation, then where
+ * it was let go, carried on by a flick, in the window; nothing if cancelled. */
+struct RailMoveGesture: UIGestureRecognizerRepresentable {
+  let horizontal: Bool
+  /** Not while a hold slides between items, or the Pencil rolls the dial. */
+  let allowed: () -> Bool
+  let changed: (CGSize) -> Void
+  let ended: (CGPoint?) -> Void
+
+  func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+  func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+    let pan = UIPanGestureRecognizer()
+    pan.delegate = context.coordinator
+    pan.maximumNumberOfTouches = 1
+    return pan
+  }
+
+  func updateUIGestureRecognizer(_ recognizer: UIPanGestureRecognizer, context: Context) {
+    context.coordinator.horizontal = horizontal
+    context.coordinator.allowed = allowed
+  }
+
+  /** Along the rail's edge rather than across it: the other gestures' drags, never a move. */
+  static func isAlong(_ translation: CGSize, horizontal: Bool) -> Bool {
+    let along = abs(horizontal ? translation.width : translation.height)
+    let across = abs(horizontal ? translation.height : translation.width)
+    return across < along * 0.7
+  }
+
+  func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
+    switch recognizer.state {
+      case .began, .changed:
+        let translation = recognizer.translation(in: nil)
+        changed(CGSize(width: translation.x, height: translation.y))
+      case .ended:
+        let point = recognizer.location(in: nil), velocity = recognizer.velocity(in: nil)
+        ended(CGPoint(x: point.x + velocity.x * 0.15, y: point.y + velocity.y * 0.15))
+      case .cancelled, .failed:
+        ended(nil)
+      default:
+        break
+    }
+  }
+
+  final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+    var horizontal = false
+    var allowed: () -> Bool = { true }
+
+    func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+      guard let pan = recognizer as? UIPanGestureRecognizer, allowed() else { return false }
+      let translation = pan.translation(in: nil)
+      /* Diagonally counts: towards a corner is towards another edge. */
+      return !RailMoveGesture.isAlong(CGSize(width: translation.x, height: translation.y), horizontal: horizontal)
+    }
+
+    func gestureRecognizer(_ recognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool
+    {
+      true
+    }
+  }
+}
 
 /* -------------------------------------------------------------------- */
 /** \name The column
@@ -673,6 +816,16 @@ struct ToolRails: View {
   @AppStorage("BlenderSidebarPosition") private var sidebarPosition = -1.0
   /** The sidebar's top edge as its handle was picked up. */
   @State private var sidebarDragStart: CGFloat?
+  /** The edges the rails were moved to; the brushes' empty until moved, to follow the hand. */
+  @AppStorage("BlenderToolRailEdge") private var toolEdge = RailEdge.leading
+  @AppStorage("BlenderBrushRailEdge") private var brushEdgeName = ""
+
+  /** The edge of \a safe nearest \a point, both in the window. */
+  private static func nearestEdge(to point: CGPoint, in safe: CGRect) -> RailEdge {
+    let distances: [(RailEdge, CGFloat)] = [(.leading, point.x - safe.minX), (.trailing, safe.maxX - point.x),
+                                            (.top, point.y - safe.minY), (.bottom, safe.maxY - point.y)]
+    return distances.min { $0.1 < $1.1 }?.0 ?? .leading
+  }
 
   var body: some View {
     GeometryReader { proxy in
@@ -695,7 +848,8 @@ struct ToolRails: View {
                                     brushes: brushesAvailable ? brushes : nil, brushCount: brushItems.count,
                                     sidebar: content,
                                     sidebarPosition: sidebarPosition >= 0 ? sidebarPosition : nil,
-                                    colorWell: color != nil, leftHanded: leftHanded, gizmoTop: gizmoTop))
+                                    colorWell: color != nil, leftHanded: leftHanded, gizmoTop: gizmoTop,
+                                    toolEdge: toolEdge, brushEdge: RailEdge(rawValue: brushEdgeName)))
       }
       /* Where the sliders do not fit beside the tools, they become dials. */
       let (content, layout) = { () -> (SidebarContent, RailLayout) in
@@ -703,6 +857,13 @@ struct ToolRails: View {
         guard !sidebarDials, full.1.sidebarTucked || (tools.listVisible && full.1.toolsCompact) else { return full }
         return arrange(true)
       }()
+      /* Where a rail is let go, from the window's coordinates, which may be scaled, as on the Mac. */
+      let frame = proxy.frame(in: .global)
+      let local = { (point: CGPoint) -> CGPoint in
+        frame.width > 0 && frame.height > 0 ?
+          CGPoint(x: (point.x - frame.minX) * proxy.size.width / frame.width,
+                  y: (point.y - frame.minY) * proxy.size.height / frame.height) : point
+      }
       ZStack(alignment: .topLeading) {
         if let color {
           BrushColorWell(color: color)
@@ -712,15 +873,17 @@ struct ToolRails: View {
         if brushesAvailable {
           Rail(items: brushItems, active: brushes.active(model.brushes?.string("active") ?? ""),
                state: brushes, label: label, width: layout.brushWidth, height: layout.brushHeight,
-               brush: true, dockDistance: 0, brushStops: layout.brushStops) { item in
+               brush: true, edge: layout.brushEdge, dockDistance: 0, brushStops: layout.brushStops,
+               move: { brushEdgeName = Self.nearestEdge(to: local($0), in: safe).rawValue }) { item in
             WM_apple_ios_ui_brush_activate(item.id)
           }
           .position(layout.brushCenter)
           .transition(.opacity)
         }
         Rail(items: toolItems, active: tools.active(model.activeTool), state: tools, label: label,
-             width: layout.toolWidth, height: layout.toolHeight, brush: false,
-             dockDistance: layout.dockDistance) { item in
+             width: layout.toolWidth, height: layout.toolHeight, brush: false, edge: layout.toolEdge,
+             dockDistance: layout.dockDistance,
+             move: { toolEdge = Self.nearestEdge(to: local($0), in: safe) }) { item in
           WM_apple_ios_ui_tool_set_by_id(item.id)
         }
         .position(layout.toolCenter)
@@ -746,6 +909,11 @@ struct ToolRails: View {
               Haptics.selection()
               withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) { sidebarDials = dials }
             })
+            /* Lifted off the window while its handle moves it, as the rails are. */
+            .scaleEffect(sidebarDragStart != nil ? 1.06 : 1)
+            .shadow(color: .black.opacity(sidebarDragStart != nil ? 0.32 : 0),
+                    radius: sidebarDragStart != nil ? 20 : 0, y: sidebarDragStart != nil ? 12 : 0)
+            .animation(.spring(response: 0.25, dampingFraction: 0.8), value: sidebarDragStart != nil)
             .position(layout.sidebarCenter)
             /* An open tool list takes the edge: the sidebar steps aside until it closes. */
             .offset(x: layout.sidebarTucked ? (layout.sidebarLeading ? -96 : 96) : 0)
@@ -799,7 +967,8 @@ struct ToolRails: View {
       .animation(UIAccessibility.isReduceMotionEnabled || sidebarDragStart != nil ? nil :
                    .spring(response: 0.32, dampingFraction: 0.84),
                  value: layout)
-      .onChange(of: layout.toolWidth, initial: true) { _, width in model.toolRailWidth = width }
+      .onChange(of: layout.leadingCorner, initial: true) { _, width in model.toolRailWidth = width }
+      .onChange(of: layout.bottomRow, initial: true) { _, height in model.bottomRailHeight = height }
       .onAppear { PencilRoll.start() }
       .onChange(of: model.brushes.map { $0 as NSDictionary }, initial: true) { _, snapshot in
         let brushes = snapshot as? JSON
@@ -897,23 +1066,44 @@ struct ToolRails: View {
       let bounds = safe.insetBy(dx: 8, dy: 8)
       /* Beside the rail, towards the viewport, level with the item, within the window. */
       let brush = label.rail === brushes
-      let toward = brush && !layout.brushLeading ? -1.0 : 1.0
-      let edge = brush ? layout.brushCenter.x + toward * layout.brushWidth / 2 :
-                         layout.toolCenter.x + layout.toolWidth / 2
-      let x = edge + toward * 10
-      let width = max(44, toward > 0 ? bounds.maxX - x : x - bounds.minX)
-      Text(text)
-        .font(.subheadline)
-        .foregroundStyle(.primary)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .panelGlass(in: Capsule())
-        .frame(maxWidth: width, alignment: toward > 0 ? .leading : .trailing)
-        .frame(width: width, alignment: toward > 0 ? .leading : .trailing)
-        .position(x: x + toward * width / 2, y: min(max(itemY, bounds.minY + 18), bounds.maxY - 18))
-        .allowsHitTesting(false)
-        .accessibilityIdentifier("blender.toolbar.tool-name")
-        .transition(.opacity.combined(with: .offset(x: -5 * toward)))
+      let railEdge = brush ? layout.brushEdge : layout.toolEdge
+      if railEdge.horizontal {
+        /* Below a row along the top, above one along the bottom, centered on the item. */
+        let itemX = frame.width > 0 ? (label.anchor.midX - frame.minX) * size.width / frame.width : label.anchor.midX
+        let center = brush ? layout.brushCenter : layout.toolCenter
+        let toward: CGFloat = railEdge == .top ? 1 : -1
+        Text(text)
+          .font(.subheadline)
+          .foregroundStyle(.primary)
+          .lineLimit(1)
+          .padding(.horizontal, 14)
+          .padding(.vertical, 8)
+          .panelGlass(in: Capsule())
+          .fixedSize()
+          .position(x: min(max(itemX, bounds.minX + 60), bounds.maxX - 60), y: center.y + toward * (32 + 10 + 18))
+          .allowsHitTesting(false)
+          .accessibilityIdentifier("blender.toolbar.tool-name")
+          .transition(.opacity.combined(with: .offset(y: -5 * toward)))
+      }
+      else {
+        let toward = railEdge == .trailing ? -1.0 : 1.0
+        let edge = brush ? layout.brushCenter.x + toward * layout.brushWidth / 2 :
+                           layout.toolCenter.x + toward * layout.toolWidth / 2
+        let x = edge + toward * 10
+        let width = max(44, toward > 0 ? bounds.maxX - x : x - bounds.minX)
+        Text(text)
+          .font(.subheadline)
+          .foregroundStyle(.primary)
+          .padding(.horizontal, 14)
+          .padding(.vertical, 8)
+          .panelGlass(in: Capsule())
+          .frame(maxWidth: width, alignment: toward > 0 ? .leading : .trailing)
+          .frame(width: width, alignment: toward > 0 ? .leading : .trailing)
+          .position(x: x + toward * width / 2, y: min(max(itemY, bounds.minY + 18), bounds.maxY - 18))
+          .allowsHitTesting(false)
+          .accessibilityIdentifier("blender.toolbar.tool-name")
+          .transition(.opacity.combined(with: .offset(x: -5 * toward)))
+      }
     }
   }
 }
@@ -3049,9 +3239,15 @@ struct RailLayout: Equatable {
   var sidebarLeading: Bool
   /** Out of the way of an open tool list, or without the room to show. */
   var sidebarTucked: Bool
-  var brushLeading: Bool
+  var toolEdge: RailEdge
+  var brushEdge: RailEdge
+  var brushLeading: Bool { brushEdge == .leading }
   /** See #Rail.brushStops. */
   var brushStops: (middle: CGFloat, other: CGFloat)
+  /** What sits in the bottom left corner, for the quick actions beside it. */
+  var leadingCorner: CGFloat = 0
+  /** A row along the bottom, which the quick actions rise above. */
+  var bottomRow: CGFloat = 0
 
   static func == (a: RailLayout, b: RailLayout) -> Bool {
     a.toolWidth == b.toolWidth && a.toolHeight == b.toolHeight && a.toolsCompact == b.toolsCompact &&
@@ -3059,93 +3255,124 @@ struct RailLayout: Equatable {
       a.brushHeight == b.brushHeight && a.toolTop == b.toolTop && a.dockDistance == b.dockDistance &&
       a.toolCenter == b.toolCenter && a.brushCenter == b.brushCenter && a.colorCenter == b.colorCenter &&
       a.sidebarCenter == b.sidebarCenter && a.sidebarLeading == b.sidebarLeading &&
-      a.sidebarTucked == b.sidebarTucked && a.brushLeading == b.brushLeading &&
-      a.brushStops == b.brushStops
+      a.sidebarTucked == b.sidebarTucked && a.toolEdge == b.toolEdge && a.brushEdge == b.brushEdge &&
+      a.brushStops == b.brushStops && a.leadingCorner == b.leadingCorner && a.bottomRow == b.bottomRow
   }
 
   @MainActor
   init(safe: CGRect, tray: CGFloat, tools: RailState, toolCount: Int, brushes: RailState?, brushCount: Int,
        sidebar: SidebarContent, sidebarPosition: Double? = nil, colorWell: Bool, leftHanded: Bool,
-       gizmoTop: CGFloat)
+       gizmoTop: CGFloat, toolEdge: RailEdge = .leading, brushEdge: RailEdge? = nil)
   {
     let compact: CGFloat = 64, gap: CGFloat = 10, topInset: CGFloat = 16, bottomInset: CGFloat = 12
     let inset: CGFloat = 14
-    sidebarLeading = !leftHanded
-    brushLeading = leftHanded
+    self.toolEdge = toolEdge
+    toolCenter = .zero
+    brushCenter = .zero
+    colorCenter = .zero
+    let brushEdge = brushEdge ?? (leftHanded ? .leading : .trailing)
+    self.brushEdge = brushEdge
+    /* The sidebar keeps the hand's side, unless the brushes were moved there. */
+    let sidebarLeading = brushEdge == (leftHanded ? .trailing : .leading) ? leftHanded : !leftHanded
+    self.sidebarLeading = sidebarLeading
+    let sidebarEdge: RailEdge = sidebarLeading ? .leading : .trailing
+    let brushLeading = brushEdge == .leading
     /* Leave a usable lane for the quick actions beside the gizmo, even in a narrow window. */
     let expandedWidth = min(240, max(64, safe.width - 284))
+    /* Where a column's room ends at the bottom of its edge: above the navigation gizmo on the
+     * trailing side. */
+    let floorY = { (leading: Bool) -> CGFloat in
+      leading ? safe.maxY - tray : min(gizmoTop - gap + bottomInset, safe.maxY - tray)
+    }
+    let listLength = { (count: Int) -> CGFloat in 44 + 12 + CGFloat(count) * 52 + CGFloat(max(0, count - 1)) * 12 }
 
     /* The + and - alone join the tool column: above the closed rail, or in the corner below an
      * open or docked one, which rises to make room. */
-    let pill = sidebar.buttonsOnly && sidebarLeading
+    let sharesSidebar = toolEdge == sidebarEdge
+    let pill = sidebar.buttonsOnly && sharesSidebar
     let below = pill && tools.listVisible
     let reserve = below ? sidebar.height + gap : 0
-    let height = max(0, safe.height - tray - reserve)
+    let toolFloor = floorY(toolEdge == .leading)
+    let span = safe.height - (safe.maxY - tray - toolFloor)
+    let height = max(0, toolFloor - safe.minY - reserve)
     /* The size and strength sliders share the tool rail's edge: an open tool list leaves room for
      * them above it rather than pushing them aside, scrolling within what is left. */
-    let shareEdge = sidebarLeading && !pill && (sidebar.size || sidebar.strength)
+    let shareEdge = sharesSidebar && !pill && (sidebar.size || sidebar.strength)
     let sidebarRoom = shareEdge ? sidebar.height + gap + 18 : 0
-    var maxList = min(max(64, (safe.height - reserve) * 0.58), max(64, safe.height - reserve - 112))
+    var maxList = min(max(64, (span - reserve) * 0.58), max(64, span - reserve - 112))
     if shareEdge {
       maxList = max(compact, min(maxList, height - topInset - bottomInset - sidebarRoom))
     }
     /* The sliders come first: with no room left for an open list of tools, the rail stays closed,
      * showing the active tool alone, until there is. */
     toolsCompact = shareEdge && tools.listVisible && maxList < compact * 2 + 12
-    toolWidth = tools.expanded && !toolsCompact ? expandedWidth : compact
-    /* As tall as its tools (the handle, then 52 points each, 12 apart), as the room allows: a
-     * mode with few tools leaves no empty space below them. */
-    let toolList = 44 + 12 + CGFloat(toolCount) * 52 + CGFloat(max(0, toolCount - 1)) * 12
-    toolHeight = tools.listVisible && !toolsCompact ? max(compact, min(toolList, maxList)) : compact
+    let top = safe.minY + topInset
+    if toolEdge.horizontal {
+      toolWidth = tools.listVisible ? listLength(toolCount) : compact
+      toolHeight = compact
+      dockDistance = 0
+    }
+    else {
+      toolWidth = tools.expanded && !toolsCompact ? expandedWidth : compact
+      /* As tall as its tools (the handle, then 52 points each, 12 apart), as the room allows: a
+       * mode with few tools leaves no empty space below them. */
+      toolHeight = tools.listVisible && !toolsCompact ? max(compact, min(listLength(toolCount), maxList)) : compact
+      /* The middle resting place of a compact tool rail, measured from the bottom one. */
+      dockDistance = max(0, (toolFloor - safe.minY - compact) / 2 - bottomInset)
+    }
     /* Docking centers the rail, unless the sliders need the room above it; otherwise it rests at
      * the bottom. */
     let centered = tools.docked && !shareEdge
-    let bottom = (centered ? max(bottomInset, (height - toolHeight) / 2) : bottomInset) + tray + reserve
-    toolTop = safe.maxY - bottom - toolHeight
-    /* The middle resting place of a compact tool rail, measured from the bottom one. */
-    dockDistance = max(0, (safe.height - tray - compact) / 2 - bottomInset)
-    toolCenter = CGPoint(x: safe.minX + inset + toolWidth / 2, y: toolTop + toolHeight / 2)
-
-    /* The color well above the brushes, on their edge between the top bar and the navigation
-     * gizmo, or the tool rail when they share its edge: an open list halfway down, closed ones
-     * resting above the gizmo, or at the top where they were dragged. */
-    let top = safe.minY + topInset
-    let trailingBottom = min(gizmoTop - gap, safe.maxY - tray - bottomInset)
-    let columnBottom = brushLeading ? toolTop - gap : trailingBottom
-    let colorHeight = colorWell ? BrushColorWell.size + gap : 0
-    brushWidth = brushes?.expanded == true ? expandedWidth : compact
-    let groupTop: CGFloat
-    if brushes?.listVisible == true {
-      /* As tall as its brushes (the handle, then 52 points each, 12 apart), as the room allows. */
-      let list = 44 + 12 + CGFloat(brushCount) * 52 + CGFloat(max(0, brushCount - 1)) * 12
-      brushHeight = max(compact, min(list, columnBottom - top - colorHeight))
-      groupTop = top + max(0, (columnBottom - top - colorHeight - brushHeight) / 2)
-    }
-    else {
-      brushHeight = compact
-      let group = colorHeight + (brushes != nil ? compact : 0)
-      groupTop = brushes?.restsAtTop == true ? top : max(top, columnBottom - group)
-    }
+    let bottom = (centered ? max(bottomInset, (height - toolHeight) / 2) : bottomInset) + reserve
+    toolTop = toolEdge == .top ? top : toolEdge == .bottom ? safe.maxY - tray - bottomInset - compact :
+                                                              toolFloor - bottom - toolHeight
     let edgeX = { (width: CGFloat, leading: Bool) in
       leading ? safe.minX + inset + width / 2 : safe.maxX - inset - width / 2
     }
-    let restTop = top + colorHeight + compact / 2
-    let restBottom = max(top, columnBottom - colorHeight - compact) + colorHeight + compact / 2
-    let resting = brushes?.restsAtTop == true ? restTop : restBottom
-    brushStops = ((top + columnBottom) / 2 - resting, (brushes?.restsAtTop == true ? restBottom : restTop) - resting)
-    colorCenter = CGPoint(x: edgeX(compact, brushLeading), y: groupTop + BrushColorWell.size / 2)
-    brushCenter = CGPoint(x: edgeX(brushWidth, brushLeading), y: groupTop + colorHeight + brushHeight / 2)
+
+    /* The color well above the brushes, on their edge between the top bar and the navigation
+     * gizmo, or the tool rail when they share its edge: an open list halfway down, closed ones
+     * resting above the gizmo, or at the top where they were dragged. In a row, it leads it. */
+    let trailingBottom = floorY(false) - bottomInset
+    let columnBottom = brushEdge == toolEdge ? toolTop - gap : floorY(brushLeading) - bottomInset
+    let colorHeight = colorWell ? BrushColorWell.size + gap : 0
+    if brushEdge.horizontal {
+      brushWidth = brushes?.listVisible == true ? listLength(brushCount) : compact
+      brushHeight = compact
+      brushStops = (0, 0)
+    }
+    else {
+      brushWidth = brushes?.expanded == true ? expandedWidth : compact
+      let groupTop: CGFloat
+      if brushes?.listVisible == true {
+        /* As tall as its brushes (the handle, then 52 points each, 12 apart), as the room allows. */
+        brushHeight = max(compact, min(listLength(brushCount), columnBottom - top - colorHeight))
+        groupTop = top + max(0, (columnBottom - top - colorHeight - brushHeight) / 2)
+      }
+      else {
+        brushHeight = compact
+        let group = colorHeight + (brushes != nil ? compact : 0)
+        groupTop = brushes?.restsAtTop == true ? top : max(top, columnBottom - group)
+      }
+      let restTop = top + colorHeight + compact / 2
+      let restBottom = max(top, columnBottom - colorHeight - compact) + colorHeight + compact / 2
+      let resting = brushes?.restsAtTop == true ? restTop : restBottom
+      brushStops = ((top + columnBottom) / 2 - resting,
+                    (brushes?.restsAtTop == true ? restBottom : restTop) - resting)
+      colorCenter = CGPoint(x: edgeX(compact, brushLeading), y: groupTop + BrushColorWell.size / 2)
+      brushCenter = CGPoint(x: edgeX(brushWidth, brushLeading), y: groupTop + colorHeight + brushHeight / 2)
+    }
 
     /* The sidebar, halfway down its edge where it fits, clear of what sits below it. */
     let h = sidebar.height
     let x = edgeX(PaintSidebar.width, sidebarLeading)
     if pill {
-      let y = below ? safe.maxY - tray - bottomInset - h : max(top, toolTop - gap - h)
+      let y = below ? toolFloor - bottomInset - h : max(top, toolTop - gap - h)
       sidebarCenter = CGPoint(x: x, y: y + h / 2)
       sidebarTucked = false
     }
     else {
-      let lowest = sidebarLeading ? toolTop - gap : trailingBottom
+      let lowest = sharesSidebar ? toolTop - gap : sidebarLeading ? floorY(true) - bottomInset : trailingBottom
       /* Room above for its handle. */
       let highest = top + 18
       let travel = highest...max(highest, lowest - h)
@@ -3155,6 +3382,58 @@ struct RailLayout: Equatable {
       sidebarCenter = CGPoint(x: x, y: y + h / 2)
       sidebarTucked = lowest - top < h
     }
+
+    /* Rows along the top or the bottom run between the columns on either side, the navigation
+     * gizmo's corner left free along the bottom. The tools lead when both share a row. */
+    let columnTools = toolWidth, columnBrushes = brushWidth
+    let lane = { (leading: Bool) -> CGFloat in
+      var widths: [CGFloat] = []
+      if !toolEdge.horizontal && (toolEdge == .leading) == leading { widths.append(columnTools) }
+      if !brushEdge.horizontal && brushLeading == leading { widths.append(max(columnBrushes, compact)) }
+      if !sidebar.isEmpty && sidebarLeading == leading { widths.append(PaintSidebar.width) }
+      return widths.max().map { inset + $0 + gap } ?? inset
+    }
+    var brushRowCenter = CGPoint.zero
+    for row in [RailEdge.top, .bottom] {
+      let toolsHere = toolEdge == row, brushesHere = brushEdge == row && brushes != nil
+      guard toolsHere || brushesHere else { continue }
+      let minX = safe.minX + lane(true)
+      let maxX = safe.maxX - max(lane(false), row == .bottom ? ShellMetrics.gizmoReserve : 0)
+      let room = max(compact, maxX - minX)
+      let colorWidth = brushesHere && colorWell ? BrushColorWell.size + gap : 0
+      var toolLength = toolsHere ? toolWidth : 0
+      var brushLength = brushesHere ? brushWidth : 0
+      let gaps = toolsHere && brushesHere ? gap : 0
+      if toolLength + brushLength + colorWidth + gaps > room {
+        /* Each scrolls within its share of the row. */
+        let share = (room - colorWidth - gaps) / (toolsHere && brushesHere ? 2 : 1)
+        toolLength = toolsHere ? max(compact, min(toolLength, share)) : 0
+        brushLength = brushesHere ? max(compact, min(brushLength, room - colorWidth - gaps - toolLength)) : 0
+      }
+      let total = toolLength + gaps + colorWidth + brushLength
+      let y = row == .top ? top + compact / 2 : safe.maxY - tray - bottomInset - compact / 2
+      var cursor = max(minX, min((safe.minX + safe.maxX) / 2 - total / 2, maxX - total))
+      if toolsHere {
+        toolWidth = toolLength
+        toolCenter = CGPoint(x: cursor + toolLength / 2, y: y)
+        cursor += toolLength + gaps
+      }
+      if brushesHere {
+        colorCenter = CGPoint(x: cursor + BrushColorWell.size / 2, y: y)
+        cursor += colorWidth
+        brushWidth = brushLength
+        brushRowCenter = CGPoint(x: cursor + brushLength / 2, y: y)
+      }
+      if row == .bottom { bottomRow = compact + gap }
+    }
+    if !toolEdge.horizontal {
+      toolCenter = CGPoint(x: edgeX(toolWidth, toolEdge == .leading), y: toolTop + toolHeight / 2)
+    }
+    if brushEdge.horizontal {
+      brushCenter = brushRowCenter
+    }
+    if toolEdge == .leading { leadingCorner = toolWidth }
+    else if brushLeading && brushes?.restsAtTop != true { leadingCorner = brushWidth }
   }
 }
 
