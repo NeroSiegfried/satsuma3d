@@ -289,6 +289,10 @@ struct OutlineList: View {
   @State private var dropTarget: String?
   /** Rows are open until closed, as in Blender's Outliner. */
   @State private var collapsed = Set<String>()
+#if !os(visionOS)
+  /** Drops onto rows, which the system's list does not pass to them itself. */
+  @State private var dropper = OutlineDropper()
+#endif
 
   private static func selected(_ nodes: [JSON]) -> Set<String> {
     Set(nodes.filter { $0.string("kind") == "object" && $0.bool("selected") }.compactMap { $0.string("key") })
@@ -325,8 +329,14 @@ struct OutlineList: View {
    * slides, and a long swipe runs the outermost.
    */
   var body: some View {
-    List {
-      ForEach(shownRows(children), id: \.keyString) { node in
+    let rows = shownRows(children)
+#if !os(visionOS)
+    dropper.rows = rows.map(\.keyString)
+    dropper.store = store
+    dropper.target = { key in if dropTarget != key { dropTarget = key } }
+#endif
+    return List {
+      ForEach(rows, id: \.keyString) { node in
         row(node)
           .listRowInsets(EdgeInsets(top: 1, leading: 8, bottom: 1, trailing: 8))
           .listRowSeparator(.hidden)
@@ -458,20 +468,16 @@ struct OutlineList: View {
 #else
     .onDrag {
       let payload = dragPayload(key, node)
+      /* The list asks again for a row beside it as the drag begins: the first is the one lifted. */
+      if Date().timeIntervalSince(DraggedRows.since) > 0.5 {
+        DraggedRows.current = DraggedRows.keys(payload)
+        DraggedRows.since = Date()
+      }
       return payload.isEmpty ? NSItemProvider() : NSItemProvider(object: payload as NSString)
     } preview: {
       dragPreview(node)
     }
-    .onDrop(of: [.plainText], isTargeted: Binding(get: { dropTarget == key }, set: { over in
-      if over { dropTarget = key } else if dropTarget == key { dropTarget = nil }
-    })) { providers in
-      guard let provider = providers.first else { return false }
-      _ = provider.loadObject(ofClass: NSString.self) { payload, _ in
-        guard let payload = payload as? String else { return }
-        DispatchQueue.main.async { drop(payload, onto: key) }
-      }
-      return true
-    }
+    .background(CollectionViewFinder { dropper.install(on: $0) })
 #endif
     .accessibilityElement(children: .combine)
     .accessibilityAddTraits(selection.contains(key) ? [.isButton, .isSelected] : .isButton)
@@ -560,6 +566,9 @@ struct OutlineList: View {
 /** Rows being dragged, as text naming their keys, which only this list reads. */
 enum DraggedRows {
   private static let prefix = "blender.outliner.rows\n"
+  /** The rows of the drag now going on, to tell where they can go while it moves. */
+  @MainActor static var current: [String] = []
+  @MainActor static var since = Date.distantPast
 
   static func payload(_ nodes: [JSON]) -> String {
     prefix + nodes.compactMap { $0.string("key") }.joined(separator: "\n")
@@ -603,3 +612,93 @@ extension Dictionary where Key == String, Value == Any {
 }
 
 /** \} */
+
+#if !os(visionOS)
+/**
+ * Drops onto the Outliner's rows. The system's list hands drops to no row of its own, so its
+ * collection view takes them here and finds the row under the finger, lit while the dragged rows
+ * can go into or under it.
+ */
+@MainActor
+final class OutlineDropper: NSObject, UIDropInteractionDelegate {
+  var rows: [String] = []
+  weak var store: HierarchyStore?
+  var target: (String?) -> Void = { _ in }
+  private weak var collectionView: UICollectionView?
+
+  func install(on view: UICollectionView) {
+    guard collectionView !== view else { return }
+    collectionView = view
+    view.addInteraction(UIDropInteraction(delegate: self))
+  }
+
+  /** The row under the drag, where the dragged rows can go. */
+  private func row(_ session: UIDropSession) -> String? {
+    guard let view = collectionView, let store,
+          let index = view.indexPathForItem(at: session.location(in: view)), index.item < rows.count
+    else { return nil }
+    let key = rows[index.item]
+    guard let node = store.byKey[key] else { return nil }
+    return store.canMove(DraggedRows.current.compactMap { store.byKey[$0] }, to: node) ? key : nil
+  }
+
+  func dropInteraction(_ interaction: UIDropInteraction, canHandle session: UIDropSession) -> Bool {
+    session.localDragSession != nil && !DraggedRows.current.isEmpty
+  }
+
+  func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: UIDropSession) -> UIDropProposal {
+    let key = row(session)
+    target(key)
+    return UIDropProposal(operation: key == nil ? .forbidden : .move)
+  }
+
+  func dropInteraction(_ interaction: UIDropInteraction, performDrop session: UIDropSession) {
+    defer { target(nil) }
+    guard let key = row(session), let provider = session.items.first?.itemProvider else { return }
+    /* The rows the drag itself carries. */
+    _ = provider.loadObject(ofClass: NSString.self) { payload, _ in
+      guard let payload = payload as? String else { return }
+      DispatchQueue.main.async {
+        MainActor.assumeIsolated {
+          guard let store = self.store, let node = store.byKey[key] else { return }
+          store.move(DraggedRows.keys(payload).compactMap { store.byKey[$0] }, to: node)
+        }
+      }
+    }
+  }
+
+  func dropInteraction(_ interaction: UIDropInteraction, sessionDidExit session: UIDropSession) {
+    target(nil)
+  }
+
+  func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnd session: UIDropSession) {
+    target(nil)
+    DraggedRows.current = []
+    DraggedRows.since = .distantPast
+  }
+}
+
+/** Hands over the collection view of the list this sits in. */
+private struct CollectionViewFinder: UIViewRepresentable {
+  let found: (UICollectionView) -> Void
+
+  func makeUIView(context: Context) -> UIView { FinderView(found: found) }
+  func updateUIView(_ view: UIView, context: Context) {}
+
+  private final class FinderView: UIView {
+    let found: (UICollectionView) -> Void
+    init(found: @escaping (UICollectionView) -> Void) {
+      self.found = found
+      super.init(frame: .zero)
+      isUserInteractionEnabled = false
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func didMoveToWindow() {
+      super.didMoveToWindow()
+      var view = superview
+      while let current = view, !(current is UICollectionView) { view = current.superview }
+      if let list = view as? UICollectionView { found(list) }
+    }
+  }
+}
+#endif
