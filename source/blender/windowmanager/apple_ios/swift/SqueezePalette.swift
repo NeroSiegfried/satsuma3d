@@ -84,8 +84,24 @@ final class SqueezePalette {
     /** The full menu at \a route, for those that did not fit. */
     case menu(String)
     case item(BlenderMenuItem)
+    /** Commands that go together, such as Duplicate and Duplicate Linked, in one place. */
+    case group(CommandGroup)
     /** A quick action, where the context menu has only the mode's settings, as painting does. */
     case action(QuickAction)
+  }
+
+  /** Commands of one kind side by side in one place, each by the words that tell it apart:
+   * "Duplicate | Linked", "Shade Smooth | Auto Smooth | Flat". */
+  struct CommandGroup: Equatable {
+    var items: [BlenderMenuItem]
+    var labels: [String]
+  }
+
+  /** A command with an icon of its own is that icon alone, as Copy and Paste are. */
+  static func iconOnly(_ item: BlenderMenuItem) -> UIImage? {
+    if item.destructive { return UIImage(systemName: "trash") }
+    guard !item.submenu, !["", "NONE", "BLANK1"].contains(item.icon) else { return nil }
+    return BlenderIcon.image(item.icon)
   }
 
   /** A stretch of an arc, holding one part. */
@@ -604,9 +620,36 @@ final class SqueezePalette {
   var contextCommands: [CommandEntry] {
     let items = (commands ?? []).filter { !$0.disabled || $0.submenu }
     if items.contains(where: { !$0.route.contains("\"panel\"") }) || !commandPath.isEmpty {
-      return items.map { .item($0) }
+      return Self.grouped(items)
     }
     return actions.map { .action($0) }
+  }
+
+  /** Commands whose titles begin with the same word, as one place where the first of them is:
+   * every kind of Extrude together, every kind of Subdivide, Duplicate and Duplicate Linked. */
+  static func grouped(_ items: [BlenderMenuItem]) -> [CommandEntry] {
+    let first = { (item: BlenderMenuItem) -> String? in
+      iconOnly(item) == nil && !item.submenu ? item.title.split(separator: " ").first.map(String.init) : nil
+    }
+    var counts: [String: Int] = [:]
+    for item in items { if let word = first(item) { counts[word, default: 0] += 1 } }
+    var result: [CommandEntry] = []
+    var placed = Set<String>()
+    for item in items {
+      guard let word = first(item), counts[word, default: 0] > 1 else {
+        result.append(.item(item))
+        continue
+      }
+      guard placed.insert(word).inserted else { continue }
+      let members = items.filter { first($0) == word }
+      let rests = members.map { String($0.title.dropFirst(word.count)).trimmingCharacters(in: .whitespaces) }
+      /* The first by the shared word alone where the rest of its title only names what it acts on,
+       * as Duplicate Objects does. */
+      let plain = rests[0].isEmpty || (!rests[0].contains(" ") && rests[0].hasSuffix("s"))
+      let labels = [plain ? word : members[0].title] + rests.dropFirst().map { $0.isEmpty ? word : $0 }
+      result.append(.group(CommandGroup(items: members, labels: labels)))
+    }
+    return result
   }
 
   static let commandGap: CGFloat = 4
@@ -620,7 +663,9 @@ final class SqueezePalette {
     switch entry {
       case .undo, .redo, .menu: return Ring.narrow - 4
       case .back: return text("‹ Back")
-      case .item(let item): return text(item.submenu ? item.title + " ›" : item.title)
+      case .item(let item):
+        return iconOnly(item) != nil ? Ring.narrow - 4 : text(item.submenu ? item.title + " ›" : item.title)
+      case .group(let group): return group.labels.reduce(0) { $0 + text($1) - 6 } + 6
       case .action(let action): return text(action.title)
     }
   }
@@ -2137,6 +2182,24 @@ private struct ArcCommandRow: View {
           }
           .hoverHighlight(shape)
           .accessibilityAddTraits(.isButton)
+      case .group(let group):
+        groupView(group, middle: middle, length: length)
+      case .item(let item) where SqueezePalette.iconOnly(item) != nil:
+        Image(uiImage: SqueezePalette.iconOnly(item)!.withRenderingMode(.alwaysTemplate))
+          .resizable()
+          .scaledToFit()
+          .frame(width: 18, height: 18)
+          .foregroundStyle(item.destructive ? Color.red : Color.primary)
+          .rotationEffect(arc.upright(middle, middle: ring.middleAngle))
+          .frame(width: ring.thickness, height: ring.thickness)
+          .position(arc.point(middle, radius: ring.radius))
+          .opacity(item.disabled ? 0.4 : 1)
+          .contentShape(shape)
+          .onTapGesture { palette.activate(item) }
+          .allowsHitTesting(!item.disabled)
+          .hoverHighlight(shape)
+          .accessibilityLabel(item.title)
+          .accessibilityAddTraits(.isButton)
       case .item(let item):
         title(item.submenu ? item.title + " ›" : item.title, middle: middle, length: length,
               color: item.destructive ? .red : .primary)
@@ -2146,6 +2209,47 @@ private struct ArcCommandRow: View {
           .allowsHitTesting(!item.disabled)
           .hoverHighlight(shape)
           .accessibilityAddTraits(.isButton)
+    }
+  }
+
+  /** A group's commands side by side in its place, each as long as its words, a fainter line
+   * between them than between places. */
+  private func groupView(_ group: SqueezePalette.CommandGroup, middle: Double, length: CGFloat) -> some View {
+    let font = UIFont.systemFont(ofSize: 12, weight: .semibold)
+    let widths = group.labels.map { ceil(($0 as NSString).size(withAttributes: [.font: font]).width) + 12 }
+    let total = widths.reduce(0, +)
+    let radius = Double(ring.radius)
+    let span = Double(length) / radius
+    var starts: [Double] = []
+    var angle = middle - span / 2
+    for width in widths {
+      starts.append(angle)
+      angle += span * Double(width / total)
+    }
+    return ZStack {
+      ForEach(Array(group.items.enumerated()), id: \.offset) { index, item in
+        let start = starts[index], piece = span * Double(widths[index] / total)
+        let shape = ArcBand(center: arc.center, radius: ring.radius, thickness: ring.thickness - 6,
+                            start: start + 0.004, end: start + piece - 0.004)
+        if index > 0 {
+          Capsule()
+            .fill(Color.primary.opacity(0.1))
+            .frame(width: 1, height: ring.thickness - 22)
+            .rotationEffect(.radians(start + .pi / 2))
+            .position(arc.point(start, radius: ring.radius))
+            .allowsHitTesting(false)
+        }
+        CurvedText(text: group.labels[index], arc: arc, radius: ring.radius, middle: start + piece / 2,
+                   length: CGFloat(piece) * ring.radius - 6, color: index == 0 ? .primary : .secondary)
+          .opacity(item.disabled ? 0.4 : 1)
+          .contentShape(shape)
+          .onTapGesture { palette.activate(item) }
+          .allowsHitTesting(!item.disabled)
+          .hoverHighlight(shape)
+          .accessibilityElement()
+          .accessibilityLabel(item.title)
+          .accessibilityAddTraits(.isButton)
+      }
     }
   }
 
@@ -2165,6 +2269,7 @@ private struct ArcCommandRow: View {
 /** \} */
 
 #endif
+
 
 
 
