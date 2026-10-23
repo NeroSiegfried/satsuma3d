@@ -543,7 +543,12 @@ final class SqueezePalette {
         /* Redo only once there is something to redo. */
         ring.leading = canRedo ? [.undo, .redo] : [.undo]
         ring.trailing = commands ? [.more] : []
-        let middle = ring.middle
+        /* Clear of the buttons: the settings' rounded ends reach half their thickness past
+         * where they start, and a little more between. */
+        let clear = Double(Ring.narrow / 2 + 6) / Double(ring.radius)
+        let low = ring.middle.lowerBound + clear
+        let high = ring.middle.upperBound - (ring.trailing.isEmpty ? 0 : clear)
+        let middle = low...max(low, high)
         let gap = Double(Ring.narrow + 6) / Double(ring.radius)
         let room = (middle.upperBound - middle.lowerBound) - gap * Double(parts.count - 1)
         let total = parts.reduce(0) { $0 + $1.share }
