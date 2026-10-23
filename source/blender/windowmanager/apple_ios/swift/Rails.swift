@@ -2650,7 +2650,9 @@ struct SidebarSlider: View {
   @Environment(\.displayScale) private var displayScale
 
   private struct Drag {
-    var position: Double
+    /** Where the finger has taken the value, past either end while it pulls the slider. */
+    var raw: Double
+    var position: Double { min(1, max(0, raw)) }
     var lastY: CGFloat
     var moved = false
     /** The Pencil's roll as last seen, to turn the value with it. */
@@ -2692,30 +2694,72 @@ struct SidebarSlider: View {
     logarithmic && low > 0 ? low * pow(high / low, position) : low + (high - low) * position
   }
 
-  /** The value filling a capsule from the bottom, the symbol at its top. */
+  /** Points the slider stretches past an end, pulled further than the value goes: less the
+   * further it is pulled, as glass gives. */
+  private var stretch: CGFloat {
+    guard let drag else { return 0 }
+    let past = drag.raw > 1 ? drag.raw - 1 : drag.raw < 0 ? drag.raw : 0
+    let pulled = CGFloat(past) * travel
+    return (pulled < 0 ? -1 : 1) * 16 * (1 - exp(-abs(pulled) / 48))
+  }
+
+  /** The value filling a glass capsule from the bottom, level across its top as the system's
+   * sliders fill, all the way down at the lowest. The symbol at its top follows the value. */
   private func capsule(height: CGFloat) -> some View {
     let width: CGFloat = 52
-    let fill = width + (height - width) * position(value)
+    let t = position(value)
+    let fill = height * t
+    let pulled = stretch
     return ZStack(alignment: .bottom) {
-      Capsule().fill(Color.primary.opacity(0.08))
-      Capsule()
-        .fill(Color.accentColor.opacity(drag != nil ? 1 : 0.85))
-        .frame(height: fill)
+      SliderFill(level: fill)
+        .fill(.clear)
+        .panelGlass(.tinted(.accentColor.opacity(drag != nil ? 1 : 0.85)), in: SliderFill(level: fill))
       Text(format(value))
         .font(.system(size: 13, weight: .semibold).monospacedDigit())
-        .foregroundStyle(.white)
+        .foregroundStyle(fill > 34 ? Color.white : Color.primary)
         .lineLimit(1)
         .minimumScaleFactor(0.6)
         .frame(width: width - 8, height: width)
     }
     .overlay(alignment: .top) {
-      Image(systemName: symbol)
-        .font(.system(size: 13, weight: .semibold))
-        .foregroundStyle(fill > height - 30 ? Color.white : Color.secondary)
+      liveSymbol(t)
+        .foregroundStyle(fill > height - 30 ? Color.white : Color.primary)
+        .frame(height: 16)
         .padding(.top, 12)
         .allowsHitTesting(false)
     }
     .frame(width: width, height: height)
+    .background(Capsule().fill(.clear).panelGlass(interactive: true, in: Capsule()))
+    /* Pulled past an end, it stretches that way and narrows, springing back when let go. */
+    .scaleEffect(x: 1 - abs(pulled) / height * 0.5, y: 1 + abs(pulled) / height,
+                 anchor: pulled > 0 ? .bottom : .top)
+  }
+
+  /** The slider's symbol drawn as the value: the brush circle growing with the size, the drop
+   * filling with the strength. */
+  @ViewBuilder
+  private func liveSymbol(_ t: Double) -> some View {
+    let font = Font.system(size: 13, weight: .semibold)
+    switch preview {
+      case .size:
+        Image(systemName: symbol)
+          .font(font)
+          .scaleEffect(0.5 + 0.75 * t)
+      case .strength:
+        Image(systemName: symbol.replacingOccurrences(of: ".fill", with: ""))
+          .font(font)
+          .overlay {
+            Image(systemName: symbol)
+              .font(font)
+              .mask {
+                GeometryReader { proxy in
+                  Rectangle()
+                    .frame(height: proxy.size.height * t)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                }
+              }
+          }
+    }
   }
 
   /** The value going around a ring, with the number inside. */
@@ -2770,7 +2814,6 @@ struct SidebarSlider: View {
         HStack(spacing: 14) {
           if !leading, drag?.moved == true { readout }
           capsule(height: Self.trackHeight)
-            .panelGlass(in: Capsule())
           if leading, drag?.moved == true { readout }
         }
         .fixedSize()
@@ -2797,7 +2840,7 @@ struct SidebarSlider: View {
               held = true
             }
           }
-          var current = drag ?? Drag(position: position(value), lastY: gesture.startLocation.y)
+          var current = drag ?? Drag(raw: position(value), lastY: gesture.startLocation.y)
           /* A tap types a value instead; the slightest drag moves it, from where the finger
            * landed, so no movement is lost to telling the two apart. */
           if !current.moved, abs(gesture.translation.height) + abs(gesture.translation.width) > 2 {
@@ -2813,7 +2856,10 @@ struct SidebarSlider: View {
           let side = max(0, abs(gesture.location.x - width / 2) - width)
           let fine = 1 / (1 + Double(side) / 60)
           let before = current.position
-          current.position = min(1, max(0, current.position - Double(dy / travel) * fine))
+          /* Turning back from past an end, the value moves again at once. */
+          if current.raw > 1, dy > 0 { current.raw = 1 }
+          if current.raw < 0, dy < 0 { current.raw = 0 }
+          current.raw -= Double(dy / travel) * fine
           drag = current
           tick(from: before, to: current.position)
           let next = value(at: current.position)
@@ -2837,6 +2883,7 @@ struct SidebarSlider: View {
           }
         })
     .animation(.easeOut(duration: 0.15), value: drag?.moved == true)
+    .animation(.spring(response: 0.35, dampingFraction: 0.55), value: drag == nil)
     .animation(.spring(response: 0.28, dampingFraction: 0.82), value: trackShown)
     /* Held with a Pencil, rolling it turns the value: half a turn from one end to the other.
      * Only read while held, so the Pencil's roll elsewhere does not redraw the slider. */
@@ -2849,7 +2896,7 @@ struct SidebarSlider: View {
       }
       current.roll = turned
       let before = current.position
-      current.position = min(1, max(0, current.position + (turned - last) / .pi))
+      current.raw = min(1, max(0, current.position + (turned - last) / .pi))
       current.moved = true
       drag = current
       tick(from: before, to: current.position)
@@ -2922,6 +2969,23 @@ struct SidebarSlider: View {
     typed = max(low, min(hard, typed))
     local = (typed, Date().addingTimeInterval(1))
     sendBrushValue(key, typed, commit: true)
+  }
+}
+
+/** A capsule standing upright, filled from the bottom to \a level, level across its top. */
+struct SliderFill: Shape {
+  var level: CGFloat
+
+  var animatableData: CGFloat {
+    get { level }
+    set { level = newValue }
+  }
+
+  func path(in rect: CGRect) -> Path {
+    let level = min(max(0, level), rect.height)
+    guard level > 0 else { return Path() }
+    let below = CGRect(x: rect.minX, y: rect.maxY - level, width: rect.width, height: level)
+    return Capsule().path(in: rect).intersection(Path(below))
   }
 }
 
