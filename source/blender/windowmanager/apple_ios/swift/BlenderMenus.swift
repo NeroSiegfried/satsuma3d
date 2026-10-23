@@ -131,6 +131,58 @@ final class BlenderMenus {
     }
   }
 
+  /**
+   * An operator's choice of its enum items, as Blender would show in a popup menu: its headings
+   * begin sections, and choosing one runs the operator with it, see `ios_enum_popup`.
+   */
+  static func enumMenu(_ request: JSON) -> UIMenu? {
+    guard let op = request.string("operator"), let property = request.string("property") else { return nil }
+    var sections: [UIMenu] = []
+    var children: [UIMenuElement] = []
+    var heading = ""
+    func flush() {
+      if !children.isEmpty { sections.append(UIMenu(title: heading, options: .displayInline, children: children)) }
+      children = []
+    }
+    for item in request.array("items") {
+      let title = item.string("title") ?? ""
+      if item.bool("heading") {
+        flush()
+        heading = title
+        continue
+      }
+      guard let value = item.string("value"), !title.isEmpty else { continue }
+      let icon = item.string("icon") ?? ""
+      let image = ["", "NONE", "BLANK1"].contains(icon) ? nil : BlenderIcon.image(icon)
+      children.append(UIAction(title: title, image: image) { _ in
+        WM_apple_ios_ui_operator_enum_enqueue(op, property, value)
+      })
+    }
+    flush()
+    return sections.isEmpty ? nil : UIMenu(title: request.string("title") ?? "", children: sections)
+  }
+
+  /** Rename Active Item: the active object's name, or the active bone's, in a native field. */
+  static func presentRename(from presenter: UIViewController, title: String, current: String) {
+    var top = presenter
+    while let presented = top.presentedViewController { top = presented }
+    let alert = UIAlertController(title: title, message: nil, preferredStyle: .alert)
+    alert.addTextField { field in
+      field.text = current
+      field.clearButtonMode = .whileEditing
+      field.autocapitalizationType = .none
+    }
+    alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+    alert.addAction(UIAlertAction(title: "Rename", style: .default) { [weak alert] _ in
+      guard let name = alert?.textFields?.first?.text, !name.isEmpty,
+            let data = try? JSONSerialization.data(withJSONObject: name, options: .fragmentsAllowed),
+            let json = String(data: data, encoding: .utf8)
+      else { return }
+      Engine.setting("rename_active", json)
+    })
+    top.present(alert, animated: true)
+  }
+
   /** Run an item in Blender. */
   func run(_ item: BlenderMenuItem) {
     _ = item.route.withCString { WM_apple_ios_ui_menu_request($0, true) }

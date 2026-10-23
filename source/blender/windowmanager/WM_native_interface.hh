@@ -28,6 +28,7 @@ namespace ui {
 enum class AlertIcon : int8_t;
 }
 
+struct PropertyRNA;
 struct ReportList;
 struct bContext;
 struct wmKeyConfig;
@@ -122,6 +123,13 @@ struct wmNativeInterface {
    * pointer is. False to show Blender's own.
    */
   bool (*menu_popup)(bContext *C, const char *menu) = nullptr;
+  /**
+   * Choose one of an operator's enum items natively, in place of Blender's popup menu of them,
+   * where the pointer is; the choice runs the operator anew. False to show Blender's own.
+   */
+  bool (*enum_popup)(bContext *C, wmOperator *op, PropertyRNA *prop) = nullptr;
+  /** Show one of Blender's panels natively, such as Rename Active Item's. False for Blender's. */
+  bool (*panel_popup)(bContext *C, const char *panel) = nullptr;
 
   /**
    * The barrel roll of a Pencil touching the screen, in radians, for moving things to turn them

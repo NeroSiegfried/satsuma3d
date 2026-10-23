@@ -3466,6 +3466,76 @@ bool ios_menu_popup(bContext *C, const char *menu)
   return true;
 }
 
+/** Where the pointer is, as fractions of the window from its top left, for a popup there. */
+static std::string ios_popup_position(bContext *C)
+{
+  float x = 0.5f, y = 0.5f;
+  wmWindow *win = CTX_wm_window(C);
+  if (win && win->runtime->eventstate) {
+    const float width = WM_window_native_pixel_x(win);
+    const float height = WM_window_native_pixel_y(win);
+    if (width > 0 && height > 0) {
+      x = win->runtime->eventstate->xy[0] / width;
+      y = 1.0f - win->runtime->eventstate->xy[1] / height;
+    }
+  }
+  return "\"x\":" + std::to_string(x) + ",\"y\":" + std::to_string(y);
+}
+
+/**
+ * An operator's choice of its enum items, such as Add Constraint's, shown natively where the
+ * pointer is in place of Blender's popup menu, its headings as sections. The native side runs the
+ * operator with the one chosen.
+ */
+bool ios_enum_popup(bContext *C, wmOperator *op, PropertyRNA *prop)
+{
+  if (WM_apple_ios_ui_desktop_mode()) {
+    return false;
+  }
+  const EnumPropertyItem *items = nullptr;
+  int count = 0;
+  bool free = false;
+  RNA_property_enum_items_gettexted(C, op->ptr, prop, &items, &count, &free);
+  if (!items || count == 0) {
+    return false;
+  }
+  std::string json = "{\"title\":\"" + ios_json_escape(WM_operatortype_name(op->type, op->ptr)) +
+                     "\",\"operator\":\"" + ios_json_escape(op->type->idname) +
+                     "\",\"property\":\"" + ios_json_escape(RNA_property_identifier(prop)) +
+                     "\",\"items\":[";
+  bool first = true;
+  for (int i = 0; i < count; i++) {
+    const EnumPropertyItem &item = items[i];
+    if (!item.name && !item.identifier[0]) {
+      continue;
+    }
+    const char *icon = nullptr;
+    if (item.icon) {
+      RNA_enum_identifier(rna_enum_icon_items, item.icon, &icon);
+    }
+    json += std::string(first ? "" : ",") + "{\"title\":\"" + ios_json_escape(item.name ? item.name : "") +
+            "\",\"value\":\"" + ios_json_escape(item.identifier) + "\",\"heading\":" +
+            (item.identifier[0] ? "0" : "1") + ",\"icon\":\"" + ios_json_escape(icon ? icon : "") +
+            "\"}";
+    first = false;
+  }
+  if (free) {
+    MEM_delete(items);
+  }
+  ios_menu_popup_snapshot.publish(json + "]," + ios_popup_position(C) + "}");
+  return true;
+}
+
+/** Rename Active Item's panel, as a native field; the other panels are Blender's own. */
+bool ios_panel_popup(bContext *C, const char *panel)
+{
+  if (WM_apple_ios_ui_desktop_mode() || !STREQ(panel, "TOPBAR_PT_name")) {
+    return false;
+  }
+  ios_menu_popup_snapshot.publish("{\"rename\":1," + ios_popup_position(C) + "}");
+  return true;
+}
+
 extern "C" char *WM_apple_ios_ui_menu_popup_take_json()
 {
   std::string json;

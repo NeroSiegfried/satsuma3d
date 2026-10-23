@@ -1227,24 +1227,9 @@ final class SqueezePalette {
   /** Rename Active, asked for with the system's text field rather than Blender's popup. */
   private func rename(_ item: BlenderMenuItem) {
     close()
-    guard let window, var top = window.rootViewController else { return }
-    while let presented = top.presentedViewController { top = presented }
-    let alert = UIAlertController(title: item.title.replacingOccurrences(of: "…", with: ""), message: nil,
-                                  preferredStyle: .alert)
-    alert.addTextField { [activeName] field in
-      field.text = activeName
-      field.clearButtonMode = .whileEditing
-      field.autocapitalizationType = .none
-    }
-    alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-    alert.addAction(UIAlertAction(title: "Rename", style: .default) { [weak alert] _ in
-      guard let name = alert?.textFields?.first?.text, !name.isEmpty,
-            let data = try? JSONSerialization.data(withJSONObject: name, options: .fragmentsAllowed),
-            let json = String(data: data, encoding: .utf8)
-      else { return }
-      Engine.setting("rename_active", json)
-    })
-    top.present(alert, animated: true)
+    guard let window, let root = window.rootViewController else { return }
+    BlenderMenus.presentRename(from: root, title: item.title.replacingOccurrences(of: "…", with: ""),
+                               current: activeName)
   }
 
   /** Runs a command, or opens its submenu. */

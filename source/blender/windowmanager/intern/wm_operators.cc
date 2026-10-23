@@ -1123,6 +1123,11 @@ wmOperatorStatus WM_menu_invoke_ex(bContext *C, wmOperator *op, wm::OpCallContex
     return retval;
   }
   else {
+    if (const wmNativeInterface *native = WM_native_interface(); native && native->enum_popup) {
+      if (native->enum_popup(C, op, prop)) {
+        return OPERATOR_CANCELLED;
+      }
+    }
     ui::PopupMenu *pup = ui::popup_menu_begin(
         C, WM_operatortype_name(op->type, op->ptr).c_str(), ICON_NONE);
     ui::Layout &layout = *popup_menu_layout(pup);
@@ -2284,6 +2289,11 @@ static wmOperatorStatus wm_call_panel_exec(bContext *C, wmOperator *op)
   RNA_string_get(op->ptr, "name", idname);
   const bool keep_open = RNA_boolean_get(op->ptr, "keep_open");
 
+  if (const wmNativeInterface *native = WM_native_interface(); native && native->panel_popup) {
+    if (native->panel_popup(C, idname)) {
+      return OPERATOR_INTERFACE;
+    }
+  }
   return ui::popover_panel_invoke(C, idname, keep_open, op->reports);
 }
 

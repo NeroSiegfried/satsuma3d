@@ -255,11 +255,20 @@ extension DocumentController: UIEditMenuInteractionDelegate, UIGestureRecognizer
     guard let json = WM_apple_ios_ui_menu_popup_take_json() else { return }
     let data = Data(bytes: json, count: strlen(json))
     free(json)
-    guard let request = (try? JSONSerialization.jsonObject(with: data)) as? JSON,
-          let menu = request.string("menu") else { return }
+    guard let request = (try? JSONSerialization.jsonObject(with: data)) as? JSON else { return }
     let bounds = metalView.bounds
     let point = CGPoint(x: bounds.width * CGFloat(request.double("x") ?? 0.5),
                         y: bounds.height * CGFloat(request.double("y") ?? 0.5))
+    if request.bool("rename") {
+      BlenderMenus.presentRename(from: self, title: "Rename Active Item", current: model.activeName)
+      return
+    }
+    if let choice = BlenderMenus.enumMenu(request) {
+      blenderMenu = choice
+      contextMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+      return
+    }
+    guard let menu = request.string("menu") else { return }
     Task { @MainActor in
       guard let items = await BlenderMenus.shared.fetch(BlenderMenus.route(menu)), !items.isEmpty else { return }
       blenderMenu = BlenderMenus.uiMenu(items)
