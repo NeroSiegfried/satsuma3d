@@ -271,9 +271,6 @@ final class SqueezePalette {
   var previewing: String?
   @ObservationIgnored private var previewGeneration = 0
   private(set) var localColor: [Double]?
-  /** Rolled past each step of the history and the stroke direction. */
-  @ObservationIgnored private var historyRoll: Double = 0
-  @ObservationIgnored private var directionRoll: Double = 0
   /** What each part does once it stops turning. */
   @ObservationIgnored private var settling: [Part: (task: Task<Void, Never>, action: @MainActor () -> Void)] = [:]
   @ObservationIgnored private var lastSent = Date.distantPast
@@ -398,8 +395,7 @@ final class SqueezePalette {
     values = [:]
     localColor = nil
     scrubbing = nil
-    historyRoll = 0
-    directionRoll = 0
+    rollGathered = nil
     hoverRoll = roll
     touchRoll = nil
     rollLock = nil
@@ -706,42 +702,64 @@ final class SqueezePalette {
     return nil
   }
 
-  /** The Pencil rolled by \a delta radians on \a part. */
+  /** How far the Pencil rolls for one step of what it turns: an item along an arc, a twentieth of
+   * a slider, one of 24 hues, one step of the history. Far enough that a hand holding still
+   * turns nothing. */
+  static let rollStep = Double.pi * 10 / 9
+  static let sliderRollStep = Double.pi / 2
+  static let hueRollStep = Double.pi * 5 / 6
+
+  /** The roll gathered towards the next step of what it turns. */
+  @ObservationIgnored private var rollGathered: (part: Part, angle: Double)?
+
+  /** Whole steps of \a size from the roll gathered on \a part, the rest kept for the next. */
+  private func steps(_ delta: Double, on part: Part, size: Double) -> Int {
+    var gathered = rollGathered?.part == part ? rollGathered!.angle : 0
+    gathered += delta
+    let whole = Int(gathered / size)
+    gathered -= Double(whole) * size
+    rollGathered = (part, gathered)
+    return whole
+  }
+
+  /** The Pencil rolled by \a delta radians on \a part: it turns in whole steps only, so nothing
+   * wavers between them. */
   private func rolled(by delta: Double, on part: Part, at point: CGPoint) {
     guard delta != 0, shown else { return }
     switch part {
       case .tools, .brushes:
-        turn(part, by: delta / Self.step, at: point)
+        let count = steps(delta, on: part, size: Self.rollStep)
+        if count != 0 { turn(part, by: Double(count), at: point) }
       case .size, .strength, .weight:
-        /* Half a turn from one end to the other, as the sidebar's sliders have it. */
+        let count = steps(delta, on: part, size: Self.sliderRollStep)
+        guard count != 0 else { return }
         let key = part == .size ? "size" : part == .weight ? "weight" : "strength"
         let before = fraction(key)
-        let after = min(1, max(0, before + delta / .pi))
+        let after = min(1, max(0, ((before * 20).rounded() + Double(count)) / 20))
         guard after != before else { return }
         setFraction(key, after, settles: true)
-        if Int(before * 20) != Int(after * 20) { tick(at: point) }
+        tick(at: point)
       case .color:
-        turnHue(by: delta / (2 * .pi), at: point)
+        let count = steps(delta, on: part, size: Self.hueRollStep)
+        if count != 0 { turnHue(by: Double(count) / 24, at: point) }
       case .direction:
         guard let direction else { return }
-        directionRoll += delta
-        guard abs(directionRoll) > .pi / 8 else { return }
-        let inverted = directionRoll > 0
-        directionRoll = 0
+        let count = steps(delta, on: part, size: Self.sliderRollStep)
+        guard count != 0 else { return }
+        let inverted = count > 0
         if inverted != direction.inverted {
           chooseDirection(inverted)
           tick(at: point)
         }
       case .history:
-        historyRoll += delta
-        while abs(historyRoll) >= Self.step {
-          let forward = historyRoll > 0
-          historyRoll -= forward ? Self.step : -Self.step
-          Engine.operatorCall(forward ? "ED_OT_redo" : "ED_OT_undo")
+        let count = steps(delta, on: part, size: Self.rollStep)
+        for _ in 0..<abs(count) {
+          Engine.operatorCall(count > 0 ? "ED_OT_redo" : "ED_OT_undo")
           tick(at: point)
         }
       case .commands:
-        turnCommands(by: delta / Self.step, at: point)
+        let count = steps(delta, on: part, size: Self.rollStep)
+        if count != 0 { turnCommands(by: Double(count), at: point) }
     }
   }
 
