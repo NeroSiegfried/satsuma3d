@@ -897,7 +897,6 @@ struct ToolRails: View {
       let safe = CGRect(origin: .zero, size: proxy.size).inset(by: insets)
       let toolItems = RailItem.tools(model.tools, mode: model.mode)
       let brushItems = RailItem.brushes(model.brushes)
-      let color = (model.brush?["color"] as? [NSNumber])?.map(\.doubleValue)
       /* The navigation gizmo, in whichever corner it is. */
       let gizmo = model.navigationGizmo
       let gizmoFrame = !gizmoShown ? CGRect(x: safe.minX, y: safe.maxY + 1000, width: 0, height: 0) :
@@ -914,7 +913,7 @@ struct ToolRails: View {
                                     brushes: brushesAvailable ? brushes : nil, brushCount: brushItems.count,
                                     sidebar: content,
                                     sidebarPosition: sidebarPosition >= 0 ? sidebarPosition : nil,
-                                    colorWell: color != nil, leftHanded: leftHanded, gizmo: gizmoFrame,
+                                    leftHanded: leftHanded, gizmo: gizmoFrame,
                                     toolEdge: toolEdge, brushEdge: RailEdge(rawValue: brushEdgeName),
                                     sidebarEdge: RailEdge(rawValue: sidebarEdgeName)))
       }
@@ -932,11 +931,6 @@ struct ToolRails: View {
                   y: (point.y - frame.minY) * proxy.size.height / frame.height) : point
       }
       ZStack(alignment: .topLeading) {
-        if let color {
-          BrushColorWell(color: color)
-            .position(layout.colorCenter)
-            .transition(.opacity.combined(with: .scale(scale: 0.8)))
-        }
         if brushesAvailable {
           Rail(items: brushItems, active: brushes.active(model.brushes?.string("active") ?? ""),
                state: brushes, label: label, width: layout.brushWidth, height: layout.brushHeight,
@@ -1794,6 +1788,8 @@ struct SidebarContent: Equatable {
   var strength = false
   var buttons = false
   var smooth = false
+  /** The brush's color, first. */
+  var color = false
   /** Face Control, where the front camera tracks faces: the face plays the brush. */
   var face = false
 
@@ -1804,6 +1800,7 @@ struct SidebarContent: Equatable {
     self.dial = dial
     size = brush?.dict("size") != nil
     strength = brush?.dict("strength") != nil
+    color = brush?["color"] is [NSNumber]
     self.buttons = buttons
     self.smooth = smooth
 #if !os(visionOS)
@@ -1811,9 +1808,9 @@ struct SidebarContent: Equatable {
 #endif
   }
 
-  var isEmpty: Bool { !size && !strength && !buttons && !smooth }
+  var isEmpty: Bool { !size && !strength && !buttons && !smooth && !color }
   /** Only buttons: small enough to sit above the tool rail. */
-  var buttonsOnly: Bool { (buttons || smooth) && !size && !strength }
+  var buttonsOnly: Bool { (buttons || smooth) && !size && !strength && !color }
 
   var sliderHeight: CGFloat { dial ? 52 : 148 }
   /** The + and -, Smooth and Face Control below them, each 52 high. */
@@ -1826,7 +1823,7 @@ struct SidebarContent: Equatable {
   var handle: CGFloat { buttonsOnly ? 0 : 16 }
 
   var height: CGFloat {
-    let parts: [CGFloat] = [size ? sliderHeight : 0, strength ? sliderHeight : 0,
+    let parts: [CGFloat] = [color ? BrushColorWell.size : 0, size ? sliderHeight : 0, strength ? sliderHeight : 0,
                             buttonsHeight].filter { $0 > 0 }
     return parts.isEmpty ? 0 : parts.reduce(0, +) + CGFloat(parts.count - 1) * 8 + 12 + handle
   }
@@ -1873,6 +1870,9 @@ struct PaintSidebar: View {
     let stack = horizontal ? AnyLayout(HStackLayout(spacing: 8)) : AnyLayout(VStackLayout(spacing: 8))
     let buttons = horizontal ? AnyLayout(HStackLayout(spacing: 4)) : AnyLayout(VStackLayout(spacing: 4))
     stack {
+      if content.color, let color = (brush?["color"] as? [NSNumber])?.map(\.doubleValue) {
+        BrushColorWell(color: color)
+      }
       if content.size, let size = brush?.dict("size") {
         let pixels = size.bool("pixels")
         turned(SidebarSlider(key: "size", title: size.string("label") ?? "Radius", symbol: "circle.dashed",
@@ -2468,7 +2468,7 @@ struct SliderFill: Shape {
 /** The brush's color, above the brushes, in modes that paint colors. */
 struct BrushColorWell: View {
   let color: [Double]
-  static let size: CGFloat = 64
+  static let size: CGFloat = 52
   @State private var anchor = AnchorBox()
 
   private var uiColor: UIColor {
@@ -2484,15 +2484,15 @@ struct BrushColorWell: View {
     } label: {
       Circle()
         .fill(Color(uiColor))
-        .frame(width: 36, height: 36)
+        .frame(width: 34, height: 34)
         .overlay(Circle().strokeBorder(.white.opacity(0.85), lineWidth: 2.5))
         .shadow(color: .black.opacity(0.2), radius: 2)
         .frame(width: Self.size, height: Self.size)
         .contentShape(Circle())
     }
     .buttonStyle(.plain)
+    .hoverHighlight(Circle())
     .background(PresentationAnchor(anchor: anchor))
-    .panelGlass(.clear, in: Circle())
     .opacity(ColorRoll.shared.showing ? 0 : 1)
     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
       ColorRoll.shared.wellFrame = frame
@@ -2773,7 +2773,6 @@ struct RailLayout: Equatable {
   var dockDistance: CGFloat
   var toolCenter: CGPoint
   var brushCenter: CGPoint
-  var colorCenter: CGPoint
   var sidebarCenter: CGPoint
   /** How far the sidebar's top edge can be moved along its edge. */
   var sidebarTravel: ClosedRange<CGFloat> = 0...0
@@ -2796,7 +2795,7 @@ struct RailLayout: Equatable {
     a.toolWidth == b.toolWidth && a.toolHeight == b.toolHeight && a.toolsCompact == b.toolsCompact &&
       a.brushWidth == b.brushWidth &&
       a.brushHeight == b.brushHeight && a.toolTop == b.toolTop && a.dockDistance == b.dockDistance &&
-      a.toolCenter == b.toolCenter && a.brushCenter == b.brushCenter && a.colorCenter == b.colorCenter &&
+      a.toolCenter == b.toolCenter && a.brushCenter == b.brushCenter &&
       a.sidebarCenter == b.sidebarCenter && a.sidebarLeading == b.sidebarLeading && a.sidebarRow == b.sidebarRow &&
       a.sidebarTucked == b.sidebarTucked && a.toolEdge == b.toolEdge && a.brushEdge == b.brushEdge &&
       a.brushStops == b.brushStops && a.leadingCorner == b.leadingCorner && a.bottomRow == b.bottomRow
@@ -2804,7 +2803,7 @@ struct RailLayout: Equatable {
 
   @MainActor
   init(safe: CGRect, tray: CGFloat, tools: RailState, toolCount: Int, brushes: RailState?, brushCount: Int,
-       sidebar: SidebarContent, sidebarPosition: Double? = nil, colorWell: Bool, leftHanded: Bool,
+       sidebar: SidebarContent, sidebarPosition: Double? = nil, leftHanded: Bool,
        gizmo: CGRect, toolEdge: RailEdge = .leading, brushEdge: RailEdge? = nil, sidebarEdge: RailEdge? = nil)
   {
     let compact: CGFloat = 64, gap: CGFloat = 10, topInset: CGFloat = 16, bottomInset: CGFloat = 12
@@ -2812,7 +2811,6 @@ struct RailLayout: Equatable {
     self.toolEdge = toolEdge
     toolCenter = .zero
     brushCenter = .zero
-    colorCenter = .zero
     let brushEdge = brushEdge ?? (leftHanded ? .leading : .trailing)
     self.brushEdge = brushEdge
     /* The sidebar keeps the hand's side, unless the brushes were moved there or it was moved itself.
@@ -2911,9 +2909,9 @@ struct RailLayout: Equatable {
       sidebarTucked = lowest - sidebarTop < h
     }
 
-    /* The color well above the brushes, on their edge between the top bar and the navigation
-     * gizmo, or the tool rail when they share its edge: an open list halfway down, closed ones
-     * resting above the gizmo, or at the top where they were dragged. In a row, it leads it. */
+    /* The brushes on their edge between the top bar and the navigation gizmo, or the tool rail
+     * when they share its edge: an open list halfway down, closed ones resting above the gizmo,
+     * or at the top where they were dragged. */
     var columnBottom = brushEdge == toolEdge ? toolTop - gap : floorY(brushLeading) - bottomInset
     /* The brushes' column begins below the gizmo where it is at the top of their edge. */
     var brushTop = ceilingY(brushLeading) + topInset
@@ -2923,7 +2921,6 @@ struct RailLayout: Equatable {
       if above - brushTop >= columnBottom - below { columnBottom = min(columnBottom, above) }
       else { brushTop = max(brushTop, below) }
     }
-    let colorHeight = colorWell ? BrushColorWell.size + gap : 0
     if brushEdge.horizontal {
       brushWidth = brushes?.listVisible == true ? listLength(brushCount) : compact
       brushHeight = compact
@@ -2934,21 +2931,20 @@ struct RailLayout: Equatable {
       let groupTop: CGFloat
       if brushes?.listVisible == true {
         /* As tall as its brushes (the handle, then 52 points each, 12 apart), as the room allows. */
-        brushHeight = max(compact, min(listLength(brushCount), columnBottom - brushTop - colorHeight))
-        groupTop = brushTop + max(0, (columnBottom - brushTop - colorHeight - brushHeight) / 2)
+        brushHeight = max(compact, min(listLength(brushCount), columnBottom - brushTop))
+        groupTop = brushTop + max(0, (columnBottom - brushTop - brushHeight) / 2)
       }
       else {
         brushHeight = compact
-        let group = colorHeight + (brushes != nil ? compact : 0)
+        let group: CGFloat = brushes != nil ? compact : 0
         groupTop = brushes?.restsAtTop == true ? brushTop : max(brushTop, columnBottom - group)
       }
-      let restTop = brushTop + colorHeight + compact / 2
-      let restBottom = max(brushTop, columnBottom - colorHeight - compact) + colorHeight + compact / 2
+      let restTop = brushTop + compact / 2
+      let restBottom = max(brushTop, columnBottom - compact) + compact / 2
       let resting = brushes?.restsAtTop == true ? restTop : restBottom
       brushStops = ((brushTop + columnBottom) / 2 - resting,
                     (brushes?.restsAtTop == true ? restBottom : restTop) - resting)
-      colorCenter = CGPoint(x: edgeX(compact, brushLeading), y: groupTop + BrushColorWell.size / 2)
-      brushCenter = CGPoint(x: edgeX(brushWidth, brushLeading), y: groupTop + colorHeight + brushHeight / 2)
+      brushCenter = CGPoint(x: edgeX(brushWidth, brushLeading), y: groupTop + brushHeight / 2)
     }
 
     /* Rows along the top or the bottom run between the columns on either side, the navigation
@@ -2973,17 +2969,16 @@ struct RailLayout: Equatable {
       /* The sidebar keeps its length, at the end of the row; the rails scroll in what is left. */
       let sidebarLength = sidebarHere ? sidebar.height + (toolsHere || brushesHere ? gap : 0) : 0
       let room = max(compact, maxX - minX - sidebarLength)
-      let colorWidth = brushesHere && colorWell ? BrushColorWell.size + gap : 0
       var toolLength = toolsHere ? toolWidth : 0
       var brushLength = brushesHere ? brushWidth : 0
       let gaps = toolsHere && brushesHere ? gap : 0
-      if toolLength + brushLength + colorWidth + gaps > room {
+      if toolLength + brushLength + gaps > room {
         /* Each scrolls within its share of the row. */
-        let share = (room - colorWidth - gaps) / (toolsHere && brushesHere ? 2 : 1)
+        let share = (room - gaps) / (toolsHere && brushesHere ? 2 : 1)
         toolLength = toolsHere ? max(compact, min(toolLength, share)) : 0
-        brushLength = brushesHere ? max(compact, min(brushLength, room - colorWidth - gaps - toolLength)) : 0
+        brushLength = brushesHere ? max(compact, min(brushLength, room - gaps - toolLength)) : 0
       }
-      let total = toolLength + gaps + colorWidth + brushLength + sidebarLength
+      let total = toolLength + gaps + brushLength + sidebarLength
       let y = row == .top ? top + compact / 2 : safe.maxY - tray - bottomInset - compact / 2
       var cursor = max(minX, min((safe.minX + safe.maxX) / 2 - total / 2, maxX - total))
       if toolsHere {
@@ -2992,8 +2987,6 @@ struct RailLayout: Equatable {
         cursor += toolLength + gaps
       }
       if brushesHere {
-        colorCenter = CGPoint(x: cursor + BrushColorWell.size / 2, y: y)
-        cursor += colorWidth
         brushWidth = brushLength
         brushRowCenter = CGPoint(x: cursor + brushLength / 2, y: y)
         cursor += brushLength
