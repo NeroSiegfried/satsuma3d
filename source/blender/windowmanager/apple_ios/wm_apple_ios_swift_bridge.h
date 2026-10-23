@@ -117,6 +117,9 @@ NSArray *_Nullable wm_apple_ios_menu_result(uint64_t request);
 /** Ask for one of Blender's menus by its JSON route, or run its item when `execute`; the answer
  * is taken with #WM_apple_ios_ui_menu_take_result. */
 uint64_t WM_apple_ios_ui_menu_request(const char *_Nonnull route, bool execute);
+/** As #WM_apple_ios_ui_menu_request, with Blender's cursor at \a x, \a y in the window's pixels,
+ * for operators that follow the pointer from there, such as Bevel. */
+uint64_t WM_apple_ios_ui_menu_at_position_request(const char *_Nonnull route, bool execute, int x, int y);
 char *_Nullable WM_apple_ios_ui_menu_take_result(uint64_t identifier);
 /** The document window's controller is closing. */
 void wm_apple_ios_document_controller_closed(id _Nonnull controller);

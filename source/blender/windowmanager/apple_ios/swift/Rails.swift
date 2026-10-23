@@ -16,9 +16,6 @@
  * nearest where it is let go: either side, or along the top or the bottom as a row.
  */
 
-#if !os(visionOS)
-import PencilKit
-#endif
 import SwiftUI
 import UIKit
 
@@ -948,6 +945,16 @@ struct ToolRails: View {
       .onChange(of: brushItems.map(\.id)) { _, _ in
         updateSqueezePalette(toolItems: toolItems, brushItems: brushItems)
       }
+#if !os(visionOS)
+      /* The quick actions for what is selected, which the squeeze palette has too. */
+      .onChange(of: QuickAction.list(model.actions), initial: true) { _, actions in
+        SqueezePalette.shared.actions = actions
+      }
+#endif
+      /* Brushes' previews, which arrive after their names. */
+      .onChange(of: brushItems.map { $0.image.map(ObjectIdentifier.init) }) { _, _ in
+        updateSqueezePalette(toolItems: toolItems, brushItems: brushItems)
+      }
       .onChange(of: model.brushes?.string("active")) { _, _ in
         updateSqueezePalette(toolItems: toolItems, brushItems: brushItems)
       }
@@ -960,7 +967,7 @@ struct ToolRails: View {
 #if !os(visionOS)
       .onChange(of: model.brush.map { $0 as NSDictionary }, initial: true) { _, brush in
         FaceControl.shared.brush = brush as? JSON
-        if #available(iOS 26.0, *) { SqueezePalette.shared.brush = brush as? JSON }
+        SqueezePalette.shared.brush = brush as? JSON
       }
 #endif
       /* Following the finger at once while the sidebar is moved. */
@@ -969,7 +976,12 @@ struct ToolRails: View {
                  value: layout)
       .onChange(of: layout.leadingCorner, initial: true) { _, width in model.toolRailWidth = width }
       .onChange(of: layout.bottomRow, initial: true) { _, height in model.bottomRailHeight = height }
-      .onAppear { PencilRoll.start() }
+      .onAppear {
+        PencilRoll.start()
+#if !os(visionOS)
+        SqueezePalette.start()
+#endif
+      }
       .onChange(of: model.brushes.map { $0 as NSDictionary }, initial: true) { _, snapshot in
         let brushes = snapshot as? JSON
         let loading = brushes?.bool("loading") ?? false
@@ -987,42 +999,30 @@ struct ToolRails: View {
     .ignoresSafeArea(edges: .vertical)
   }
 
-  /** The system's tool palette a Pencil's squeeze shows: the brushes where Blender paints with
-   * them, otherwise the tools. */
+  /** The palette a Pencil's squeeze shows: the tools, and the brushes where Blender paints with
+   * them, with their settings. */
   private func updateSqueezePalette(toolItems: [RailItem], brushItems: [RailItem]) {
 #if !os(visionOS)
-    if #available(iOS 26.0, *) {
-      RollDial.shared.activeBrush = model.brushes?.string("active")
-      SqueezePalette.shared.setUndo(canUndo: model.canUndo, canRedo: model.canRedo)
-      let strokes = model.direction?.bool("hidden") == true ? nil : intent.strokes
-      SqueezePalette.shared.update(
-        tools: toolItems, active: tools.active(model.activeTool),
-        direction: strokes.map { .init(inverted: $0.inverted, add: $0.addName, subtract: $0.subtractName,
-                                      addSymbol: $0.addSymbol, subtractSymbol: $0.subtractSymbol) },
-        chooseTool: { WM_apple_ios_ui_tool_set_by_id($0.id) },
-        setDirection: { [intent] inverted in intent.choose(inverted ? .subtract : .add) })
-      let tools = tools, brushes = brushes
-      let animation: Animation? = UIAccessibility.isReduceMotionEnabled ? nil :
-        .spring(response: 0.32, dampingFraction: 0.84)
-      SqueezePalette.shared.showAll = {
-        withAnimation(animation) {
-          if brushItems.isEmpty { tools.expanded = true } else { brushes.docked = true }
-        }
-      }
-      if !brushItems.isEmpty {
-        SqueezePalette.shared.brush = model.brush
-        SqueezePalette.shared.update(items: brushItems, active: model.brushes?.string("active") ?? "",
-                                     brushes: true) { item in
-          WM_apple_ios_ui_brush_activate(item.id)
-        }
-      }
-      else {
-        SqueezePalette.shared.update(items: toolItems, active: tools.active(model.activeTool),
-                                     brushes: false) { item in
-          WM_apple_ios_ui_tool_set_by_id(item.id)
-        }
-      }
+    RollDial.shared.activeBrush = model.brushes?.string("active")
+    let strokes = model.direction?.bool("hidden") == true ? nil : intent.strokes
+    let palette = SqueezePalette.shared
+    palette.update(tools: toolItems, activeTool: tools.active(model.activeTool), brushes: brushItems,
+                   activeBrush: brushes.active(model.brushes?.string("active") ?? ""),
+                   direction: strokes.map { .init(inverted: $0.inverted, add: $0.addName, subtract: $0.subtractName,
+                                                  addSymbol: $0.addSymbol, subtractSymbol: $0.subtractSymbol) },
+                   canUndo: model.canUndo, canRedo: model.canRedo)
+    /* The rails show what is chosen there at once, as if chosen on them. */
+    palette.chooseTool = { [tools] item in
+      tools.choose(item.id)
+      WM_apple_ios_ui_tool_set_by_id(item.id)
     }
+    palette.chooseBrush = { [brushes] item in
+      brushes.choose(item.id)
+      WM_apple_ios_ui_brush_activate(item.id)
+    }
+    palette.setDirection = { [intent] inverted in intent.choose(inverted ? .subtract : .add) }
+    palette.runAction = { [model] action in action.run(in: model) }
+    palette.blenderWindow = model.window
 #endif
   }
 
@@ -1234,672 +1234,6 @@ final class SelectIntentState {
     WM_apple_ios_ui_select_intent_set(smoothing ? 3 : Int32(intent.rawValue))
   }
 }
-
-#if !os(visionOS)
-/** What squeezing Apple Pencil Pro shows, see the iPad page of Settings: the system's tool palette
- * by the Pencil, as drawing apps have it, or the Pencil's radial menu. GHOST reads it too. */
-enum PencilSqueeze {
-  static let key = "BlenderPencilSqueeze"
-  static var showsPalette: Bool { UserDefaults.standard.string(forKey: key) != "menu" }
-}
-
-/** The system's tool palette, which a squeeze of Apple Pencil Pro shows by the Pencil anywhere in
- * the window, with Blender's brushes or tools as its items: choosing one makes it active. */
-@available(iOS 26.0, *)
-@MainActor
-final class SqueezePalette: NSObject, PKToolPickerObserver {
-  static let shared = SqueezePalette()
-
-  private var picker: PKToolPicker?
-  private var ids: [String] = []
-  private var choose: ((RailItem) -> Void)?
-  private var items: [RailItem] = []
-  /** Set here from Blender, not chosen in the palette. */
-  private var following = false
-  /** When the palette was last made: a new one selects its first item by itself, which is not a
-   * choice, and reports it a moment later. */
-  private var builtAt = Date.distantPast
-  private var observer: NSObjectProtocol?
-
-  private override init() {
-    super.init()
-    observer = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification,
-                                                      object: nil, queue: .main) { _ in
-      MainActor.assumeIsolated { SqueezePalette.shared.attach() }
-    }
-  }
-
-
-  /** The brush's values from Blender, which the palette's width, opacity and color set: its size,
-   * strength and color. Null where Blender selects with tools rather than painting with brushes. */
-  var brush: JSON? {
-    didSet {
-      SqueezeBrushState.shared.brush = brush
-      /* A brush that paints with a color now, or no longer: the palette offers it, or not. */
-      if (brush?["color"] != nil) != paints { rebuild?() }
-      followBrush()
-    }
-  }
-  /** The last update again, for the brush's color to come or go. */
-  private var rebuild: (() -> Void)?
-  /** The palette's widths, the brush sizes it offers, in pixels. */
-  private static let widths: [CGFloat] = [8, 20, 40, 80, 160]
-  /** Its items are brushes, with their options. */
-  private var brushes = false
-  private var builtForBrushes = false
-
-  /** The active one and the two used before it, as few as the palette's arc holds without
-   * crowding; its button beside them shows all of them. */
-  private static let capacity = 3
-  /** Opens the rail with all of them. */
-  var showAll: (() -> Void)?
-  /** Presents Blender's settings. */
-  var showSettings: (() -> Void)?
-
-  /** The palette's More button: all the brushes or tools, Blender's commands for what is
-   * selected, as its context menu lists them, and Settings. */
-  private func moreMenu() -> UIMenu {
-    /* The tools, and the stroke's direction, as rows of icons at the top, as of the moment it
-     * opens. */
-    let current = UIDeferredMenuElement.uncached { completion in
-      MainActor.assumeIsolated { completion(SqueezePalette.shared.toolRows()) }
-    }
-    let all = UIAction(title: brushes ? "All Tools and Brushes" : "All Tools",
-                       image: UIImage(systemName: "square.grid.2x2")) { _ in
-      MainActor.assumeIsolated { SqueezePalette.shared.expand() }
-    }
-    let commands = UIDeferredMenuElement.uncached { completion in
-      Task { @MainActor in
-        let items = await BlenderMenus.shared.fetch(BlenderMenus.contextRoute) ?? []
-        completion(items.isEmpty ? [] : [BlenderMenus.uiMenu(items)])
-      }
-    }
-    let settings = UIAction(title: "Settings", image: UIImage(systemName: "gearshape")) { _ in
-      MainActor.assumeIsolated { SqueezePalette.shared.showSettings?() }
-    }
-    return UIMenu(children: [current, UIMenu(options: .displayInline, children: [all]), commands,
-                             UIMenu(options: .displayInline, children: [settings])])
-  }
-
-  private func toolRows() -> [UIMenuElement] {
-    var rows: [UIMenuElement] = []
-    if brushes, !tools.isEmpty {
-      rows.append(UIMenu(title: "Tools", options: [.displayInline, .displayAsPalette], children: tools.map { tool in
-        UIAction(title: tool.title, image: tool.image.map { Self.fitted($0, side: 26) },
-                 state: tool.id == activeTool ? .on : .off) { _ in
-          MainActor.assumeIsolated { SqueezePalette.shared.chooseTool?(tool) }
-        }
-      }))
-    }
-    if let direction {
-      let choice = { (inverted: Bool, title: String, symbol: String) in
-        UIAction(title: title, image: DirectionSymbol.image(symbol),
-                 state: direction.inverted == inverted ? .on : .off) { _ in
-          MainActor.assumeIsolated { SqueezePalette.shared.setDirection?(inverted) }
-        }
-      }
-      rows.append(UIMenu(title: "Direction", options: [.displayInline, .displayAsPalette], children: [
-        choice(false, direction.add, direction.addSymbol), choice(true, direction.subtract, direction.subtractSymbol),
-      ]))
-    }
-    return rows
-  }
-
-  /** Blender's undo, for the palette's own Undo and Redo buttons, which use the first
-   * responder's undo manager. */
-  private final class BlenderUndo: UndoManager {
-    var undoable = false
-    var redoable = false
-    override var canUndo: Bool { undoable }
-    override var canRedo: Bool { redoable }
-    override func undo() { Engine.operatorCall("ED_OT_undo") }
-    override func redo() { Engine.operatorCall("ED_OT_redo") }
-  }
-  private let undo = BlenderUndo()
-
-  func setUndo(canUndo: Bool, canRedo: Bool) {
-    guard canUndo != undo.undoable || canRedo != undo.redoable else { return }
-    undo.undoable = canUndo
-    undo.redoable = canRedo
-    /* The palette checks again when told the undo manager changed. */
-    NotificationCenter.default.post(name: .NSUndoManagerCheckpoint, object: undo)
-  }
-  /** The brushes or tools used last, most recent first. */
-  private var recent: [String] {
-    get { UserDefaults.standard.stringArray(forKey: "BlenderSqueezeRecent." + (brushes ? "brushes" : "tools")) ?? [] }
-    set { UserDefaults.standard.set(Array(newValue.prefix(Self.capacity)),
-                                    forKey: "BlenderSqueezeRecent." + (brushes ? "brushes" : "tools")) }
-  }
-
-  /** The tool items' identifiers, apart from the brushes'. */
-  private static let toolPrefix = "tool:"
-  /** The item that opens every tool and brush. */
-  private static let allID = "show:all"
-  /** Where it holds brushes, how many of the tools used last it shows beside them. */
-  private static let toolCapacity = 2
-
-  /** The tools used last, most recent first, kept beside the brushes. */
-  private static var recentTools: [String] {
-    get { UserDefaults.standard.stringArray(forKey: "BlenderSqueezeRecentTools") ?? [] }
-    set { UserDefaults.standard.set(Array(newValue.prefix(4)), forKey: "BlenderSqueezeRecentTools") }
-  }
-
-  /** Every tool and brush, opened from the palette itself. */
-  private func allItem() -> PKToolPickerItem {
-    var configuration = PKToolPickerCustomItem.Configuration(identifier: Self.allID,
-                                                            name: brushes ? "All Tools and Brushes" : "All Tools")
-    let image = UIImage(systemName: "square.grid.2x2")!
-    configuration.imageProvider = { _ in image }
-    configuration.allowsColorSelection = false
-    configuration.toolAttributeControls = []
-    return PKToolPickerCustomItem(configuration: configuration)
-  }
-  /** Every brush, from which the recent are taken and which All shows. */
-  private var allItems: [RailItem] = []
-  /** Whether the brushes paint with a color, which the palette then offers. */
-  private var paints = false
-
-  func update(items all: [RailItem], active: String, brushes: Bool, choose: @escaping (RailItem) -> Void) {
-    self.brushes = brushes
-    allItems = all
-    rebuild = { [weak self] in self?.update(items: all, active: active, brushes: brushes, choose: choose) }
-    if !active.isEmpty, recent.first != active {
-      recent = [active] + recent.filter { $0 != active }
-    }
-    /* The active one and those used last, then the first ones to fill, in the rail's order so
-     * each keeps its place in the arc. */
-    var chosen = Set(recent.filter { id in all.contains { $0.id == id } }.prefix(Self.capacity))
-    for item in all where chosen.count < Self.capacity { chosen.insert(item.id) }
-    let items = all.filter { chosen.contains($0.id) }
-    self.items = items
-    self.choose = choose
-    /* Painting, the tools used last too, the active one first, before the brushes: both shown,
-     * as the rails show them; then the item that shows all. */
-    let toolIDs = brushes ? ([activeTool] + Self.recentTools.filter { $0 != activeTool }) : []
-    let shownTools = toolIDs.compactMap { id in tools.first { $0.id == id } }.prefix(Self.toolCapacity)
-    let ids = shownTools.map { Self.toolPrefix + $0.id } + items.map(\.id) + [Self.allID]
-    /* The color is a list of its channels. */
-    let paints = brush?["color"] != nil
-    if ids != self.ids || picker == nil || brushes != builtForBrushes || paints != self.paints {
-      self.ids = ids
-      builtForBrushes = brushes
-      self.paints = paints
-      picker?.removeObserver(self)
-      let toolItems = shownTools.map { toolItem($0) } +
-        items.map { brushes ? brushItem($0) : toolItem($0, prefixed: false) } + [allItem()]
-      guard !toolItems.isEmpty else { return }
-      let picker = PKToolPicker(toolItems: toolItems)
-      builtAt = Date()
-      picker.accessoryItem = UIBarButtonItem(title: "More", image: nil, menu: moreMenu())
-      picker.showsDrawingPolicyControls = false
-      picker.addObserver(self)
-      self.picker = picker
-    }
-    followSelection()
-    followBrush()
-    followTool()
-    attach()
-  }
-
-  /** A brush in the palette: tapped again, its size, strength, direction and color. */
-  private func brushItem(_ item: RailItem) -> PKToolPickerItem {
-    var configuration = PKToolPickerCustomItem.Configuration(identifier: item.id, name: item.title)
-    let image = item.image ?? UIImage(systemName: "circle")!
-    configuration.imageProvider = { _ in image }
-    configuration.widthVariants = Self.widthVariants(image)
-    configuration.defaultWidth = Self.widths[2]
-    /* Blender's own options above the system's, which then show only the color, where the
-     * brush paints with one. */
-    configuration.toolAttributeControls = []
-    configuration.allowsColorSelection = paints
-    configuration.defaultColor = paints ? .black : .label
-    configuration.viewControllerProvider = { _ in
-      MainActor.assumeIsolated {
-        let options = UIHostingController(rootView: SqueezeBrushOptions())
-        options.sizingOptions = .preferredContentSize
-        options.view.backgroundColor = .clear
-        return options
-      }
-    }
-    return PKToolPickerCustomItem(configuration: configuration)
-  }
-
-  /** A tool in the palette, as the tool rail shows it. */
-  private func toolItem(_ item: RailItem, prefixed: Bool = true) -> PKToolPickerItem {
-    var configuration = PKToolPickerCustomItem.Configuration(
-      identifier: (prefixed ? Self.toolPrefix : "") + item.id, name: item.title)
-    let image = item.image ?? UIImage(systemName: "circle")!
-    configuration.imageProvider = { _ in image }
-    configuration.allowsColorSelection = false
-    configuration.toolAttributeControls = []
-    return PKToolPickerCustomItem(configuration: configuration)
-  }
-
-  /** The palette on what Blender has: the brush while the tool paints with brushes, or else the
-   * tool. */
-  private func followSelection() {
-    let tool = ids.contains(Self.toolPrefix + activeTool)
-    let selected = brushes && !activeTool.contains("brush") && tool ? Self.toolPrefix + activeTool :
-      (brushes ? RollDial.shared.activeBrush ?? "" : activeTool)
-    guard let picker, ids.contains(selected), picker.selectedToolItemIdentifier != selected else { return }
-    following = true
-    picker.selectedToolItemIdentifier = selected
-    following = false
-  }
-
-  /** Every tool, those of each group too, and every brush, in a sheet: the palette's arc holds
-   * only a few. */
-  private func expand() {
-    guard let window = holder.window, var top = window.rootViewController else { return }
-    while let presented = top.presentedViewController { top = presented }
-    guard !(top is UIHostingController<SqueezeAllView>) else { return }
-    /* Each tool of a group, as its menu on the rail lists them. */
-    var seen = Set<String>()
-    let everyTool = tools.flatMap { $0.grouped ? $0.group : [$0] }.filter { seen.insert($0.id).inserted }
-    let brushItems = brushes ? allItems : []
-    let view = SqueezeAllView(
-      tools: brushes ? everyTool : allItems.flatMap { $0.grouped ? $0.group : [$0] },
-      brushes: brushItems, activeTool: activeTool, activeBrush: brushes ? RollDial.shared.activeBrush : nil,
-      chooseTool: { [weak self] tool in
-        guard let self else { return }
-        if brushes { chooseTool?(tool) } else { choose?(tool) }
-      },
-      chooseBrush: { [weak self] brush in self?.choose?(brush) })
-    let sheet = UIHostingController(rootView: view)
-    sheet.modalPresentationStyle = .formSheet
-    if let controller = sheet.sheetPresentationController {
-      controller.detents = [.medium(), .large()]
-      controller.prefersGrabberVisible = true
-    }
-    top.present(sheet, animated: true)
-  }
-
-  /** Where the palette holds brushes, the tool they paint with, to see and change beside them,
-   * and which way they stroke. */
-  private var tools: [RailItem] = []
-  private var activeTool = ""
-  private var chooseTool: ((RailItem) -> Void)?
-  struct Direction: Equatable {
-    var inverted: Bool
-    var add: String
-    var subtract: String
-    var addSymbol: String
-    var subtractSymbol: String
-  }
-  private var direction: Direction?
-  private var setDirection: ((Bool) -> Void)?
-
-  func update(tools: [RailItem], active: String, direction: Direction?,
-              chooseTool: @escaping (RailItem) -> Void, setDirection: @escaping (Bool) -> Void) {
-    self.tools = tools
-    activeTool = active
-    if !active.isEmpty {
-      let recent = Self.recentTools
-      if recent.first != active { Self.recentTools = [active] + recent.filter { $0 != active } }
-    }
-    self.direction = direction
-    self.chooseTool = chooseTool
-    self.setDirection = setDirection
-    SqueezeBrushState.shared.direction = direction
-    SqueezeBrushState.shared.setDirection = setDirection
-    followTool()
-  }
-
-  /** The palette's button shows the active tool where its items are brushes, or More. */
-  private func followTool() {
-    guard let accessory = picker?.accessoryItem else { return }
-    let tool = brushes ? tools.first { $0.id == activeTool } : nil
-    let image = tool?.image.map { Self.fitted($0, side: 26) } ?? Self.more
-    if accessory.image !== image { accessory.image = image }
-    accessory.accessibilityLabel = tool?.title ?? "More"
-  }
-
-  private static let more = UIImage(systemName: "ellipsis.circle")
-  private static var fittedCache: [ObjectIdentifier: UIImage] = [:]
-  private static func fitted(_ image: UIImage, side: CGFloat) -> UIImage {
-    if let cached = fittedCache[ObjectIdentifier(image)] { return cached }
-    let result = UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { _ in
-      image.draw(in: CGRect(x: 0, y: 0, width: side, height: side))
-    }.withRenderingMode(image.renderingMode)
-    fittedCache[ObjectIdentifier(image)] = result
-    return result
-  }
-
-  /** The palette shows an item by its width's image, and its width choices by theirs: the
-   * brush's own preview for each, smaller for the thinner ones. */
-  private static func widthVariants(_ image: UIImage) -> [CGFloat: UIImage] {
-    let side = max(image.size.width, image.size.height, 1)
-    return Dictionary(uniqueKeysWithValues: widths.enumerated().map { index, width in
-      let scale = 0.6 + 0.4 * CGFloat(index) / CGFloat(widths.count - 1)
-      let inset = side * (1 - scale) / 2
-      let variant = UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { _ in
-        image.draw(in: CGRect(x: inset, y: inset, width: side - 2 * inset, height: side - 2 * inset))
-      }
-      return (width, variant)
-    })
-  }
-
-  /** The palette's item showing the brush as Blender has it: its size as the nearest width, its
-   * strength as opacity, and its color. */
-  private func followBrush() {
-    guard brushes, let item = picker?.selectedToolItem as? PKToolPickerCustomItem else { return }
-    following = true
-    defer { following = false }
-    if let json = brush?.dict("size"), let size = json.double("value") {
-      let width: CGFloat
-      if json.bool("pixels") {
-        width = Self.widths.min { abs(Double($0) - size) < abs(Double($1) - size) } ?? Self.widths[2]
-      }
-      else {
-        /* A size in the scene, such as Grease Pencil's: its place along its range. */
-        let low = max(1e-4, json.double("min") ?? 1e-3), high = max(low * 1.01, json.double("max") ?? 1)
-        let t = min(1, max(0, log(max(size, low) / low) / log(high / low)))
-        width = Self.widths[Int((t * Double(Self.widths.count - 1)).rounded())]
-      }
-      if item.width != width { item.width = width }
-    }
-    var color = item.color
-    if let rgb = (brush?["color"] as? [NSNumber])?.map({ CGFloat($0.doubleValue) }), rgb.count >= 3 {
-      color = UIColor(red: rgb[0], green: rgb[1], blue: rgb[2], alpha: 1)
-    }
-    color = color.withAlphaComponent(1)
-    /* Only a real change: setting it again as Blender echoes what the palette sent would reset
-     * its width and opacity controls while they are being used. */
-    if !Self.same(item.color, color) { item.color = color }
-  }
-
-  private static func same(_ a: UIColor, _ b: UIColor) -> Bool {
-    func rgba(_ color: UIColor) -> [CGFloat] {
-      var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, alpha: CGFloat = 0
-      color.getRed(&r, green: &g, blue: &b, alpha: &alpha)
-      return [r, g, b, alpha]
-    }
-    return zip(rgba(a), rgba(b)).allSatisfy { abs($0 - $1) < 0.01 }
-  }
-
-  /** The system finds the palette from the first responder, which nothing else in the window is
-   * while no text is typed, and shows it for a squeeze through PencilKit's own canvas: this
-   * empty, invisible canvas behind everything is both, holding the palette, hidden until a
-   * squeeze shows it, while Settings has the palette for squeezing. It never draws or takes a
-   * touch. */
-  private final class Holder: PKCanvasView {
-    var blenderUndo: UndoManager?
-    override var canBecomeFirstResponder: Bool { true }
-    override var undoManager: UndoManager? { blenderUndo }
-  }
-  private lazy var holder: Holder = {
-    let view = Holder(frame: .zero)
-    view.blenderUndo = undo
-    /* Enabled, for its Pencil interaction, but behind all of Blender's views, which take every
-     * touch. */
-    view.isOpaque = false
-    view.backgroundColor = .clear
-    view.drawingPolicy = .pencilOnly
-    view.isScrollEnabled = false
-    view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-    return view
-  }()
-  private var keyboardObserver: NSObjectProtocol?
-
-  func attach() {
-    guard let window = UIApplication.shared.connectedScenes
-      .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first
-    else { return }
-    if holder.window !== window {
-      holder.removeFromSuperview()
-      holder.frame = window.bounds
-      window.insertSubview(holder, at: 0)
-    }
-    if keyboardObserver == nil {
-      /* Back as the first responder once typing ends. */
-      keyboardObserver = NotificationCenter.default.addObserver(
-        forName: UIResponder.keyboardDidHideNotification, object: nil, queue: .main) { _ in
-          MainActor.assumeIsolated { SqueezePalette.shared.attach() }
-        }
-    }
-    let state = holder.pencilKitResponderState
-    if PencilSqueeze.showsPalette, let picker {
-      if state.activeToolPicker !== picker { state.activeToolPicker = picker }
-      state.toolPickerVisibility = ProcessInfo.processInfo.environment["DEBUGPALETTE"] != nil ? .visible : .hidden
-      if !holder.isFirstResponder && !Self.typing(in: window) { holder.becomeFirstResponder() }
-    }
-    else {
-      state.toolPickerVisibility = .inactive
-      state.activeToolPicker = nil
-      if holder.isFirstResponder { holder.resignFirstResponder() }
-    }
-  }
-
-  /** A text field or view has the keyboard, which the palette must not take. */
-  private static func typing(in view: UIView) -> Bool {
-    if view.isFirstResponder && view is UIKeyInput { return true }
-    return view.subviews.contains { typing(in: $0) }
-  }
-
-  nonisolated func toolPickerSelectedToolItemDidChange(_ toolPicker: PKToolPicker) {
-    MainActor.assumeIsolated {
-      guard !following, let id = toolPicker.selectedToolItem.identifier as String? else { return }
-      /* Only what is picked in it, never what a palette selects on its own: a new one picks its
-       * first item while out of sight, which would change the tool picked in Blender. Back to
-       * Blender's then. */
-      guard toolPicker === picker, toolPicker.isVisible, Date().timeIntervalSince(builtAt) > 0.3 else {
-        followSelection()
-        return
-      }
-      if id == Self.allID {
-        /* Not a tool: the palette back on what was picked, and every tool and brush open. */
-        followSelection()
-        holder.pencilKitResponderState.toolPickerVisibility = .hidden
-        expand()
-        return
-      }
-      if id.hasPrefix(Self.toolPrefix) {
-        let toolID = String(id.dropFirst(Self.toolPrefix.count))
-        if toolID != activeTool, let tool = tools.first(where: { $0.id == toolID }) { chooseTool?(tool) }
-        return
-      }
-      guard let item = allItems.first(where: { $0.id == id }) else { return }
-      let active = brushes ? brush.flatMap { _ in RollDial.shared.activeBrush } : nil
-      if !brushes || active != id {
-        choose?(item)
-        return
-      }
-      /* The same brush with its color changed in the palette; its size and strength are set in
-       * Blender's own options above it. */
-      guard let custom = toolPicker.selectedToolItem as? PKToolPickerCustomItem, brush?["color"] != nil else { return }
-      var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 1
-      custom.color.getRed(&r, green: &g, blue: &b, alpha: &a)
-      sendBrushValue("color", [r, g, b].map { min(1, max(0, Double($0))) }, commit: true)
-    }
-  }
-}
-#endif
-
-#if !os(visionOS)
-/** The brush as the squeeze palette's options show it, following Blender. */
-@available(iOS 26.0, *)
-@MainActor
-@Observable
-final class SqueezeBrushState {
-  static let shared = SqueezeBrushState()
-  var brush: JSON?
-  var direction: SqueezePalette.Direction?
-  @ObservationIgnored var setDirection: ((Bool) -> Void)?
-}
-
-/** Tapping the brush in use in the squeeze palette: its size and strength, and in modes that
- * stroke both ways, Add or Subtract, above the palette's own color. */
-@available(iOS 26.0, *)
-struct SqueezeBrushOptions: View {
-  private var state: SqueezeBrushState { SqueezeBrushState.shared }
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      if let size = state.brush?.dict("size") {
-        let pixels = size.bool("pixels")
-        OptionSlider(title: size.string("label") ?? "Radius", key: "size", json: size, logarithmic: true) {
-          pixels ? "\(Int($0.rounded())) px" : String(format: "%.3g m", $0)
-        }
-      }
-      if let strength = state.brush?.dict("strength") {
-        OptionSlider(title: "Strength", key: "strength", json: strength, logarithmic: false) {
-          "\(Int(($0 * 100).rounded()))%"
-        }
-      }
-      if let direction = state.direction {
-        Picker("Direction", selection: Binding(get: { direction.inverted }, set: { state.setDirection?($0) })) {
-          Label { Text(direction.add) } icon: { DirectionSymbol.view(direction.addSymbol) }.tag(false)
-          Label { Text(direction.subtract) } icon: { DirectionSymbol.view(direction.subtractSymbol) }.tag(true)
-        }
-        .pickerStyle(.segmented)
-      }
-    }
-    .padding(16)
-    .frame(width: 300)
-  }
-}
-
-/** Every tool and brush, from the squeeze palette, whose arc holds only a few: tapped, one is
- * picked and the sheet closes. */
-@available(iOS 26.0, *)
-struct SqueezeAllView: View {
-  let tools: [RailItem]
-  let brushes: [RailItem]
-  let activeTool: String
-  let activeBrush: String?
-  let chooseTool: (RailItem) -> Void
-  let chooseBrush: (RailItem) -> Void
-  @Environment(\.dismiss) private var dismiss
-
-  var body: some View {
-    NavigationStack {
-      ScrollView {
-        VStack(alignment: .leading, spacing: 20) {
-          if !tools.isEmpty {
-            section(brushes.isEmpty ? nil : "Tools", items: tools, brush: false) { item in
-              item.id == activeTool
-            } choose: { chooseTool($0) }
-          }
-          /* The brushes by catalog, as the rail separates them. */
-          ForEach(Array(catalogs.enumerated()), id: \.offset) { index, catalog in
-            section(index == 0 ? "Brushes" : nil, items: catalog, brush: true) { $0.id == activeBrush } choose: {
-              chooseBrush($0)
-            }
-          }
-        }
-        .padding(20)
-      }
-      .navigationTitle(brushes.isEmpty ? "Tools" : "Tools and Brushes")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .confirmationAction) {
-          Button("Done", systemImage: "checkmark") { dismiss() }
-        }
-      }
-    }
-  }
-
-  private var catalogs: [[RailItem]] {
-    var result: [[RailItem]] = []
-    for brush in brushes {
-      if brush.gapBefore || result.isEmpty { result.append([]) }
-      result[result.count - 1].append(brush)
-    }
-    return result
-  }
-
-  private func section(_ title: String?, items: [RailItem], brush: Bool, selected: @escaping (RailItem) -> Bool,
-                       choose: @escaping (RailItem) -> Void) -> some View {
-    VStack(alignment: .leading, spacing: 10) {
-      if let title {
-        Text(title).font(.headline)
-      }
-      LazyVGrid(columns: [GridItem(.adaptive(minimum: 84), spacing: 8)], spacing: 8) {
-        ForEach(items) { item in
-          let on = selected(item)
-          Button {
-            choose(item)
-            Haptics.selection()
-            dismiss()
-          } label: {
-            VStack(spacing: 6) {
-              if let image = on ? item.selectedImage ?? item.image : item.image {
-                Image(uiImage: image)
-                  .renderingMode(image.renderingMode == .alwaysOriginal || brush ? .original : .template)
-                  .resizable()
-                  .scaledToFit()
-                  .frame(width: brush ? 48 : 30, height: brush ? 48 : 30)
-                  .frame(height: 48)
-              }
-              Text(item.title)
-                .font(.caption)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-            }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 4)
-            .frame(maxWidth: .infinity)
-            .background(on ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.05),
-                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay {
-              if on {
-                RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.accentColor, lineWidth: 2)
-              }
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-          }
-          .buttonStyle(.plain)
-          .accessibilityAddTraits(on ? .isSelected : [])
-        }
-      }
-    }
-  }
-}
-
-/** One of the brush's values: dragged, Blender follows at once; let go, one undo step. */
-@available(iOS 26.0, *)
-private struct OptionSlider: View {
-  let title: String
-  let key: String
-  let json: JSON
-  let logarithmic: Bool
-  let format: (Double) -> String
-  @State private var dragging: Double?
-
-  private var low: Double { max(logarithmic ? 0.001 : 0, json.double("min") ?? 0) }
-  private var high: Double { max(low + 0.001, min(logarithmic ? 1000 : 1, json.double("max") ?? 1)) }
-
-  private func position(_ value: Double) -> Double {
-    logarithmic ? log(max(low, value) / low) / log(high / low) : (value - low) / (high - low)
-  }
-
-  private func value(_ position: Double) -> Double {
-    logarithmic ? low * pow(high / low, position) : low + (high - low) * position
-  }
-
-  var body: some View {
-    let current = dragging ?? json.double("value") ?? low
-    VStack(alignment: .leading, spacing: 4) {
-      HStack {
-        Text(title).font(.subheadline)
-        Spacer()
-        Text(format(current)).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
-      }
-      Slider(value: Binding(get: { position(current) }, set: { position in
-        let next = value(position)
-        dragging = next
-        sendBrushValue(key, next, commit: false)
-      }), in: 0...1) { editing in
-        if !editing, let dragging {
-          sendBrushValue(key, dragging, commit: true)
-          self.dragging = nil
-        }
-      }
-    }
-  }
-}
-#endif
 
 /** The barrel roll of a Pencil on the screen, anywhere in the window, for dials to turn with. */
 @MainActor

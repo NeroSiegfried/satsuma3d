@@ -45,9 +45,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     let shell = ShellPanels(model: model)
     let commands = ShellCommands(model: model, shell: shell)
 #if !os(visionOS)
-    if #available(iOS 26.0, *) {
-      SqueezePalette.shared.showSettings = { [weak commands] in commands?.settings?.present() }
-    }
+    SqueezePalette.shared.showSettings = { [weak commands] in commands?.settings?.present() }
 #endif
     let viewport = ViewportContainer(metalView: metalView)
 #if os(visionOS)
@@ -421,6 +419,10 @@ public struct DocumentWindow: View {
    * they are windows of their own. */
   public var body: some View {
     window
+#if !os(visionOS)
+      /* The palette a Pencil's squeeze shows, over everything; its commands follow the context. */
+      .overlay { SqueezePaletteLayer() }
+#endif
       .environment(\.blenderMenuContext, model.menuContext)
 #if !os(visionOS)
       /* The scene in the room, through the camera. */

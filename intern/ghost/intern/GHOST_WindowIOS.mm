@@ -550,33 +550,8 @@ UIWindow *document_window = nil;
   pencil_interaction = [[UIPencilInteraction alloc] init];
   pencil_interaction.delegate = self;
   [window->getView() addInteraction:pencil_interaction];
-  [self updatePencilInteraction];
-  [NSNotificationCenter.defaultCenter addObserver:self
-                                         selector:@selector(updatePencilInteraction)
-                                             name:NSUserDefaultsDidChangeNotification
-                                           object:nil];
 #endif
 }
-
-#if !defined(APPLE_TARGET_VISIONOS)
-/* While squeezing shows the system's tool palette, see the iPad page of Settings, the squeeze
- * goes to the palette's own canvas, see `SqueezePalette` in `Rails.swift`: UIKit gives it to one
- * Pencil interaction, which must not be this one then. */
-- (void)updatePencilInteraction
-{
-  if (![NSThread isMainThread]) {
-    dispatch_async(dispatch_get_main_queue(), ^{ [self updatePencilInteraction]; });
-    return;
-  }
-  NSString *squeeze_shows = [NSUserDefaults.standardUserDefaults stringForKey:@"BlenderPencilSqueeze"];
-  const BOOL palette = ![squeeze_shows isEqualToString:@"menu"];
-  if (pencil_interaction.enabled == palette) {
-    pencil_interaction.enabled = !palette;
-    ios_squeeze_log(palette ? "Pencil interaction off: the palette's canvas takes squeezes" :
-                              "Pencil interaction on: squeezes show the radial menu");
-  }
-}
-#endif
 
 /* Turn the user inputs into Blender events.
  * We batch up the events rather than send them directly in the gesture
@@ -2062,19 +2037,36 @@ static UIBezierPath *pointer_move()
                                              long(squeeze.phase),
                                              long(action)]
                       .UTF8String);
-  /* Unless Settings has the radial menu for squeezing, the system's tool palette shows instead,
-   * see `SqueezePalette` in `Rails.swift`. */
-  NSString *squeeze_shows = [NSUserDefaults.standardUserDefaults stringForKey:@"BlenderPencilSqueeze"];
-  if (action == UIPencilPreferredActionShowContextualPalette &&
-      ![squeeze_shows isEqualToString:@"menu"])
+  if (squeeze.phase != UIPencilInteractionPhaseEnded || action == UIPencilPreferredActionIgnore ||
+      action == UIPencilPreferredActionRunSystemShortcut)
   {
     return;
   }
-  if (squeeze.phase == UIPencilInteractionPhaseEnded && action != UIPencilPreferredActionIgnore &&
-      action != UIPencilPreferredActionRunSystemShortcut)
-  {
-    [self togglePencilMenuForInteraction:interaction hoverPose:squeeze.hoverPose];
+  /* Unless Settings has the radial menu for squeezing, Blender's tool palette opens by the
+   * Pencil, see `SqueezePalette.swift`. Not mid-stroke, where a squeeze is most likely a grip. */
+  NSString *squeeze_shows = [NSUserDefaults.standardUserDefaults stringForKey:@"BlenderPencilSqueeze"];
+  if (![squeeze_shows isEqualToString:@"menu"]) {
+    if (current_pencil_touch) {
+      return;
+    }
+    NSMutableDictionary *info = [NSMutableDictionary dictionary];
+    if (UIPencilHoverPose *pose = squeeze.hoverPose) {
+      const CGPoint point = [interaction.view convertPoint:pose.location toView:nil];
+      info[@"x"] = @(point.x);
+      info[@"y"] = @(point.y);
+      if (@available(iOS 17.5, *)) {
+        info[@"roll"] = @(pose.rollAngle);
+      }
+      /* Which way the Pencil leans over the screen, for the palette to open away from the hand. */
+      info[@"azimuth"] = @(pose.azimuthAngle);
+      info[@"altitude"] = @(pose.altitudeAngle);
+    }
+    [NSNotificationCenter.defaultCenter postNotificationName:@"BlenderPencilSqueeze"
+                                                      object:self
+                                                    userInfo:info];
+    return;
   }
+  [self togglePencilMenuForInteraction:interaction hoverPose:squeeze.hoverPose];
 }
 #endif
 
@@ -2614,8 +2606,7 @@ GHOST_WindowIOS::GHOST_WindowIOS(GHOST_SystemIOS *system_ios,
     }
 
     [ghost_rootWindow setSystemAndWindowIOS:system_ios_ windowIOS:this];
-    /* Above the launcher's window, which it covers, but below the system's own windows, such as
-     * the tool palette a Pencil's squeeze shows. */
+    /* Above the launcher's window, which it covers, but below the system's own windows. */
     rootWindow.windowLevel = UIWindowLevelNormal + 1;
 
     GHOST_ASSERT(rootWindow, "UIWindow not valid");

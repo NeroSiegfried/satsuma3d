@@ -309,7 +309,7 @@ private struct IPadSettingsPage: View {
 
       Section {
         ChoiceRow(title: "Tool Palette",
-                  detail: "The brushes or tools by the Pencil, to choose from with it.",
+                  detail: "Tools, brushes and their settings by the Pencil. Roll it to turn what it points at.",
                   symbol: "pencil.and.scribble",
                   selected: squeeze != "menu") { squeeze = "palette" }
         ChoiceRow(title: "Context Menu",
@@ -319,8 +319,7 @@ private struct IPadSettingsPage: View {
       } header: {
         Text("Squeeze Apple Pencil Pro")
       } footer: {
-        Text("Anywhere over the viewport, when squeezing shows the tool palette in the iPad's Apple "
-          + "Pencil settings.")
+        Text("Anywhere in the window, unless squeezing is turned off in the iPad's Apple Pencil settings.")
       }
 
       Section {
