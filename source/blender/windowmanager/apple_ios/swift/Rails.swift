@@ -1026,17 +1026,14 @@ struct ToolRails: View {
 #endif
   }
 
-  /** A small grabber above the sidebar: dragged, it moves the sidebar up or down its edge, where
-   * it stays. */
+  /** A small grabber at the top of the sidebar, as the rails have: dragged, it moves the sidebar
+   * up or down its edge, where it stays. */
   private func sidebarHandle(_ layout: RailLayout, content: SidebarContent) -> some View {
     Capsule()
-      /* Light over the viewport, which is dark whatever the interface's appearance. */
-      .fill(.white.opacity(0.7))
-      .shadow(color: .black.opacity(0.35), radius: 1.5)
+      .fill(Color.secondary)
       .frame(width: 24, height: 5)
-      .frame(width: 48, height: 22)
+      .frame(width: PaintSidebar.width, height: 6 + content.handle)
       .contentShape(Rectangle())
-      .offset(y: -22)
       .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
         .onChanged { value in
           let start = sidebarDragStart ?? layout.sidebarCenter.y - content.height / 2
@@ -2377,10 +2374,13 @@ struct SidebarContent: Equatable {
     return count == 0 ? 0 : CGFloat(count) * 52 + CGFloat(count - 1) * 4
   }
 
+  /** Room at the top for the grabber that moves it, which the + and - alone don't have. */
+  var handle: CGFloat { buttonsOnly ? 0 : 16 }
+
   var height: CGFloat {
     let parts: [CGFloat] = [size ? sliderHeight : 0, strength ? sliderHeight : 0,
                             buttonsHeight].filter { $0 > 0 }
-    return parts.isEmpty ? 0 : parts.reduce(0, +) + CGFloat(parts.count - 1) * 8 + 12
+    return parts.isEmpty ? 0 : parts.reduce(0, +) + CGFloat(parts.count - 1) * 8 + 12 + handle
   }
 }
 
@@ -2447,6 +2447,7 @@ struct PaintSidebar: View {
       }
     }
     .padding(6)
+    .padding(.top, content.handle)
     .frame(width: Self.width, height: content.height)
     .panelGlass(in: RoundedRectangle(cornerRadius: 32, style: .continuous))
     .animation(UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: 0.32, dampingFraction: 0.84),
@@ -3298,7 +3299,7 @@ struct RailLayout: Equatable {
     /* The size and strength sliders share the tool rail's edge: an open tool list leaves room for
      * them above it rather than pushing them aside, scrolling within what is left. */
     let shareEdge = sharesSidebar && !pill && (sidebar.size || sidebar.strength)
-    let sidebarRoom = shareEdge ? sidebar.height + gap + 18 : 0
+    let sidebarRoom = shareEdge ? sidebar.height + gap : 0
     var maxList = min(max(64, (span - reserve) * 0.58), max(64, span - reserve - 112))
     if shareEdge {
       maxList = max(compact, min(maxList, height - topInset - bottomInset - sidebarRoom))
@@ -3373,8 +3374,7 @@ struct RailLayout: Equatable {
     }
     else {
       let lowest = sharesSidebar ? toolTop - gap : sidebarLeading ? floorY(true) - bottomInset : trailingBottom
-      /* Room above for its handle. */
-      let highest = top + 18
+      let highest = top
       let travel = highest...max(highest, lowest - h)
       sidebarTravel = travel
       let y = sidebarPosition.map { travel.lowerBound + CGFloat($0) * (travel.upperBound - travel.lowerBound) } ??
