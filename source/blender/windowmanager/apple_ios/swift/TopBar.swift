@@ -324,8 +324,8 @@ struct DocumentToolbar: ToolbarContent {
     .accessibilityIdentifier("blender.undo")
   }
 
-  /** The node editors, each opening the node editor on its tree, and the Image Editor: the
-   * editors docked along the bottom. */
+  /** The node editors, each opening the node editor on its tree, docked along the bottom, and the
+   * Image Editor beside the viewport. */
   @ViewBuilder
   private var nodeEditorToggles: some View {
     Section {

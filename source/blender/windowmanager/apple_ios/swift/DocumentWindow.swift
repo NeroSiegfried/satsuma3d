@@ -411,6 +411,10 @@ public struct DocumentWindow: View {
   let commands: ShellCommands
   let pencilMenu: PencilMenu?
   @State private var stripWidth: CGFloat = 0
+  /** The viewport's width, with the Image Editor's beside it. */
+  @State private var layersWidth: CGFloat = 0
+  /** How much of that the 3D viewport has, the Image Editor the rest. */
+  @AppStorage("BlenderImageSplit") private var imageSplit = 0.5
   @Environment(\.horizontalSizeClass) private var sizeClass
 
   /** The native controls are hidden in full screen, and over Blender's own interface. */
@@ -576,12 +580,6 @@ public struct DocumentWindow: View {
         }
         .transition(.move(edge: .bottom).combined(with: .opacity))
       }
-      if editorsShown && model.imageShown {
-        DockedEditorLayer(model: model, cover: Bindable(model).imageCover, resizeLabel: "Resize Image Editor") {
-          ImageEditorPanel(model: shell.panels.image)
-        }
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-      }
 #endif
     }
     .ignoresSafeArea(edges: .vertical)
@@ -589,35 +587,74 @@ public struct DocumentWindow: View {
 
   /** How much of the window's bottom the viewport leaves to the node editor. */
   private var viewportCover: CGFloat {
-    editorsShown ? max(model.nodesShown ? model.nodesCover : 0, model.imageShown ? model.imageCover : 0,
-                       model.curvesCover) : 0
+    editorsShown ? max(model.nodesShown ? model.nodesCover : 0, model.curvesCover) : 0
+  }
+
+  /** The Image Editor, a viewport of its own: beside the 3D one, or over it on a phone. */
+  private var imageViewportShown: Bool {
+#if os(visionOS) /* A window of its own there. */
+    false
+#else
+    editorsShown && model.imageShown
+#endif
+  }
+
+  /** The Image Editor's width beside the 3D viewport, leaving each room to work in. */
+  private var imageWidth: CGFloat {
+    guard imageViewportShown, sizeClass != .compact, layersWidth > 0 else { return 0 }
+    let least = min(320, layersWidth / 3)
+    return min(max(layersWidth * (1 - imageSplit), least), layersWidth - least)
   }
 
   private func viewportLayers(bottom: Bool) -> some View {
-    ZStack {
-      /* Edge to edge, under a phone's toolbar column too. */
-      ViewportView(container: viewport, bottomCover: viewportCover, live: model.nodesCoverDragging)
-        .ignoresSafeArea()
-        .onDrop(of: [.data, .image], delegate: FileDrop(model: model) { shell.assets.store.dragged != nil })
-      if !model.viewportReady {
-        ProgressView()
-          .controlSize(.large)
-          .accessibilityLabel("Loading Viewport")
-          .accessibilityIdentifier("blender.viewport.loading")
-          .allowsHitTesting(false)
+    let beside = imageWidth > 0
+    return ZStack {
+      HStack(spacing: 0) {
+        ZStack {
+          /* Edge to edge, under a phone's toolbar column too. */
+          ViewportView(container: viewport, bottomCover: viewportCover, live: model.nodesCoverDragging)
+            .ignoresSafeArea()
+            .onDrop(of: [.data, .image], delegate: FileDrop(model: model) { shell.assets.store.dragged != nil })
+          if !model.viewportReady {
+            ProgressView()
+              .controlSize(.large)
+              .accessibilityLabel("Loading Viewport")
+              .accessibilityIdentifier("blender.viewport.loading")
+              .allowsHitTesting(false)
+          }
+        }
+        if beside {
+          ImageSplitHandle(fraction: $imageSplit, width: layersWidth)
+          imageViewport
+            .frame(width: imageWidth)
+            .transition(.move(edge: .trailing))
+        }
+      }
+      if imageViewportShown && !beside {
+        imageViewport
+          .transition(.move(edge: .bottom).combined(with: .opacity))
       }
       if controlsShown {
         /* Over the viewport, which ends above the node editor. */
         ZStack {
+          /* The 3D viewport's own, beside the Image Editor. */
+          ZStack {
 #if !os(visionOS) /* Ornaments there. */
-          QuickActionsRow(model: model)
-            /* The Pencil's dial takes over while it shows. */
-            .opacity(RollDial.shared.showing ? 0 : 1)
-            .animation(.easeOut(duration: 0.18), value: RollDial.shared.showing)
-          ToolRails(model: model)
+            QuickActionsRow(model: model)
+              /* The Pencil's dial takes over while it shows. */
+              .opacity(RollDial.shared.showing ? 0 : 1)
+              .animation(.easeOut(duration: 0.18), value: RollDial.shared.showing)
 #endif
-          ViewGizmoLayer(model: model)
-          TextObjectKeyboard(model: model)
+            ViewGizmoLayer(model: model)
+            TextObjectKeyboard(model: model)
+          }
+          .padding(.trailing, beside ? imageWidth + ImageSplitHandle.width : 0)
+          .opacity(imageViewportShown && !beside ? 0 : 1)
+#if !os(visionOS)
+          /* Across both: the tools and sliders on one side, the brushes on the other, painting on
+           * either, as Blender's Texture Paint workspace has them. */
+          ToolRails(model: model, gizmoShown: !imageViewportShown)
+#endif
         }
         .padding(.bottom, viewportCover)
       }
@@ -633,6 +670,18 @@ public struct DocumentWindow: View {
         showInterfaceButton
       }
     }
+    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { layersWidth = $0 }
+    .animation(.easeOut(duration: 0.42), value: imageViewportShown)
+  }
+
+  /** The Image Editor, fitting its image clear of the bar, the brushes and what is docked below. */
+  private var imageViewport: some View {
+    ImageEditorPanel(model: shell.panels.image,
+                     obscured: EdgeInsets(top: model.topBarBottom + 60, leading: 0,
+                                          bottom: model.safeAreaInsets.bottom + 12,
+                                          trailing: controlsShown ? 84 : 0))
+      .padding(.bottom, viewportCover)
+      .accessibilityIdentifier("blender.image.viewport")
   }
 
   /** In full screen, faint until a Pencil or pointer comes near, so it does not compete with the
@@ -646,6 +695,46 @@ public struct DocumentWindow: View {
       Spacer()
     }
     .padding(12)
+  }
+}
+
+/** Between the 3D viewport and the Image Editor: dragged, it gives one more room and the other
+ * less, where it stays. */
+struct ImageSplitHandle: View {
+  static let width: CGFloat = 1
+  @Binding var fraction: Double
+  let width: CGFloat
+  @State private var start: Double?
+
+  var body: some View {
+    Rectangle()
+      .fill(Color.black)
+      .frame(width: Self.width)
+      .ignoresSafeArea()
+      .overlay {
+        Capsule()
+          .fill(.white.opacity(start != nil ? 0.9 : 0.6))
+          .frame(width: 5, height: start != nil ? 52 : 40)
+          .frame(width: 32, height: 88)
+          .contentShape(Rectangle())
+          .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
+            .onChanged { value in
+              if start == nil { Haptics.selection() }
+              let from = start ?? fraction
+              start = from
+              guard width > 0 else { return }
+              fraction = min(0.85, max(0.15, from + Double(value.translation.width / width)))
+            }
+            .onEnded { _ in start = nil })
+          .hoverEffect(.highlight)
+          .animation(.spring(response: 0.25, dampingFraction: 0.8), value: start != nil)
+          .accessibilityElement()
+          .accessibilityLabel("Resize Image Editor")
+          .accessibilityAdjustableAction { direction in
+            fraction = min(0.85, max(0.15, fraction + (direction == .increment ? 0.1 : -0.1)))
+          }
+      }
+      .zIndex(1)
   }
 }
 

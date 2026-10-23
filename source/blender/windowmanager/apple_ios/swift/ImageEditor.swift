@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 /** \file
- * The Image Editor drawn natively, docked along the bottom as the node editor is. Blender sends
+ * The Image Editor drawn natively, a viewport of its own beside the 3D one, as Blender's Texture
+ * Paint workspace has it: the same rails and sliders paint on either. Blender sends
  * the images, the one shown and its pixels as they change, so a texture fills in while it is
  * painted on the model; the UVs show over it. The image shown follows the texture being painted,
  * as Blender's follows the active paint slot, until another is chosen. See `image_native.cc`.
@@ -112,10 +113,6 @@ final class ImageEditorModel {
     send("stroke", ["phase": phase, "points": points.map { Double($0) }, "zoom": Double(zoom)])
   }
 
-  func setBrush(_ key: String, _ value: Any) {
-    send("brush", ["key": key, "value": value])
-  }
-
   func requestFit() { fitRequest += 1 }
   func requestActualSize() { actualSizeRequest += 1 }
 
@@ -198,35 +195,36 @@ final class ImageEditorModel {
 /** The Image Editor along the bottom: which image, and the image itself. */
 struct ImageEditorPanel: View {
   let model: ImageEditorModel
+  /** What the bars and rails over it cover, which the image is fitted clear of. */
+  var obscured = EdgeInsets()
   @State private var creating = false
   @State private var opening = false
   @State private var zoom: CGFloat = 1
-  @State private var brushShown = false
 
   var body: some View {
-    VStack(spacing: 0) {
-      toolbar
-      Divider()
-      ZStack {
-        if model.snapshot != nil && model.image == nil {
-          ContentUnavailableView {
-            Label("No Image", systemImage: "photo")
-          } description: {
-            Text(model.painting ? "Add a texture to paint on in Properties, or a new image here." :
-                                  "Images show here, such as the textures painted on a model.")
-          } actions: {
-            Button("New Image") { creating = true }
-              .buttonStyle(.borderedProminent)
-          }
+    ZStack {
+      if model.snapshot != nil && model.image == nil {
+        ContentUnavailableView {
+          Label("No Image", systemImage: "photo")
+        } description: {
+          Text(model.painting ? "Add a texture to paint on in Properties, or a new image here." :
+                                "Images show here, such as the textures painted on a model.")
+        } actions: {
+          Button("New Image") { creating = true }
+            .buttonStyle(.borderedProminent)
         }
-        else {
-          ImageCanvas(model: model, zoom: $zoom)
-            .overlay(alignment: .bottomLeading) { info }
-        }
+        .padding(.top, obscured.top)
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .containerShape(Rectangle())
+      else {
+        ImageCanvas(model: model, zoom: $zoom, obscured: obscured)
+          .ignoresSafeArea()
+          .overlay(alignment: .bottomLeading) { info.padding(.bottom, obscured.bottom) }
+      }
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(ImageCanvasView.backdrop.ignoresSafeArea())
+    /* Below the window's bar, as the viewport's own controls are. */
+    .overlay(alignment: .top) { header.padding(.top, max(0, obscured.top - 52)) }
     .background(NodeKeyCapture(model: model))
     .sheet(isPresented: $creating) {
       NewImageSheet(suggestedName: "Untitled") { request in
@@ -240,16 +238,13 @@ struct ImageEditorPanel: View {
     }
   }
 
-  private var toolbar: some View {
-    HStack(spacing: 12) {
-      Text("Image Editor")
-        .font(.headline)
+  /** The image shown and what to do with it, floating over the top of the image as the
+   * viewport's quick actions float over the scene. Its brush is the rails' and sliders'. */
+  private var header: some View {
+    HStack(spacing: 4) {
       imagePicker
-      Spacer(minLength: 0)
-      /* In Texture Paint, the sidebar beside the viewport has the same brush's. */
-      if model.paintable, model.brush != nil, !model.painting {
-        brushControls
-      }
+        .padding(.leading, 14)
+        .padding(.trailing, 6)
       moreMenu
       Button { creating = true } label: {
         Label("New Image", systemImage: "plus")
@@ -257,8 +252,9 @@ struct ImageEditorPanel: View {
       .editorHeaderButton()
       EditorCloseButton(label: "Close Image Editor") { model.setShown(false) }
     }
-    .padding(.horizontal, 14)
-    .frame(height: 52)
+    .padding(4)
+    .panelGlass(in: Capsule())
+    .padding(.horizontal, 12)
   }
 
   /** The image shown, from all of them, the ones painted on marked with a brush. */
@@ -305,30 +301,6 @@ struct ImageEditorPanel: View {
     .menuStyle(.button)
     .buttonStyle(.plain)
     .accessibilityLabel("Image")
-  }
-
-  /** The brush's color, and its size and strength, which painting on the image uses. */
-  @ViewBuilder
-  private var brushControls: some View {
-    let rgb = (model.brush?["color"] as? [NSNumber])?.map(\.doubleValue) ?? [0, 0, 0]
-    ColorPicker(selection: Binding(get: { Color(red: rgb[0], green: rgb[1], blue: rgb[2]) },
-                                   set: { color in
-                                     let resolved = UIColor(color)
-                                     var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-                                     resolved.getRed(&r, green: &g, blue: &b, alpha: &a)
-                                     model.setBrush("color", [r, g, b].map { min(1, max(0, Double($0))) })
-                                   }),
-                supportsOpacity: false) {
-      Text("Brush Color")
-    }
-    .labelsHidden()
-    Button { brushShown = true } label: {
-      Label("Brush", systemImage: "paintbrush.pointed")
-    }
-    .editorHeaderButton()
-    .popover(isPresented: $brushShown) {
-      ImageBrushSettings(model: model)
-    }
   }
 
   private var moreMenu: some View {
@@ -448,40 +420,6 @@ private enum ImageSharing {
   }
 }
 
-/** The brush's size and strength, as the sidebar beside the viewport has them. */
-private struct ImageBrushSettings: View {
-  let model: ImageEditorModel
-  @State private var size: Double = 50
-  @State private var strength: Double = 1
-
-  var body: some View {
-    Form {
-      Section {
-        LabeledContent("Brush", value: model.brush?.string("name") ?? "")
-      }
-      Section("Size") {
-        HStack {
-          Slider(value: $size, in: 1...500) { editing in if !editing { model.setBrush("size", size) } }
-          Text(verbatim: "\(Int(size)) px").monospacedDigit().frame(width: 64, alignment: .trailing)
-        }
-      }
-      Section("Strength") {
-        HStack {
-          Slider(value: $strength, in: 0...1) { editing in if !editing { model.setBrush("strength", strength) } }
-          Text(strength, format: .number.precision(.fractionLength(2))).monospacedDigit()
-            .frame(width: 64, alignment: .trailing)
-        }
-      }
-    }
-    .frame(idealWidth: 320, idealHeight: 300)
-    .onAppear {
-      size = Double(model.brush?.int("size") ?? 50)
-      strength = (model.brush?["strength"] as? NSNumber)?.doubleValue ?? 1
-    }
-  }
-}
-
-/** A new image's name, size and fill, as Blender's New Image. */
 private struct NewImageSheet: View {
   let suggestedName: String
   let create: (JSON) -> Void
@@ -566,6 +504,7 @@ private struct NewImageSheet: View {
 private struct ImageCanvas: UIViewRepresentable {
   let model: ImageEditorModel
   @Binding var zoom: CGFloat
+  var obscured = EdgeInsets()
   /** Settings' Apple Pencil & Touch, which the viewport follows too. */
   @AppStorage(SettingsModel.fingerUsesToolKey) private var fingerUsesTool = false
 
@@ -582,7 +521,10 @@ private struct ImageCanvas: UIViewRepresentable {
     view.show(uvs: model.showUVs ? model.uvs : [])
     view.fit(request: model.fitRequest)
     view.actualSize(request: model.actualSizeRequest)
-    view.paintable = model.paintable
+    view.obscured = UIEdgeInsets(top: obscured.top, left: obscured.leading, bottom: obscured.bottom,
+                                 right: obscured.trailing)
+    /* Painted as the 3D viewport is, in Texture Paint, with its brush. */
+    view.paintable = model.paintable && model.painting
     view.fingerPaints = fingerUsesTool
     view.brushRadius = CGFloat((model.brush?["radius"] as? NSNumber)?.doubleValue ?? 0)
     view.stroke = { phase, points, zoom in model.stroke(phase, points, zoom: zoom) }
@@ -635,8 +577,7 @@ final class ImageCanvasView: UIView, UIScrollViewDelegate {
   override init(frame: CGRect) {
     super.init(frame: frame)
     clipsToBounds = true
-    backgroundColor = UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 0.16, alpha: 1) :
-                                                                 UIColor(white: 0.82, alpha: 1) }
+    backgroundColor = Self.backdropColor
     checker.backgroundColor = UIColor(patternImage: Self.checkerTile)
     checker.isUserInteractionEnabled = false
     addSubview(checker)
@@ -736,6 +677,19 @@ final class ImageCanvasView: UIView, UIScrollViewDelegate {
   @available(*, unavailable)
   required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+  /** Behind the image, dark as the viewport's backdrop is whatever the interface's appearance. */
+  private static let backdropColor = UIColor(white: 0.16, alpha: 1)
+  static var backdrop: Color { Color(uiColor: backdropColor) }
+
+  /** What covers the view's edges, which fitting and centering keep the image clear of. */
+  var obscured = UIEdgeInsets.zero {
+    didSet {
+      guard obscured != oldValue else { return }
+      updateZoomLimits()
+      if fitted { applyFit(animated: false) } else { center() }
+    }
+  }
+
   private static let checkerTile: UIImage = {
     let side: CGFloat = 8
     return UIGraphicsImageRenderer(size: CGSize(width: side * 2, height: side * 2)).image { context in
@@ -789,10 +743,11 @@ final class ImageCanvasView: UIView, UIScrollViewDelegate {
 
   /** The zoom that shows the whole image, with a margin. */
   private var fitScale: CGFloat {
-    guard imageSize.width > 0, imageSize.height > 0, bounds.width > 0, bounds.height > 0 else { return 1 }
+    let room = bounds.inset(by: obscured)
+    guard imageSize.width > 0, imageSize.height > 0, room.width > 0, room.height > 0 else { return 1 }
     let margin: CGFloat = 24
-    return max(0.0001, min((bounds.width - margin * 2) / imageSize.width,
-                           (bounds.height - margin * 2) / imageSize.height))
+    return max(0.0001, min((room.width - margin * 2) / imageSize.width,
+                           (room.height - margin * 2) / imageSize.height))
   }
 
   private func updateZoomLimits() {
@@ -828,12 +783,15 @@ final class ImageCanvasView: UIView, UIScrollViewDelegate {
     placeChecker()
   }
 
-  /** Smaller than the view, the image stays in its middle. */
+  /** Smaller than what is left uncovered, the image stays in its middle; larger, it scrolls to
+   * its edges there. */
   private func center() {
     let size = CGSize(width: imageSize.width * scroll.zoomScale, height: imageSize.height * scroll.zoomScale)
-    let x = max(0, (scroll.bounds.width - size.width) / 2)
-    let y = max(0, (scroll.bounds.height - size.height) / 2)
-    scroll.contentInset = UIEdgeInsets(top: y, left: x, bottom: y, right: x)
+    let room = scroll.bounds.inset(by: obscured)
+    let x = max(0, (room.width - size.width) / 2)
+    let y = max(0, (room.height - size.height) / 2)
+    scroll.contentInset = UIEdgeInsets(top: obscured.top + y, left: obscured.left + x, bottom: obscured.bottom + y,
+                                       right: obscured.right + x)
   }
 
   private func placeChecker() {
@@ -921,9 +879,17 @@ final class StrokeRecognizer: UIGestureRecognizer {
   }
 
   private func sample(_ touch: UITouch) -> (CGPoint, CGFloat) {
-    let pressure = touch.type == .pencil && touch.maximumPossibleForce > 0 ?
-      min(1, touch.force / touch.maximumPossibleForce) : 1
-    return (touch.preciseLocation(in: space), pressure)
+    (touch.preciseLocation(in: space), touch.type == .pencil ? Self.pressure(touch) : 1)
+  }
+
+  /** The Pencil's force as the pressure the viewport gets, with Settings' curve, see
+   * `pencil_pressure` in `GHOST_WindowIOS.mm`. */
+  private static func pressure(_ touch: UITouch) -> CGFloat {
+    guard touch.maximumPossibleForce > 0 else { return 1 }
+    let setting = UserDefaults.standard.object(forKey: "BlenderPencilPressureSensitivity") as? Double
+    let sensitivity = min(1, max(0, setting ?? 0.5))
+    let full = 0.9 - 0.5 * sensitivity, exponent = 1.0 - 0.75 * sensitivity
+    return CGFloat(pow(min(1, max(0, Double(touch.force / touch.maximumPossibleForce) / full)), exponent))
   }
 
   /** The kind of touch painting. */

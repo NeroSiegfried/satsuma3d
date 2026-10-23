@@ -794,6 +794,9 @@ let leftHandedInterfaceKey = "BlenderLeftHandedInterface"
 
 struct ToolRails: View {
   let model: ShellModel
+  /** The navigation gizmo is in a corner of the rails' room, which the columns there keep clear
+   * of; not so beside the Image Editor, where it is in the middle. */
+  var gizmoShown = true
   @State private var tools = RailState()
   /** The brushes start docked open, halfway down their edge. */
   @State private var brushes: RailState = {
@@ -835,7 +838,8 @@ struct ToolRails: View {
       let color = (model.brush?["color"] as? [NSNumber])?.map(\.doubleValue)
       /* The navigation gizmo, in whichever corner it is. */
       let gizmo = model.navigationGizmo
-      let gizmoFrame = gizmo.count == 3 ?
+      let gizmoFrame = !gizmoShown ? CGRect(x: safe.minX, y: safe.maxY + 1000, width: 0, height: 0) :
+        gizmo.count == 3 ?
         CGRect(x: CGFloat(gizmo[0]) * proxy.size.width, y: CGFloat(gizmo[1]) * proxy.size.height, width: 0, height: 0)
           .insetBy(dx: -CGFloat(gizmo[2]) * proxy.size.width, dy: -CGFloat(gizmo[2]) * proxy.size.width) :
         CGRect(x: safe.maxX - 100, y: safe.maxY - 100, width: 80, height: 80)

@@ -37,7 +37,6 @@ final class ShellPanels {
       if shown {
         self?.timeline.setCurvesShown(false)
         self?.timeline.setStoryboardShown(false)
-        self?.panels.image.setShown(false)
       }
 #endif
     }
@@ -45,12 +44,6 @@ final class ShellPanels {
       withAnimation(SwiftTimeline.animation) { self?.model.imageShown = shown }
 #if os(visionOS)
       PanelWindows.set(.image, open: shown)
-#else
-      if shown {
-        self?.timeline.setCurvesShown(false)
-        self?.timeline.setStoryboardShown(false)
-        self?.panels.nodes.setShown(false)
-      }
 #endif
     }
     panels.graphSnapshot = { [weak self] snapshot in
@@ -64,7 +57,6 @@ final class ShellPanels {
 #if !os(visionOS)
     timeline.curvesDidOpen = { [weak self] in
       self?.panels.nodes.setShown(false)
-      self?.panels.image.setShown(false)
     }
 #endif
     timeline.visibilityDidChange = { [weak self] in
