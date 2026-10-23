@@ -289,6 +289,9 @@ final class SqueezePalette {
   /** The color wheel's disc, and the brightness ring around it. */
   static let wheelRadius: CGFloat = 70
   static let wheelRing: CGFloat = 12
+  /** The colors used last, on a short arc between the color wheel and the brush's settings. */
+  static let recentThickness: CGFloat = 34
+  static var recentRadius: CGFloat { Arc.inner + 26 - Ring.narrow / 2 - Ring.gap - recentThickness / 2 }
 
   /** The size or strength being changed, shown as the brush where the arcs center. */
   var previewing: String?
@@ -799,7 +802,8 @@ final class SqueezePalette {
 
   /** The part under \a point in the window, or none away from them all. */
   private func inWheel(_ point: CGPoint, arc: Arc) -> Bool {
-    hypot(point.x - arc.center.x, point.y - arc.center.y) <= Self.wheelRadius + Self.wheelRing + 4
+    let reach = recentColors.isEmpty ? Self.wheelRadius + Self.wheelRing + 4 : Self.recentRadius + Self.recentThickness / 2
+    return hypot(point.x - arc.center.x, point.y - arc.center.y) <= reach
   }
 
   private func part(at point: CGPoint) -> Part? {
@@ -1097,8 +1101,15 @@ final class SqueezePalette {
     localColor ?? (brush?["color"] as? [NSNumber]).map { $0.map(\.doubleValue) }
   }
 
-  /** Blender follows at once; one undo step once it settles. */
+  /** The two colors used before this one, shown beside the color wheel while it is open. */
+  private static let recentKey = "BlenderPaletteRecentColors"
+  private(set) var recentColors: [[Double]] =
+    (UserDefaults.standard.array(forKey: "BlenderPaletteRecentColors") as? [[Double]]) ?? []
+
+  /** Blender follows at once; one undo step once it settles, and the one it replaces joins the
+   * recent colors. */
   func setColor(_ rgb: [Double], settleAfter delay: Double) {
+    keepColorBefore()
     localColor = rgb
     if Date().timeIntervalSince(lastSent) > 1.0 / 30 {
       lastSent = Date()
@@ -1107,9 +1118,33 @@ final class SqueezePalette {
     settle(.color, after: delay) { [weak self] in self?.commitColor() }
   }
 
+  /** A recent color, at once. */
+  func applyColor(_ rgb: [Double]) {
+    lockRoll()
+    cancelSettling(.color)
+    keepColorBefore()
+    localColor = rgb
+    commitColor()
+    Haptics.selection()
+  }
+
+  /** The brush's color as a change began, which joins the recent ones as it ends. */
+  private var colorBefore: [Double]?
+
+  private func keepColorBefore() {
+    if colorBefore == nil { colorBefore = (brush?["color"] as? [NSNumber]).map { $0.map(\.doubleValue) } }
+  }
+
   private func commitColor() {
     guard let rgb = localColor else { return }
     sendBrushValue("color", rgb, commit: true)
+    if let before = colorBefore, !Self.same(before, rgb) {
+      var recent = recentColors.filter { !Self.same($0, before) && !Self.same($0, rgb) }
+      recent.insert(Array(before.prefix(3)), at: 0)
+      recentColors = Array(recent.prefix(2))
+      UserDefaults.standard.set(recentColors, forKey: Self.recentKey)
+    }
+    colorBefore = nil
     DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
       if self.localColor.map({ Self.same($0, rgb) }) == true { self.localColor = nil }
     }
@@ -2111,8 +2146,48 @@ private struct ArcColor: View {
         .position(arc.point((piece.start + piece.end) / 2, radius: ring.radius))
         .accessibilityLabel("Color")
       }
+      if palette.colorWheel {
+        recent((piece.start + piece.end) / 2)
+          .transition(.scale(scale: 0.6, anchor: .center).combined(with: .opacity))
+      }
     }
     .modifier(Lit(shape: whole, part: .color))
+  }
+
+  /** The two colors used last, on a short arc of their own just inside the color, while the
+   * wheel is open. */
+  @ViewBuilder
+  private func recent(_ middle: Double) -> some View {
+    let radius = SqueezePalette.recentRadius
+    let colors = palette.recentColors.filter { $0.count >= 3 }
+    if !colors.isEmpty {
+      let step = Double(32) / Double(radius)
+      let first = middle - Double(colors.count - 1) * step / 2
+      let cap = Double(SqueezePalette.recentThickness / 2) / Double(radius)
+      let band = ArcBand(center: arc.center, radius: radius, thickness: SqueezePalette.recentThickness,
+                         start: first - cap + 0.02, end: first + Double(colors.count - 1) * step + cap - 0.02)
+      ZStack {
+        Color.clear
+          .panelGlass(in: band)
+          .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+        ForEach(Array(colors.enumerated()), id: \.offset) { index, rgb in
+          Button {
+            palette.applyColor(rgb)
+          } label: {
+            Circle()
+              .fill(Color(red: rgb[0], green: rgb[1], blue: rgb[2]))
+              .frame(width: 24, height: 24)
+              .overlay(Circle().strokeBorder(.white.opacity(0.9), lineWidth: 1.5))
+              .frame(width: 32, height: 32)
+              .contentShape(Circle())
+          }
+          .buttonStyle(.plain)
+          .hoverHighlight(Circle())
+          .position(arc.point(first + Double(index) * step, radius: radius))
+          .accessibilityLabel("Recent Color")
+        }
+      }
+    }
   }
 }
 
