@@ -100,5 +100,7 @@ std::string WM_apple_ios_document_template_write(bContext *C,
                                                  std::string &attribution);
 /** Switch between the native iPad interface and Blender's own, as on a desktop computer. */
 void WM_OT_apple_ios_interface_toggle(wmOperatorType *ot);
+/** Open a web page in the system's browser. */
+void WM_OT_apple_ios_url_open(wmOperatorType *ot);
 
 }  // namespace blender

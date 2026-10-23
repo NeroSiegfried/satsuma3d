@@ -4269,6 +4269,7 @@ void wm_operatortypes_register()
 {
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
   WM_operatortype_append(WM_OT_apple_ios_interface_toggle);
+  WM_operatortype_append(WM_OT_apple_ios_url_open);
 #endif
   WM_operatortype_append(WM_OT_window_close);
   WM_operatortype_append(WM_OT_window_new);

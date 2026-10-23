@@ -3654,6 +3654,29 @@ void WM_OT_apple_ios_interface_toggle(wmOperatorType *ot)
   ot->get_name = ios_interface_toggle_get_name;
 }
 
+extern "C" void wm_apple_ios_open_web_url(const char *url);
+
+static wmOperatorStatus ios_url_open_exec(bContext * /*C*/, wmOperator *op)
+{
+  char url[1024];
+  RNA_string_get(op->ptr, "url", url);
+  if (!url[0]) {
+    return OPERATOR_CANCELLED;
+  }
+  wm_apple_ios_open_web_url(url);
+  return OPERATOR_FINISHED;
+}
+
+void WM_OT_apple_ios_url_open(wmOperatorType *ot)
+{
+  ot->name = "Open URL";
+  ot->idname = "WM_OT_apple_ios_url_open";
+  ot->description = "Open a web page in the browser";
+  ot->exec = ios_url_open_exec;
+  ot->flag = OPTYPE_INTERNAL;
+  RNA_def_string(ot->srna, "url", nullptr, 1024, "URL", "");
+}
+
 extern "C" bool WM_apple_ios_ui_desktop_mode()
 {
   return ios_desktop_ui;

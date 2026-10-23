@@ -78,6 +78,18 @@ extern "C" void wm_apple_ios_window_hold_modifier(void *window, const char *key,
       ghost_window(window), STREQ(key, "shift") ? GHOST_kKeyLeftShift : GHOST_kKeyLeftControl, down);
 }
 
+/** A web page, in the browser: Help's links, an add-on's documentation. */
+extern "C" void wm_apple_ios_open_web_url(const char *url)
+{
+  NSURL *web = [NSURL URLWithString:@(url)];
+  if (!web) {
+    return;
+  }
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [UIApplication.sharedApplication openURL:web options:@{} completionHandler:nil];
+  });
+}
+
 extern "C" bool wm_apple_ios_documents_available()
 {
   return wm_apple_ios_launcher_can_show_documents();
