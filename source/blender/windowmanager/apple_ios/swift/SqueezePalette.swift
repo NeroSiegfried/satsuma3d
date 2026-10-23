@@ -750,9 +750,9 @@ final class SqueezePalette {
   /** How far the Pencil rolls for one step of what it turns: an item along an arc, a twentieth of
    * a slider, one of 24 hues, one step of the history. Far enough that a hand holding still
    * turns nothing. */
-  static let rollStep = Double.pi * 10 / 9
-  static let sliderRollStep = Double.pi / 2
-  static let hueRollStep = Double.pi * 5 / 6
+  static let rollStep = Double.pi / 3
+  static let sliderRollStep = Double.pi / 6
+  static let hueRollStep = Double.pi / 4
 
   /** The roll gathered towards the next step of what it turns. */
   @ObservationIgnored private var rollGathered: (part: Part, angle: Double)?
