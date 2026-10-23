@@ -1860,7 +1860,10 @@ struct PaintSidebar: View {
    * it for fine steps; let go, it is free again. */
   private func modifierButton(_ key: String, symbol: String, label: String) -> some View {
     let on = held == key
-    return Image(systemName: symbol)
+    /* The system has no magnet: Blender's own snapping icon then. */
+    let icon = UIImage(systemName: symbol) != nil ? Image(systemName: symbol) :
+      (BlenderIcon.image("SNAP_ON").map { Image(uiImage: $0.withRenderingMode(.alwaysTemplate)) } ?? Image(systemName: "dot.squareshape"))
+    return icon
       .font(.system(size: 19, weight: .semibold))
       .foregroundStyle(on ? Color.white : Color.primary)
       .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
