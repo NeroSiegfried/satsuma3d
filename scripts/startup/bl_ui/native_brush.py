@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-"""The active brush's size, strength and color for the native iPad interface.
+"""The active brush's size, strength, weight and color for the native iPad interface.
 
 The iPad shows these in the sidebar beside the viewport and the color well above the brushes,
 rather than in the tool settings, and sets them through `brush_set`. Each is read from and written
@@ -64,6 +64,14 @@ def _owners(context):
     return size, strength, color
 
 
+def _weight_owner(context):
+    """The owner of the weight the brush paints, where it paints weights, otherwise None."""
+    if context.mode not in {'PAINT_WEIGHT', 'WEIGHT_GREASE_PENCIL'} or _owners(context) is None:
+        return None
+    settings, brush = _settings(context)
+    return _unified_owner(settings, brush, "weight")
+
+
 def _size_prop(owner):
     return "unprojected_size" if owner.use_locked_size == 'SCENE' else "size"
 
@@ -100,6 +108,15 @@ def brush_json(context):
             "max": float(high),
             "default": float(default),
         }
+    weight = _weight_owner(context)
+    if weight is not None:
+        low, high, default = _range(weight, "weight")
+        result["weight"] = {
+            "value": float(weight.weight),
+            "min": float(low),
+            "max": float(high),
+            "default": float(default),
+        }
     # Drawing with the material's color has no color of the brush's own: no color well.
     if color is not None:
         result["color"] = [float(c) for c in color.color]
@@ -107,7 +124,7 @@ def brush_json(context):
 
 
 def brush_set(context, payload):
-    """Set one of `size`, `strength` or `color` from a JSON object with its `key` and `value`."""
+    """Set one of `size`, `strength`, `weight` or `color` from a JSON object with its `key` and `value`."""
     request = json.loads(payload)
     size, strength, color = _owners(context) or (None, None, None)
     key = request.get("key")
@@ -117,6 +134,9 @@ def brush_set(context, payload):
         setattr(size, prop, int(round(value)) if prop == "size" else float(value))
     elif key == "strength" and strength is not None:
         strength.strength = float(value)
+    elif key == "weight":
+        if (weight := _weight_owner(context)) is not None:
+            weight.weight = float(value)
     elif key == "color" and color is not None:
         color.color = [float(c) for c in value[:3]]
 
