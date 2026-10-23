@@ -7,6 +7,7 @@
 #include "BKE_screen.hh"
 #include "BLT_translation.hh"
 #include "BLI_serialize.hh"
+#include "BLI_set.hh"
 #include "ED_undo.hh"
 #include "RNA_access.hh"
 #include "RNA_enum_types.hh"
@@ -171,6 +172,60 @@ bool is_action(Button &but)
          (but.rnaprop && ELEM(RNA_property_type(but.rnaprop), PROP_BOOLEAN, PROP_ENUM));
 }
 
+/**
+ * What the iPad's menu bar leaves out: Blender's own windows, preferences and debugging, files
+ * outside the document, and the regions the native interface replaces, which do nothing there or
+ * open Blender's desktop interface over it.
+ */
+bool hidden_from_menu_bar(Button &but)
+{
+  static const Set<StringRef> operators = {
+      "WM_OT_splash",
+      "WM_OT_splash_about",
+      "WM_OT_quit_blender",
+      "WM_OT_save_homefile",
+      "WM_OT_read_factory_settings",
+      "WM_OT_link",
+      "WM_OT_append",
+      "WM_OT_window_new",
+      "WM_OT_window_new_main",
+      "WM_OT_window_fullscreen_toggle",
+      "SCREEN_OT_userpref_show",
+      "SCREEN_OT_workspace_cycle",
+      "SCREEN_OT_screenshot",
+      "SCREEN_OT_screenshot_area",
+      "OUTLINER_OT_orphans_manage",
+      "RENDER_OT_view_show",
+      "RENDER_OT_play_rendered_anim",
+      "RENDER_OT_opengl",
+  };
+  static const Set<StringRef> menus = {
+      "TOPBAR_MT_blender_system",
+      "TOPBAR_MT_file_open_recent",
+      "TOPBAR_MT_file_recover",
+      "TOPBAR_MT_file_previews",
+      "TOPBAR_MT_file_external_data",
+      "TOPBAR_MT_file_defaults",
+      "INFO_MT_area",
+  };
+  static const Set<StringRef> properties = {
+      "show_statusbar",
+      "show_region_toolbar",
+      "show_region_ui",
+      "show_region_tool_header",
+      "show_region_asset_shelf",
+      "show_region_hud",
+      "show_viewer",
+  };
+  if (but.optype && operators.contains(but.optype->idname)) {
+    return true;
+  }
+  if (MenuType *child = button_menutype_get(&but); child && menus.contains(child->idname)) {
+    return true;
+  }
+  return !but.optype && but.rnaprop && properties.contains(RNA_property_identifier(but.rnaprop));
+}
+
 void project(bContext *C,
              MenuType *mt,
              Button *parent,
@@ -236,6 +291,9 @@ void project(bContext *C,
       break;
     }
     if (invocation) {
+      continue;
+    }
+    if (ELEM(root, "TOPBAR_MT_editor_menus", "VIEW3D_MT_editor_menus") && hidden_from_menu_bar(but)) {
       continue;
     }
     if (ELEM(but.type, ButtonType::Sepr, ButtonType::SeprLine)) {
