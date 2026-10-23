@@ -87,6 +87,8 @@ bool WM_apple_ios_ui_image_take_pixels(char *_Nullable *_Nonnull r_name,
 bool WM_apple_ios_ui_image_take_uvs(float *_Nullable *_Nonnull r_segments, int *_Nonnull r_count);
 /** How much of the window's height, from the bottom, the asset pane and timeline cover. */
 void WM_apple_ios_ui_bottom_tray_set(float fraction);
+/** How much of the window's height, from the top, the native top bar covers. */
+void WM_apple_ios_ui_top_bar_set(float fraction);
 void WM_apple_ios_ui_viewport_cover_set(float pixels);
 UIDocument *_Nullable wm_apple_ios_open_document(void);
 /** Choose a template and create a new document, presented from `presenter`. */

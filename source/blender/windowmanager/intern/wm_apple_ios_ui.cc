@@ -306,6 +306,7 @@ std::atomic<float> ios_bottom_tray{0.0f};
 std::atomic<float> ios_viewport_cover{0.0f};
 std::atomic<bool> ios_viewport_cover_changed{false};
 extern "C" int WM_apple_ios_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region);
+extern "C" int WM_apple_ios_ui_top_bar_ymax(const wmWindow *win, const ARegion *region);
 struct IOSPencilHoverRequest {
   bool active = false;
   int x = 0, y = 0;
@@ -1219,8 +1220,19 @@ static std::atomic<bool> ios_tweak_tilt = true;
 /* Whether what the Pencil or pointer hovers over is highlighted, from the iPad's Settings. */
 static bool ios_hover_highlight = true;
 
+/* The navigation gizmo's corner of the viewport, from the iPad's Settings, and mirrored for the
+ * left hand. */
+static std::atomic<bool> ios_navigation_top = false;
+static std::atomic<bool> ios_navigation_left = false;
+
 void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
 {
+  if (command.setting == "navigation_corner") {
+    ios_navigation_top = command.value.starts_with("top");
+    ios_navigation_left = command.value.ends_with("left");
+    WM_main_add_notifier(NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+    return;
+  }
   if (command.setting == "hover_highlight") {
     ios_hover_highlight = command.value == "1";
     return;
@@ -2864,6 +2876,7 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
     ARegion *region = CTX_wm_region(C);
     rcti visible = *ED_region_visible_rect(region);
     visible.ymin = std::max(visible.ymin, WM_apple_ios_ui_bottom_tray_ymin(win, region));
+    visible.ymax = std::min(visible.ymax, WM_apple_ios_ui_top_bar_ymax(win, region));
     const float width = WM_window_native_pixel_x(win);
     const float height = WM_window_native_pixel_y(win);
     const float radius = U.gizmo_size_navigate_v3d * 0.5f * U.scale_factor;
@@ -2874,11 +2887,11 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
       /* Over the part of the window a native panel leaves showing, as the native controls
        * that follow the gizmo are laid out. */
       const float cover = std::min(ios_viewport_cover.load(), height * 0.9f);
-      navigation_json = "[" +
-                        std::to_string((region->winrct.xmin + visible.xmax - inset) / width) +
-                        "," +
-                        std::to_string(1.0f - (region->winrct.ymin + visible.ymin + inset - cover) /
-                                                  (height - cover)) +
+      /* In whichever corner Settings has it. */
+      const float x = ios_navigation_left ? visible.xmin + inset : visible.xmax - inset;
+      const float y = ios_navigation_top ? visible.ymax - inset : visible.ymin + inset;
+      navigation_json = "[" + std::to_string((region->winrct.xmin + x) / width) + "," +
+                        std::to_string(1.0f - (region->winrct.ymin + y - cover) / (height - cover)) +
                         "," + std::to_string(radius / width) + "]";
     }
   }
@@ -3719,6 +3732,22 @@ extern "C" void WM_apple_ios_ui_navigation_redraw_request()
   ios_navigation_redraw_pending.store(true);
 }
 
+/* How much of the window's height, from the top, the native top bar covers. */
+static std::atomic<float> ios_top_bar = 0.0f;
+
+extern "C" void WM_apple_ios_ui_top_bar_set(const float fraction)
+{
+  if (ios_top_bar.exchange(fraction) != fraction) {
+    ios_navigation_redraw_pending.store(true);
+  }
+}
+
+extern "C" int WM_apple_ios_ui_top_bar_ymax(const wmWindow *win, const ARegion *region)
+{
+  /* The navigation gizmo sits below the top bar, in region pixels. */
+  return int((1.0f - ios_top_bar.load()) * WM_window_native_pixel_y(win)) - region->winrct.ymin;
+}
+
 extern "C" void WM_apple_ios_ui_bottom_tray_set(const float fraction)
 {
   if (ios_bottom_tray.exchange(fraction) != fraction) {
@@ -3740,6 +3769,16 @@ extern "C" void WM_apple_ios_ui_viewport_cover_set(const float pixels)
 extern "C" float WM_apple_ios_ui_viewport_cover()
 {
   return ios_viewport_cover.load();
+}
+
+extern "C" bool WM_apple_ios_ui_navigation_top()
+{
+  return ios_navigation_top.load();
+}
+
+extern "C" bool WM_apple_ios_ui_navigation_left()
+{
+  return ios_navigation_left.load();
 }
 
 extern "C" int WM_apple_ios_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region)

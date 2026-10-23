@@ -81,6 +81,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     if UserDefaults.standard.object(forKey: SettingsModel.hoverHighlightKey) as? Bool == false {
       Engine.setting("hover_highlight", "0")
     }
+    SettingsModel.applyNavigationCorner()
     if UserDefaults.standard.bool(forKey: "BlenderDesktopInterface") {
       /* Start in the interface the person left; Blender follows from its inbox. */
       Engine.setting("interface", "desktop")
@@ -194,7 +195,11 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
       }
       pending.append(contentsOf: current.subviews)
     }
-    if model.topBarBottom != bottom { model.topBarBottom = bottom }
+    if model.topBarBottom != bottom {
+      model.topBarBottom = bottom
+      /* Blender keeps the navigation gizmo below it. */
+      WM_apple_ios_ui_top_bar_set(view.bounds.height > 0 ? Float(bottom / view.bounds.height) : 0)
+    }
   }
 
   /* -------------------------------------------------------------------- */

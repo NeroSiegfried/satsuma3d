@@ -31,7 +31,10 @@ namespace blender {
 
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
 extern "C" int WM_apple_ios_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region);
+extern "C" int WM_apple_ios_ui_top_bar_ymax(const wmWindow *win, const ARegion *region);
 extern "C" bool WM_apple_ios_ui_desktop_mode();
+extern "C" bool WM_apple_ios_ui_navigation_top();
+extern "C" bool WM_apple_ios_ui_navigation_left();
 #endif
 
 /* -------------------------------------------------------------------- */
@@ -89,6 +92,8 @@ struct NavigateWidgetGroup {
       char viewlock;
       char cameralock;
     } rv3d;
+    /** The corner the native iPad interface has it in. */
+    int corner;
   } state;
 };
 
@@ -302,11 +307,15 @@ static void WIDGETGROUP_navigate_draw_prepare(const bContext *C, wmGizmoGroup *g
   }
 
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
-  /* Keep the gizmo above the native bottom tray (the asset pane) while it is open. */
+  /* Keep the gizmo above the native bottom tray (the asset pane) while it is open, and below the
+   * top bar. */
   rcti rect_visible_ios = *ED_region_visible_rect(region);
   if (!WM_apple_ios_ui_desktop_mode()) {
     rect_visible_ios.ymin = std::max(rect_visible_ios.ymin,
                                      WM_apple_ios_ui_bottom_tray_ymin(CTX_wm_window(C), region));
+    /* And below the native top bar. */
+    rect_visible_ios.ymax = std::min(rect_visible_ios.ymax,
+                                     WM_apple_ios_ui_top_bar_ymax(CTX_wm_window(C), region));
   }
   const rcti *rect_visible = &rect_visible_ios;
 #else
@@ -316,7 +325,12 @@ static void WIDGETGROUP_navigate_draw_prepare(const bContext *C, wmGizmoGroup *g
   /* Ensure types match so bits are never lost on assignment. */
   CHECK_TYPE_PAIR(navgroup->state.rv3d.viewlock, rv3d->viewlock);
 
-  if ((navgroup->state.rect_visible.xmin == rect_visible->xmin) &&
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  const int corner = (WM_apple_ios_ui_navigation_top() ? 1 : 0) | (WM_apple_ios_ui_navigation_left() ? 2 : 0);
+#else
+  const int corner = 0;
+#endif
+  if ((navgroup->state.corner == corner) && (navgroup->state.rect_visible.xmin == rect_visible->xmin) &&
       (navgroup->state.rect_visible.xmax == rect_visible->xmax) &&
       (navgroup->state.rect_visible.ymin == rect_visible->ymin) &&
       (navgroup->state.rect_visible.ymax == rect_visible->ymax) &&
@@ -329,6 +343,7 @@ static void WIDGETGROUP_navigate_draw_prepare(const bContext *C, wmGizmoGroup *g
   }
 
   navgroup->state.rect_visible = *rect_visible;
+  navgroup->state.corner = corner;
   navgroup->state.rv3d.is_persp = rv3d->is_persp;
   navgroup->state.rv3d.is_camera = (rv3d->persp == RV3D_CAMOB);
   navgroup->state.rv3d.viewlock = RV3D_LOCK_FLAGS(rv3d);
@@ -351,9 +366,14 @@ static void WIDGETGROUP_navigate_draw_prepare(const bContext *C, wmGizmoGroup *g
   const float icon_offset = UI_SCALE_FAC *
                             (GIZMO_OFFSET + (show_rotate_gizmo ? GIZMO_SIZE / 2.0f : 0.0f));
   const float icon_offset_mini = (GIZMO_MINI_SIZE + GIZMO_MINI_OFFSET) * UI_SCALE_FAC;
-  const float co_rotate[2] = {rect_visible->xmax - icon_offset,
-                              use_bottom_right_navigation ? rect_visible->ymin + icon_offset :
-                                                            rect_visible->ymax - icon_offset};
+  /* In the native interface, in the corner its Settings choose: the bottom right at first. */
+  const bool native_top = native_interface && (corner & 1);
+  const bool native_left = native_interface && (corner & 2);
+  const float co_rotate[2] = {native_left ? rect_visible->xmin + icon_offset :
+                                            rect_visible->xmax - icon_offset,
+                              use_bottom_right_navigation && !native_top ?
+                                  rect_visible->ymin + icon_offset :
+                                  rect_visible->ymax - icon_offset};
 
   float icon_offset_from_axis = icon_offset_mini * 0.75f;
   switch (eUserpref_MiniAxisType(U.mini_axis_type)) {

@@ -58,7 +58,18 @@ final class SettingsModel: ObservableObject {
     didSet {
       guard leftHanded != oldValue else { return }
       UserDefaults.standard.set(leftHanded, forKey: leftHandedInterfaceKey)
+      Self.applyNavigationCorner()
     }
+  }
+
+  static let navigationTopKey = "BlenderNavigationGizmoTop"
+
+  /** The navigation gizmo's corner: at the top or bottom as Settings has it, on the right, or the
+   * left for the left hand. */
+  static func applyNavigationCorner() {
+    let defaults = UserDefaults.standard
+    let top = defaults.bool(forKey: navigationTopKey), left = defaults.bool(forKey: leftHandedInterfaceKey)
+    Engine.setting("navigation_corner", "\(top ? "top" : "bottom")_\(left ? "left" : "right")")
   }
 
   var fingerUsesToolChanged: ((Bool) -> Void)?
@@ -252,6 +263,7 @@ private struct IPadSettingsPage: View {
   @ObservedObject var model: SettingsModel
   @AppStorage("BlenderFingerDragsObjects") private var fingerDragsObjects = false
   @AppStorage("BlenderPencilSqueeze") private var squeeze = "palette"
+  @AppStorage(SettingsModel.navigationTopKey) private var navigationTop = false
   /** Read as it changes by the app's event handling, see `show_touches` in `GHOST_SystemIOS.mm`. */
   @AppStorage("BlenderShowTouches") private var showTouches = false
 
@@ -321,6 +333,20 @@ private struct IPadSettingsPage: View {
       } footer: {
         Text("Anywhere in the window, unless squeezing is turned off in the iPad's Apple Pencil settings.")
       }
+
+      Section {
+        ChoiceRow(title: "Bottom", detail: "Below the brushes, near the hand.",
+                  symbol: model.leftHanded ? "arrow.down.left.square" : "arrow.down.right.square",
+                  selected: !navigationTop) { navigationTop = false }
+        ChoiceRow(title: "Top", detail: "Below the toolbar, out of the way of the hand.",
+                  symbol: model.leftHanded ? "arrow.up.left.square" : "arrow.up.right.square",
+                  selected: navigationTop) { navigationTop = true }
+      } header: {
+        Text("Navigation Gizmo")
+      } footer: {
+        Text("On the right, or on the left with the interface for the left hand.")
+      }
+      .onChange(of: navigationTop) { _, _ in SettingsModel.applyNavigationCorner() }
 
       Section {
         Toggle("Quick Actions", isOn: $model.showQuickActions)

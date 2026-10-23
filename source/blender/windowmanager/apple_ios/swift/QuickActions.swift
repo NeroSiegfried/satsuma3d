@@ -275,11 +275,17 @@ struct QuickActionsRow: View {
       let width = geometry.size.width
       /* The lane between the tool rail and the navigation gizmo, across the whole viewport, as
        * Blender places the gizmo, but beside the window's sides. */
-      let laneLeading = model.sideInsets.left + ShellMetrics.railLeading + model.toolRailWidth + 12
-      /* Up to the navigation gizmo's hotspot, which Blender places in fractions of the viewport. */
+      /* Clear of the navigation gizmo's hotspot where it is along the bottom, which Blender places
+       * in fractions of the viewport: on the right, or the left for the left hand. */
       let gizmo = model.navigationGizmo
-      let hotspot = min(gizmo.count == 3 ? gizmo[0] * width - max(44, gizmo[2] * width + 10) :
-                          width - ShellMetrics.gizmoReserve, width - model.sideInsets.right)
+      let gizmoBottom = gizmo.count != 3 || gizmo[1] > 0.5
+      let gizmoLeft = gizmo.count == 3 && gizmo[0] < 0.5
+      let gizmoReach = gizmo.count == 3 ? max(44, gizmo[2] * width + 10) : 0
+      let laneLeading = max(model.sideInsets.left + ShellMetrics.railLeading + model.toolRailWidth + 12,
+                            gizmoBottom && gizmoLeft ? gizmo[0] * width + gizmoReach + 12 : 0)
+      let hotspot = min(!gizmoBottom || gizmoLeft ? width :
+                          gizmo.count == 3 ? gizmo[0] * width - gizmoReach : width - ShellMetrics.gizmoReserve,
+                        width - model.sideInsets.right)
       let laneWidth = max(0, hotspot - 12 - laneLeading)
       let wide = width >= ShellMetrics.wideRow
       let pillWidth = redoTitle.map(redoPillWidth) ?? 0

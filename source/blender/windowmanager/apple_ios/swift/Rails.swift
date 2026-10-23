@@ -833,9 +833,12 @@ struct ToolRails: View {
       let toolItems = RailItem.tools(model.tools, mode: model.mode)
       let brushItems = RailItem.brushes(model.brushes)
       let color = (model.brush?["color"] as? [NSNumber])?.map(\.doubleValue)
+      /* The navigation gizmo, in whichever corner it is. */
       let gizmo = model.navigationGizmo
-      let gizmoTop = gizmo.count == 3 ? CGFloat(gizmo[1]) * proxy.size.height - CGFloat(gizmo[2]) * proxy.size.width :
-                                        safe.maxY - 100
+      let gizmoFrame = gizmo.count == 3 ?
+        CGRect(x: CGFloat(gizmo[0]) * proxy.size.width, y: CGFloat(gizmo[1]) * proxy.size.height, width: 0, height: 0)
+          .insetBy(dx: -CGFloat(gizmo[2]) * proxy.size.width, dy: -CGFloat(gizmo[2]) * proxy.size.width) :
+        CGRect(x: safe.maxX - 100, y: safe.maxY - 100, width: 80, height: 80)
       let arrange = { (dial: Bool) -> (SidebarContent, RailLayout) in
         let content = SidebarContent(brush: model.brush,
                                      buttons: model.direction?.bool("hidden") != true || model.transforming,
@@ -845,7 +848,7 @@ struct ToolRails: View {
                                     brushes: brushesAvailable ? brushes : nil, brushCount: brushItems.count,
                                     sidebar: content,
                                     sidebarPosition: sidebarPosition >= 0 ? sidebarPosition : nil,
-                                    colorWell: color != nil, leftHanded: leftHanded, gizmoTop: gizmoTop,
+                                    colorWell: color != nil, leftHanded: leftHanded, gizmo: gizmoFrame,
                                     toolEdge: toolEdge, brushEdge: RailEdge(rawValue: brushEdgeName)))
       }
       /* Where the sliders do not fit beside the tools, they become dials. */
@@ -2664,7 +2667,7 @@ struct RailLayout: Equatable {
   @MainActor
   init(safe: CGRect, tray: CGFloat, tools: RailState, toolCount: Int, brushes: RailState?, brushCount: Int,
        sidebar: SidebarContent, sidebarPosition: Double? = nil, colorWell: Bool, leftHanded: Bool,
-       gizmoTop: CGFloat, toolEdge: RailEdge = .leading, brushEdge: RailEdge? = nil)
+       gizmo: CGRect, toolEdge: RailEdge = .leading, brushEdge: RailEdge? = nil)
   {
     let compact: CGFloat = 64, gap: CGFloat = 10, topInset: CGFloat = 16, bottomInset: CGFloat = 12
     let inset: CGFloat = 14
@@ -2681,10 +2684,16 @@ struct RailLayout: Equatable {
     let brushLeading = brushEdge == .leading
     /* Leave a usable lane for the quick actions beside the gizmo, even in a narrow window. */
     let expandedWidth = min(240, max(64, safe.width - 284))
-    /* Where a column's room ends at the bottom of its edge: above the navigation gizmo on the
-     * trailing side. */
+    /* The navigation gizmo's corner, which the columns on its edge stay clear of. */
+    let gizmoLeading = gizmo.midX < safe.midX
+    let gizmoBottom = gizmo.midY > safe.midY
+    /* Where a column's room ends at the bottom of its edge: above the gizmo on its side. */
     let floorY = { (leading: Bool) -> CGFloat in
-      leading ? safe.maxY - tray : min(gizmoTop - gap + bottomInset, safe.maxY - tray)
+      leading == gizmoLeading && gizmoBottom ? min(gizmo.minY - gap + bottomInset, safe.maxY - tray) : safe.maxY - tray
+    }
+    /* And where it begins at the top: below the gizmo there. */
+    let ceilingY = { (leading: Bool) -> CGFloat in
+      leading == gizmoLeading && !gizmoBottom ? max(safe.minY, gizmo.maxY + gap - topInset) : safe.minY
     }
     let listLength = { (count: Int) -> CGFloat in 44 + 12 + CGFloat(count) * 52 + CGFloat(max(0, count - 1)) * 12 }
 
@@ -2695,8 +2704,9 @@ struct RailLayout: Equatable {
     let below = pill && tools.listVisible
     let reserve = below ? sidebar.height + gap : 0
     let toolFloor = floorY(toolEdge == .leading)
-    let span = safe.height - (safe.maxY - tray - toolFloor)
-    let height = max(0, toolFloor - safe.minY - reserve)
+    let toolCeiling = ceilingY(toolEdge == .leading)
+    let span = safe.height - (safe.maxY - tray - toolFloor) - (toolCeiling - safe.minY)
+    let height = max(0, toolFloor - toolCeiling - reserve)
     /* The size and strength sliders share the tool rail's edge: an open tool list leaves room for
      * them above it rather than pushing them aside, scrolling within what is left. */
     let shareEdge = sharesSidebar && !pill && (sidebar.size || sidebar.strength)
@@ -2720,7 +2730,7 @@ struct RailLayout: Equatable {
        * mode with few tools leaves no empty space below them. */
       toolHeight = tools.listVisible && !toolsCompact ? max(compact, min(listLength(toolCount), maxList)) : compact
       /* The middle resting place of a compact tool rail, measured from the bottom one. */
-      dockDistance = max(0, (toolFloor - safe.minY - compact) / 2 - bottomInset)
+      dockDistance = max(0, (toolFloor - toolCeiling - compact) / 2 - bottomInset)
     }
     /* Docking centers the rail, unless the sliders need the room above it; otherwise it rests at
      * the bottom. */
@@ -2737,6 +2747,8 @@ struct RailLayout: Equatable {
      * resting above the gizmo, or at the top where they were dragged. In a row, it leads it. */
     let trailingBottom = floorY(false) - bottomInset
     let columnBottom = brushEdge == toolEdge ? toolTop - gap : floorY(brushLeading) - bottomInset
+    /* The brushes' column begins below the gizmo where it is at the top of their edge. */
+    let brushTop = ceilingY(brushLeading) + topInset
     let colorHeight = colorWell ? BrushColorWell.size + gap : 0
     if brushEdge.horizontal {
       brushWidth = brushes?.listVisible == true ? listLength(brushCount) : compact
@@ -2748,18 +2760,18 @@ struct RailLayout: Equatable {
       let groupTop: CGFloat
       if brushes?.listVisible == true {
         /* As tall as its brushes (the handle, then 52 points each, 12 apart), as the room allows. */
-        brushHeight = max(compact, min(listLength(brushCount), columnBottom - top - colorHeight))
-        groupTop = top + max(0, (columnBottom - top - colorHeight - brushHeight) / 2)
+        brushHeight = max(compact, min(listLength(brushCount), columnBottom - brushTop - colorHeight))
+        groupTop = brushTop + max(0, (columnBottom - brushTop - colorHeight - brushHeight) / 2)
       }
       else {
         brushHeight = compact
         let group = colorHeight + (brushes != nil ? compact : 0)
-        groupTop = brushes?.restsAtTop == true ? top : max(top, columnBottom - group)
+        groupTop = brushes?.restsAtTop == true ? brushTop : max(brushTop, columnBottom - group)
       }
-      let restTop = top + colorHeight + compact / 2
-      let restBottom = max(top, columnBottom - colorHeight - compact) + colorHeight + compact / 2
+      let restTop = brushTop + colorHeight + compact / 2
+      let restBottom = max(brushTop, columnBottom - colorHeight - compact) + colorHeight + compact / 2
       let resting = brushes?.restsAtTop == true ? restTop : restBottom
-      brushStops = ((top + columnBottom) / 2 - resting,
+      brushStops = ((brushTop + columnBottom) / 2 - resting,
                     (brushes?.restsAtTop == true ? restBottom : restTop) - resting)
       colorCenter = CGPoint(x: edgeX(compact, brushLeading), y: groupTop + BrushColorWell.size / 2)
       brushCenter = CGPoint(x: edgeX(brushWidth, brushLeading), y: groupTop + colorHeight + brushHeight / 2)
@@ -2767,25 +2779,26 @@ struct RailLayout: Equatable {
 
     /* The sidebar, halfway down its edge where it fits, clear of what sits below it. */
     let h = sidebar.height
+    let sidebarTop = ceilingY(sidebarLeading) + topInset
     let x = edgeX(PaintSidebar.width, sidebarLeading)
     if pill {
-      let y = below ? toolFloor - bottomInset - h : max(top, toolTop - gap - h)
+      let y = below ? toolFloor - bottomInset - h : max(sidebarTop, toolTop - gap - h)
       sidebarCenter = CGPoint(x: x, y: y + h / 2)
       sidebarTucked = false
     }
     else {
       let lowest = sharesSidebar ? toolTop - gap : sidebarLeading ? floorY(true) - bottomInset : trailingBottom
-      let highest = top
+      let highest = sidebarTop
       let travel = highest...max(highest, lowest - h)
       sidebarTravel = travel
       let y = sidebarPosition.map { travel.lowerBound + CGFloat($0) * (travel.upperBound - travel.lowerBound) } ??
-        max(top, min(safe.midY - h / 2, lowest - h))
+        max(sidebarTop, min(safe.midY - h / 2, lowest - h))
       sidebarCenter = CGPoint(x: x, y: y + h / 2)
-      sidebarTucked = lowest - top < h
+      sidebarTucked = lowest - sidebarTop < h
     }
 
     /* Rows along the top or the bottom run between the columns on either side, the navigation
-     * gizmo's corner left free along the bottom. The tools lead when both share a row. */
+     * gizmo's corner left free. The tools lead when both share a row. */
     let columnTools = toolWidth, columnBrushes = brushWidth
     let lane = { (leading: Bool) -> CGFloat in
       var widths: [CGFloat] = []
@@ -2798,8 +2811,10 @@ struct RailLayout: Equatable {
     for row in [RailEdge.top, .bottom] {
       let toolsHere = toolEdge == row, brushesHere = brushEdge == row && brushes != nil
       guard toolsHere || brushesHere else { continue }
-      let minX = safe.minX + lane(true)
-      let maxX = safe.maxX - max(lane(false), row == .bottom ? ShellMetrics.gizmoReserve : 0)
+      /* The gizmo's corner left free in its row. */
+      let gizmoRow = (row == .bottom) == gizmoBottom
+      let minX = safe.minX + max(lane(true), gizmoRow && gizmoLeading ? ShellMetrics.gizmoReserve : 0)
+      let maxX = safe.maxX - max(lane(false), gizmoRow && !gizmoLeading ? ShellMetrics.gizmoReserve : 0)
       let room = max(compact, maxX - minX)
       let colorWidth = brushesHere && colorWell ? BrushColorWell.size + gap : 0
       var toolLength = toolsHere ? toolWidth : 0
