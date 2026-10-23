@@ -130,8 +130,11 @@ final class SqueezePalette {
     var end: Double
     /** The tools and brushes along it. */
     var sections: [Section] = []
-    /** Commands in equal places along it. */
+    /** Commands along it, each as long as its title. */
     var commands: [CommandEntry] = []
+    /** The context menu's arc, which holds them all and turns to show those past its ends; a
+     * submenu's is only as long as its commands, beside the one that opened it. */
+    var scrolls = false
 
     var middleAngle: Double { (start + end) / 2 }
     var leading: [Accessory] = []
@@ -411,6 +414,7 @@ final class SqueezePalette {
     commandPath = []
     commandIndex = nil
     commandRolled = false
+    commandScroll = 0
     commandPage = 0
     values = [:]
     localColor = nil
@@ -579,57 +583,70 @@ final class SqueezePalette {
     /* Then the commands for what is selected, with undo and redo, without brush settings, or
      * once asked for. */
     if page == .commands || brush == nil {
-      for row in commandRows(arc: arc, from: radius + Ring.wide / 2 + Ring.gap + Ring.narrow / 2) {
-        add(Ring.narrow, length: .infinity) { $0.commands = row }
+      let history: [CommandEntry] = canRedo ? [.undo, .redo] : [.undo]
+      add(Ring.narrow, length: .infinity) { ring in
+        ring.commands = (brush == nil ? history : []) + contextCommands(BlenderMenus.contextRoute)
+        ring.scrolls = true
+      }
+      /* Each submenu opened, on an arc of its own further out, beside the command that opened it. */
+      for level in commandPath {
+        guard let parent = result.last else { break }
+        let anchor = commandPlaces(parent).first { place in
+          switch place.entry {
+            case .item(let item): return item.route == level.route
+            default: return false
+          }
+        }.map { $0.start + $0.length / 2 } ?? arc.facing
+        add(Ring.narrow, length: .infinity) { ring in
+          var entries = contextCommands(level.route)
+          let span = ring.end - ring.start
+          let gap = Double(Self.commandGap) / Double(ring.radius)
+          var total = entries.reduce(0) { $0 + Double(Self.commandWidth($1)) / Double(ring.radius) + gap } - gap
+          /* What does not fit is in the full menu, last. */
+          if total > span {
+            let menu = Double(Self.commandWidth(.menu(level.route))) / Double(ring.radius) + gap
+            while total + menu > span, let dropped = entries.popLast() {
+              total -= Double(Self.commandWidth(dropped)) / Double(ring.radius) + gap
+            }
+            entries.append(.menu(level.route))
+            total += menu
+          }
+          ring.commands = entries
+          let start = min(max(ring.start, anchor - total / 2), ring.end - total)
+          ring.start = start
+          ring.end = start + max(0, total)
+        }
       }
     }
     return result
   }
 
-  /** Undo and redo, then the context menu's commands for what is selected, along up to two arcs
-   * from \a first outwards, each as long as its title. An arc takes them in order and fills what
-   * room is left with the next that fit; where they do not all fit, the full menu is last. With
-   * the brush's settings, undo and redo are there instead. */
-  private func commandRows(arc: Arc, from first: CGFloat) -> [[CommandEntry]] {
-    let history: [CommandEntry] = canRedo ? [.undo, .redo] : [.undo]
-    var rows: [[CommandEntry]] = []
-    var radius = first
-    /* Packs \a pending along up to \a arcs arcs, the full menu at \a route last where they do not
-     * all fit. */
-    func pack(_ pending: [CommandEntry], arcs: Int, route: String) {
-      var pending = pending
-      for row in 0..<arcs {
-        var room = CGFloat(arc.end - arc.start) * radius + Ring.narrow - 8
-        let last = row == arcs - 1
-        var line: [CommandEntry] = []
-        var rest: [CommandEntry] = []
-        for entry in pending {
-          let width = Self.commandWidth(entry) + Self.commandGap
-          if width <= room { line.append(entry); room -= width } else { rest.append(entry) }
-        }
-        if last && !rest.isEmpty {
-          /* The full menu in the last place, giving up what it must for the room. */
-          let menu = Self.commandWidth(.menu(route)) + Self.commandGap
-          while room < menu, let dropped = line.popLast() {
-            room += Self.commandWidth(dropped) + Self.commandGap
-          }
-          line.append(.menu(route))
-        }
-        if !line.isEmpty {
-          rows.append(line)
-          radius += Ring.narrow + Ring.gap
-        }
-        pending = rest
-        if pending.isEmpty { break }
-      }
+  /** How far the context menu's arc has turned, in radians: its commands start this far before
+   * its start. */
+  private(set) var commandScroll: Double = 0
+
+  /** Each command's start and length along \a ring, in radians, as long as its title: from the
+   * ring's start, less how far it has turned where it turns. */
+  func commandPlaces(_ ring: Ring) -> [(entry: CommandEntry, start: Double, length: Double)] {
+    let radius = Double(ring.radius)
+    let gap = Double(Self.commandGap) / radius
+    var angle = ring.start - (ring.scrolls ? commandScroll : 0)
+    return ring.commands.map { entry in
+      let length = Double(Self.commandWidth(entry)) / radius
+      defer { angle += length + gap }
+      return (entry, angle, length)
     }
-    /* The context menu's, then each submenu opened from it on an arc of its own, further out. */
-    pack((brush == nil ? history : []) + contextCommands(BlenderMenus.contextRoute), arcs: 2,
-         route: BlenderMenus.contextRoute)
-    for level in commandPath {
-      pack(contextCommands(level.route), arcs: 1, route: level.route)
-    }
-    return rows
+  }
+
+  /** Turns the context menu's arc by \a delta radians, as far as its commands go. */
+  func scrollCommands(by delta: Double) {
+    guard let ring = rings.first(where: \.scrolls) else { return }
+    let places = commandPlaces(ring)
+    guard let last = places.last else { return }
+    let total = last.start + last.length - (places.first?.start ?? 0)
+    let most = max(0, total - (ring.end - ring.start))
+    let next = min(most, max(0, commandScroll + delta))
+    if next != commandScroll { commandScroll = next }
   }
 
   /** A submenu opened on an arc further out, whose title then shows lit where it was tapped. */
@@ -833,7 +850,12 @@ final class SqueezePalette {
         }
       case .commands:
         let count = steps(delta, on: part, size: Self.rollStep)
-        if count != 0 { turnCommands(by: Double(count), at: point) }
+        if count != 0 {
+          withAnimation(Self.motion(.spring(response: 0.3, dampingFraction: 0.86))) {
+            scrollCommands(by: Double(count) * 0.32)
+          }
+          tick(at: point)
+        }
     }
   }
 
@@ -1194,12 +1216,14 @@ final class SqueezePalette {
        * again, it closes. */
       let depth = Self.depth(of: item.route)
       let open = isOpen(item)
-      commandPath = Array(commandPath.prefix(max(0, depth - 1)))
+      withAnimation(Self.motion(.spring(response: 0.34, dampingFraction: 0.82))) {
+        commandPath = Array(commandPath.prefix(max(0, depth - 1)))
+        if !open { commandPath.append((item.route, item.title)) }
+      }
       if open {
         Haptics.selection()
         return
       }
-      commandPath.append((item.route, item.title))
       commandIndex = 0
       commandPage = 0
       Task { _ = await BlenderMenus.shared.fetch(item.route) }
@@ -2167,23 +2191,10 @@ private struct ArcCommandRow: View {
   let ring: Ring
   private var palette: SqueezePalette { .shared }
 
-  /** Each entry's start and length along the arc, in radians, centered where the arcs face. */
   private var places: [(entry: SqueezePalette.CommandEntry, start: Double, length: Double)] {
-    let radius = Double(ring.radius)
-    let gap = Double(SqueezePalette.commandGap) / radius
-    var lengths = ring.commands.map { Double(SqueezePalette.commandWidth($0)) / radius }
-    let gaps = gap * Double(max(0, lengths.count - 1))
-    /* Stretched to fill the arc, each by its share. */
-    let natural = lengths.reduce(0, +)
-    let room = ring.end - ring.start - gaps
-    if natural > 0, natural < room { lengths = lengths.map { $0 * room / natural } }
-    let total = lengths.reduce(0, +) + gaps
-    var angle = ring.middleAngle - total / 2
-    return zip(ring.commands, lengths).map { entry, length in
-      defer { angle += length + gap }
-      return (entry, angle, length)
-    }
+    palette.commandPlaces(ring)
   }
+  @State private var dragAngle: Double?
 
   var body: some View {
     let places = self.places
@@ -2191,17 +2202,25 @@ private struct ArcCommandRow: View {
     let cap = Double(width / 2) / Double(ring.radius)
     ZStack {
       if let first = places.first, let last = places.last {
+        /* The context menu's arc its whole length, its commands turning along it; a submenu's as
+         * long as its own. */
         let band = ArcBand(center: arc.center, radius: ring.radius, thickness: width,
-                           start: first.start + cap, end: last.start + last.length - cap)
+                           start: (ring.scrolls ? ring.start : first.start) + cap,
+                           end: (ring.scrolls ? ring.end : last.start + last.length) - cap)
         Color.clear
           .panelGlass(in: band)
           .shadow(color: .black.opacity(0.18), radius: 14, y: 6)
+          .contentShape(band)
+          .simultaneousGesture(scroll)
       }
       ForEach(Array(places.enumerated()), id: \.offset) { index, place in
         let middle = place.start + place.length / 2
+        /* Past the arc's ends they go on round, fading, until it is turned to them. */
+        let outside = max(ring.start - place.start, place.start + place.length - ring.end, 0)
+        let visible = !ring.scrolls || outside < place.length
         let shape = ArcBand(center: arc.center, radius: ring.radius, thickness: width,
                             start: place.start + cap, end: place.start + place.length - cap)
-        if index > 0 {
+        if visible && index > 0 && place.start > ring.start {
           /* A hairline between places. */
           Capsule()
             .fill(Color.primary.opacity(0.18))
@@ -2211,10 +2230,26 @@ private struct ArcCommandRow: View {
                                 radius: ring.radius))
             .allowsHitTesting(false)
         }
-        content(place.entry, middle: middle, length: CGFloat(place.length) * ring.radius, shape: shape)
+        if visible {
+          content(place.entry, middle: middle, length: CGFloat(place.length) * ring.radius, shape: shape)
+            .opacity(ring.scrolls ? max(0, 1 - outside / max(0.001, place.length) * 1.4) : 1)
+            .simultaneousGesture(scroll)
+        }
       }
     }
     .animation(SqueezePalette.motion(.spring(response: 0.3, dampingFraction: 0.86)), value: palette.commandPath.count)
+  }
+
+  /** A finger or the Pencil sliding along the context menu's arc turns it. */
+  private var scroll: some Gesture {
+    DragGesture(minimumDistance: 8, coordinateSpace: .local)
+      .onChanged { value in
+        guard ring.scrolls else { return }
+        let angle = arc.angle(of: value.location)
+        if let last = dragAngle { palette.scrollCommands(by: last - angle) }
+        dragAngle = angle
+      }
+      .onEnded { _ in dragAngle = nil }
   }
 
   @ViewBuilder
