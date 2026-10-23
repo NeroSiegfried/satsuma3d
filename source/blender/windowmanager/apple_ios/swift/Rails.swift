@@ -819,6 +819,10 @@ struct ToolRails: View {
   /** The edges the rails were moved to; the brushes' empty until moved, to follow the hand. */
   @AppStorage("BlenderToolRailEdge") private var toolEdge = RailEdge.leading
   @AppStorage("BlenderBrushRailEdge") private var brushEdgeName = ""
+  /** Where the sidebar was moved; empty for the hand's side. */
+  @AppStorage("BlenderSidebarEdge") private var sidebarEdgeName = ""
+  /** How far the sidebar is carried from its place while its handle moves it to another edge. */
+  @State private var sidebarLift: CGSize?
 
   /** The edge of \a safe nearest \a point, both in the window. */
   private static func nearestEdge(to point: CGPoint, in safe: CGRect) -> RailEdge {
@@ -853,7 +857,8 @@ struct ToolRails: View {
                                     sidebar: content,
                                     sidebarPosition: sidebarPosition >= 0 ? sidebarPosition : nil,
                                     colorWell: color != nil, leftHanded: leftHanded, gizmo: gizmoFrame,
-                                    toolEdge: toolEdge, brushEdge: RailEdge(rawValue: brushEdgeName)))
+                                    toolEdge: toolEdge, brushEdge: RailEdge(rawValue: brushEdgeName),
+                                    sidebarEdge: RailEdge(rawValue: sidebarEdgeName)))
       }
       /* Where the sliders do not fit beside the tools, they become dials. */
       let (content, layout) = { () -> (SidebarContent, RailLayout) in
@@ -900,10 +905,16 @@ struct ToolRails: View {
           }
         }
         if !content.isEmpty {
+          let lifted = sidebarDragStart != nil || sidebarLift != nil
           PaintSidebar(state: intent, direction: model.direction, brush: model.brush, content: content,
-                       leading: layout.sidebarLeading, transforming: model.transforming, window: model.window)
-            .overlay(alignment: .top) {
-              if !content.buttonsOnly { sidebarHandle(layout, content: content) }
+                       leading: layout.sidebarLeading, transforming: model.transforming, window: model.window,
+                       horizontal: layout.sidebarRow != nil)
+            .overlay(alignment: layout.sidebarRow != nil ? .leading : .top) {
+              if !content.buttonsOnly {
+                sidebarHandle(layout, content: content) { point in
+                  sidebarEdgeName = Self.nearestEdge(to: local(point), in: safe).rawValue
+                }
+              }
             }
             /* Pinched in, the sliders become dials; pinched out, sliders again. */
             .simultaneousGesture(MagnifyGesture().onEnded { value in
@@ -914,11 +925,11 @@ struct ToolRails: View {
               withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) { sidebarDials = dials }
             })
             /* Lifted off the window while its handle moves it, as the rails are. */
-            .scaleEffect(sidebarDragStart != nil ? 1.06 : 1)
-            .shadow(color: .black.opacity(sidebarDragStart != nil ? 0.32 : 0),
-                    radius: sidebarDragStart != nil ? 20 : 0, y: sidebarDragStart != nil ? 12 : 0)
-            .animation(.spring(response: 0.25, dampingFraction: 0.8), value: sidebarDragStart != nil)
+            .scaleEffect(lifted ? 1.06 : 1)
+            .shadow(color: .black.opacity(lifted ? 0.32 : 0), radius: lifted ? 20 : 0, y: lifted ? 12 : 0)
+            .animation(.spring(response: 0.25, dampingFraction: 0.8), value: lifted)
             .position(layout.sidebarCenter)
+            .offset(sidebarLift ?? .zero)
             /* An open tool list takes the edge: the sidebar steps aside until it closes. */
             .offset(x: layout.sidebarTucked ? (layout.sidebarLeading ? -96 : 96) : 0)
             .opacity(layout.sidebarTucked ? 0 : 1)
@@ -1034,25 +1045,50 @@ struct ToolRails: View {
 #endif
   }
 
-  /** A small grabber at the top of the sidebar, as the rails have: dragged, it moves the sidebar
-   * up or down its edge, where it stays. */
-  private func sidebarHandle(_ layout: RailLayout, content: SidebarContent) -> some View {
-    Capsule()
+  /** A small grabber at the top of the sidebar, as the rails have: dragged along its edge, it moves
+   * the sidebar up or down it, where it stays; dragged across, it carries it to the edge nearest
+   * where it is let go, \a drop, the top and the bottom too, where it lies along a row. */
+  private func sidebarHandle(_ layout: RailLayout, content: SidebarContent,
+                             drop: @escaping (CGPoint) -> Void) -> some View
+  {
+    let row = layout.sidebarRow != nil
+    return Capsule()
       .fill(Color.secondary)
-      .frame(width: 24, height: 5)
-      .frame(width: PaintSidebar.width, height: 6 + content.handle)
+      .frame(width: row ? 5 : 24, height: row ? 24 : 5)
+      .frame(width: row ? 6 + content.handle : PaintSidebar.width, height: row ? PaintSidebar.width : 6 + content.handle)
       .contentShape(Rectangle())
       .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
         .onChanged { value in
-          let start = sidebarDragStart ?? layout.sidebarCenter.y - content.height / 2
-          if sidebarDragStart == nil { Haptics.selection() }
-          sidebarDragStart = start
+          if sidebarLift == nil && sidebarDragStart == nil {
+            /* Which way it first goes decides once: in a row, or across its edge, it lifts. */
+            let t = value.translation
+            guard hypot(t.width, t.height) > 6 else { return }
+            Haptics.selection()
+            if row || !RailMoveGesture.isAlong(t, horizontal: false) {
+              sidebarLift = t
+              return
+            }
+            sidebarDragStart = layout.sidebarCenter.y - content.height / 2
+          }
+          if sidebarLift != nil {
+            sidebarLift = value.translation
+            return
+          }
+          guard let start = sidebarDragStart else { return }
           let travel = layout.sidebarTravel
           let y = min(max(start + value.translation.height, travel.lowerBound), travel.upperBound)
           let span = travel.upperBound - travel.lowerBound
           sidebarPosition = span > 0 ? Double((y - travel.lowerBound) / span) : 0.5
         }
-        .onEnded { _ in sidebarDragStart = nil })
+        .onEnded { value in
+          sidebarDragStart = nil
+          guard sidebarLift != nil else { return }
+          withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
+            sidebarLift = nil
+            drop(CGPoint(x: value.location.x + value.velocity.width * 0.15,
+                         y: value.location.y + value.velocity.height * 0.15))
+          }
+        })
       .hoverEffect(.highlight)
       .accessibilityLabel("Move Sidebar")
       .accessibilityAdjustableAction { direction in
@@ -1739,6 +1775,8 @@ struct PaintSidebar: View {
    * are on a keyboard. */
   var transforming = false
   var window: UnsafeMutableRawPointer?
+  /** In a row along the top or the bottom, its sliders on their sides. */
+  var horizontal = false
   static let width: CGFloat = 64
 
   @State private var held: String?
@@ -1747,30 +1785,47 @@ struct PaintSidebar: View {
   /** One selection between the + and -, sliding from one to the other as the rails' does. */
   @Namespace private var selection
 
+  /** Lying along the row, turned so its low end is at the start. */
+  @ViewBuilder
+  private func turned<V: View>(_ slider: V) -> some View {
+    if horizontal {
+      slider
+        .frame(width: 52, height: content.sliderHeight)
+        .rotationEffect(.degrees(90))
+        .frame(width: content.sliderHeight, height: 52)
+    }
+    else {
+      slider
+    }
+  }
+
   var body: some View {
-    VStack(spacing: 8) {
+    let stack = horizontal ? AnyLayout(HStackLayout(spacing: 8)) : AnyLayout(VStackLayout(spacing: 8))
+    let buttons = horizontal ? AnyLayout(HStackLayout(spacing: 4)) : AnyLayout(VStackLayout(spacing: 4))
+    stack {
       if content.size, let size = brush?.dict("size") {
         let pixels = size.bool("pixels")
-        SidebarSlider(key: "size", title: size.string("label") ?? "Radius", symbol: "circle.dashed",
-                      json: size, logarithmic: true, height: content.sliderHeight, dial: content.dial, leading: leading,
-                      unit: pixels ? "px" : "m", preview: .size(pixels: pixels),
-                      format: { pixels ? String(Int($0.rounded())) : String(format: "%.3g", $0) })
+        turned(SidebarSlider(key: "size", title: size.string("label") ?? "Radius", symbol: "circle.dashed",
+                             json: size, logarithmic: true, height: content.sliderHeight, dial: content.dial,
+                             leading: leading, horizontal: horizontal,
+                             unit: pixels ? "px" : "m", preview: .size(pixels: pixels),
+                             format: { pixels ? String(Int($0.rounded())) : String(format: "%.3g", $0) }))
       }
       if content.strength, let strength = brush?.dict("strength") {
-        SidebarSlider(key: "strength", title: "Strength", symbol: "drop.fill", json: strength,
-                      logarithmic: false, height: content.sliderHeight, dial: content.dial, leading: leading,
-                      unit: "%",
-                      preview: .strength, format: { String(Int(($0 * 100).rounded())) })
+        turned(SidebarSlider(key: "strength", title: "Strength", symbol: "drop.fill", json: strength,
+                             logarithmic: false, height: content.sliderHeight, dial: content.dial, leading: leading,
+                             horizontal: horizontal, unit: "%",
+                             preview: .strength, format: { String(Int(($0 * 100).rounded())) }))
       }
       if content.buttons || content.smooth || content.face {
-        VStack(spacing: 4) {
+        buttons {
           if content.buttons && transforming {
             modifierButton("ctrl", symbol: "magnet", label: "Snap")
             modifierButton("shift", symbol: "scope", label: "Precision")
           }
           else if content.buttons, let strokes = state.strokes {
             /* One way or the other, never both: a segmented control, its selection sliding between. */
-            VStack(spacing: 4) {
+            buttons {
               button(.add, symbol: strokes.addSymbol, marquee: false, label: strokes.addName)
               button(.subtract, symbol: strokes.subtractSymbol, marquee: false, label: strokes.subtractName)
             }
@@ -1789,8 +1844,8 @@ struct PaintSidebar: View {
       }
     }
     .padding(6)
-    .padding(.top, content.handle)
-    .frame(width: Self.width, height: content.height)
+    .padding(horizontal ? .leading : .top, content.handle)
+    .frame(width: horizontal ? content.height : Self.width, height: horizontal ? Self.width : content.height)
     .panelGlass(in: RoundedRectangle(cornerRadius: 32, style: .continuous))
     .animation(UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: 0.32, dampingFraction: 0.84),
                value: state.active)
@@ -1820,7 +1875,7 @@ struct PaintSidebar: View {
       Image(systemName: on ? "face.smiling.inverse" : "face.smiling")
         .font(.system(size: 20, weight: .semibold))
         .foregroundStyle(on ? Color.white : Color.primary)
-        .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
+        .frame(minWidth: 52, maxWidth: horizontal ? 52 : .infinity, minHeight: 52, maxHeight: 52)
         .background {
           if on { Capsule().fill(.clear).panelGlass(.tinted(.blue), in: Capsule()) }
         }
@@ -1841,7 +1896,7 @@ struct PaintSidebar: View {
     return Image(systemName: "drop.halffull")
       .font(.system(size: 19, weight: .semibold))
       .foregroundStyle(on ? Color.white : Color.primary)
-      .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
+      .frame(minWidth: 52, maxWidth: horizontal ? 52 : .infinity, minHeight: 52, maxHeight: 52)
       .background {
         if on {
           Capsule().fill(.clear).panelGlass(.tinted(.blue), in: Capsule())
@@ -1874,7 +1929,7 @@ struct PaintSidebar: View {
     return icon
       .font(.system(size: 19, weight: .semibold))
       .foregroundStyle(on ? Color.white : Color.primary)
-      .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
+      .frame(minWidth: 52, maxWidth: horizontal ? 52 : .infinity, minHeight: 52, maxHeight: 52)
       .background {
         if on {
           Capsule().fill(.clear).panelGlass(.tinted(.blue), in: Capsule())
@@ -1920,7 +1975,7 @@ struct PaintSidebar: View {
         }
       }
       .foregroundStyle(on ? Color.white : Color.primary)
-      .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
+      .frame(minWidth: 52, maxWidth: horizontal ? 52 : .infinity, minHeight: 52, maxHeight: 52)
       .contentTransition(.symbolEffect(.replace))
       .background {
         if on {
@@ -1981,6 +2036,8 @@ struct SidebarSlider: View {
   /** A ring the value goes around; holding or dragging it brings out a tall slider beside it. */
   var dial = false
   let leading: Bool
+  /** Turned on its side in a row along the top or the bottom: its words turned back upright. */
+  var horizontal = false
   let unit: String
   /** What dragging shows beside the slider, towards the viewport. */
   enum Preview {
@@ -2065,9 +2122,11 @@ struct SidebarSlider: View {
         .lineLimit(1)
         .minimumScaleFactor(0.6)
         .frame(width: width - 8, height: width)
+        .rotationEffect(.degrees(horizontal ? -90 : 0))
     }
     .overlay(alignment: .top) {
       liveSymbol(t)
+        .rotationEffect(.degrees(horizontal ? -90 : 0))
         .foregroundStyle(fill > height - 30 ? Color.white : Color.primary)
         .frame(height: 16)
         .padding(.top, 12)
@@ -2124,6 +2183,7 @@ struct SidebarSlider: View {
         .lineLimit(1)
         .minimumScaleFactor(0.5)
         .padding(.horizontal, 11)
+        .rotationEffect(.degrees(horizontal ? -90 : 0))
     }
     .frame(width: 52, height: 52)
   }
@@ -2144,6 +2204,7 @@ struct SidebarSlider: View {
     .frame(minWidth: 112, minHeight: 112)
     .panelGlass(in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     .fixedSize()
+    .rotationEffect(.degrees(horizontal ? -90 : 0))
   }
 
   var body: some View {
@@ -2647,6 +2708,8 @@ struct RailLayout: Equatable {
   /** How far the sidebar's top edge can be moved along its edge. */
   var sidebarTravel: ClosedRange<CGFloat> = 0...0
   var sidebarLeading: Bool
+  /** Along the top or the bottom, a row of its own beside the rails there. */
+  var sidebarRow: RailEdge?
   /** Out of the way of an open tool list, or without the room to show. */
   var sidebarTucked: Bool
   var toolEdge: RailEdge
@@ -2664,7 +2727,7 @@ struct RailLayout: Equatable {
       a.brushWidth == b.brushWidth &&
       a.brushHeight == b.brushHeight && a.toolTop == b.toolTop && a.dockDistance == b.dockDistance &&
       a.toolCenter == b.toolCenter && a.brushCenter == b.brushCenter && a.colorCenter == b.colorCenter &&
-      a.sidebarCenter == b.sidebarCenter && a.sidebarLeading == b.sidebarLeading &&
+      a.sidebarCenter == b.sidebarCenter && a.sidebarLeading == b.sidebarLeading && a.sidebarRow == b.sidebarRow &&
       a.sidebarTucked == b.sidebarTucked && a.toolEdge == b.toolEdge && a.brushEdge == b.brushEdge &&
       a.brushStops == b.brushStops && a.leadingCorner == b.leadingCorner && a.bottomRow == b.bottomRow
   }
@@ -2672,7 +2735,7 @@ struct RailLayout: Equatable {
   @MainActor
   init(safe: CGRect, tray: CGFloat, tools: RailState, toolCount: Int, brushes: RailState?, brushCount: Int,
        sidebar: SidebarContent, sidebarPosition: Double? = nil, colorWell: Bool, leftHanded: Bool,
-       gizmo: CGRect, toolEdge: RailEdge = .leading, brushEdge: RailEdge? = nil)
+       gizmo: CGRect, toolEdge: RailEdge = .leading, brushEdge: RailEdge? = nil, sidebarEdge: RailEdge? = nil)
   {
     let compact: CGFloat = 64, gap: CGFloat = 10, topInset: CGFloat = 16, bottomInset: CGFloat = 12
     let inset: CGFloat = 14
@@ -2682,8 +2745,12 @@ struct RailLayout: Equatable {
     colorCenter = .zero
     let brushEdge = brushEdge ?? (leftHanded ? .leading : .trailing)
     self.brushEdge = brushEdge
-    /* The sidebar keeps the hand's side, unless the brushes were moved there. */
-    let sidebarLeading = brushEdge == (leftHanded ? .trailing : .leading) ? leftHanded : !leftHanded
+    /* The sidebar keeps the hand's side, unless the brushes were moved there or it was moved itself.
+     * In a row, its values open towards the viewport, as a leading column's do. */
+    let sidebarRow = sidebarEdge?.horizontal == true ? sidebarEdge : nil
+    self.sidebarRow = sidebarRow
+    let sidebarLeading = sidebarRow.map { $0 == .top } ?? sidebarEdge.map { $0 == .leading } ??
+      (brushEdge == (leftHanded ? .trailing : .leading) ? leftHanded : !leftHanded)
     self.sidebarLeading = sidebarLeading
     let sidebarEdge: RailEdge = sidebarLeading ? .leading : .trailing
     let brushLeading = brushEdge == .leading
@@ -2704,7 +2771,7 @@ struct RailLayout: Equatable {
 
     /* The + and - alone join the tool column: above the closed rail, or in the corner below an
      * open or docked one, which rises to make room. */
-    let sharesSidebar = toolEdge == sidebarEdge
+    let sharesSidebar = sidebarRow == nil && toolEdge == sidebarEdge
     let pill = sidebar.buttonsOnly && sharesSidebar
     let below = pill && tools.listVisible
     let reserve = below ? sidebar.height + gap : 0
@@ -2786,7 +2853,12 @@ struct RailLayout: Equatable {
     let h = sidebar.height
     let sidebarTop = ceilingY(sidebarLeading) + topInset
     let x = edgeX(PaintSidebar.width, sidebarLeading)
-    if pill {
+    if sidebarRow != nil {
+      /* Placed with the row below. */
+      sidebarCenter = .zero
+      sidebarTucked = false
+    }
+    else if pill {
       let y = below ? toolFloor - bottomInset - h : max(sidebarTop, toolTop - gap - h)
       sidebarCenter = CGPoint(x: x, y: y + h / 2)
       sidebarTucked = false
@@ -2809,18 +2881,21 @@ struct RailLayout: Equatable {
       var widths: [CGFloat] = []
       if !toolEdge.horizontal && (toolEdge == .leading) == leading { widths.append(columnTools) }
       if !brushEdge.horizontal && brushLeading == leading { widths.append(max(columnBrushes, compact)) }
-      if !sidebar.isEmpty && sidebarLeading == leading { widths.append(PaintSidebar.width) }
+      if !sidebar.isEmpty && sidebarRow == nil && sidebarLeading == leading { widths.append(PaintSidebar.width) }
       return widths.max().map { inset + $0 + gap } ?? inset
     }
     var brushRowCenter = CGPoint.zero
     for row in [RailEdge.top, .bottom] {
       let toolsHere = toolEdge == row, brushesHere = brushEdge == row && brushes != nil
-      guard toolsHere || brushesHere else { continue }
+      let sidebarHere = sidebarRow == row && !sidebar.isEmpty
+      guard toolsHere || brushesHere || sidebarHere else { continue }
       /* The gizmo's corner left free in its row. */
       let gizmoRow = (row == .bottom) == gizmoBottom
       let minX = safe.minX + max(lane(true), gizmoRow && gizmoLeading ? ShellMetrics.gizmoReserve : 0)
       let maxX = safe.maxX - max(lane(false), gizmoRow && !gizmoLeading ? ShellMetrics.gizmoReserve : 0)
-      let room = max(compact, maxX - minX)
+      /* The sidebar keeps its length, at the end of the row; the rails scroll in what is left. */
+      let sidebarLength = sidebarHere ? sidebar.height + (toolsHere || brushesHere ? gap : 0) : 0
+      let room = max(compact, maxX - minX - sidebarLength)
       let colorWidth = brushesHere && colorWell ? BrushColorWell.size + gap : 0
       var toolLength = toolsHere ? toolWidth : 0
       var brushLength = brushesHere ? brushWidth : 0
@@ -2831,7 +2906,7 @@ struct RailLayout: Equatable {
         toolLength = toolsHere ? max(compact, min(toolLength, share)) : 0
         brushLength = brushesHere ? max(compact, min(brushLength, room - colorWidth - gaps - toolLength)) : 0
       }
-      let total = toolLength + gaps + colorWidth + brushLength
+      let total = toolLength + gaps + colorWidth + brushLength + sidebarLength
       let y = row == .top ? top + compact / 2 : safe.maxY - tray - bottomInset - compact / 2
       var cursor = max(minX, min((safe.minX + safe.maxX) / 2 - total / 2, maxX - total))
       if toolsHere {
@@ -2844,6 +2919,11 @@ struct RailLayout: Equatable {
         cursor += colorWidth
         brushWidth = brushLength
         brushRowCenter = CGPoint(x: cursor + brushLength / 2, y: y)
+        cursor += brushLength
+      }
+      if sidebarHere {
+        cursor += sidebarLength - sidebar.height
+        sidebarCenter = CGPoint(x: cursor + sidebar.height / 2, y: y)
       }
       if row == .bottom { bottomRow = compact + gap }
     }
