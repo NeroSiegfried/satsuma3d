@@ -411,10 +411,12 @@ public struct DocumentWindow: View {
   let commands: ShellCommands
   let pencilMenu: PencilMenu?
   @State private var stripWidth: CGFloat = 0
-  /** The viewport's width, with the Image Editor's beside it. */
-  @State private var layersWidth: CGFloat = 0
+  /** The viewport's size, with the Image Editor's beside or below it. */
+  @State private var layersSize = CGSize.zero
   /** How much of that the 3D viewport has, the Image Editor the rest. */
   @AppStorage("BlenderImageSplit") private var imageSplit = 0.5
+  /** The Image Editor below the 3D viewport rather than beside it. */
+  @AppStorage("BlenderImageSplitAcross") private var imageSplitAcross = false
   @Environment(\.horizontalSizeClass) private var sizeClass
 
   /** The native controls are hidden in full screen, and over Blender's own interface. */
@@ -599,20 +601,28 @@ public struct DocumentWindow: View {
 #endif
   }
 
-  /** The Image Editor's width beside the 3D viewport, leaving each room to work in. */
-  private var imageWidth: CGFloat {
-    guard imageViewportShown, sizeClass != .compact, layersWidth > 0 else { return 0 }
-    let least = min(320, layersWidth / 3)
-    return min(max(layersWidth * (1 - imageSplit), least), layersWidth - least)
+  /** Along the split: the width beside each other, the height one above the other. */
+  private var layersLength: CGFloat { imageSplitAcross ? layersSize.height : layersSize.width }
+
+  /** The Image Editor's width beside the 3D viewport, or its height below it, leaving each room
+   * to work in. */
+  private var imageLength: CGFloat {
+    guard imageViewportShown, sizeClass != .compact, layersLength > 0 else { return 0 }
+    let least = min(320, layersLength / 3)
+    return min(max(layersLength * (1 - imageSplit), least), layersLength - least)
   }
 
   private func viewportLayers(bottom: Bool) -> some View {
-    let beside = imageWidth > 0
+    let beside = imageLength > 0
+    let across = imageSplitAcross
+    let split = across ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
     return ZStack {
-      HStack(spacing: 0) {
+      split {
         ZStack {
-          /* Edge to edge, under a phone's toolbar column too. */
-          ViewportView(container: viewport, bottomCover: viewportCover, live: model.nodesCoverDragging)
+          /* Edge to edge, under a phone's toolbar column too; above the Image Editor, what is
+           * docked below covers it no more. */
+          ViewportView(container: viewport, bottomCover: beside && across ? 0 : viewportCover,
+                       live: model.nodesCoverDragging)
             .ignoresSafeArea()
             .onDrop(of: [.data, .image], delegate: FileDrop(model: model) { shell.assets.store.dragged != nil })
           if !model.viewportReady {
@@ -624,10 +634,10 @@ public struct DocumentWindow: View {
           }
         }
         if beside {
-          ImageSplitHandle(fraction: $imageSplit, width: layersWidth)
+          ImageSplitHandle(fraction: $imageSplit, across: $imageSplitAcross, length: layersLength)
           imageViewport
-            .frame(width: imageWidth)
-            .transition(.move(edge: .trailing))
+            .frame(width: across ? nil : imageLength, height: across ? imageLength : nil)
+            .transition(.move(edge: across ? .bottom : .trailing))
         }
       }
       if imageViewportShown && !beside {
@@ -648,7 +658,8 @@ public struct DocumentWindow: View {
             ViewGizmoLayer(model: model)
             TextObjectKeyboard(model: model)
           }
-          .padding(.trailing, beside ? imageWidth + ImageSplitHandle.width : 0)
+          .padding(across ? .bottom : .trailing,
+                   beside ? max(0, imageLength + ImageSplitHandle.width - (across ? viewportCover : 0)) : 0)
           .opacity(imageViewportShown && !beside ? 0 : 1)
 #if !os(visionOS)
           /* Across both: the tools and sliders on one side, the brushes on the other, painting on
@@ -670,8 +681,9 @@ public struct DocumentWindow: View {
         showInterfaceButton
       }
     }
-    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { layersWidth = $0 }
+    .onGeometryChange(for: CGSize.self) { $0.size } action: { layersSize = $0 }
     .animation(.easeOut(duration: 0.42), value: imageViewportShown)
+    .animation(.spring(response: 0.42, dampingFraction: 0.86), value: imageSplitAcross)
   }
 
   /** The Image Editor, fitting its image clear of the bar, the brushes and what is docked below. */
@@ -699,39 +711,85 @@ public struct DocumentWindow: View {
 }
 
 /** Between the 3D viewport and the Image Editor: dragged, it gives one more room and the other
- * less, where it stays. */
+ * less, where it stays, catching at the middle, the thirds and the quarters; held, it turns the
+ * split, the Image Editor below the 3D viewport rather than beside it, or back. */
 struct ImageSplitHandle: View {
   static let width: CGFloat = 1
   @Binding var fraction: Double
-  let width: CGFloat
+  @Binding var across: Bool
+  /** The split's length, along which it is dragged. */
+  let length: CGFloat
   @State private var start: Double?
+  /** Held still a moment: the split turns, and the touch does nothing more. */
+  @State private var hold: DispatchWorkItem?
+  @State private var turned = false
+  @State private var detent: Double?
+
+  private static let detents: [Double] = [1 / 4, 1 / 3, 1 / 2, 2 / 3, 3 / 4]
+  /** How near a detent, in points, catches it. */
+  private static let reach: CGFloat = 18
+
+  /** \a value caught by the detent within reach, if any. */
+  private func caught(_ value: Double) -> (Double, Double?) {
+    guard length > 0 else { return (value, nil) }
+    let near = Self.detents.min { abs($0 - value) < abs($1 - value) }
+    if let near, abs(near - value) * Double(length) < Double(Self.reach) { return (near, near) }
+    return (value, nil)
+  }
 
   var body: some View {
+    let lifted = start != nil && !turned
     Rectangle()
       .fill(Color.black)
-      .frame(width: Self.width)
+      .frame(width: across ? nil : Self.width, height: across ? Self.width : nil)
       .ignoresSafeArea()
       .overlay {
         Capsule()
-          .fill(.white.opacity(start != nil ? 0.9 : 0.6))
-          .frame(width: 5, height: start != nil ? 52 : 40)
-          .frame(width: 32, height: 88)
+          .fill(.white.opacity(lifted ? 0.9 : 0.6))
+          .frame(width: across ? (lifted ? 52 : 40) : 5, height: across ? 5 : (lifted ? 52 : 40))
+          .frame(width: across ? 88 : 32, height: across ? 32 : 88)
           .contentShape(Rectangle())
           .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
             .onChanged { value in
-              if start == nil { Haptics.selection() }
-              let from = start ?? fraction
-              start = from
-              guard width > 0 else { return }
-              fraction = min(0.85, max(0.15, from + Double(value.translation.width / width)))
+              if start == nil {
+                Haptics.selection()
+                start = fraction
+                turned = false
+                let item = DispatchWorkItem {
+                  turned = true
+                  Haptics.impact(.medium)
+                  withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { across.toggle() }
+                }
+                hold = item
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
+              }
+              let moved = across ? value.translation.height : value.translation.width
+              if abs(moved) > 6 || abs(across ? value.translation.width : value.translation.height) > 6 {
+                hold?.cancel()
+              }
+              guard !turned, let from = start, length > 0 else { return }
+              let (next, at) = caught(min(0.85, max(0.15, from + Double(moved / length))))
+              if at != detent {
+                if at != nil { Haptics.selection() }
+                detent = at
+              }
+              fraction = next
             }
-            .onEnded { _ in start = nil })
+            .onEnded { _ in
+              hold?.cancel()
+              hold = nil
+              start = nil
+              detent = nil
+            })
           .hoverEffect(.highlight)
-          .animation(.spring(response: 0.25, dampingFraction: 0.8), value: start != nil)
+          .animation(.spring(response: 0.25, dampingFraction: 0.8), value: lifted)
           .accessibilityElement()
           .accessibilityLabel("Resize Image Editor")
           .accessibilityAdjustableAction { direction in
             fraction = min(0.85, max(0.15, fraction + (direction == .increment ? 0.1 : -0.1)))
+          }
+          .accessibilityAction(named: across ? "Image Editor Beside" : "Image Editor Below") {
+            across.toggle()
           }
       }
       .zIndex(1)
