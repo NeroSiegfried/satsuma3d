@@ -34,6 +34,7 @@
 #  include "BLI_path_utils.hh"
 #  include "BLI_string.h"
 #  include "DEG_depsgraph_query.hh"
+#  include "DNA_image_types.h"
 #  include "DNA_object_types.h"
 #  include "DNA_scene_types.h"
 #  include "DNA_space_types.h"
@@ -343,6 +344,15 @@ static bool wm_document_write(bContext *C, const char *filepath, const bool prev
     if (preview && win->runtime->ghostwin) {
       wm_window_clear_drawable(wm);
       wm_window_make_drawable(wm, win);
+    }
+  }
+  /* Painted images are kept in the document, as Pack does: it saves itself, with no moment to
+   * save them on their own, and their pixels would otherwise be lost. */
+  for (Image &image : CTX_data_main(C)->images) {
+    if (!ID_IS_LINKED(&image) && ELEM(image.source, IMA_SRC_FILE, IMA_SRC_GENERATED, IMA_SRC_TILED) &&
+        BKE_image_is_dirty(&image))
+    {
+      BKE_image_memorypack(&image);
     }
   }
   ReportList reports;
