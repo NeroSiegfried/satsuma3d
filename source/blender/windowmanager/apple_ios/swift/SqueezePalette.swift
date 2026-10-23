@@ -97,10 +97,14 @@ final class SqueezePalette {
     var labels: [String]
   }
 
+  /** Icons more than one of the menu's commands have, such as an edge's for its seams and sharp
+   * edges, which do not tell them apart: those show their titles. */
+  static var sharedIcons = Set<String>()
+
   /** A command with an icon of its own is that icon alone, as Copy and Paste are. */
   static func iconOnly(_ item: BlenderMenuItem) -> UIImage? {
     if item.destructive { return UIImage(systemName: "trash") }
-    guard !item.submenu, !["", "NONE", "BLANK1"].contains(item.icon) else { return nil }
+    guard !item.submenu, !["", "NONE", "BLANK1"].contains(item.icon), !sharedIcons.contains(item.icon) else { return nil }
     return BlenderIcon.image(item.icon)
   }
 
@@ -412,6 +416,7 @@ final class SqueezePalette {
     localColor = nil
     scrubbing = nil
     rollGathered = nil
+    Self.sharedIcons = []
     hoverRoll = roll
     touchRoll = nil
     rollLock = nil
@@ -634,6 +639,9 @@ final class SqueezePalette {
    * painting's does, the mode's quick actions instead. */
   func contextCommands(_ route: String) -> [CommandEntry] {
     let items = (BlenderMenus.shared.items[route] ?? []).filter { !$0.disabled || $0.submenu }
+    var counts: [String: Int] = [:]
+    for item in items { counts[item.icon, default: 0] += 1 }
+    Self.sharedIcons.formUnion(counts.filter { $0.value > 1 }.map(\.key))
     if items.contains(where: { !$0.route.contains("\"panel\"") }) || route != BlenderMenus.contextRoute {
       /* Those that are icons alone together first, as Copy and Paste belong side by side. */
       let entries = Self.grouped(items)
