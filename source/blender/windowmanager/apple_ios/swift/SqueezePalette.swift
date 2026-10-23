@@ -615,12 +615,21 @@ final class SqueezePalette {
     return rows
   }
 
+  /** A submenu opened on an arc further out, whose title then shows lit where it was tapped. */
+  func isOpen(_ item: BlenderMenuItem) -> Bool { commandPath.contains { $0.route == item.route } }
+
   /** The context menu's commands for what is selected; where it has only the mode's settings, as
    * painting's does, the mode's quick actions instead. */
-  var contextCommands: [CommandEntry] {
-    let items = (commands ?? []).filter { !$0.disabled || $0.submenu }
-    if items.contains(where: { !$0.route.contains("\"panel\"") }) || !commandPath.isEmpty {
-      return Self.grouped(items)
+  func contextCommands(_ route: String) -> [CommandEntry] {
+    let items = (BlenderMenus.shared.items[route] ?? []).filter { !$0.disabled || $0.submenu }
+    if items.contains(where: { !$0.route.contains("\"panel\"") }) || route != BlenderMenus.contextRoute {
+      /* Those that are icons alone together first, as Copy and Paste belong side by side. */
+      let entries = Self.grouped(items)
+      let icon = { (entry: CommandEntry) -> Bool in
+        if case .item(let item) = entry { return Self.iconOnly(item) != nil }
+        return false
+      }
+      return entries.filter(icon) + entries.filter { !icon($0) }
     }
     return actions.map { .action($0) }
   }
