@@ -2884,13 +2884,45 @@ struct RailLayout: Equatable {
       leading ? safe.minX + inset + width / 2 : safe.maxX - inset - width / 2
     }
 
+    /* The sidebar, halfway down its edge where it fits, clear of what sits below it. */
+    let h = sidebar.height
+    let sharesBrushes = brushes != nil && !brushEdge.horizontal && brushLeading == sidebarLeading
+    let sidebarTop = ceilingY(sidebarLeading) + topInset
+    let x = edgeX(PaintSidebar.width, sidebarLeading)
+    if sidebarRow != nil {
+      /* Placed with the row below. */
+      sidebarCenter = .zero
+      sidebarTucked = false
+    }
+    else if pill {
+      let y = below ? toolFloor - bottomInset - h : max(sidebarTop, toolTop - gap - h)
+      sidebarCenter = CGPoint(x: x, y: y + h / 2)
+      sidebarTucked = false
+    }
+    else {
+      let lowest = sharesSidebar ? toolTop - gap : floorY(sidebarLeading) - bottomInset
+      let highest = sidebarTop
+      let travel = highest...max(highest, lowest - h)
+      sidebarTravel = travel
+      /* Below the brushes where they share its edge, leaving them the room above. */
+      let y = sidebarPosition.map { travel.lowerBound + CGFloat($0) * (travel.upperBound - travel.lowerBound) } ??
+        max(sidebarTop, sharesBrushes ? lowest - h : min(safe.midY - h / 2, lowest - h))
+      sidebarCenter = CGPoint(x: x, y: y + h / 2)
+      sidebarTucked = lowest - sidebarTop < h
+    }
+
     /* The color well above the brushes, on their edge between the top bar and the navigation
      * gizmo, or the tool rail when they share its edge: an open list halfway down, closed ones
      * resting above the gizmo, or at the top where they were dragged. In a row, it leads it. */
-    let trailingBottom = floorY(false) - bottomInset
-    let columnBottom = brushEdge == toolEdge ? toolTop - gap : floorY(brushLeading) - bottomInset
+    var columnBottom = brushEdge == toolEdge ? toolTop - gap : floorY(brushLeading) - bottomInset
     /* The brushes' column begins below the gizmo where it is at the top of their edge. */
-    let brushTop = ceilingY(brushLeading) + topInset
+    var brushTop = ceilingY(brushLeading) + topInset
+    /* On the sidebar's edge, they keep to the larger room above or below it, never over it. */
+    if sharesBrushes && sidebarRow == nil && !sidebar.isEmpty && !sidebarTucked && !pill {
+      let above = sidebarCenter.y - h / 2 - gap, below = sidebarCenter.y + h / 2 + gap
+      if above - brushTop >= columnBottom - below { columnBottom = min(columnBottom, above) }
+      else { brushTop = max(brushTop, below) }
+    }
     let colorHeight = colorWell ? BrushColorWell.size + gap : 0
     if brushEdge.horizontal {
       brushWidth = brushes?.listVisible == true ? listLength(brushCount) : compact
@@ -2917,31 +2949,6 @@ struct RailLayout: Equatable {
                     (brushes?.restsAtTop == true ? restBottom : restTop) - resting)
       colorCenter = CGPoint(x: edgeX(compact, brushLeading), y: groupTop + BrushColorWell.size / 2)
       brushCenter = CGPoint(x: edgeX(brushWidth, brushLeading), y: groupTop + colorHeight + brushHeight / 2)
-    }
-
-    /* The sidebar, halfway down its edge where it fits, clear of what sits below it. */
-    let h = sidebar.height
-    let sidebarTop = ceilingY(sidebarLeading) + topInset
-    let x = edgeX(PaintSidebar.width, sidebarLeading)
-    if sidebarRow != nil {
-      /* Placed with the row below. */
-      sidebarCenter = .zero
-      sidebarTucked = false
-    }
-    else if pill {
-      let y = below ? toolFloor - bottomInset - h : max(sidebarTop, toolTop - gap - h)
-      sidebarCenter = CGPoint(x: x, y: y + h / 2)
-      sidebarTucked = false
-    }
-    else {
-      let lowest = sharesSidebar ? toolTop - gap : sidebarLeading ? floorY(true) - bottomInset : trailingBottom
-      let highest = sidebarTop
-      let travel = highest...max(highest, lowest - h)
-      sidebarTravel = travel
-      let y = sidebarPosition.map { travel.lowerBound + CGFloat($0) * (travel.upperBound - travel.lowerBound) } ??
-        max(sidebarTop, min(safe.midY - h / 2, lowest - h))
-      sidebarCenter = CGPoint(x: x, y: y + h / 2)
-      sidebarTucked = lowest - sidebarTop < h
     }
 
     /* Rows along the top or the bottom run between the columns on either side, the navigation
