@@ -1788,7 +1788,7 @@ struct SidebarContent: Equatable {
   var strength = false
   var buttons = false
   var smooth = false
-  /** The brush's color, first. */
+  /** The brush's color, below the sliders. */
   var color = false
   /** Face Control, where the front camera tracks faces: the face plays the brush. */
   var face = false
@@ -1870,9 +1870,6 @@ struct PaintSidebar: View {
     let stack = horizontal ? AnyLayout(HStackLayout(spacing: 8)) : AnyLayout(VStackLayout(spacing: 8))
     let buttons = horizontal ? AnyLayout(HStackLayout(spacing: 4)) : AnyLayout(VStackLayout(spacing: 4))
     stack {
-      if content.color, let color = (brush?["color"] as? [NSNumber])?.map(\.doubleValue) {
-        BrushColorWell(color: color)
-      }
       if content.size, let size = brush?.dict("size") {
         let pixels = size.bool("pixels")
         turned(SidebarSlider(key: "size", title: size.string("label") ?? "Radius", symbol: "circle.dashed",
@@ -1886,6 +1883,9 @@ struct PaintSidebar: View {
                              logarithmic: false, height: content.sliderHeight, dial: content.dial, leading: leading,
                              horizontal: horizontal, unit: "%",
                              preview: .strength, format: { String(Int(($0 * 100).rounded())) }))
+      }
+      if content.color, let color = (brush?["color"] as? [NSNumber])?.map(\.doubleValue) {
+        BrushColorWell(color: color)
       }
       if content.buttons || content.smooth || content.face {
         buttons {
