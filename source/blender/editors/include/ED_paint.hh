@@ -88,6 +88,21 @@ void ED_image_undo_restore(UndoStep *us);
 /** Export for ED_undo_sys. */
 void ED_image_undosys_type(UndoType *ut);
 
+/* `paint_image_ops_paint.cc` */
+
+/**
+ * A stroke on the Image Editor's image from a native interface, which sends its points as they
+ * come rather than events: the context's Image Editor is in Paint mode, and its region's pixels
+ * are the image's. \a zoom is how many of the screen's pixels each of the image's covers, which
+ * the brush's size and spacing are measured in, as in the Image Editor.
+ */
+bool ED_image_paint_native_begin(bContext *C, float zoom, const float point[3]);
+/** Points along the stroke: x, y in the image's pixels and the pressure. */
+void ED_image_paint_native_points(bContext *C, const float (*points)[3], int count);
+/** With \a cancel, the image goes back to how it was before the stroke, as when a second finger
+ * lands to move the view instead. */
+void ED_image_paint_native_end(bContext *C, bool cancel = false);
+
 void *ED_image_paint_tile_find(PaintTileMap *paint_tile_map,
                                Image *image,
                                ImBuf *ibuf,

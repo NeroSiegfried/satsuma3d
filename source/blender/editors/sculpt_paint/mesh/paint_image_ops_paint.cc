@@ -13,6 +13,7 @@
 
 #include "BLI_math_color.h"
 #include "BLI_math_vector.h"
+#include "BLI_math_vector.hh"
 
 #include "BKE_brush.hh"
 #include "BKE_colortools.hh"
@@ -20,6 +21,7 @@
 #include "BKE_layer.hh"
 #include "BKE_paint.hh"
 #include "BKE_paint_types.hh"
+#include "BKE_report.hh"
 #include "BKE_undo_system.hh"
 
 #include "ED_paint.hh"
@@ -627,5 +629,208 @@ void PAINT_OT_image_paint(wmOperatorType *ot)
 
   paint_stroke_operator_properties(ot);
 }
+
+/* -------------------------------------------------------------------- */
+/** \name Native Strokes
+ *
+ * The 2D painting above, with the stroke system's spacing and pressure, from points a native
+ * interface sends while the stroke is drawn. One undo step for the stroke, as the operator's.
+ * \{ */
+
+struct NativeImageStroke {
+  void *handle = nullptr;
+  float zoom = 1.0f;
+  float start_alpha = 1.0f;
+  float2 start;
+  /** The last dab, and the last point sent with its pressure. */
+  float2 last;
+  float2 last_point;
+  float last_pressure = 1.0f;
+  /** Screen pixels along the stroke, and since the last dab. */
+  float distance = 0.0f;
+  float since_dab = 0.0f;
+};
+static NativeImageStroke *native_stroke = nullptr;
+
+static void native_stroke_dab(bContext *C, const float2 position, const float pressure)
+{
+  NativeImageStroke &stroke = *native_stroke;
+  Scene *scene = CTX_data_scene(C);
+  Paint *paint = &scene->toolsettings->imapaint.paint;
+  Brush *brush = BKE_paint_brush(paint);
+  const float size_pressure = BKE_brush_use_size_pressure(brush) ?
+                                  BKE_curvemapping_evaluateF(brush->curve_size, 0, pressure) :
+                                  1.0f;
+  /* In the image's pixels, as the stroke system divides by the editor's zoom. */
+  const float size = max_ff(0.5f, BKE_brush_radius_get(paint, brush) * size_pressure / stroke.zoom);
+  float dab_pressure = pressure;
+  if (BKE_brush_use_alpha_pressure(brush)) {
+    dab_pressure = BKE_curvemapping_evaluateF(brush->curve_strength, 0, pressure);
+    BKE_brush_alpha_set(paint, brush, max_ff(0.0f, stroke.start_alpha * dab_pressure));
+  }
+  else {
+    BKE_brush_alpha_set(paint, brush, stroke.start_alpha);
+  }
+  float prev[2] = {stroke.last.x, stroke.last.y};
+  float mouse[2] = {position.x, position.y};
+  paint_2d_stroke(stroke.handle, prev, mouse, false, dab_pressure, stroke.distance, size);
+  BKE_brush_alpha_set(paint, brush, stroke.start_alpha);
+  stroke.last = position;
+}
+
+/** Screen pixels between dabs, as the stroke system spaces them. */
+static float native_stroke_spacing(bContext *C, const float pressure)
+{
+  Scene *scene = CTX_data_scene(C);
+  Paint *paint = &scene->toolsettings->imapaint.paint;
+  Brush *brush = BKE_paint_brush(paint);
+  const float size_pressure = BKE_brush_use_size_pressure(brush) ?
+                                  BKE_curvemapping_evaluateF(brush->curve_size, 0, pressure) :
+                                  1.0f;
+  const float radius = max_ff(1.0f, BKE_brush_radius_get(paint, brush) * size_pressure);
+  float spacing = brush->spacing;
+  if (brush->stroke_method == BRUSH_STROKE_SPACE && brush->flag & BRUSH_SPACING_PRESSURE) {
+    spacing *= 1.5f - pressure;
+  }
+  return max_ff(1.0f, radius * spacing / 50.0f);
+}
+
+bool ED_image_paint_native_begin(bContext *C, const float zoom, const float point[3])
+{
+  if (native_stroke) {
+    ED_image_paint_native_end(C);
+  }
+  Scene *scene = CTX_data_scene(C);
+  ToolSettings *settings = scene->toolsettings;
+  BKE_paint_init(CTX_data_main(C), scene, PaintMode::Texture2D);
+  Paint *paint = &settings->imapaint.paint;
+  Brush *brush = BKE_paint_brush(paint);
+  if (!brush) {
+    return false;
+  }
+  ReportList reports;
+  BKE_reports_init(&reports, RPT_STORE);
+  wmOperator op = {};
+  op.reports = &reports;
+  void *handle = paint_2d_new_stroke(C, &op, BrushStrokeMode::Normal);
+  BKE_reports_free(&reports);
+  if (!handle) {
+    return false;
+  }
+  native_stroke = MEM_new<NativeImageStroke>(__func__);
+  native_stroke->handle = handle;
+  native_stroke->zoom = max_ff(zoom, 1e-4f);
+  native_stroke->start_alpha = BKE_brush_alpha_get(paint, brush);
+  native_stroke->start = native_stroke->last = native_stroke->last_point = float2(point[0], point[1]);
+  native_stroke->last_pressure = point[2];
+
+  settings->imapaint.flag |= IMAGEPAINT_DRAWING;
+  ED_image_undo_push_begin("Image Paint", PaintMode::Texture2D);
+  /* The falloff is set up as the brush's cursor draws, which has not been drawn here. */
+  BKE_curvemapping_init(brush->curve_distance_falloff);
+  BKE_curvemapping_init(brush->curve_rand_hue);
+  BKE_curvemapping_init(brush->curve_rand_saturation);
+  BKE_curvemapping_init(brush->curve_rand_value);
+  BKE_curvemapping_init(brush->curve_size);
+  BKE_curvemapping_init(brush->curve_strength);
+
+  /* Filling acts once the stroke ends; anything else paints where it starts. */
+  if (brush->image_brush_type != IMAGE_PAINT_BRUSH_TYPE_FILL) {
+    native_stroke_dab(C, native_stroke->start, point[2]);
+    paint_2d_redraw(C, handle, false);
+  }
+  return true;
+}
+
+void ED_image_paint_native_points(bContext *C, const float (*points)[3], const int count)
+{
+  if (!native_stroke) {
+    return;
+  }
+  NativeImageStroke &stroke = *native_stroke;
+  Brush *brush = BKE_paint_brush(&CTX_data_scene(C)->toolsettings->imapaint.paint);
+  if (brush->image_brush_type == IMAGE_PAINT_BRUSH_TYPE_FILL) {
+    if (count > 0) {
+      stroke.last = stroke.last_point = float2(points[count - 1][0], points[count - 1][1]);
+    }
+    return;
+  }
+  /* From the last point, walking on to each in screen pixels. */
+  float2 from = stroke.last_point;
+  float from_pressure = stroke.last_pressure;
+  for (int i = 0; i < count; i++) {
+    const float2 to(points[i][0], points[i][1]);
+    const float to_pressure = points[i][2];
+    const float length = math::distance(from, to) * stroke.zoom;
+    float walked = 0.0f;
+    while (length > 0.0f) {
+      const float t = walked / length;
+      const float pressure = from_pressure + (to_pressure - from_pressure) * t;
+      /* Less than the spacing when a lighter touch makes it smaller than what was walked. */
+      const float step = max_ff(0.5f, native_stroke_spacing(C, pressure) - stroke.since_dab);
+      if (walked + step > length) {
+        stroke.since_dab += length - walked;
+        break;
+      }
+      walked += step;
+      stroke.distance += step;
+      stroke.since_dab = 0.0f;
+      const float f = walked / length;
+      native_stroke_dab(C, math::interpolate(from, to, f), from_pressure + (to_pressure - from_pressure) * f);
+    }
+    from = to;
+    from_pressure = to_pressure;
+  }
+  stroke.last_point = from;
+  stroke.last_pressure = from_pressure;
+  paint_2d_redraw(C, stroke.handle, false);
+}
+
+void ED_image_paint_native_end(bContext *C, const bool cancel)
+{
+  if (!native_stroke) {
+    return;
+  }
+  NativeImageStroke &stroke = *native_stroke;
+  Scene *scene = CTX_data_scene(C);
+  ToolSettings *settings = scene->toolsettings;
+  Paint *paint = &settings->imapaint.paint;
+  Brush *brush = BKE_paint_brush(paint);
+  settings->imapaint.flag &= ~IMAGEPAINT_DRAWING;
+  if (cancel) {
+    /* As the operator cancels: what was painted is restored, and no undo step is kept. */
+    UndoStack *ustack = CTX_wm_manager(C)->runtime->undo_stack;
+    if (ustack->step_init) {
+      ED_image_undo_restore(ustack->step_init);
+    }
+  }
+  else if (brush && brush->image_brush_type == IMAGE_PAINT_BRUSH_TYPE_FILL) {
+    float start[2] = {stroke.start.x, stroke.start.y};
+    float end[2] = {stroke.last.x, stroke.last.y};
+    if (brush->flag & BRUSH_USE_GRADIENT) {
+      paint_2d_gradient_fill(C, brush, start, end, stroke.handle);
+    }
+    else {
+      float color[3];
+      copy_v3_v3(color, BKE_brush_color_get(paint, brush));
+      paint_2d_bucket_fill(C, color, brush, start, end, stroke.handle);
+    }
+  }
+  paint_2d_redraw(C, stroke.handle, true);
+  paint_2d_stroke_done(stroke.handle);
+  if (brush) {
+    BKE_brush_alpha_set(paint, brush, stroke.start_alpha);
+  }
+  if (cancel) {
+    WM_event_add_notifier(C, NC_IMAGE | NA_EDITED, nullptr);
+  }
+  else {
+    ED_image_undo_push_end();
+  }
+  MEM_delete(native_stroke);
+  native_stroke = nullptr;
+}
+
+/** \} */
 
 }  // namespace blender
