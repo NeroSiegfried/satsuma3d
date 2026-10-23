@@ -895,7 +895,12 @@ static void paint_brush_default_essentials_name_get(const PaintMode paint_mode,
       break;
     case PaintMode::Texture2D:
     case PaintMode::Texture3D:
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+      /* Painted with a Pencil, whose pressure sizes the stroke as drawing apps' do. */
+      name = "Paint Hard Pressure";
+#else
       name = "Paint Hard";
+#endif
       if (brush_type) {
         switch (eBrushImagePaintType(*brush_type)) {
           case IMAGE_PAINT_BRUSH_TYPE_SOFTEN:
