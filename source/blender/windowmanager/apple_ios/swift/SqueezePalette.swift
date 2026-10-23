@@ -531,7 +531,7 @@ final class SqueezePalette {
     if brush?.dict("size") != nil { parts.append((.size, 140)) }
     if brush?.dict("strength") != nil { parts.append((.strength, 140)) }
     if brush?.dict("weight") != nil { parts.append((.weight, 140)) }
-    if direction != nil { parts.append((.direction, 96)) }
+    if direction != nil { parts.append((.direction, 84)) }
     if color != nil { parts.append((.color, 40)) }
     let commands = !contextCommands(BlenderMenus.contextRoute).isEmpty
     if brush != nil, !parts.isEmpty {
@@ -551,10 +551,15 @@ final class SqueezePalette {
         let middle = low...max(low, high)
         let gap = Double(Ring.narrow + 6) / Double(ring.radius)
         let room = (middle.upperBound - middle.lowerBound) - gap * Double(parts.count - 1)
-        let total = parts.reduce(0) { $0 + $1.share }
+        /* The in and out, and the color, as long as they need; the sliders share the rest. */
+        let fixed = { (part: Part) in part == .direction || part == .color }
+        let set = parts.filter { fixed($0.part) }.reduce(0) { $0 + $1.share / Double(ring.radius) }
+        let total = parts.filter { !fixed($0.part) }.reduce(0) { $0 + $1.share }
+        let stretch = total > 0 ? room - min(set, room) : 0
+        let scale = total > 0 ? 1.0 : room / max(set, 0.001)
         var angle = middle.lowerBound
         for entry in parts {
-          let length = room * entry.share / total
+          let length = fixed(entry.part) ? entry.share / Double(ring.radius) * scale : stretch * entry.share / total
           ring.pieces.append(Piece(part: entry.part, start: angle, end: angle + length))
           angle += length + gap
         }
@@ -2027,13 +2032,18 @@ private struct ArcDirection: View {
   var body: some View {
     let width = ring.thickness - 10
     let middle = (piece.start + piece.end) / 2
-    let track = ArcBand(center: arc.center, radius: ring.radius, thickness: width, start: piece.start, end: piece.end)
+    /* Rounded ends and all within its stretch: the track, then the thumb in one half of it,
+     * never reaching into the other. */
+    let radius = Double(ring.radius)
+    let cap = Double(width / 2) / radius, thumbCap = Double((width - 6) / 2) / radius
+    let track = ArcBand(center: arc.center, radius: ring.radius, thickness: width, start: piece.start + cap,
+                        end: max(piece.start + cap, piece.end - cap))
     let inverted = palette.direction?.inverted ?? false
-    /* The thumb, its rounded ends inside the track's. */
-    let inset = Double(3) / Double(ring.radius)
+    let inset = 3 / radius
+    let half = inverted ? (middle + inset / 2)...(piece.end - inset) : (piece.start + inset)...(middle - inset / 2)
     let thumb = ArcBand(center: arc.center, radius: ring.radius, thickness: width - 6,
-                        start: inverted ? middle + inset : piece.start + inset,
-                        end: inverted ? piece.end - inset : middle - inset)
+                        start: half.lowerBound + thumbCap,
+                        end: max(half.lowerBound + thumbCap, half.upperBound - thumbCap))
     ZStack {
       track.fill(Color.primary.opacity(0.1))
       Color.clear
