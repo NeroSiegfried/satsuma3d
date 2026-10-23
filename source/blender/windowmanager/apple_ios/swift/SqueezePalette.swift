@@ -638,15 +638,30 @@ final class SqueezePalette {
     }
   }
 
+  /** How far the context menu's arc can turn: its commands' length past its own. */
+  func commandOverflow(_ ring: Ring) -> Double {
+    let places = commandPlaces(ring)
+    guard let first = places.first, let last = places.last else { return 0 }
+    return max(0, last.start + last.length - first.start - (ring.end - ring.start))
+  }
+
   /** Turns the context menu's arc by \a delta radians, as far as its commands go. */
   func scrollCommands(by delta: Double) {
     guard let ring = rings.first(where: \.scrolls) else { return }
-    let places = commandPlaces(ring)
-    guard let last = places.last else { return }
-    let total = last.start + last.length - (places.first?.start ?? 0)
-    let most = max(0, total - (ring.end - ring.start))
-    let next = min(most, max(0, commandScroll + delta))
+    let next = min(commandOverflow(ring), max(0, commandScroll + delta))
     if next != commandScroll { commandScroll = next }
+  }
+
+  /** Turned a little way and back as it opens, so what is past its end shows it is there. */
+  func peekCommands() {
+    guard let ring = rings.first(where: \.scrolls), commandScroll == 0 else { return }
+    let peek = min(commandOverflow(ring), 0.14)
+    guard peek > 0.01 else { return }
+    withAnimation(Self.motion(.spring(response: 0.34, dampingFraction: 0.8))) { commandScroll = peek }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { [self] in
+      guard commandScroll == peek else { return }
+      withAnimation(Self.motion(.spring(response: 0.42, dampingFraction: 0.82))) { commandScroll = 0 }
+    }
   }
 
   /** A submenu opened on an arc further out, whose title then shows lit where it was tapped. */
@@ -2200,6 +2215,10 @@ private struct ArcCommandRow: View {
     let places = self.places
     let width = ring.thickness - 6
     let cap = Double(width / 2) / Double(ring.radius)
+    /* More past either end, which the arc turns to: the titles fade out there, a chevron
+     * pointing on. */
+    let before = ring.scrolls && palette.commandScroll > 0.001
+    let after = ring.scrolls && palette.commandScroll < palette.commandOverflow(ring) - 0.001
     ZStack {
       if let first = places.first, let last = places.last {
         /* The context menu's arc its whole length, its commands turning along it; a submenu's as
@@ -2213,6 +2232,7 @@ private struct ArcCommandRow: View {
           .contentShape(band)
           .simultaneousGesture(scroll)
       }
+      ZStack {
       ForEach(Array(places.enumerated()), id: \.offset) { index, place in
         let middle = place.start + place.length / 2
         /* Past the arc's ends they go on round, fading, until it is turned to them. */
@@ -2236,8 +2256,51 @@ private struct ArcCommandRow: View {
             .simultaneousGesture(scroll)
         }
       }
+      }
+      .mask { fade(before: before, after: after, cap: cap) }
+      chevron(before: true, cap: cap).opacity(before ? 1 : 0)
+      chevron(before: false, cap: cap).opacity(after ? 1 : 0)
     }
     .animation(SqueezePalette.motion(.spring(response: 0.3, dampingFraction: 0.86)), value: palette.commandPath.count)
+    .animation(SqueezePalette.motion(.easeOut(duration: 0.2)), value: before)
+    .animation(SqueezePalette.motion(.easeOut(duration: 0.2)), value: after)
+    .onAppear {
+      guard ring.scrolls else { return }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { palette.peekCommands() }
+    }
+  }
+
+  /** Clear towards an end with more past it, around the arc's center. */
+  private func fade(before: Bool, after: Bool, cap: Double) -> some View {
+    GeometryReader { proxy in
+      let size = proxy.size
+      let span = ring.end - ring.start
+      /* About a title's width of fading at each end. */
+      let reach = min(0.3, Double(ring.thickness * 1.6) / Double(ring.radius)) / span
+      let margin = cap * 0.6 / span
+      AngularGradient(stops: [
+        .init(color: before ? .clear : .black, location: 0),
+        .init(color: before ? .clear : .black, location: before ? margin : 0),
+        .init(color: .black, location: before ? margin + reach : 0.001),
+        .init(color: .black, location: after ? 1 - margin - reach : 0.999),
+        .init(color: after ? .clear : .black, location: after ? 1 - margin : 1),
+        .init(color: after ? .clear : .black, location: 1),
+      ], center: UnitPoint(x: size.width > 0 ? arc.center.x / size.width : 0.5,
+                           y: size.height > 0 ? arc.center.y / size.height : 0.5),
+      startAngle: .radians(ring.start), endAngle: .radians(ring.end))
+    }
+    .allowsHitTesting(false)
+  }
+
+  /** A small chevron in the arc's end, pointing on round it to the commands past it. */
+  private func chevron(before: Bool, cap: Double) -> some View {
+    let angle = before ? ring.start + cap * 0.9 : ring.end - cap * 0.9
+    return Image(systemName: before ? "chevron.left" : "chevron.right")
+      .font(.system(size: 11, weight: .bold))
+      .foregroundStyle(.secondary)
+      .rotationEffect(.radians(angle + .pi / 2))
+      .position(arc.point(angle, radius: ring.radius))
+      .allowsHitTesting(false)
   }
 
   /** A finger or the Pencil sliding along the context menu's arc turns it. */
