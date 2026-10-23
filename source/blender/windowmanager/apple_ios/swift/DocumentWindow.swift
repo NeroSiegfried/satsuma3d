@@ -564,8 +564,16 @@ public struct DocumentWindow: View {
         .padding(.trailing, docked ? 0 : trailing)
 #if !os(visionOS) /* A window of its own there. */
       if editorsShown && model.nodesShown {
-        NodeEditorLayer(model: model, nodes: shell.panels.nodes)
-          .transition(.move(edge: .bottom).combined(with: .opacity))
+        DockedEditorLayer(model: model, cover: Bindable(model).nodesCover, resizeLabel: "Resize Node Editor") {
+          NodeEditorPanel(model: shell.panels.nodes)
+        }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+      }
+      if editorsShown && model.imageShown {
+        DockedEditorLayer(model: model, cover: Bindable(model).imageCover, resizeLabel: "Resize Image Editor") {
+          ImageEditorPanel(model: shell.panels.image)
+        }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
       }
 #endif
     }
@@ -574,7 +582,8 @@ public struct DocumentWindow: View {
 
   /** How much of the window's bottom the viewport leaves to the node editor. */
   private var viewportCover: CGFloat {
-    editorsShown ? max(model.nodesShown ? model.nodesCover : 0, model.curvesCover) : 0
+    editorsShown ? max(model.nodesShown ? model.nodesCover : 0, model.imageShown ? model.imageCover : 0,
+                       model.curvesCover) : 0
   }
 
   private func viewportLayers(bottom: Bool) -> some View {

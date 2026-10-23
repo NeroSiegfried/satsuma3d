@@ -21,6 +21,8 @@ final class SwiftScenePanels {
   let inspector = InspectorStore(mode: .properties)
   /** The native node editor, which Blender's panel snapshots also feed. */
   let nodes = NodeEditorModel()
+  /** The native Image Editor, which they feed too. */
+  let image = ImageEditorModel()
   /** The curve editor's curves, which the timeline shows. */
   var graphSnapshot: ((JSON) -> Void)?
   var storyboardSnapshot: ((JSON) -> Void)?
@@ -121,6 +123,9 @@ final class SwiftScenePanels {
     if let nodesSnapshot = snapshot.dict("nodes"), nodes.shown {
       nodes.update(nodesSnapshot, ack: ack)
     }
+    if let imageSnapshot = snapshot.dict("image"), image.shown {
+      image.update(imageSnapshot)
+    }
     if ack < inspector.sequence { return }
     if let nodes = snapshot["hierarchy"] as? [Any] {
       hierarchy.update(nodes: nodes.compactMap { $0 as? JSON }, status: snapshot.string("error") ?? "")
@@ -145,6 +150,7 @@ final class SwiftScenePanels {
     switch kind {
       case .properties: AnyView(InspectorPanel(store: inspector) {})
       case .nodes: AnyView(NodeEditorPanel(model: nodes))
+      case .image: AnyView(ImageEditorPanel(model: image))
       default: AnyView(HierarchyPanel(store: hierarchy) {})
     }
   }
@@ -274,6 +280,7 @@ enum PanelWindow: String, CaseIterable {
   case outliner = "org.blender.window.outliner"
   case timeline = "org.blender.window.timeline"
   case nodes = "org.blender.window.nodes"
+  case image = "org.blender.window.image"
   case curves = "org.blender.window.curves"
   /** The scene live in 3D, see `VolumeView.swift`. */
   case volume = "org.blender.window.volume"
@@ -284,6 +291,7 @@ enum PanelWindow: String, CaseIterable {
     case .outliner: "Outliner"
     case .timeline: "Timeline"
     case .nodes: "Node Editor"
+    case .image: "Image Editor"
     case .curves: "Curves"
     case .volume: "3D Volume"
     }
@@ -329,6 +337,7 @@ enum PanelWindows {
       case .timeline: SwiftTimeline.current?.setWindowOpen(open)
       case .curves: SwiftTimeline.current?.setCurvesShown(open)
       case .nodes: SwiftScenePanels.current?.nodes.setShown(open)
+      case .image: SwiftScenePanels.current?.image.setShown(open)
       case .volume: VolumeStore.shared.windowOpened(open)
       default: SwiftScenePanels.current?.setWindow(kind, open: open)
     }
@@ -344,6 +353,7 @@ final class PanelSceneDelegate: NSObject, UIHostingSceneDelegate {
     panel(.timeline, size: CGSize(width: 1100, height: 96))
     /* The editors, wide, to set below or beside the viewport. */
     panel(.nodes, size: CGSize(width: 1100, height: 640))
+    panel(.image, size: CGSize(width: 820, height: 760))
     panel(.curves, size: CGSize(width: 1100, height: 520))
     /* The scene in 3D, to walk around. */
     Window(PanelWindow.volume.title, id: PanelWindow.volume.rawValue) {
@@ -373,7 +383,7 @@ struct PanelWindowContent: View {
         content
       }
     }
-    .frame(minWidth: kind == .timeline ? 520 : kind == .nodes || kind == .curves ? 600 : 320,
+    .frame(minWidth: kind == .timeline ? 520 : kind == .nodes || kind == .curves || kind == .image ? 600 : 320,
            minHeight: kind == .timeline ? 64 : kind == .curves ? 320 : 420)
     .environment(\.panelInWindow, true)
     .tint(PanelStyle.tint)

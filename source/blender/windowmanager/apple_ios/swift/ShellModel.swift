@@ -48,6 +48,9 @@ final class ShellModel {
   var nodesCoverDragging = false
   /** How much of the window's bottom the curve editor covers, likewise. */
   var curvesCover: CGFloat = 0
+  /** The native Image Editor shows over the bottom of the viewport, as the node editor does. */
+  var imageShown = false
+  var imageCover: CGFloat = 0
   /** Blender's navigation gizmo: its center and radius, in fractions of the window's width and
    * height (center) and width (radius). */
   private(set) var navigationGizmo: [Double] = []

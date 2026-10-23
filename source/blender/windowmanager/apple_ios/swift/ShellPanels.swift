@@ -37,6 +37,19 @@ final class ShellPanels {
       if shown {
         self?.timeline.setCurvesShown(false)
         self?.timeline.setStoryboardShown(false)
+        self?.panels.image.setShown(false)
+      }
+#endif
+    }
+    panels.image.shownChanged = { [weak self] shown in
+      withAnimation(SwiftTimeline.animation) { self?.model.imageShown = shown }
+#if os(visionOS)
+      PanelWindows.set(.image, open: shown)
+#else
+      if shown {
+        self?.timeline.setCurvesShown(false)
+        self?.timeline.setStoryboardShown(false)
+        self?.panels.nodes.setShown(false)
       }
 #endif
     }
@@ -49,7 +62,10 @@ final class ShellPanels {
       timeline.store.storyboard.update(snapshot)
     }
 #if !os(visionOS)
-    timeline.curvesDidOpen = { [weak self] in self?.panels.nodes.setShown(false) }
+    timeline.curvesDidOpen = { [weak self] in
+      self?.panels.nodes.setShown(false)
+      self?.panels.image.setShown(false)
+    }
 #endif
     timeline.visibilityDidChange = { [weak self] in
       guard let self else { return }
@@ -67,6 +83,7 @@ final class ShellPanels {
     if let timelineSnapshot = takeJSON(WM_apple_ios_ui_timeline_take_json()) { timeline.updateSnapshot(timelineSnapshot) }
     if let assetsSnapshot = takeJSON(WM_apple_ios_ui_assets_take_json()) { assets.updateSnapshot(assetsSnapshot) }
     if let panelsSnapshot = takeJSON(WM_apple_ios_ui_panels_take_json()) { panels.updateSnapshot(panelsSnapshot) }
+    panels.image.pullPixels()
   }
 
   private func takeJSON(_ json: UnsafeMutablePointer<CChar>?) -> Any? {

@@ -324,7 +324,8 @@ struct DocumentToolbar: ToolbarContent {
     .accessibilityIdentifier("blender.undo")
   }
 
-  /** The node editors, each opening the node editor on its tree. */
+  /** The node editors, each opening the node editor on its tree, and the Image Editor: the
+   * editors docked along the bottom. */
   @ViewBuilder
   private var nodeEditorToggles: some View {
     Section {
@@ -341,6 +342,9 @@ struct DocumentToolbar: ToolbarContent {
             nodes.setShown(true)
           }
         }
+      }
+      sidebarToggle("Image Editor", icon: BlenderIcon.image("IMAGE"), isOn: model.imageShown) {
+        shell.panels.image.setShown($0)
       }
     }
   }

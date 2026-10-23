@@ -75,6 +75,16 @@ char *_Nullable WM_apple_ios_ui_panels_take_json(void);
 char *_Nullable WM_apple_ios_ui_menu_popup_take_json(void);
 char *_Nullable WM_apple_ios_ui_timeline_take_json(void);
 char *_Nullable WM_apple_ios_ui_assets_take_json(void);
+/** The image editor's picture when it changed: its image's name, straight RGBA top row first, as
+ * sent and as large as the image is. No pixels without an image. Each is freed with `free`. */
+bool WM_apple_ios_ui_image_take_pixels(char *_Nullable *_Nonnull r_name,
+                                       uint8_t *_Nullable *_Nonnull r_rgba,
+                                       int *_Nonnull r_width,
+                                       int *_Nonnull r_height,
+                                       int *_Nonnull r_full_width,
+                                       int *_Nonnull r_full_height);
+/** The UV edges over it when they changed, two points each. */
+bool WM_apple_ios_ui_image_take_uvs(float *_Nullable *_Nonnull r_segments, int *_Nonnull r_count);
 /** How much of the window's height, from the bottom, the asset pane and timeline cover. */
 void WM_apple_ios_ui_bottom_tray_set(float fraction);
 void WM_apple_ios_ui_viewport_cover_set(float pixels);

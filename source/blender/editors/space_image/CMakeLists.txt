@@ -18,6 +18,7 @@ set(SRC
   image_buttons.cc
   image_draw.cc
   image_edit.cc
+  image_native.cc
   image_ops.cc
   image_sequence.cc
   image_undo.cc

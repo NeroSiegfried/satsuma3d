@@ -44,6 +44,7 @@ namespace blender {
 
 extern "C" void WM_apple_ios_ui_flush_commands(bContext *C);
 extern "C" void WM_apple_ios_ui_storyboard_draw(bContext *C);
+extern "C" void WM_apple_ios_ui_image_update(bContext *C);
 extern "C" double WM_apple_ios_engine_idle_seconds(bContext *C);
 extern "C" bool WM_apple_ios_ui_desktop_mode();
 extern "C" void WM_apple_ios_ui_pencil_hover_set(bool active, int x, int y);
@@ -240,6 +241,7 @@ void engine_step(bContext *C)
   wm_window_events_process(C);
   wm_event_do_handlers(C);
   wm_event_do_notifiers(C);
+  WM_apple_ios_ui_image_update(C);
   /* Input is always taken, but drawing waits for the GPU to catch up: the next frame then shows
    * all input since, instead of queuing behind frames still to be rendered. GHOST wakes this loop
    * as a frame completes. */

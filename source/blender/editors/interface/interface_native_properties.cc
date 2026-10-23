@@ -1846,6 +1846,11 @@ bool apply_tree(bContext *C, const TreeRows &tree, const DictionaryValue &query)
 /** \} */
 }  // namespace
 
+std::string native_id_preview_path(bContext *C, ID *id)
+{
+  return id_preview_path(C, id);
+}
+
 namespace {
 /* Engine-owned identity, invalidated before the operator's memory can be reused. */
 wmOperator *native_redo_operator = nullptr;

@@ -61,6 +61,7 @@
 #include "../asset/ED_asset_shelf.hh"
 #include "ED_asset.hh"
 #include "ED_asset_menu_utils.hh"
+#include "ED_image_native.hh"
 #include "ED_object.hh"
 #include "ED_screen.hh"
 #include "ED_sequencer.hh"
@@ -276,6 +277,17 @@ std::string ios_graph_state = "{}";
 bool ios_graph_dirty = true;
 std::string ios_graph_json;
 std::chrono::steady_clock::time_point ios_graph_next_check;
+/** The native image editor's state: the image chosen and whether UVs show over it. */
+std::string ios_image_state = "{}";
+bool ios_image_dirty = true;
+std::string ios_image_json;
+std::chrono::steady_clock::time_point ios_image_next_check;
+/** Its picture and UVs, taken by the native editor when they change. */
+GHOST_IOSLatest<ed::image::NativeImagePixels> ios_image_pixels;
+GHOST_IOSLatest<std::vector<float>> ios_image_uvs;
+/** The picture changed since it was last sent, which waits a little while painting. */
+bool ios_image_pixels_pending = true;
+bool ios_image_uvs_pending = true;
 /* The storyboard: the sequencer scene's shots, see `sequencer_native.cc`. */
 bool ios_storyboard_dirty = true;
 /* How the native storyboard shows the shots: the frames between their pictures, and their size. */
@@ -1288,6 +1300,35 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     ios_properties_error = ui::native_nodes_query(C, command.value, true);
     return;
   }
+  if (command.setting == "native_image_state") {
+    ios_image_dirty = true;
+    ios_image_pixels_pending = true;
+    ios_image_uvs_pending = true;
+    ios_image_state = command.value;
+    ios_panels_next_snapshot = {};
+    return;
+  }
+  if (command.setting == "native_image_visible") {
+    ios_image_dirty = true;
+    ios_image_pixels_pending = true;
+    ios_image_uvs_pending = true;
+    ios_panels_visible = (ios_panels_visible & ~128) | (command.value == "1" ? 128 : 0);
+    ios_panels_next_snapshot = {};
+    ios_panels_published.clear();
+    return;
+  }
+  if (command.setting == "native_image_edit") {
+    ios_image_dirty = true;
+    ios_image_pixels_pending = true;
+    std::istringstream stream(command.value);
+    auto value = io::serialize::JsonFormatter().deserialize(stream);
+    if (const auto *request = value ? value->as_dictionary_value() : nullptr) {
+      ios_panels_sequence = request->lookup_int("sequence").value_or(ios_panels_sequence);
+    }
+    ios_panels_next_snapshot = {};
+    ios_properties_error = ed::image::native_image_query(C, command.value, true);
+    return;
+  }
   if (command.setting == "native_graph_state") {
     ios_graph_dirty = true;
     ios_graph_state = command.value;
@@ -1432,7 +1473,7 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     ios_panels_next_snapshot = {};
     ios_panels_published.clear();
     /* Settings, open over the window, stays as it is. */
-    ios_panels_visible = (ios_panels_visible & (4 | 32 | 64)) | (command.value == "3" ? 3 :
+    ios_panels_visible = (ios_panels_visible & (4 | 32 | 64 | 128)) | (command.value == "3" ? 3 :
                                                      command.value == "2" ? 2 :
                                                      command.value == "1" ? 1 :
                                                                             0);
@@ -2707,6 +2748,17 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
         }
         merged.append_str("graph", "@native_graph_json@");
       }
+      if (ios_panels_visible & 128) {
+        if (ios_image_dirty || now >= ios_image_next_check) {
+          ios_image_dirty = false;
+          ios_image_next_check = now + std::chrono::seconds(2);
+          ios_image_json = ed::image::native_image_query(C, ios_image_state, false);
+        }
+        std::istringstream image_stream(ios_image_json);
+        if (auto image = JsonFormatter().deserialize(image_stream)) {
+          merged.append("image", std::move(image));
+        }
+      }
       if (ios_panels_visible & 64) {
         /* Soon again while shots still need their pictures drawn, one at a time. */
         if (ios_storyboard_dirty || now >= ios_storyboard_next_check) {
@@ -3311,6 +3363,9 @@ void WM_apple_ios_ui_tag_changed()
 {
   ios_nodes_dirty = true;
   ios_graph_dirty = true;
+  ios_image_dirty = true;
+  ios_image_pixels_pending = true;
+  ios_image_uvs_pending = true;
   ios_ui_changed = true;
 }
 
@@ -3754,6 +3809,9 @@ static void ios_ui_dispatch(bContext *C, IOSUIMessage &message)
                                                 setting->setting != "native_graph_state" &&
                                                 setting->setting != "native_graph_visible" &&
                                                 setting->setting != "native_graph_edit" &&
+                                                setting->setting != "native_image_state" &&
+                                                setting->setting != "native_image_visible" &&
+                                                setting->setting != "native_image_edit" &&
                                                 setting->setting != "native_storyboard_visible" &&
                                                 setting->setting != "native_storyboard_edit" &&
                                                 setting->setting != "native_storyboard_state")))
@@ -3774,6 +3832,9 @@ static void ios_ui_dispatch(bContext *C, IOSUIMessage &message)
                                          setting->setting == "native_graph_state" ||
                                          setting->setting == "native_graph_visible" ||
                                          setting->setting == "native_graph_edit" ||
+                                         setting->setting == "native_image_state" ||
+                                         setting->setting == "native_image_visible" ||
+                                         setting->setting == "native_image_edit" ||
                                          setting->setting == "native_storyboard_visible" ||
                                          setting->setting == "native_storyboard_edit" ||
                                          setting->setting == "native_storyboard_state");
@@ -3853,6 +3914,86 @@ extern "C" void WM_apple_ios_ui_storyboard_draw(bContext *C)
   ios_panels_next_snapshot = {};
 }
 
+extern "C" void WM_apple_ios_ui_image_update(bContext *C)
+{
+  /* The image editor's picture follows painting closely, not at the panels' slower pace: each
+   * time Blender changes something, though no closer together than the last one took to make. */
+  static std::chrono::steady_clock::time_point next_pixels;
+  if (!(ios_panels_visible & 128) || !(ios_image_pixels_pending || ios_image_uvs_pending)) {
+    return;
+  }
+  const auto now = std::chrono::steady_clock::now();
+  const IOSContextStore context_store = ios_context_push_view3d(C);
+  if (ios_image_pixels_pending && now >= next_pixels) {
+    ios_image_pixels_pending = false;
+    ed::image::NativeImagePixels pixels;
+    if (ed::image::native_image_pixels(C, ios_image_state, pixels)) {
+      ios_image_pixels.publish(std::move(pixels));
+    }
+    const auto took = std::chrono::steady_clock::now() - now;
+    next_pixels = now + std::max<std::chrono::steady_clock::duration>(
+                            std::chrono::milliseconds(33), took * 2);
+  }
+  if (ios_image_uvs_pending) {
+    static std::vector<float> sent;
+    static bool sent_any = false;
+    ios_image_uvs_pending = false;
+    std::vector<float> uvs = ed::image::native_image_uvs(C);
+    if (!sent_any || uvs != sent) {
+      sent_any = true;
+      sent = uvs;
+      ios_image_uvs.publish(std::move(uvs));
+    }
+  }
+  ios_context_pop(C, context_store);
+}
+
+extern "C" bool WM_apple_ios_ui_image_take_pixels(char **r_name,
+                                                  uint8_t **r_rgba,
+                                                  int *r_width,
+                                                  int *r_height,
+                                                  int *r_full_width,
+                                                  int *r_full_height)
+{
+  ed::image::NativeImagePixels pixels;
+  if (!ios_image_pixels.take(pixels)) {
+    return false;
+  }
+  *r_name = strdup(pixels.name.c_str());
+  *r_rgba = nullptr;
+  if (!pixels.rgba.empty()) {
+    *r_rgba = static_cast<uint8_t *>(std::malloc(pixels.rgba.size()));
+    if (*r_rgba) {
+      std::memcpy(*r_rgba, pixels.rgba.data(), pixels.rgba.size());
+    }
+  }
+  *r_width = *r_rgba ? pixels.width : 0;
+  *r_height = *r_rgba ? pixels.height : 0;
+  *r_full_width = pixels.full_width;
+  *r_full_height = pixels.full_height;
+  return true;
+}
+
+extern "C" bool WM_apple_ios_ui_image_take_uvs(float **r_segments, int *r_count)
+{
+  std::vector<float> uvs;
+  if (!ios_image_uvs.take(uvs)) {
+    return false;
+  }
+  *r_count = int(uvs.size());
+  *r_segments = nullptr;
+  if (!uvs.empty()) {
+    *r_segments = static_cast<float *>(std::malloc(uvs.size() * sizeof(float)));
+    if (*r_segments) {
+      std::memcpy(*r_segments, uvs.data(), uvs.size() * sizeof(float));
+    }
+    else {
+      *r_count = 0;
+    }
+  }
+  return true;
+}
+
 extern "C" double WM_apple_ios_engine_idle_seconds(bContext *C)
 {
   /* How long Blender's loop has nothing to do: no events, notifiers or redraws pending, until
@@ -3865,6 +4006,10 @@ extern "C" double WM_apple_ios_engine_idle_seconds(bContext *C)
   if ((ios_panels_visible & 64) && ios_storyboard_pending) {
     /* The storyboard's pictures still to draw, a few each pass. */
     return 0.1;
+  }
+  if ((ios_panels_visible & 128) && (ios_image_pixels_pending || ios_image_uvs_pending)) {
+    /* The image editor's picture, held back while painting changes it quickly. */
+    return 0.03;
   }
   for (wmWindow &win : wm->windows) {
     bScreen *screen = WM_window_get_active_screen(&win);
