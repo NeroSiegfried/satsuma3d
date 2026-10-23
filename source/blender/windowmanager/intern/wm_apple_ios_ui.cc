@@ -1204,8 +1204,15 @@ static std::atomic<bool> ios_tweak_move = true;
 static std::atomic<bool> ios_tweak_roll = true;
 static std::atomic<bool> ios_tweak_tilt = true;
 
+/* Whether what the Pencil or pointer hovers over is highlighted, from the iPad's Settings. */
+static bool ios_hover_highlight = true;
+
 void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
 {
+  if (command.setting == "hover_highlight") {
+    ios_hover_highlight = command.value == "1";
+    return;
+  }
   if (command.setting == "tweak_drag") {
     /* The letters of what is on: "m" move, "r" roll, "t" tilt. */
     ios_tweak_move = command.value.find('m') != std::string::npos;
@@ -3982,7 +3989,7 @@ extern "C" void WM_apple_ios_ui_flush_commands(bContext *C)
         screen->do_draw_gesture = true;
       }
     }
-    bool active = ios_hover_request.active && window && region;
+    bool active = ios_hover_request.active && ios_hover_highlight && window && region;
     if (active) {
       for (wmEventHandler &handler : window->runtime->modalhandlers) {
         if (handler.type == WM_HANDLER_TYPE_OP || handler.type == WM_HANDLER_TYPE_UI) {

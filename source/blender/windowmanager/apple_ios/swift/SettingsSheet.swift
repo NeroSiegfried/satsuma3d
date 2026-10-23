@@ -28,6 +28,7 @@ enum TouchInput: String, CaseIterable, Identifiable {
 final class SettingsModel: ObservableObject {
   static let fingerUsesToolKey = "BlenderFingerUsesTool"
   static let showQuickActionsKey = "BlenderShowQuickActions"
+  static let hoverHighlightKey = "BlenderHoverHighlight"
 
   /** Blender's active keymap preset, from the toolbar snapshot. */
   @Published var keymap = "Industry_Compatible"
@@ -42,6 +43,14 @@ final class SettingsModel: ObservableObject {
     didSet {
       guard showQuickActions != oldValue else { return }
       UserDefaults.standard.set(showQuickActions, forKey: Self.showQuickActionsKey)
+    }
+  }
+  /** What the Pencil or pointer hovers over in the viewport is highlighted. */
+  @Published var hoverHighlight: Bool {
+    didSet {
+      guard hoverHighlight != oldValue else { return }
+      UserDefaults.standard.set(hoverHighlight, forKey: Self.hoverHighlightKey)
+      Engine.setting("hover_highlight", hoverHighlight ? "1" : "0")
     }
   }
   /** The sidebar on the right and the brushes on the left, read by the viewport's controls. */
@@ -59,6 +68,7 @@ final class SettingsModel: ObservableObject {
     let defaults = UserDefaults.standard
     touchInput = defaults.bool(forKey: Self.fingerUsesToolKey) ? .pencilAndFingers : .pencilOnly
     showQuickActions = defaults.object(forKey: Self.showQuickActionsKey) as? Bool ?? true
+    hoverHighlight = defaults.object(forKey: Self.hoverHighlightKey) as? Bool ?? true
     leftHanded = defaults.bool(forKey: leftHandedInterfaceKey)
   }
 
@@ -242,6 +252,8 @@ private struct IPadSettingsPage: View {
   @ObservedObject var model: SettingsModel
   @AppStorage("BlenderFingerDragsObjects") private var fingerDragsObjects = false
   @AppStorage("BlenderPencilSqueeze") private var squeeze = "palette"
+  /** Read as it changes by the app's event handling, see `show_touches` in `GHOST_SystemIOS.mm`. */
+  @AppStorage("BlenderShowTouches") private var showTouches = false
 
   var body: some View {
     Form {
@@ -313,10 +325,14 @@ private struct IPadSettingsPage: View {
 
       Section {
         Toggle("Quick Actions", isOn: $model.showQuickActions)
+        Toggle("Hover Highlighting", isOn: $model.hoverHighlight)
+        Toggle("Show Touches", isOn: $showTouches)
       } header: {
         Text("Interface")
       } footer: {
-        Text("Buttons for common actions on the selection, above the bottom of the viewport.")
+        Text("Quick Actions are buttons for common actions on the selection, above the bottom of "
+          + "the viewport. Hover Highlighting outlines what Apple Pencil or the pointer is over. "
+          + "Show Touches draws a circle under each finger, for recordings and demonstrations.")
       }
 
       Section {

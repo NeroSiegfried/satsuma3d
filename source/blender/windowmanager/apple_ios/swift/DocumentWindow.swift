@@ -80,6 +80,9 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
       UserDefaults.standard.set(true, forKey: "BlenderKeymapDefaulted")
       Engine.setting("keymap", "Industry_Compatible")
     }
+    if UserDefaults.standard.object(forKey: SettingsModel.hoverHighlightKey) as? Bool == false {
+      Engine.setting("hover_highlight", "0")
+    }
     if UserDefaults.standard.bool(forKey: "BlenderDesktopInterface") {
       /* Start in the interface the person left; Blender follows from its inbox. */
       Engine.setting("interface", "desktop")

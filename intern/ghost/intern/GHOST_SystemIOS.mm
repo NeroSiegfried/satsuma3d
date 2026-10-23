@@ -620,12 +620,97 @@ void GHOST_ios_unregister_window(UIWindow *window)
 }
 @end
 
+/**
+ * Show Touches, from the iPad's Settings: a circle under each finger on the screen, for
+ * recordings and demonstrations. Each is a plain layer moved in place without animation, so it
+ * follows the finger for no more than the event that moves it.
+ */
+static bool show_touches = false;
+static NSMapTable<UITouch *, CALayer *> *touch_indicators = nil;
+
+static void show_touches_clear()
+{
+  for (CALayer *layer in touch_indicators.objectEnumerator) {
+    [layer removeFromSuperlayer];
+  }
+  [touch_indicators removeAllObjects];
+}
+
+static void show_touches_read_setting()
+{
+  show_touches = [NSUserDefaults.standardUserDefaults boolForKey:@"BlenderShowTouches"];
+  if (!show_touches) {
+    show_touches_clear();
+  }
+}
+
+static void show_touches_update(UIEvent *event)
+{
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    touch_indicators = [[NSMapTable weakToStrongObjectsMapTable] retain];
+    show_touches_read_setting();
+    [NSNotificationCenter.defaultCenter addObserverForName:NSUserDefaultsDidChangeNotification
+                                                    object:nil
+                                                     queue:NSOperationQueue.mainQueue
+                                                usingBlock:^(NSNotification * /*note*/) {
+                                                  show_touches_read_setting();
+                                                }];
+  });
+  if (!show_touches || event.type != UIEventTypeTouches) {
+    return;
+  }
+  const CGFloat size = 44.0;
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  for (UITouch *touch in event.allTouches) {
+    if (touch.type != UITouchTypeDirect) {
+      continue;
+    }
+    CALayer *layer = [touch_indicators objectForKey:touch];
+    if (touch.phase == UITouchPhaseEnded || touch.phase == UITouchPhaseCancelled) {
+      if (layer) {
+        /* Fades as the finger lifts, so a quick tap still shows. */
+        [CATransaction begin];
+        [CATransaction setDisableActions:NO];
+        [CATransaction setAnimationDuration:0.25];
+        [CATransaction setCompletionBlock:^{
+          [layer removeFromSuperlayer];
+        }];
+        layer.opacity = 0.0f;
+        layer.transform = CATransform3DMakeScale(1.3, 1.3, 1.0);
+        [CATransaction commit];
+        [touch_indicators removeObjectForKey:touch];
+      }
+      continue;
+    }
+    if (!layer) {
+      if (!touch.window) {
+        continue;
+      }
+      layer = [CALayer layer];
+      layer.bounds = CGRectMake(0, 0, size, size);
+      layer.cornerRadius = size / 2;
+      layer.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.4].CGColor;
+      layer.borderColor = [UIColor colorWithWhite:0.0 alpha:0.3].CGColor;
+      layer.borderWidth = 1.5;
+      /* Above everything in the window, sheets and popovers too. */
+      layer.zPosition = 1e6;
+      [touch.window.layer addSublayer:layer];
+      [touch_indicators setObject:layer forKey:touch];
+    }
+    layer.position = [touch locationInView:touch.window];
+  }
+  [CATransaction commit];
+}
+
 @interface GHOSTUIApplication : UIApplication
 @end
 
 @implementation GHOSTUIApplication
 - (void)sendEvent:(UIEvent *)event
 {
+  show_touches_update(event);
   /* Hardware keys arrive as a private subclass with its own type, not #UIEventTypePresses. */
   if ([event isKindOfClass:UIPressesEvent.class]) {
     bool handled = false;
