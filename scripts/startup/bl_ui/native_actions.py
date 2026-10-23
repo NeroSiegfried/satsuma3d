@@ -16,6 +16,7 @@ import bpy
 
 __all__ = (
     "actions_json",
+    "rename_active",
     "run",
 )
 
@@ -323,6 +324,20 @@ def actions_json(context, tool):
             "selected": bool(action.checked(state)) if action.checked else False,
         })
     return json.dumps(items, ensure_ascii=True)
+
+
+def rename_active(context, name):
+    """Rename what Rename Active would: the active bone in an armature's modes, else the active
+    object. ``name`` arrives as a JSON string."""
+    name = json.loads(name)
+    if not name:
+        return
+    if context.mode == 'POSE' and context.active_pose_bone:
+        context.active_pose_bone.name = name
+    elif context.mode == 'EDIT_ARMATURE' and context.active_bone:
+        context.active_bone.name = name
+    elif context.active_object:
+        context.active_object.name = name
 
 
 def run(context, action_id, tool=""):

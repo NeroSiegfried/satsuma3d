@@ -12,6 +12,7 @@
 #include "AS_asset_library.hh"
 #include "AS_asset_representation.hh"
 
+#include "BKE_armature.hh"
 #include "BKE_appdir.hh"
 #include "BKE_asset.hh"
 #include "BKE_context.hh"
@@ -47,6 +48,7 @@
 
 #include "DEG_depsgraph.hh"
 
+#include "DNA_action_types.h"
 #include "DNA_asset_types.h"
 #include "DNA_brush_types.h"
 #include "DNA_node_types.h"
@@ -1555,6 +1557,19 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     ios_context_pop(C, context_store);
     return;
   }
+  if (command.setting == "rename_active") {
+    /* Rename Active from the native interface, which asks for the name itself rather than
+     * Blender's popup; see `bl_ui.native_actions.rename_active`. */
+    const IOSContextStore context_store = ios_context_push_view3d(C);
+    const char *imports[] = {"bpy", "bl_ui", nullptr};
+    const std::string expression = "bl_ui.native_actions.rename_active(bpy.context, \"" +
+                                   ios_json_escape(command.value) + "\")";
+    BPY_run_string_eval(C, imports, expression.c_str());
+    ED_undo_push(C, "Rename");
+    WM_main_add_notifier(NC_ID | NA_RENAME, nullptr);
+    ios_context_pop(C, context_store);
+    return;
+  }
   if (command.setting == "native_action") {
     /* The button may predate a context change; `run` checks the action still applies. */
     const bToolRef *tool = ios_active_tool(C);
@@ -2628,10 +2643,24 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
   }
   std::string object_modes_json = "[]";
   const char *object_mode = "OBJECT";
+  /* What Rename Active renames, for the native field to start from: the active bone in an
+   * armature's modes, otherwise the active object. */
+  std::string active_name;
   if (has_view3d_context) {
     object_modes_json = ios_object_modes_json(C);
     if (const Object *active = CTX_data_active_object(C)) {
       RNA_enum_identifier(rna_enum_object_mode_items, active->mode, &object_mode);
+      active_name = active->id.name + 2;
+    }
+    if (mode == CTX_MODE_POSE) {
+      if (const bPoseChannel *pchan = CTX_data_active_pose_bone(C)) {
+        active_name = pchan->name;
+      }
+    }
+    else if (mode == CTX_MODE_EDIT_ARMATURE) {
+      if (const EditBone *ebone = CTX_data_active_bone(C)) {
+        active_name = ebone->name;
+      }
     }
   }
   const std::string mesh_select_mode = mode == CTX_MODE_EDIT_MESH ?
@@ -2919,7 +2948,9 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
   json += shading;
   json += "\",\"desktop\":";
   json += ios_desktop_ui ? "true" : "false";
-  json += ",\"objectMode\":\"";
+  json += ",\"activeName\":\"";
+  json += ios_json_escape(active_name);
+  json += "\",\"objectMode\":\"";
   json += ios_json_escape(object_mode);
   json += "\",\"modes\":";
   json += object_modes_json;

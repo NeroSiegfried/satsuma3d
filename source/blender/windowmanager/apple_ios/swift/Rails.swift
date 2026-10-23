@@ -1026,6 +1026,7 @@ struct ToolRails: View {
     palette.setDirection = { [intent] inverted in intent.choose(inverted ? .subtract : .add) }
     palette.runAction = { [model] action in action.run(in: model) }
     palette.blenderWindow = model.window
+    palette.activeName = model.activeName
 #endif
   }
 

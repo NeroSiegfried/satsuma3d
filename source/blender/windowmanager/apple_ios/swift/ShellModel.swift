@@ -23,6 +23,9 @@ final class ShellModel {
   /** Blender's tools for the mode, in groups: `nil` separates two groups. */
   private(set) var tools: [JSON?] = []
   private(set) var activeTool = ""
+  /** The active object's name, or the active bone's in an armature's modes, as Rename Active has
+   * it. */
+  private(set) var activeName = ""
   private(set) var actions: [JSON] = []
   /** Changes when what Blender's menus show may have: the active undo step moves with every
    * change an operator makes, once per action. */
@@ -137,6 +140,7 @@ final class ShellModel {
   /** The toolbar snapshot, Blender's latest or a copy of it. */
   func update(toolbar: JSON) {
     set(\.mode, toolbar.string("mode") ?? "")
+    set(\.activeName, toolbar.string("activeName") ?? "")
     set(\.tools, ((toolbar["tools"] as? [Any]) ?? []).map { $0 as? JSON },
         equal: { jsonEqual($0.map { $0 as Any? ?? NSNull() } as NSArray, $1.map { $0 as Any? ?? NSNull() } as NSArray) })
     set(\.activeTool, toolbar.string("active") ?? "")
