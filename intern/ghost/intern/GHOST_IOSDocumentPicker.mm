@@ -239,9 +239,16 @@ static NSString *documentFilename(NSString *value, NSString *extension)
     return;
   }
   self.controller = controller;
-  controller.modalPresentationStyle = UIModalPresentationFormSheet;
+  /* An alert presents itself and can't be swiped away: UIKit doesn't allow its presentation to be
+   * changed or watched. */
+  const bool alert = [controller isKindOfClass:UIAlertController.class];
+  if (!alert) {
+    controller.modalPresentationStyle = UIModalPresentationFormSheet;
+  }
   [self.presenter presentViewController:controller animated:YES completion:nil];
-  controller.presentationController.delegate = self;
+  if (!alert) {
+    controller.presentationController.delegate = self;
+  }
 }
 
 - (void)showPicker
