@@ -3077,10 +3077,14 @@ struct NodeCanvasDrag: UIGestureRecognizerRepresentable {
 /** \name Layer
  * \{ */
 
-/** The node editor over the bottom of the viewport, its top edge dragged to make it taller. */
-struct NodeEditorLayer: View {
+/** An editor over the bottom of the viewport, such as the node editor or the Image Editor, its top
+ * edge dragged to make it taller. They share the height it was left at. */
+struct DockedEditorLayer<Content: View>: View {
   let model: ShellModel
-  let nodes: NodeEditorModel
+  /** How much of the window's bottom it covers, which the viewport leaves out. */
+  @Binding var cover: CGFloat
+  let resizeLabel: String
+  @ViewBuilder let content: Content
   @AppStorage("BlenderNodeEditorFraction") private var fraction = 0.5
   @State private var dragStart: Double?
 
@@ -3111,8 +3115,8 @@ struct NodeEditorLayer: View {
                   cover(proxy.size.height, live: true)
                   model.nodesCoverDragging = false
                 })
-            .accessibilityLabel("Resize Node Editor")
-          NodeEditorPanel(model: nodes)
+            .accessibilityLabel(resizeLabel)
+          content
         }
         .frame(height: proxy.size.height * fraction)
         .background(PanelStyle.docked, in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24,
@@ -3123,20 +3127,20 @@ struct NodeEditorLayer: View {
       .onChange(of: proxy.size.height, initial: true) { _, height in cover(height) }
     }
     .ignoresSafeArea(edges: .bottom)
-    .onDisappear { withAnimation(.easeOut(duration: 0.42)) { model.nodesCover = 0 } }
+    .onDisappear { withAnimation(.easeOut(duration: 0.42)) { cover = 0 } }
   }
 
   /** The viewport ends under the panel's rounded corners, and changes size once a drag ends
    * rather than on every step of it. */
   private func cover(_ height: CGFloat, live: Bool = false) {
     /* Eased as the viewport itself is, see `ViewportContainer`. */
-    let cover = max(0, height * fraction - 24)
-    if cover != model.nodesCover {
+    let covered = max(0, height * fraction - 24)
+    if covered != cover {
       if live {
-        model.nodesCover = cover
+        cover = covered
       }
       else {
-        withAnimation(.easeOut(duration: 0.42)) { model.nodesCover = cover }
+        withAnimation(.easeOut(duration: 0.42)) { cover = covered }
       }
     }
   }
