@@ -493,12 +493,10 @@ struct Rail: View {
       return
     }
     if !state.listVisible {
-      /* A tap on the closed rail opens it to pick another; the brushes open docked, as they
-       * start. */
+      /* A tap on the closed rail opens it to pick another, docked: the tools as the brushes,
+       * their icons alone. */
       label.hide()
-      withAnimation(animation) {
-        if brush || edge.horizontal { state.docked = true } else { state.expanded = true }
-      }
+      withAnimation(animation) { state.docked = true }
       return
     }
     /* Opened by a tap, picking closes it again; a docked list stays open. */
