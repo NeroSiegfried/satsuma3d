@@ -524,7 +524,7 @@ final class SqueezePalette {
     if brush?.dict("weight") != nil { parts.append((.weight, 140)) }
     if direction != nil { parts.append((.direction, 96)) }
     if color != nil { parts.append((.color, 40 + 36 * Double(min(5, recentColors.count)))) }
-    let commands = !contextCommands.isEmpty
+    let commands = !contextCommands(BlenderMenus.contextRoute).isEmpty
     if brush != nil, !parts.isEmpty {
       let accessories = CGFloat((commands ? 2 : 1) + (canRedo ? 1 : 0)) * (Ring.narrow - 2)
       let length = accessories + CGFloat(parts.reduce(0) { $0 + $1.share }) + CGFloat(parts.count - 1) * (Ring.narrow + 6)
@@ -587,30 +587,42 @@ final class SqueezePalette {
    * the brush's settings, undo and redo are there instead. */
   private func commandRows(arc: Arc, from first: CGFloat) -> [[CommandEntry]] {
     let history: [CommandEntry] = canRedo ? [.undo, .redo] : [.undo]
-    var pending: [CommandEntry] = (brush == nil ? history : []) + (commandPath.isEmpty ? [] : [.back])
-    pending += contextCommands
     var rows: [[CommandEntry]] = []
-    for row in 0..<2 {
-      let radius = first + CGFloat(row) * (Ring.narrow + Ring.gap)
-      var room = CGFloat(arc.end - arc.start) * radius + Ring.narrow - 8
-      let last = row == 1
-      var line: [CommandEntry] = []
-      var rest: [CommandEntry] = []
-      for entry in pending {
-        let width = Self.commandWidth(entry) + Self.commandGap
-        if width <= room { line.append(entry); room -= width } else { rest.append(entry) }
-      }
-      if last && !rest.isEmpty {
-        /* The full menu in the last place, giving up what it must for the room. */
-        let menu = Self.commandWidth(.menu(commandRoute)) + Self.commandGap
-        while room < menu, let dropped = line.popLast() {
-          room += Self.commandWidth(dropped) + Self.commandGap
+    var radius = first
+    /* Packs \a pending along up to \a arcs arcs, the full menu at \a route last where they do not
+     * all fit. */
+    func pack(_ pending: [CommandEntry], arcs: Int, route: String) {
+      var pending = pending
+      for row in 0..<arcs {
+        var room = CGFloat(arc.end - arc.start) * radius + Ring.narrow - 8
+        let last = row == arcs - 1
+        var line: [CommandEntry] = []
+        var rest: [CommandEntry] = []
+        for entry in pending {
+          let width = Self.commandWidth(entry) + Self.commandGap
+          if width <= room { line.append(entry); room -= width } else { rest.append(entry) }
         }
-        line.append(.menu(commandRoute))
+        if last && !rest.isEmpty {
+          /* The full menu in the last place, giving up what it must for the room. */
+          let menu = Self.commandWidth(.menu(route)) + Self.commandGap
+          while room < menu, let dropped = line.popLast() {
+            room += Self.commandWidth(dropped) + Self.commandGap
+          }
+          line.append(.menu(route))
+        }
+        if !line.isEmpty {
+          rows.append(line)
+          radius += Ring.narrow + Ring.gap
+        }
+        pending = rest
+        if pending.isEmpty { break }
       }
-      if !line.isEmpty { rows.append(line) }
-      pending = rest
-      if pending.isEmpty { break }
+    }
+    /* The context menu's, then each submenu opened from it on an arc of its own, further out. */
+    pack((brush == nil ? history : []) + contextCommands(BlenderMenus.contextRoute), arcs: 2,
+         route: BlenderMenus.contextRoute)
+    for level in commandPath {
+      pack(contextCommands(level.route), arcs: 1, route: level.route)
     }
     return rows
   }
@@ -1127,10 +1139,28 @@ final class SqueezePalette {
     if Int(before.rounded()) != Int(after.rounded()) { tick(at: point) }
   }
 
+  /** How many menus deep a command's route is: one for the context menu's own. */
+  static func depth(of route: String) -> Int {
+    guard let data = route.data(using: .utf8),
+          let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+          let path = json["path"] as? [Any]
+    else { return 1 }
+    return max(1, path.count)
+  }
+
   /** Runs a command, or opens its submenu. */
   func activate(_ item: BlenderMenuItem) {
     guard !item.disabled else { return }
     if item.submenu {
+      /* Its own arc, further out than the one it is on, in place of any opened from there: tapped
+       * again, it closes. */
+      let depth = Self.depth(of: item.route)
+      let open = isOpen(item)
+      commandPath = Array(commandPath.prefix(max(0, depth - 1)))
+      if open {
+        Haptics.selection()
+        return
+      }
       commandPath.append((item.route, item.title))
       commandIndex = 0
       commandPage = 0
@@ -2210,8 +2240,11 @@ private struct ArcCommandRow: View {
           .accessibilityLabel(item.title)
           .accessibilityAddTraits(.isButton)
       case .item(let item):
+        /* A submenu open on the arc further out is lit. */
+        let open = palette.isOpen(item)
         title(item.submenu ? item.title + " ›" : item.title, middle: middle, length: length,
-              color: item.destructive ? .red : .primary)
+              color: open ? .white : item.destructive ? .red : .primary)
+          .background { if open { Color.clear.panelGlass(.tinted(.blue), in: shape) } }
           .opacity(item.disabled ? 0.4 : 1)
           .contentShape(shape)
           .onTapGesture { palette.activate(item) }
@@ -2249,7 +2282,7 @@ private struct ArcCommandRow: View {
             .allowsHitTesting(false)
         }
         CurvedText(text: group.labels[index], arc: arc, radius: ring.radius, middle: start + piece / 2,
-                   length: CGFloat(piece) * ring.radius - 6, color: index == 0 ? .primary : .secondary)
+                   length: CGFloat(piece) * ring.radius - 6)
           .opacity(item.disabled ? 0.4 : 1)
           .contentShape(shape)
           .onTapGesture { palette.activate(item) }
