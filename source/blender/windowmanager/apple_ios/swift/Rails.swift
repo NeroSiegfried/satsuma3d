@@ -149,7 +149,6 @@ final class RailState {
   var dragOffset: CGFloat = 0
   /** Dragged away from its edge, the rail follows the finger to another. */
   var moving = false
-  var moveOffset = CGSize.zero
   /** A hold ended over an item: its tap, which ends with it, is not one. */
   @ObservationIgnored var suppressTap = false
   /** Chosen here, until Blender's snapshot shows it. */
@@ -307,8 +306,8 @@ struct Rail: View {
   /** The closed brushes' other places, from where they rest: docked open halfway down their
    * edge, and their other resting place, at the top or the bottom. */
   var brushStops: (middle: CGFloat, other: CGFloat) = (0, 0)
-  /** Let go away from its edge, at this point in the window: the rail moves to the nearest. */
-  let move: (CGPoint) -> Void
+  /** Pulled away from its edge: the finger carrying it, in the window, and where it is let go. */
+  let move: (RailMove) -> Void
   let choose: (RailItem) -> Void
   @Namespace private var namespace
   @State private var railFrame = CGRect.zero
@@ -379,7 +378,7 @@ struct Rail: View {
     .scaleEffect(lifted ? 1.06 : 1)
     .shadow(color: .black.opacity(lifted ? 0.32 : 0), radius: lifted ? 20 : 0, y: lifted ? 12 : 0)
     .animation(.spring(response: 0.25, dampingFraction: 0.8), value: lifted)
-    .offset(x: state.moveOffset.width, y: state.moveOffset.height + (edge.horizontal ? 0 : state.dragOffset))
+    .offset(y: edge.horizontal ? 0 : state.dragOffset)
     /* The finger on the rail: dragging the closed rail up or down docks it, and holding an item
      * slides to another. An open list scrolls instead. */
     /* Only on the closed rail: on an open list, even a drag that does nothing takes the finger
@@ -387,9 +386,12 @@ struct Rail: View {
     .simultaneousGesture(dockDrag, including: state.listVisible && !state.pressSelecting ? .subviews : .all)
     /* Pulled off its edge from anywhere on it, open or closed, held first or not. */
     .gesture(RailMoveGesture(horizontal: edge.horizontal,
-                             allowed: { [state] in !state.pressSelecting && !RollDial.shared.showing }) { translation in
-      if !state.moving { beginMove() }
-      state.moveOffset = translation
+                             allowed: { [state] in !state.pressSelecting && !RollDial.shared.showing }) { translation, point in
+      if !state.moving {
+        beginMove()
+        move(.began(CGPoint(x: point.x - translation.width, y: point.y - translation.height)))
+      }
+      move(.changed(point))
     } ended: { point in
       endMove(at: point)
     })
@@ -580,9 +582,8 @@ struct Rail: View {
     state.suppressTap = true
     DispatchQueue.main.async { state.suppressTap = false }
     withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) {
-      if let point { move(point) }
+      move(.ended(point))
       state.moving = false
-      state.moveOffset = .zero
       state.dragOffset = 0
     }
   }
@@ -666,21 +667,14 @@ struct Rail: View {
    * opened tool list up to dock it. */
   private var handle: some View {
     Button(action: collapse) {
-      if edge.horizontal {
-        Capsule()
-          .fill(Color.secondary)
-          .frame(width: 5, height: 28)
-          .frame(maxHeight: .infinity)
-          .frame(width: 44)
-          .contentShape(Rectangle())
-      }
-      else {
-        Capsule()
-          .fill(Color.secondary)
-          .frame(width: 28, height: 5)
-          .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44)
-          .contentShape(Rectangle())
-      }
+      /* One grabber, turning with the rail rather than swapped for another. */
+      let row = edge.horizontal
+      Capsule()
+        .fill(Color.secondary)
+        .frame(width: row ? 5 : 28, height: row ? 28 : 5)
+        .frame(minWidth: row ? 44 : nil, maxWidth: row ? 44 : .infinity,
+               minHeight: row ? nil : 44, maxHeight: row ? .infinity : 44)
+        .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
     .help(brush ? "Collapse Brushes" : "Collapse Toolbar")
@@ -718,6 +712,14 @@ struct Rail: View {
 
 /** \} */
 
+/** A rail, or the sidebar, carried to another edge: where the finger took it, where it is, both in
+ * the window, and where it was let go, carried on by a flick; nothing if cancelled. */
+enum RailMove {
+  case began(CGPoint)
+  case changed(CGPoint)
+  case ended(CGPoint?)
+}
+
 /** A pan that begins only across the rail's edge, beside the list's own scrolling along it. Which
  * way a drag first goes decides once what it does: across, it moves the rail; along, it docks or
  * closes it as before; after a hold, it slides between items. Reports the translation, then where
@@ -726,7 +728,8 @@ struct RailMoveGesture: UIGestureRecognizerRepresentable {
   let horizontal: Bool
   /** Not while a hold slides between items, or the Pencil rolls the dial. */
   let allowed: () -> Bool
-  let changed: (CGSize) -> Void
+  /** How far it has moved, and where the finger is, in the window. */
+  let changed: (CGSize, CGPoint) -> Void
   let ended: (CGPoint?) -> Void
 
   func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
@@ -754,7 +757,7 @@ struct RailMoveGesture: UIGestureRecognizerRepresentable {
     switch recognizer.state {
       case .began, .changed:
         let translation = recognizer.translation(in: nil)
-        changed(CGSize(width: translation.x, height: translation.y))
+        changed(CGSize(width: translation.x, height: translation.y), recognizer.location(in: nil))
       case .ended:
         let point = recognizer.location(in: nil), velocity = recognizer.velocity(in: nil)
         ended(CGPoint(x: point.x + velocity.x * 0.15, y: point.y + velocity.y * 0.15))
@@ -821,14 +824,71 @@ struct ToolRails: View {
   @AppStorage("BlenderBrushRailEdge") private var brushEdgeName = ""
   /** Where the sidebar was moved; empty for the hand's side. */
   @AppStorage("BlenderSidebarEdge") private var sidebarEdgeName = ""
-  /** How far the sidebar is carried from its place while its handle moves it to another edge. */
-  @State private var sidebarLift: CGSize?
+  /** What is being carried to another edge: it follows the finger, and everything re-flows
+   * around the edge it is nearest as it goes. */
+  @State private var carried: Carried?
 
-  /** The edge of \a safe nearest \a point, both in the window. */
-  private static func nearestEdge(to point: CGPoint, in safe: CGRect) -> RailEdge {
+  enum Carry { case tools, brushes, sidebar }
+
+  struct Carried {
+    let what: Carry
+    /** From its center to the finger, turning with it between a row and a column. */
+    var grab: CGSize
+    var finger: CGPoint
+    var horizontal: Bool
+  }
+
+  /** The edge of \a safe nearest \a point, both in the window; \a current kept until another is
+   * clearly nearer, so it does not flicker between two near a corner. */
+  private static func nearestEdge(to point: CGPoint, in safe: CGRect, current: RailEdge? = nil) -> RailEdge {
     let distances: [(RailEdge, CGFloat)] = [(.leading, point.x - safe.minX), (.trailing, safe.maxX - point.x),
                                             (.top, point.y - safe.minY), (.bottom, safe.maxY - point.y)]
-    return distances.min { $0.1 < $1.1 }?.0 ?? .leading
+    let nearest = distances.min { $0.1 < $1.1 } ?? (.leading, 0)
+    if let current, let here = distances.first(where: { $0.0 == current }), here.1 - nearest.1 < 40 {
+      return current
+    }
+    return nearest.0
+  }
+
+  /** Follows \a move: the carried thing goes to whichever edge it is nearest as the finger moves,
+   * through \a set, and lands there. \a center is where it sits, \a local turns the window's
+   * points into these. */
+  private func carry(_ move: RailMove, _ what: Carry, center: CGPoint, edge: RailEdge, safe: CGRect,
+                     local: (CGPoint) -> CGPoint, set: (RailEdge) -> Void)
+  {
+    switch move {
+      case .began(let point):
+        let finger = local(point)
+        carried = Carried(what: what, grab: CGSize(width: finger.x - center.x, height: finger.y - center.y),
+                          finger: finger, horizontal: edge.horizontal)
+      case .changed(let point):
+        guard carried?.what == what else { return }
+        let finger = local(point)
+        carried?.finger = finger
+        let next = Self.nearestEdge(to: finger, in: safe, current: edge)
+        guard next != edge else { return }
+        Haptics.selection()
+        withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
+          set(next)
+          if next.horizontal != carried?.horizontal, let grab = carried?.grab {
+            /* Turned between a column and a row: the finger stays as far along it. */
+            carried?.grab = CGSize(width: grab.height, height: grab.width)
+            carried?.horizontal = next.horizontal
+          }
+        }
+      case .ended(let point):
+        if let point { set(Self.nearestEdge(to: local(point), in: safe, current: edge)) }
+        carried = nil
+    }
+  }
+
+  /** Under the finger while \a what is carried, as far from it as where it was taken, within
+   * its \a size. */
+  private func carriedCenter(_ what: Carry, size: CGSize) -> CGPoint? {
+    guard let carried, carried.what == what else { return nil }
+    let x = min(max(carried.grab.width, -max(0, size.width / 2 - 26)), max(0, size.width / 2 - 26))
+    let y = min(max(carried.grab.height, -max(0, size.height / 2 - 26)), max(0, size.height / 2 - 26))
+    return CGPoint(x: carried.finger.x - x, y: carried.finger.y - y)
   }
 
   var body: some View {
@@ -883,19 +943,27 @@ struct ToolRails: View {
           Rail(items: brushItems, active: brushes.active(model.brushes?.string("active") ?? ""),
                state: brushes, label: label, width: layout.brushWidth, height: layout.brushHeight,
                brush: true, edge: layout.brushEdge, dockDistance: 0, brushStops: layout.brushStops,
-               move: { brushEdgeName = Self.nearestEdge(to: local($0), in: safe).rawValue }) { item in
+               move: { move in
+                 carry(move, .brushes, center: layout.brushCenter, edge: layout.brushEdge, safe: safe,
+                       local: local) { brushEdgeName = $0.rawValue }
+               }) { item in
             WM_apple_ios_ui_brush_activate(item.id)
           }
-          .position(layout.brushCenter)
+          .position(carriedCenter(.brushes, size: CGSize(width: layout.brushWidth, height: layout.brushHeight)) ??
+                    layout.brushCenter)
           .transition(.opacity)
         }
         Rail(items: toolItems, active: tools.active(model.activeTool), state: tools, label: label,
              width: layout.toolWidth, height: layout.toolHeight, brush: false, edge: layout.toolEdge,
              dockDistance: layout.dockDistance,
-             move: { toolEdge = Self.nearestEdge(to: local($0), in: safe) }) { item in
+             move: { move in
+               carry(move, .tools, center: layout.toolCenter, edge: layout.toolEdge, safe: safe,
+                     local: local) { toolEdge = $0 }
+             }) { item in
           WM_apple_ios_ui_tool_set_by_id(item.id)
         }
-        .position(layout.toolCenter)
+        .position(carriedCenter(.tools, size: CGSize(width: layout.toolWidth, height: layout.toolHeight)) ??
+                  layout.toolCenter)
         .onChange(of: layout.toolsCompact) { _, compact in
           /* No room beside the sliders for the open list: closed, the active tool alone. */
           guard compact else { return }
@@ -905,14 +973,18 @@ struct ToolRails: View {
           }
         }
         if !content.isEmpty {
-          let lifted = sidebarDragStart != nil || sidebarLift != nil
+          let lifted = sidebarDragStart != nil || carried?.what == .sidebar
+          let sidebarEdge = layout.sidebarRow ?? (layout.sidebarLeading ? .leading : .trailing)
+          let sidebarSize = layout.sidebarRow != nil ? CGSize(width: content.height, height: PaintSidebar.width) :
+                                                       CGSize(width: PaintSidebar.width, height: content.height)
           PaintSidebar(state: intent, direction: model.direction, brush: model.brush, content: content,
                        leading: layout.sidebarLeading, transforming: model.transforming, window: model.window,
                        horizontal: layout.sidebarRow != nil)
             .overlay(alignment: layout.sidebarRow != nil ? .leading : .top) {
               if !content.buttonsOnly {
-                sidebarHandle(layout, content: content) { point in
-                  sidebarEdgeName = Self.nearestEdge(to: local(point), in: safe).rawValue
+                sidebarHandle(layout, content: content) { move in
+                  carry(move, .sidebar, center: layout.sidebarCenter, edge: sidebarEdge, safe: safe,
+                        local: local) { sidebarEdgeName = $0.rawValue }
                 }
               }
             }
@@ -928,8 +1000,7 @@ struct ToolRails: View {
             .scaleEffect(lifted ? 1.06 : 1)
             .shadow(color: .black.opacity(lifted ? 0.32 : 0), radius: lifted ? 20 : 0, y: lifted ? 12 : 0)
             .animation(.spring(response: 0.25, dampingFraction: 0.8), value: lifted)
-            .position(layout.sidebarCenter)
-            .offset(sidebarLift ?? .zero)
+            .position(carriedCenter(.sidebar, size: sidebarSize) ?? layout.sidebarCenter)
             /* An open tool list takes the edge: the sidebar steps aside until it closes. */
             .offset(x: layout.sidebarTucked ? (layout.sidebarLeading ? -96 : 96) : 0)
             .opacity(layout.sidebarTucked ? 0 : 1)
@@ -1047,9 +1118,9 @@ struct ToolRails: View {
 
   /** A small grabber at the top of the sidebar, as the rails have: dragged along its edge, it moves
    * the sidebar up or down it, where it stays; dragged across, it carries it to the edge nearest
-   * where it is let go, \a drop, the top and the bottom too, where it lies along a row. */
+   * where it is let go, the top and the bottom too, where it lies along a row, through \a carry. */
   private func sidebarHandle(_ layout: RailLayout, content: SidebarContent,
-                             drop: @escaping (CGPoint) -> Void) -> some View
+                             carry: @escaping (RailMove) -> Void) -> some View
   {
     let row = layout.sidebarRow != nil
     return Capsule()
@@ -1059,19 +1130,21 @@ struct ToolRails: View {
       .contentShape(Rectangle())
       .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
         .onChanged { value in
-          if sidebarLift == nil && sidebarDragStart == nil {
+          let carrying = carried?.what == .sidebar
+          if !carrying && sidebarDragStart == nil {
             /* Which way it first goes decides once: in a row, or across its edge, it lifts. */
             let t = value.translation
             guard hypot(t.width, t.height) > 6 else { return }
             Haptics.selection()
             if row || !RailMoveGesture.isAlong(t, horizontal: false) {
-              sidebarLift = t
+              carry(.began(value.startLocation))
+              carry(.changed(value.location))
               return
             }
             sidebarDragStart = layout.sidebarCenter.y - content.height / 2
           }
-          if sidebarLift != nil {
-            sidebarLift = value.translation
+          if carrying {
+            carry(.changed(value.location))
             return
           }
           guard let start = sidebarDragStart else { return }
@@ -1082,11 +1155,10 @@ struct ToolRails: View {
         }
         .onEnded { value in
           sidebarDragStart = nil
-          guard sidebarLift != nil else { return }
+          guard carried?.what == .sidebar else { return }
           withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
-            sidebarLift = nil
-            drop(CGPoint(x: value.location.x + value.velocity.width * 0.15,
-                         y: value.location.y + value.velocity.height * 0.15))
+            carry(.ended(CGPoint(x: value.location.x + value.velocity.width * 0.15,
+                                 y: value.location.y + value.velocity.height * 0.15)))
           }
         })
       .hoverEffect(.highlight)
