@@ -58,6 +58,11 @@ bool ios_enum_popup(bContext *C, wmOperator *op, PropertyRNA *prop);
 bool ios_panel_popup(bContext *C, const char *panel);
 
 namespace ui {
+bool native_operator_dialog_begin(bContext *C,
+                                  wmOperator *op,
+                                  const std::string &title,
+                                  const std::string &confirm,
+                                  const std::string &message);
 void native_redo_operator_register(bContext *C, wmOperator *op);
 void native_redo_operator_free(wmOperator *op);
 void native_redo_operator_clear();
@@ -137,6 +142,19 @@ std::optional<wmOperatorStatus> confirm(bContext *C,
     return OPERATOR_RUNNING_MODAL;
   }
   return OPERATOR_CANCELLED;
+}
+
+/** An operator's dialog, natively: its properties above OK and Cancel, see `OperatorDialog.swift`. */
+bool props_dialog(bContext *C,
+                  wmOperator *op,
+                  const std::string &title,
+                  const std::string &confirm,
+                  const std::string &message)
+{
+  if (WM_apple_ios_ui_desktop_mode()) {
+    return false;
+  }
+  return ui::native_operator_dialog_begin(C, op, title, confirm, message);
 }
 
 /** Two fingers move the view; Blender's own keymaps have no touch gestures. */
@@ -235,6 +253,7 @@ wmNativeInterface native_interface_create()
   native.menu_popup = ios_menu_popup;
   native.enum_popup = ios_enum_popup;
   native.panel_popup = ios_panel_popup;
+  native.props_dialog = props_dialog;
   return native;
 }
 

@@ -36,6 +36,8 @@ final class RedoStore: ObservableObject {
   private var sequence: UInt64 = 0
   var icon: (String) -> UIImage? = { BlenderIcon.image($0) }
   var close: () -> Void = {}
+  /** The engine setting edits go to: the last operation's, or a dialog's. */
+  var editSetting = "native_redo_edit"
 
   var operation: String? { snapshot?.string("id") }
   var properties: [JSON] { snapshot?.array("properties") ?? [] }
@@ -83,7 +85,78 @@ final class RedoStore: ObservableObject {
     else {
       request["action"] = "dismiss"
     }
-    Engine.setting("native_redo_edit", json: request)
+    Engine.setting(editSetting, json: request)
+  }
+
+  /** A dialog's OK or Cancel. */
+  func finish(confirm: Bool) {
+    guard let operation else { return }
+    sequence += 1
+    Engine.setting(editSetting, json: ["id": operation, "sequence": NSNumber(value: sequence),
+                                       "action": confirm ? "confirm" : "cancel"])
+  }
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Dialog
+ * \{ */
+
+/**
+ * An operator's settings, asked for before it runs, in place of Blender's dialog: a sheet with
+ * its settings as a form, Cancel and the operator's own confirm button. See
+ * `native_operator_dialog_query`.
+ */
+struct OperatorDialog: View {
+  @StateObject private var store: RedoStore = {
+    let store = RedoStore()
+    store.editSetting = "native_dialog_edit"
+    return store
+  }()
+  let snapshot: JSON
+  let close: () -> Void
+
+  var body: some View {
+    NavigationStack {
+      Form {
+        if let message = snapshot.string("message"), !message.isEmpty {
+          Text(message)
+        }
+        ForEach(Array(store.properties.enumerated()), id: \.offset) { _, property in
+          row(property)
+        }
+      }
+      .navigationTitle(snapshot.string("title") ?? "")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Cancel", role: .cancel) {
+            store.finish(confirm: false)
+            close()
+          }
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          Button(snapshot.string("confirm").flatMap { $0.isEmpty ? nil : $0 } ?? "OK") {
+            store.finish(confirm: true)
+            close()
+          }
+          .accessibilityIdentifier("blender.dialog.confirm")
+        }
+      }
+    }
+    .tint(Color(uiColor: .systemBlue))
+    .onAppear { store.update(snapshot) }
+    .onChange(of: snapshot as NSDictionary) { _, next in store.update(next as? JSON) }
+  }
+
+  private func row(_ property: JSON) -> some View {
+    let name = [property.string("group"), property.string("label")].compactMap { $0 }.filter { !$0.isEmpty }
+      .joined(separator: " ")
+    return LabeledContent(name) {
+      RedoControl(store: store, property: property, name: name)
+        .frame(maxWidth: property.string("type") == "BOOLEAN" ? nil : 260, minHeight: 32)
+    }
   }
 }
 
@@ -174,12 +247,25 @@ struct RedoColumn: View {
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .minimumScaleFactor(0.8)
-      control
-        .disabled(!property.bool("editable"))
-        .accessibilityLabel(name)
-        .accessibilityIdentifier("blender.redo.property." + (property.string("key") ?? ""))
+      RedoControl(store: store, property: property, name: name)
     }
     .frame(width: width, alignment: .leading)
+  }
+}
+
+/** One setting's control, on the strip or in a dialog. */
+struct RedoControl: View {
+  @ObservedObject var store: RedoStore
+  let property: JSON
+  let name: String
+
+  private var type: String { property.string("type") ?? "" }
+
+  var body: some View {
+    control
+      .disabled(!property.bool("editable"))
+      .accessibilityLabel(name)
+      .accessibilityIdentifier("blender.redo.property." + (property.string("key") ?? ""))
   }
 
   @ViewBuilder

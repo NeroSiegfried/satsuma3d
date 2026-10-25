@@ -444,6 +444,18 @@ public struct DocumentWindow: View {
       .overlay { SqueezePaletteLayer() }
 #endif
       .environment(\.blenderMenuContext, model.menuContext)
+      /* An operator's settings, asked for before it runs, in place of Blender's dialog. */
+      .sheet(isPresented: Binding(get: { model.dialog != nil && !model.desktop }, set: { shown in
+        if !shown, let id = model.dialog?.string("id") {
+          /* Swiped away: as Cancel. */
+          Engine.setting("native_dialog_edit", json: ["id": id, "action": "cancel"])
+        }
+      })) {
+        if let dialog = model.dialog {
+          OperatorDialog(snapshot: dialog) {}
+            .presentationDetents([.medium, .large])
+        }
+      }
 #if !os(visionOS)
       /* The scene in the room, through the camera. */
       .fullScreenCover(isPresented: Bindable(ARPreviewState.shared).shown) { ARPreview() }

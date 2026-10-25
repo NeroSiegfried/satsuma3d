@@ -133,6 +133,7 @@ std::string native_graph_query(bContext *C, const std::string &request, bool exe
 }  // namespace blender::ed::graph
 namespace blender::ui {
 std::string native_operator_redo_query(bContext *C, const std::string &request, bool execute);
+std::string native_operator_dialog_query(bContext *C, const std::string &request, bool execute);
 void native_properties_interaction_finish(bContext *C);
 std::string native_properties_menu_query(bContext *C, const std::string &request, bool execute);
 }  // namespace blender::ui
@@ -1252,6 +1253,10 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
   }
   if (command.setting == "native_redo_edit") {
     ui::native_operator_redo_query(C, command.value, true);
+    return;
+  }
+  if (command.setting == "native_dialog_edit") {
+    ui::native_operator_dialog_query(C, command.value, true);
     return;
   }
   if (command.setting == "interface") {
@@ -2917,6 +2922,8 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
   }
   const std::string redo_json = has_view3d_context ? ui::native_operator_redo_query(C, "", false) :
                                                      "null";
+  /* An operator's properties asked for before it runs, in place of Blender's dialog. */
+  const std::string dialog_json = ui::native_operator_dialog_query(C, "", false);
   if (!has_view3d_context) {
     ios_brushes_json = "null";
   }
@@ -2970,6 +2977,8 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
   json += ",\"propertiesAck\":" + std::to_string(ios_panels_sequence);
   json += ",\"redo\":";
   json += redo_json;
+  json += ",\"dialog\":";
+  json += dialog_json;
   json += ",\"textObject\":";
   json += has_view3d_context ? ios_text_object_json(C) : "null";
   json += ",\"navigationGizmo\":";
@@ -4386,7 +4395,8 @@ extern "C" void WM_apple_ios_ui_flush_commands(bContext *C)
       return true;
     }
     if (!a || !b || a->setting != b->setting ||
-        (a->setting != "native_properties_edit" && a->setting != "native_redo_edit"))
+        (a->setting != "native_properties_edit" && a->setting != "native_redo_edit" &&
+         a->setting != "native_dialog_edit"))
     {
       return false;
     }

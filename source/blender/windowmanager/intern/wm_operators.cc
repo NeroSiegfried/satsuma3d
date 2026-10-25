@@ -1839,6 +1839,18 @@ static wmOperatorStatus wm_operator_props_popup_ex(
         C, op, 300, title, confirm_text, cancel_default, message);
   }
 
+  /* An interface that shows the last operation's properties itself: run it, then show them. */
+  if (const wmNativeInterface *native = WM_native_interface();
+      do_call && native && native->replaces_redo_panel && native->replaces_redo_panel() &&
+      native->redo_show)
+  {
+    const wmOperatorStatus status = op->type->exec(C, op);
+    if (status & OPERATOR_FINISHED) {
+      native->redo_show(C);
+    }
+    return status;
+  }
+
   popup_block_ex(C, wm_block_create_redo, nullptr, wm_block_redo_cancel_cb, op, op);
 
   if (do_call) {
@@ -1887,6 +1899,16 @@ wmOperatorStatus WM_operator_props_dialog_popup(bContext *C,
                                                 const bool cancel_default,
                                                 std::optional<std::string> message)
 {
+  if (const wmNativeInterface *native = WM_native_interface(); native && native->props_dialog) {
+    if (native->props_dialog(C,
+                             op,
+                             title ? *title : WM_operatortype_name(op->type, op->ptr),
+                             confirm_text ? *confirm_text : IFACE_("OK"),
+                             message ? *message : std::string()))
+    {
+      return OPERATOR_RUNNING_MODAL;
+    }
+  }
   wmOpPopUp *data = MEM_new<wmOpPopUp>(__func__);
   data->op = op;
   data->width = int(float(width) * UI_SCALE_FAC * ui::style_get()->widget.points /

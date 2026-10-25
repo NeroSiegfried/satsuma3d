@@ -128,6 +128,16 @@ struct wmNativeInterface {
    * where the pointer is; the choice runs the operator anew. False to show Blender's own.
    */
   bool (*enum_popup)(bContext *C, wmOperator *op, PropertyRNA *prop) = nullptr;
+  /**
+   * Ask for an operator's properties natively, in place of Blender's dialog, before running it.
+   * The interface owns the operator from here: it runs it on OK, frees it on Cancel. False to show
+   * Blender's own.
+   */
+  bool (*props_dialog)(bContext *C,
+                       wmOperator *op,
+                       const std::string &title,
+                       const std::string &confirm,
+                       const std::string &message) = nullptr;
   /** Show one of Blender's panels natively, such as Rename Active Item's. False for Blender's. */
   bool (*panel_popup)(bContext *C, const char *panel) = nullptr;
 

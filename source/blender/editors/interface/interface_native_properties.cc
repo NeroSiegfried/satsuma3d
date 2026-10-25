@@ -2006,6 +2006,167 @@ std::string native_operator_redo_query(bContext *C, const std::string &json, boo
 }
 
 namespace {
+/* An operator whose properties are set before it runs, in place of Blender's dialog: owned here
+ * until it runs or is cancelled, see #native_operator_dialog_begin. */
+wmOperator *native_dialog_operator = nullptr;
+uint64_t native_dialog_generation = 0;
+int64_t native_dialog_ack = 0;
+std::string native_dialog_title;
+std::string native_dialog_confirm;
+std::string native_dialog_message;
+/* Where it was started, for it to run there. */
+wmWindow *native_dialog_window = nullptr;
+ScrArea *native_dialog_area = nullptr;
+ARegion *native_dialog_region = nullptr;
+
+void native_dialog_end()
+{
+  native_dialog_operator = nullptr;
+  native_dialog_window = nullptr;
+  native_dialog_area = nullptr;
+  native_dialog_region = nullptr;
+  WM_main_add_notifier(NC_WINDOW, nullptr);
+}
+
+/** Back where the dialog was started, if its window and editor are still there. */
+void native_dialog_context(bContext *C)
+{
+  wmWindowManager *wm = CTX_wm_manager(C);
+  if (!native_dialog_window || BLI_findindex(&wm->windows, native_dialog_window) == -1) {
+    return;
+  }
+  CTX_wm_window_set(C, native_dialog_window);
+  bScreen *screen = WM_window_get_active_screen(native_dialog_window);
+  ScrArea *area = screen && BLI_findindex(&screen->areabase, native_dialog_area) != -1 ?
+                      native_dialog_area :
+                      nullptr;
+  CTX_wm_area_set(C, area);
+  CTX_wm_region_set(
+      C, area && BLI_findindex(&area->regionbase, native_dialog_region) != -1 ? native_dialog_region : nullptr);
+}
+}  // namespace
+
+bool native_operator_dialog_begin(bContext *C,
+                                  wmOperator *op,
+                                  const std::string &title,
+                                  const std::string &confirm,
+                                  const std::string &message)
+{
+  if (native_dialog_operator || !CTX_wm_window(C)) {
+    return false;
+  }
+  native_dialog_operator = op;
+  ++native_dialog_generation;
+  native_dialog_title = title;
+  native_dialog_confirm = confirm;
+  native_dialog_message = message;
+  native_dialog_window = CTX_wm_window(C);
+  native_dialog_area = CTX_wm_area(C);
+  native_dialog_region = CTX_wm_region(C);
+  WM_main_add_notifier(NC_WINDOW, nullptr);
+  return true;
+}
+
+std::string native_operator_dialog_query(bContext *C, const std::string &json, const bool execute)
+{
+  wmOperator *op = native_dialog_operator;
+  if (!op) {
+    return "null";
+  }
+  auto query_value = execute ? decode(json) : nullptr;
+  const auto *query = query_value ? query_value->as_dictionary_value() : nullptr;
+  const std::string identity = "dialog" + std::to_string(native_dialog_generation);
+  if (execute) {
+    if (!query || query->lookup_str("id").value_or("") != identity) {
+      return "null";
+    }
+    native_dialog_ack = query->lookup_int("sequence").value_or(native_dialog_ack);
+    const std::string action = query->lookup_str("action").value_or("");
+    if (action == "cancel" || action == "dismiss") {
+      native_dialog_end();
+      if (op->type->cancel) {
+        op->type->cancel(C, op);
+      }
+      WM_operator_free(op);
+      return "null";
+    }
+    if (action == "confirm") {
+      native_dialog_end();
+      wmWindow *previous_window = CTX_wm_window(C);
+      ScrArea *previous_area = CTX_wm_area(C);
+      ARegion *previous_region = CTX_wm_region(C);
+      native_dialog_context(C);
+      /* As Blender's OK button: the operator is registered, or freed. */
+      WM_operator_call_ex(C, op, true);
+      CTX_wm_window_set(C, previous_window);
+      CTX_wm_area_set(C, previous_area);
+      CTX_wm_region_set(C, previous_region);
+      return "null";
+    }
+  }
+  DictionaryValue result;
+  result.append_str("id", identity);
+  result.append_str("title", native_dialog_title);
+  result.append_str("confirm", native_dialog_confirm);
+  result.append_str("message", native_dialog_message);
+  result.append_str("operator", op->type->idname);
+  result.append_int("ack", native_dialog_ack);
+  auto fields = result.append_array("properties");
+  Block *block = block_begin(C, nullptr, "native_operator_dialog", EmbossType::Emboss);
+  Layout &layout = block_layout(
+      block, LayoutDirection::Vertical, LayoutType::Panel, 0, 0, 320, 20, 0, style_get_dpi());
+  /* The operator's own dialog, including its draw function, as Blender would show it. */
+  uiTemplateOperatorPropertyButs(C, &layout, op, BUT_LABEL_ALIGN_NONE, 0);
+  const auto pairs = property_pairs(*block);
+  block_end(C, block);
+  std::set<std::string> seen;
+  bool applied = false;
+  for (const auto &button : block->buttons) {
+    Button &but = *button;
+    /* The operator's properties, and those of its property groups, as Batch Rename's steps. */
+    if (!but.rnaprop || !but.rnapoin.data || (but.flag & UI_HIDDEN) ||
+        !(RNA_struct_is_a(but.rnapoin.type, RNA_OperatorProperties) ||
+          RNA_struct_is_a(but.rnapoin.type, RNA_PropertyGroup)) ||
+        !ELEM(RNA_property_type(but.rnaprop),
+              PROP_BOOLEAN,
+              PROP_INT,
+              PROP_FLOAT,
+              PROP_STRING,
+              PROP_ENUM))
+    {
+      continue;
+    }
+    const int length = RNA_property_array_length(&but.rnapoin, but.rnaprop);
+    const bool color = is_color(&but.rnapoin, but.rnaprop);
+    const int begin = !color && length ? std::max(0, but.rnaindex) : -1;
+    const int end = !color && length && but.rnaindex < 0 ? length : begin + 1;
+    for (int index = begin; index < end; ++index) {
+      const std::string key = property_key(but, index);
+      if (!seen.insert(key).second) {
+        continue;
+      }
+      if (execute && query->lookup_str("key").value_or("") == key) {
+        applied = set_property(C, but, index, *query, false);
+      }
+      else if (!execute) {
+        auto field = fields->append_dict();
+        const auto pair = pairs.find(&but);
+        project_property(C, but, index, *field, pair == pairs.end() ? nullptr : &pair->second);
+      }
+    }
+  }
+  block_free(C, block);
+  if (execute) {
+    /* As Blender's dialog: the operator may change its properties as others change. */
+    if (applied && op->type->check) {
+      op->type->check(C, op);
+    }
+    return native_operator_dialog_query(C, "", false);
+  }
+  return encode(result);
+}
+
+namespace {
 
 /** Preferences tabs are the Preferences' section identifiers with this prefix. */
 constexpr const char *PREFERENCES_TAB_PREFIX = "PREFERENCES_";

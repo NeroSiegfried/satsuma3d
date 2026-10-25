@@ -41,6 +41,8 @@ final class ShellModel {
   private(set) var canRedo = false
   /** Adjust Last Operation: the last operator's settings, or none. */
   private(set) var redo: JSON?
+  /** An operator's settings, asked for before it runs in place of Blender's dialog, or none. */
+  private(set) var dialog: JSON?
   /** The text object being typed into: its style where the cursor is, alignment and font file. */
   private(set) var textObject: JSON?
   /** The native node editor shows over the bottom of the viewport. */
@@ -152,6 +154,7 @@ final class ShellModel {
     set(\.canRedo, toolbar.bool("canRedo"))
     set(\.menuContext, "\(toolbar.string("objectMode") ?? "")|\(toolbar.string("menuState") ?? "")")
     set(\.redo, toolbar.dict("redo"), equal: { jsonEqual($0, $1) })
+    set(\.dialog, toolbar.dict("dialog"), equal: { jsonEqual($0, $1) })
     set(\.textObject, toolbar.dict("textObject"), equal: { jsonEqual($0, $1) })
     let gizmo = (toolbar["navigationGizmo"] as? [NSNumber])?.map(\.doubleValue) ?? []
     if gizmo.count == 3 { set(\.navigationGizmo, gizmo) }
