@@ -1461,17 +1461,8 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     if (!preview) {
       ios_panels_next_snapshot = {};
     }
-    if (wmWindow *window = CTX_wm_window(C)) {
-      for (wmEventHandler &handler : window->runtime->modalhandlers) {
-        if (handler.type == WM_HANDLER_TYPE_OP) {
-          const wmOperator *op = reinterpret_cast<wmEventHandler_Op &>(handler).op;
-          os_log(OS_LOG_DEFAULT, "BLENDERDIAG properties edit refused, modal %{public}s",
-                 op && op->type ? op->type->idname : "?");
-          ios_properties_error = "Finish the current operation before editing properties.";
-          return;
-        }
-      }
-    }
+    /* While a stroke or other operator runs, only values arrive here, see #ios_ui_message_live;
+     * their undo steps wait for it to end. */
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
     if (WM_apple_ios_dialog_active(CTX_wm_window(C))) {
       ios_properties_error = "Finish the current dialog before editing properties.";
@@ -4210,8 +4201,11 @@ extern "C" double WM_apple_ios_engine_idle_seconds(bContext *C)
   return std::clamp(next - BLI_time_now_seconds(), 0.0, 0.1);
 }
 
-/* While a stroke or another modal operator runs, one hand can keep using the native controls
- * with the other: they are not blocked as Blender's own buttons are. */
+/* While a stroke or another modal operator runs, one hand can keep changing things with the
+ * other: the native controls are not blocked as Blender's own buttons are. Values change live;
+ * what would change Blender's data under the operator waits for it to end, see
+ * #ios_ui_message_live. */
+static Vector<IOSUIMessage> ios_ui_messages_waiting;
 /* Set while a native control is handled, so its undo steps wait for the operator too. */
 static bool ios_ui_dispatching = false;
 /* The undo step held back, pushed when the operator ends; see #WM_apple_ios_ui_undo_push_defer. */
@@ -4233,6 +4227,76 @@ static bool ios_modal_operator_running(bContext *C)
         return true;
       }
     }
+  }
+  return false;
+}
+
+/* A panel's edit that only sets a value, not a button, list, menu or operator. */
+static bool ios_edit_sets_value(const std::string &json)
+{
+  std::istringstream stream(json);
+  auto value = io::serialize::JsonFormatter().deserialize(stream);
+  const auto *request = value ? value->as_dictionary_value() : nullptr;
+  if (request == nullptr || request->lookup_str("action").value_or("") != "property" ||
+      request->lookup("value") == nullptr)
+  {
+    return false;
+  }
+  for (const char *key : {"operator", "list_action", "id_action", "panel_action",
+                          "animation_action"})
+  {
+    if (request->lookup(key)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Whether a message can be handled while a stroke or other modal operator runs: values, what is
+ * shown and the view. Modes, tools, brushes, operators, undo, frames and assets change data the
+ * operator holds, and wait for it to end.
+ */
+static bool ios_ui_message_live(const IOSUIMessage &message)
+{
+  if (const auto *command = std::get_if<IOSUICommand>(&message)) {
+    /* The view and its shading; not Local View, which hides objects. */
+    return *command >= IOSUICommand::FrameSelected && *command <= IOSUICommand::ViewBottom &&
+           *command != IOSUICommand::ViewLocal;
+  }
+  if (std::holds_alternative<float>(message)) {
+    return true;
+  }
+  if (const auto *menu = std::get_if<IOSMenuRequest>(&message)) {
+    return !menu->execute;
+  }
+  const auto *setting = std::get_if<IOSSettingCommand>(&message);
+  if (setting == nullptr) {
+    return false;
+  }
+  const StringRef name = setting->setting;
+  if (name.endswith("_state") || name.endswith("_visible")) {
+    return true;
+  }
+  if (ELEM(name,
+           "native_brush",
+           "brush_direction",
+           "constraint_axis",
+           "snap",
+           "proportional",
+           "pivot",
+           "orientation",
+           "mirror",
+           "mirror_topology",
+           "native_panels",
+           "hover_highlight",
+           "navigation_corner",
+           "tweak_drag"))
+  {
+    return true;
+  }
+  if (ELEM(name, "native_properties_edit", "native_panel_edit", "native_nodes_edit")) {
+    return ios_edit_sets_value(setting->value);
   }
   return false;
 }
@@ -4333,7 +4397,22 @@ extern "C" void WM_apple_ios_ui_flush_commands(bContext *C)
            a_request->lookup_str("key") == b_request->lookup_str("key");
   };
   bool handled_commands = false;
+  /* Waiting messages first, in the order they came; a stroke or move may start or end between
+   * any two of them. Live messages go ahead of any still waiting. */
+  Vector<IOSUIMessage> messages = std::move(ios_ui_messages_waiting);
+  ios_ui_messages_waiting.clear();
   for (IOSUIMessage &message : ios_ui_messages.take_coalesced(supersedes_preview)) {
+    messages.append(std::move(message));
+  }
+  for (IOSUIMessage &message : messages) {
+    const bool running = ios_modal_operator_running(C);
+    if (!running) {
+      ios_undo_push_pending(C);
+    }
+    if ((running || !ios_ui_messages_waiting.is_empty()) && !ios_ui_message_live(message)) {
+      ios_ui_messages_waiting.append(std::move(message));
+      continue;
+    }
     ios_ui_dispatching = true;
     ios_ui_dispatch(C, message);
     ios_ui_dispatching = false;
