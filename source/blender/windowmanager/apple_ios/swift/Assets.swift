@@ -227,8 +227,6 @@ enum AssetPullPhase { case begin, move, drop }
 struct AssetTile: View {
   @ObservedObject var store: AssetsStore
   let item: JSON
-  /** A drag on the tile pulls the asset out, or else scrolls the pane; decided as it starts. */
-  @State private var pulling: Bool?
 
   var body: some View {
     Button {
@@ -251,19 +249,7 @@ struct AssetTile: View {
     .contextMenu { menu }
     /* Pulled upwards, towards the scene, it lifts at once; sideways the pane scrolls. A hold
      * lifts it too, as the system does. */
-    .simultaneousGesture(DragGesture(minimumDistance: 8, coordinateSpace: .global)
-      .onChanged { value in
-        if pulling == nil {
-          let up = -value.translation.height
-          pulling = up > abs(value.translation.width)
-          if pulling == true { store.pull?(.begin, item, value.location) }
-        }
-        if pulling == true { store.pull?(.move, item, value.location) }
-      }
-      .onEnded { value in
-        if pulling == true { store.pull?(.drop, item, value.location) }
-        pulling = nil
-      })
+    .gesture(AssetPullGesture { phase, point in store.pull?(phase, item, point) })
     .onDrag {
       store.dragged = item
       return NSItemProvider(object: (item.string("name") ?? "") as NSString)
@@ -302,6 +288,46 @@ struct AssetTile: View {
           Label("Show \(category)", systemImage: "square.grid.2x2")
         }
       }
+    }
+  }
+}
+
+/** A pan that begins only upwards, out of the pane; the pane's own scrolling waits for it to fail,
+ * so sideways it scrolls. A SwiftUI drag on the tile would keep the pane from scrolling at all.
+ * Reports where the finger is, in the window. */
+struct AssetPullGesture: UIGestureRecognizerRepresentable {
+  let pull: (AssetPullPhase, CGPoint) -> Void
+
+  func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+  func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+    let pan = UIPanGestureRecognizer()
+    pan.delegate = context.coordinator
+    pan.maximumNumberOfTouches = 1
+    return pan
+  }
+
+  func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
+    let point = recognizer.location(in: nil)
+    switch recognizer.state {
+      case .began: pull(.begin, point)
+      case .changed: pull(.move, point)
+      case .ended, .cancelled: pull(.drop, point)
+      default: break
+    }
+  }
+
+  final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+    func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+      guard let pan = recognizer as? UIPanGestureRecognizer else { return false }
+      let translation = pan.translation(in: nil)
+      return -translation.y > abs(translation.x)
+    }
+
+    func gestureRecognizer(_ recognizer: UIGestureRecognizer,
+                           shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool
+    {
+      other.view is UIScrollView
     }
   }
 }
