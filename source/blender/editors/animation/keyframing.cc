@@ -63,6 +63,7 @@
 #include "UI_resources.hh"
 
 #include "WM_api.hh"
+#include "WM_native_interface.hh"
 #include "WM_types.hh"
 
 #include "RNA_access.hh"
@@ -536,6 +537,12 @@ static wmOperatorStatus insert_key_menu_invoke(bContext *C,
    * to assign shortcuts to arbitrarily named keying sets. See #89560.
    * These menu items perform the key-frame insertion (not this operator)
    * hence the #OPERATOR_INTERFACE return. */
+  if (const wmNativeInterface *native = WM_native_interface(); native && native->enum_popup) {
+    /* The keying sets as a native menu, which runs this operator with the one chosen. */
+    if (native->enum_popup(C, op, RNA_struct_find_property(op->ptr, "type"))) {
+      return OPERATOR_CANCELLED;
+    }
+  }
   ui::PopupMenu *pup = ui::popup_menu_begin(
       C, WM_operatortype_name(op->type, op->ptr).c_str(), ICON_NONE);
   ui::Layout &layout = *popup_menu_layout(pup);

@@ -32,6 +32,7 @@
 #include "UI_resources.hh"
 
 #include "WM_api.hh"
+#include "WM_native_interface.hh"
 #include "WM_types.hh"
 
 #include "RNA_access.hh"
@@ -431,6 +432,11 @@ static wmOperatorStatus keyingset_active_menu_invoke(bContext *C,
                                                      const wmEvent * /*event*/)
 {
   /* Call the menu, which will call this operator again, hence the canceled. */
+  if (const wmNativeInterface *native = WM_native_interface(); native && native->enum_popup) {
+    if (native->enum_popup(C, op, RNA_struct_find_property(op->ptr, "type"))) {
+      return OPERATOR_CANCELLED;
+    }
+  }
   ui::PopupMenu *pup = ui::popup_menu_begin(C, op->type->name, ICON_NONE);
   ui::Layout &layout = *popup_menu_layout(pup);
   layout.op_enum("ANIM_OT_keying_set_active_set", "type");
