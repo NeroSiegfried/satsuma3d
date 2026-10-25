@@ -162,6 +162,25 @@ final class BlenderMenus {
     return sections.isEmpty ? nil : UIMenu(title: request.string("title") ?? "", children: sections)
   }
 
+  /** An enum choice's sections, as `enumMenu` reads them: a heading, then its choices. */
+  static func enumSections(_ request: JSON) -> [(heading: String, items: [JSON])] {
+    var sections: [(heading: String, items: [JSON])] = []
+    var heading = ""
+    var items: [JSON] = []
+    for item in request.array("items") {
+      if item.bool("heading") {
+        if !items.isEmpty { sections.append((heading, items)) }
+        heading = item.string("title") ?? ""
+        items = []
+      }
+      else if item.string("value") != nil, !(item.string("title") ?? "").isEmpty {
+        items.append(item)
+      }
+    }
+    if !items.isEmpty { sections.append((heading, items)) }
+    return sections
+  }
+
   /** Rename Active Item: the active object's name, or the active bone's, in a native field. */
   static func presentRename(from presenter: UIViewController, title: String, current: String) {
     var top = presenter
@@ -348,5 +367,46 @@ struct ContextMenuButton: View {
     .prefetchingBlenderMenu(BlenderMenus.contextRoute)
     .accessibilityLabel("Actions")
     .accessibilityIdentifier("blender.context-menu")
+  }
+}
+
+/**
+ * A long enum choice with headings, such as Add Constraint's, as a popover list where the pointer
+ * is: an edit menu's horizontal strip leaves out section titles.
+ */
+struct EnumChoiceList: View {
+  let request: JSON
+  let dismiss: () -> Void
+
+  var body: some View {
+    let op = request.string("operator") ?? "", property = request.string("property") ?? ""
+    NavigationStack {
+      List {
+        ForEach(Array(BlenderMenus.enumSections(request).enumerated()), id: \.offset) { _, section in
+          Section(section.heading) {
+            ForEach(Array(section.items.enumerated()), id: \.offset) { _, item in
+              Button {
+                WM_apple_ios_ui_operator_enum_enqueue(op, property, item.string("value") ?? "")
+                dismiss()
+              } label: {
+                Label {
+                  Text(item.string("title") ?? "")
+                } icon: {
+                  let icon = item.string("icon") ?? ""
+                  if !["", "NONE", "BLANK1"].contains(icon), let image = BlenderIcon.image(icon) {
+                    Image(uiImage: image)
+                  }
+                }
+              }
+              .foregroundStyle(.primary)
+            }
+          }
+        }
+      }
+      .listStyle(.insetGrouped)
+      .navigationTitle(request.string("title") ?? "")
+      .navigationBarTitleDisplayMode(.inline)
+    }
+    .frame(idealWidth: 340, idealHeight: 520)
   }
 }

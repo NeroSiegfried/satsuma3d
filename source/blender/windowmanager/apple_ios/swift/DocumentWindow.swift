@@ -263,6 +263,20 @@ extension DocumentController: UIEditMenuInteractionDelegate, UIGestureRecognizer
       BlenderMenus.presentRename(from: self, title: "Rename Active Item", current: model.activeName)
       return
     }
+    if BlenderMenus.enumSections(request).contains(where: { !$0.heading.isEmpty }) {
+      /* Its headings would be lost on an edit menu's strip. */
+      var top: UIViewController = self
+      while let presented = top.presentedViewController { top = presented }
+      weak var list: UIViewController?
+      let host = UIHostingController(rootView: EnumChoiceList(request: request) { list?.dismiss(animated: true) })
+      list = host
+      host.modalPresentationStyle = .popover
+      host.preferredContentSize = CGSize(width: 340, height: 520)
+      host.popoverPresentationController?.sourceView = metalView
+      host.popoverPresentationController?.sourceRect = CGRect(origin: point, size: CGSize(width: 1, height: 1))
+      top.present(host, animated: true)
+      return
+    }
     if let choice = BlenderMenus.enumMenu(request) {
       blenderMenu = choice
       contextMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
