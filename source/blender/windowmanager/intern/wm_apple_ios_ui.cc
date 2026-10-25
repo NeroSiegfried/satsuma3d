@@ -4210,6 +4210,59 @@ extern "C" double WM_apple_ios_engine_idle_seconds(bContext *C)
   return std::clamp(next - BLI_time_now_seconds(), 0.0, 0.1);
 }
 
+/* While a stroke or another modal operator runs, one hand can keep using the native controls
+ * with the other: they are not blocked as Blender's own buttons are. */
+/* Set while a native control is handled, so its undo steps wait for the operator too. */
+static bool ios_ui_dispatching = false;
+/* The undo step held back, pushed when the operator ends; see #WM_apple_ios_ui_undo_push_defer. */
+static std::optional<std::string> ios_undo_pending;
+
+/* Whether a stroke or another modal operator is running. The file browser waits for the system's
+ * picker, holding no data half changed. */
+static bool ios_modal_operator_running(bContext *C)
+{
+  wmWindowManager *wm = CTX_wm_manager(C);
+  if (wm->runtime->undo_stack && wm->runtime->undo_stack->step_init) {
+    return true;
+  }
+  for (wmWindow &win : wm->windows) {
+    for (wmEventHandler &handler : win.runtime->modalhandlers) {
+      if (handler.type == WM_HANDLER_TYPE_OP &&
+          !reinterpret_cast<wmEventHandler_Op &>(handler).is_fileselect)
+      {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+static void ios_undo_push_pending(bContext *C)
+{
+  if (!ios_undo_pending) {
+    return;
+  }
+  const std::string name = std::move(*ios_undo_pending);
+  ios_undo_pending.reset();
+  const IOSContextStore context_store = ios_context_push_view3d(C);
+  ED_undo_push(C, name.empty() ? nullptr : name.c_str());
+  ios_context_pop(C, context_store);
+}
+
+/**
+ * An undo step from a native control while a stroke or other modal operator runs: pushed then, it
+ * would close the operator's own step half way, and the stroke crashes as it goes on. It is
+ * pushed once the operator ends instead. Blender's own pushes, as an operator finishing, go ahead.
+ */
+extern "C" bool WM_apple_ios_ui_undo_push_defer(bContext *C, const char *name)
+{
+  if (!ios_ui_dispatching || !ios_modal_operator_running(C)) {
+    return false;
+  }
+  ios_undo_pending = name ? name : "";
+  return true;
+}
+
 extern "C" void WM_apple_ios_ui_flush_commands(bContext *C)
 {
   if (C == nullptr) {
@@ -4281,8 +4334,13 @@ extern "C" void WM_apple_ios_ui_flush_commands(bContext *C)
   };
   bool handled_commands = false;
   for (IOSUIMessage &message : ios_ui_messages.take_coalesced(supersedes_preview)) {
+    ios_ui_dispatching = true;
     ios_ui_dispatch(C, message);
+    ios_ui_dispatching = false;
     handled_commands = true;
+  }
+  if (!ios_modal_operator_running(C)) {
+    ios_undo_push_pending(C);
   }
 
   const bool hover_changed = ios_hover_requests.take(ios_hover_request);

@@ -50,6 +50,10 @@
 
 namespace blender {
 
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+extern "C" bool WM_apple_ios_ui_undo_push_defer(bContext *C, const char *name);
+#endif
+
 /** We only need this locally. */
 static CLG_LogRef LOG = {"undo"};
 
@@ -96,6 +100,12 @@ void ED_undo_group_end(bContext *C)
 
 void ED_undo_push(bContext *C, const char *str)
 {
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* A native control used while a stroke or other operator runs: its step waits for it. */
+  if (WM_apple_ios_ui_undo_push_defer(C, str)) {
+    return;
+  }
+#endif
   CLOG_INFO(&LOG, "Push '%s'", str);
   WM_file_tag_modified();
 
