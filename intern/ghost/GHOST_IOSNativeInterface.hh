@@ -40,6 +40,11 @@ struct GHOST_IOSNativeInterface {
   double (*engine_idle_seconds)(blender::bContext *C) = nullptr;
   /** Save unsaved work now: iOS may end the app in the background. */
   void (*autosave_now)(blender::bContext *C) = nullptr;
+  /**
+   * Whether a stroke or other operator is running, holding data half changed: work for documents
+   * and shortcuts waits for it to end.
+   */
+  bool (*engine_busy)(blender::bContext *C) = nullptr;
 
   /** An Apple Pencil hovers over the viewport, at a window position in pixels, or stopped. */
   void (*pencil_hover)(bool active, int x, int y) = nullptr;

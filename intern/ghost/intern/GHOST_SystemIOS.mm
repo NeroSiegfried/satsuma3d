@@ -133,6 +133,8 @@ static std::vector<std::function<void()>> engine_autosave_done;
  * app leaves the foreground. */
 static GHOST_IOSMessageQueue<std::function<void()>> engine_document_requests;
 static std::atomic<bool> engine_document_pending{false};
+/* Requests waiting for a stroke or other operator to end; only the engine thread uses it. */
+static std::vector<std::function<void()>> engine_document_waiting;
 static std::atomic<bool> app_in_background{false};
 /* A render the user started goes on while the app is inactive or in the background. */
 static std::atomic<bool> engine_continues_work{false};
@@ -281,6 +283,17 @@ static void run_engine()
     run_engine_autosave();
     if (engine_document_pending.exchange(false)) {
       for (auto &request : engine_document_requests.take()) {
+        engine_document_waiting.push_back(std::move(request));
+      }
+    }
+    /* Opening, saving or a shortcut under a stroke or other operator would change data it holds;
+     * they wait for it to end. Saving as the app leaves the foreground does not, see above. */
+    if (!engine_document_waiting.empty() &&
+        !(native_interface && native_interface->engine_busy && native_interface->engine_busy(C)))
+    {
+      std::vector<std::function<void()>> requests = std::move(engine_document_waiting);
+      engine_document_waiting.clear();
+      for (auto &request : requests) {
         request();
       }
     }

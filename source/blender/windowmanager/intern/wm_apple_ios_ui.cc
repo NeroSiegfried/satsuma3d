@@ -4327,6 +4327,11 @@ extern "C" bool WM_apple_ios_ui_undo_push_defer(bContext *C, const char *name)
   return true;
 }
 
+extern "C" bool WM_apple_ios_ui_engine_busy(bContext *C)
+{
+  return ios_modal_operator_running(C);
+}
+
 extern "C" void WM_apple_ios_ui_flush_commands(bContext *C)
 {
   if (C == nullptr) {

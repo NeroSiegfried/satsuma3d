@@ -46,6 +46,7 @@ extern "C" void WM_apple_ios_ui_flush_commands(bContext *C);
 extern "C" void WM_apple_ios_ui_storyboard_draw(bContext *C);
 extern "C" void WM_apple_ios_ui_image_update(bContext *C);
 extern "C" double WM_apple_ios_engine_idle_seconds(bContext *C);
+extern "C" bool WM_apple_ios_ui_engine_busy(bContext *C);
 extern "C" bool WM_apple_ios_ui_desktop_mode();
 extern "C" void WM_apple_ios_ui_pencil_hover_set(bool active, int x, int y);
 extern "C" void WM_apple_ios_ui_pencil_roll_set(bool down, float angle, float tilt_x, float tilt_y);
@@ -261,6 +262,7 @@ GHOST_IOSNativeInterface ghost_interface_create()
   native.engine_step = engine_step;
   native.engine_idle_seconds = WM_apple_ios_engine_idle_seconds;
   native.autosave_now = WM_apple_ios_autosave_now;
+  native.engine_busy = WM_apple_ios_ui_engine_busy;
   native.pencil_hover = WM_apple_ios_ui_pencil_hover_set;
   native.pencil_roll = WM_apple_ios_ui_pencil_roll_set;
   native.navigation_hover = WM_apple_ios_ui_navigation_hover_set;
