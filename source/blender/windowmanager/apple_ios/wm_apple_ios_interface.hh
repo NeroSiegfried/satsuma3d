@@ -49,6 +49,8 @@ extern "C" void WM_apple_ios_ui_bottom_tray_set(float fraction);
 /** How many pixels of the window's bottom a native panel covers, such as the node editor, which
  * the viewport is shortened by. */
 extern "C" void WM_apple_ios_ui_viewport_cover_set(float pixels);
+/** How many pixels of the window's right a native panel covers, such as the Image Editor. */
+extern "C" void WM_apple_ios_ui_viewport_trailing_cover_set(float pixels);
 extern "C" char *WM_apple_ios_ui_assets_take_json();
 extern "C" void WM_apple_ios_ui_toolbar_free_json(char *json);
 enum WMIOSUICommand {

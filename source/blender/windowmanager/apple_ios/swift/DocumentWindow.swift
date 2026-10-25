@@ -332,7 +332,7 @@ extension DocumentController: UIEditMenuInteractionDelegate, UIGestureRecognizer
  * \{ */
 
 /** Holds GHOST's Metal view, sized to the window at the display's full resolution, less what a
- * panel covers at the bottom so the view centers on what can be seen. */
+ * panel covers at the bottom or the right so the view centers on what can be seen. */
 final class ViewportContainer: UIView {
   let metalView: MTKView
   /** Set while the panel's handle is dragged: the cover is followed at once. */
@@ -342,9 +342,16 @@ final class ViewportContainer: UIView {
       if bottomCover != oldValue { animateCover() }
     }
   }
-  /** The cover as the viewport is shaped now, eased toward `bottomCover` alongside the panel. */
+  /** What the Image Editor beside the viewport covers. */
+  var trailingCover: CGFloat = 0 {
+    didSet {
+      if trailingCover != oldValue { animateCover() }
+    }
+  }
+  /** The covers as the viewport is shaped now, eased toward the set ones alongside the panel. */
   private var shownCover: CGFloat = 0
-  private var coverAnimation: (from: CGFloat, start: CFTimeInterval)?
+  private var shownTrailingCover: CGFloat = 0
+  private var coverAnimation: (from: CGFloat, fromTrailing: CGFloat, start: CFTimeInterval)?
   private var displayLink: CADisplayLink?
   private static let coverDuration: CFTimeInterval = 0.42
 
@@ -363,10 +370,11 @@ final class ViewportContainer: UIView {
       displayLink?.invalidate()
       displayLink = nil
       shownCover = bottomCover
+      shownTrailingCover = trailingCover
       setNeedsLayout()
       return
     }
-    coverAnimation = (shownCover, CACurrentMediaTime())
+    coverAnimation = (shownCover, shownTrailingCover, CACurrentMediaTime())
     if displayLink == nil {
       let link = CADisplayLink(target: self, selector: #selector(stepCover))
       link.add(to: .main, forMode: .common)
@@ -380,6 +388,7 @@ final class ViewportContainer: UIView {
     /* Eased out, as the panel slides. */
     let eased = 1 - pow(1 - t, 3)
     shownCover = animation.from + (bottomCover - animation.from) * eased
+    shownTrailingCover = animation.fromTrailing + (trailingCover - animation.fromTrailing) * eased
     setNeedsLayout()
     layoutIfNeeded()
     if t >= 1 {
@@ -403,6 +412,7 @@ final class ViewportContainer: UIView {
     metalView.layer.contentsScale = scale
     let size = CGSize(width: max(1, frame.width * scale), height: max(1, frame.height * scale))
     WM_apple_ios_ui_viewport_cover_set(Float((shownCover * scale).rounded()))
+    WM_apple_ios_ui_viewport_trailing_cover_set(Float((shownTrailingCover * scale).rounded()))
     if metalView.drawableSize != size {
       metalView.drawableSize = size
     }
@@ -412,12 +422,14 @@ final class ViewportContainer: UIView {
 struct ViewportView: UIViewRepresentable {
   let container: ViewportContainer
   var bottomCover: CGFloat = 0
+  var trailingCover: CGFloat = 0
   var live = false
 
   func makeUIView(context: Context) -> ViewportContainer { container }
   func updateUIView(_ view: ViewportContainer, context: Context) {
     view.live = live
     view.bottomCover = bottomCover
+    view.trailingCover = trailingCover
   }
 }
 
@@ -440,6 +452,8 @@ public struct DocumentWindow: View {
   @AppStorage("BlenderImageSplit") private var imageSplit = 0.5
   /** The Image Editor below the 3D viewport rather than beside it. */
   @AppStorage("BlenderImageSplitAcross") private var imageSplitAcross = false
+  /** The split as the divider is dragged, kept once it is let go. */
+  @State private var imageSplitDrag: Double?
   @Environment(\.horizontalSizeClass) private var sizeClass
 
   /** The native controls are hidden in full screen, and over Blender's own interface. */
@@ -643,37 +657,53 @@ public struct DocumentWindow: View {
    * to work in. */
   private var imageLength: CGFloat {
     guard imageViewportShown, sizeClass != .compact, layersLength > 0 else { return 0 }
-    let least = min(320, layersLength / 3)
-    return min(max(layersLength * (1 - imageSplit), least), layersLength - least)
+    let least = imageLeast
+    return min(max(layersLength * (1 - (imageSplitDrag ?? imageSplit)), least), layersLength - least)
+  }
+
+  private var imageLeast: CGFloat { min(320, layersLength / 3) }
+
+  /** How far the divider goes: the 3D viewport's share, each side keeping room to work in. */
+  private var imageSplitRange: ClosedRange<Double> {
+    guard layersLength > 0 else { return 0.15...0.85 }
+    let least = Double(imageLeast / layersLength)
+    return max(0.15, least)...min(0.85, 1 - least)
   }
 
   private func viewportLayers(bottom: Bool) -> some View {
     let beside = imageLength > 0
     let across = imageSplitAcross
     let split = across ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
+    /* The Image Editor lies over the 3D viewport, which keeps its size and is told what is
+     * covered: resizing its drawable as the divider moves would drop frames. */
+    let covered = beside ? imageLength + ImageSplitHandle.width : 0
     return ZStack {
-      split {
-        ZStack {
-          /* Edge to edge, under a phone's toolbar column too; above the Image Editor, what is
-           * docked below covers it no more. */
-          ViewportView(container: viewport, bottomCover: beside && across ? 0 : viewportCover,
-                       live: model.nodesCoverDragging)
-            .ignoresSafeArea()
-            .onDrop(of: [.data, .image], delegate: FileDrop(model: model) { shell.assets.store.dragged != nil })
-          if !model.viewportReady {
-            ProgressView()
-              .controlSize(.large)
-              .accessibilityLabel("Loading Viewport")
-              .accessibilityIdentifier("blender.viewport.loading")
-              .allowsHitTesting(false)
-          }
+      ZStack {
+        /* Edge to edge, under a phone's toolbar column too; above the Image Editor, what is
+         * docked below covers it no more. */
+        ViewportView(container: viewport, bottomCover: beside && across ? covered : viewportCover,
+                     trailingCover: beside && !across ? covered : 0,
+                     live: model.nodesCoverDragging || imageSplitDrag != nil)
+          .ignoresSafeArea()
+          .onDrop(of: [.data, .image], delegate: FileDrop(model: model) { shell.assets.store.dragged != nil })
+        if !model.viewportReady {
+          ProgressView()
+            .controlSize(.large)
+            .accessibilityLabel("Loading Viewport")
+            .accessibilityIdentifier("blender.viewport.loading")
+            .allowsHitTesting(false)
+            .padding(across ? .bottom : .trailing, covered)
         }
-        if beside {
-          ImageSplitHandle(fraction: $imageSplit, across: $imageSplitAcross, length: layersLength)
+      }
+      if beside {
+        split {
+          ImageSplitHandle(fraction: $imageSplit, dragged: $imageSplitDrag, across: $imageSplitAcross,
+                           length: layersLength, range: imageSplitRange)
           imageViewport
             .frame(width: across ? nil : imageLength, height: across ? imageLength : nil)
-            .transition(.move(edge: across ? .bottom : .trailing))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: across ? .bottom : .trailing)
+        .transition(.move(edge: across ? .bottom : .trailing))
       }
       if imageViewportShown && !beside {
         imageViewport
@@ -746,14 +776,18 @@ public struct DocumentWindow: View {
 }
 
 /** Between the 3D viewport and the Image Editor: dragged, it gives one more room and the other
- * less, where it stays, catching at the middle, the thirds and the quarters; held, it turns the
- * split, the Image Editor below the 3D viewport rather than beside it, or back. */
+ * less, where it stays, drawn into the middle, the thirds and the quarters as it nears them; held,
+ * it turns the split, the Image Editor below the 3D viewport rather than beside it, or back. */
 struct ImageSplitHandle: View {
   static let width: CGFloat = 1
+  /** The 3D viewport's share, kept. */
   @Binding var fraction: Double
+  /** The share as it is dragged, followed at once, kept in `fraction` once let go. */
+  @Binding var dragged: Double?
   @Binding var across: Bool
   /** The split's length, along which it is dragged. */
   let length: CGFloat
+  let range: ClosedRange<Double>
   @State private var start: Double?
   /** Held still a moment: the split turns, and the touch does nothing more. */
   @State private var hold: DispatchWorkItem?
@@ -761,73 +795,119 @@ struct ImageSplitHandle: View {
   @State private var detent: Double?
 
   private static let detents: [Double] = [1 / 4, 1 / 3, 1 / 2, 2 / 3, 3 / 4]
-  /** How near a detent, in points, catches it. */
-  private static let reach: CGFloat = 18
+  /** The grabber's length, and while it is held. */
+  private static let grabber: CGFloat = 36
+  private static let grabberLifted: CGFloat = 48
 
-  /** \a value caught by the detent within reach, if any. */
-  private func caught(_ value: Double) -> (Double, Double?) {
-    guard length > 0 else { return (value, nil) }
-    let near = Self.detents.min { abs($0 - value) < abs($1 - value) }
-    if let near, abs(near - value) * Double(length) < Double(Self.reach) { return (near, near) }
-    return (value, nil)
+  /** How near a detent, in points, starts drawing the divider in: never past halfway to the
+   * next. */
+  private var reach: Double { min(32, Double(length) / 24 * 0.9) }
+
+  private func nearest(_ value: Double) -> Double? {
+    Self.detents.filter { range.contains($0) }.min { abs($0 - value) < abs($1 - value) }
+  }
+
+  /** Where the divider shows for the finger at \a value: the finger's own place, but drawn into
+   * a detent within reach, gently at first, so it settles there and eases back out without a
+   * jump. The second value is the detent it rests on. */
+  private func drawn(_ value: Double) -> (Double, Double?) {
+    guard length > 0, let near = nearest(value) else { return (value, nil) }
+    let off = (value - near) * Double(length)
+    let x = abs(off) / reach
+    guard x < 1 else { return (value, nil) }
+    /* Flat at the detent, meeting the finger's own pace at the edge of reach. */
+    let pulled = reach * (2 * x * x - x * x * x)
+    return (near + (off < 0 ? -pulled : pulled) / Double(length), x < 0.4 ? near : nil)
   }
 
   var body: some View {
     let lifted = start != nil && !turned
-    Rectangle()
-      .fill(Color.black)
-      .frame(width: across ? nil : Self.width, height: across ? Self.width : nil)
-      .ignoresSafeArea()
-      .overlay {
-        Capsule()
-          .fill(.white.opacity(lifted ? 0.9 : 0.6))
-          .frame(width: across ? (lifted ? 52 : 40) : 5, height: across ? 5 : (lifted ? 52 : 40))
-          .frame(width: across ? 88 : 32, height: across ? 32 : 88)
-          .contentShape(Rectangle())
-          .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
-            .onChanged { value in
-              if start == nil {
-                Haptics.selection()
-                start = fraction
-                turned = false
-                let item = DispatchWorkItem {
-                  turned = true
-                  Haptics.impact(.medium)
-                  withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { across.toggle() }
-                }
-                hold = item
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
-              }
-              let moved = across ? value.translation.height : value.translation.width
-              if abs(moved) > 6 || abs(across ? value.translation.width : value.translation.height) > 6 {
-                hold?.cancel()
-              }
-              guard !turned, let from = start, length > 0 else { return }
-              let (next, at) = caught(min(0.85, max(0.15, from + Double(moved / length))))
-              if at != detent {
-                if at != nil { Haptics.selection() }
-                detent = at
-              }
-              fraction = next
+    let long = lifted ? Self.grabberLifted : Self.grabber
+    /* The line stops short of the grabber rather than running through it. */
+    let gap = long + 16
+    ZStack {
+      Rectangle()
+        .fill(Color.black)
+        .mask {
+          Rectangle()
+            .overlay {
+              Capsule()
+                .frame(width: across ? gap : nil, height: across ? nil : gap)
+                .blendMode(.destinationOut)
             }
-            .onEnded { _ in
-              hold?.cancel()
-              hold = nil
-              start = nil
+            .compositingGroup()
+        }
+    }
+    .frame(width: across ? nil : Self.width, height: across ? Self.width : nil)
+    .ignoresSafeArea()
+    .overlay {
+      Capsule()
+        .fill(.white.opacity(lifted ? 0.95 : 0.7))
+        .shadow(color: .black.opacity(0.35), radius: 3)
+        .frame(width: across ? long : 6, height: across ? 6 : long)
+        .frame(width: across ? 120 : 44, height: across ? 44 : 120)
+        .contentShape(Rectangle())
+        .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
+          .onChanged { value in
+            if start == nil {
+              Haptics.selection()
+              start = fraction
+              dragged = fraction
+              turned = false
               detent = nil
-            })
-          .hoverEffect(.highlight)
-          .animation(.spring(response: 0.25, dampingFraction: 0.8), value: lifted)
-          .accessibilityElement()
-          .accessibilityLabel("Resize Image Editor")
-          .accessibilityAdjustableAction { direction in
-            fraction = min(0.85, max(0.15, fraction + (direction == .increment ? 0.1 : -0.1)))
+              let item = DispatchWorkItem {
+                turned = true
+                dragged = nil
+                Haptics.impact(.medium)
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { across.toggle() }
+              }
+              hold = item
+              DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
+            }
+            let moved = across ? value.translation.height : value.translation.width
+            if abs(moved) > 6 || abs(across ? value.translation.width : value.translation.height) > 6 {
+              hold?.cancel()
+            }
+            guard !turned, let from = start, length > 0 else { return }
+            let finger = min(range.upperBound, max(range.lowerBound, from + Double(moved / length)))
+            let (shown, at) = drawn(finger)
+            if at != detent {
+              if at != nil { Haptics.selection() }
+              detent = at
+            }
+            /* Not animated: the divider stays under the finger. */
+            var still = Transaction()
+            still.disablesAnimations = true
+            withTransaction(still) { dragged = shown }
           }
-          .accessibilityAction(named: across ? "Image Editor Beside" : "Image Editor Below") {
-            across.toggle()
-          }
-      }
-      .zIndex(1)
+          .onEnded { _ in
+            hold?.cancel()
+            hold = nil
+            if !turned, let shown = dragged {
+              /* Settles into a detent it was drawn toward. */
+              let rest = nearest(shown).flatMap { abs($0 - shown) * Double(length) < reach ? $0 : nil } ?? shown
+              fraction = shown
+              dragged = nil
+              withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) { fraction = rest }
+            }
+            else {
+              dragged = nil
+            }
+            start = nil
+            detent = nil
+          })
+        .hoverEffect(.highlight)
+        .accessibilityElement()
+        .accessibilityLabel("Resize Image Editor")
+        .accessibilityAdjustableAction { direction in
+          fraction = min(range.upperBound, max(range.lowerBound, fraction + (direction == .increment ? 0.1 : -0.1)))
+        }
+        .accessibilityAction(named: across ? "Image Editor Beside" : "Image Editor Below") {
+          across.toggle()
+        }
+    }
+    .animation(.spring(response: 0.25, dampingFraction: 0.8), value: lifted)
+    .zIndex(1)
   }
 }
 

@@ -66,6 +66,7 @@ namespace blender {
 
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
 extern "C" float WM_apple_ios_ui_viewport_cover();
+extern "C" float WM_apple_ios_ui_viewport_trailing_cover();
 #endif
 
 /* general area and region code */
@@ -1999,12 +2000,18 @@ static void area_calc_totrct(const bScreen *screen, ScrArea *area, const rcti *w
   }
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
   /* A native panel over the bottom of the window, such as the node editor, shortens the 3D view
-   * to the part left showing, so its renders, overlays and gizmos all fit what can be seen. */
+   * to the part left showing, so its renders, overlays and gizmos all fit what can be seen. The
+   * Image Editor beside it narrows it the same way. */
   if (area->spacetype == SPACE_VIEW3D && !ED_area_is_global(area)) {
     const int cover = int(WM_apple_ios_ui_viewport_cover());
     if (cover > 0) {
       area->totrct.ymin = std::min(std::max(area->totrct.ymin, window_rect->ymin + cover),
                                    area->totrct.ymax - int(UI_SCALE_FAC * 80.0f));
+    }
+    const int trailing = int(WM_apple_ios_ui_viewport_trailing_cover());
+    if (trailing > 0) {
+      area->totrct.xmax = std::max(std::min(area->totrct.xmax, window_rect->xmax - trailing),
+                                   area->totrct.xmin + int(UI_SCALE_FAC * 80.0f));
     }
   }
 #endif

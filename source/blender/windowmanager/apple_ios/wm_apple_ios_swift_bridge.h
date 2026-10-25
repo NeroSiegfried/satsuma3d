@@ -90,6 +90,7 @@ void WM_apple_ios_ui_bottom_tray_set(float fraction);
 /** How much of the window's height, from the top, the native top bar covers. */
 void WM_apple_ios_ui_top_bar_set(float fraction);
 void WM_apple_ios_ui_viewport_cover_set(float pixels);
+void WM_apple_ios_ui_viewport_trailing_cover_set(float pixels);
 UIDocument *_Nullable wm_apple_ios_open_document(void);
 /** Choose a template and create a new document, presented from `presenter`. */
 void wm_apple_ios_new_document(UIViewController *_Nonnull presenter);

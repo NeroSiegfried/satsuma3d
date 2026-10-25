@@ -307,6 +307,8 @@ std::atomic<bool> ios_navigation_redraw_pending{false};
 std::atomic<float> ios_bottom_tray{0.0f};
 /** Window pixels a native panel covers at the bottom, which the 3D views leave out. */
 std::atomic<float> ios_viewport_cover{0.0f};
+/** Window pixels a native panel covers at the right, such as the Image Editor beside the 3D view. */
+std::atomic<float> ios_viewport_trailing_cover{0.0f};
 std::atomic<bool> ios_viewport_cover_changed{false};
 extern "C" int WM_apple_ios_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region);
 extern "C" int WM_apple_ios_ui_top_bar_ymax(const wmWindow *win, const ARegion *region);
@@ -3942,6 +3944,19 @@ extern "C" void WM_apple_ios_ui_viewport_cover_set(const float pixels)
 extern "C" float WM_apple_ios_ui_viewport_cover()
 {
   return ios_viewport_cover.load();
+}
+
+extern "C" void WM_apple_ios_ui_viewport_trailing_cover_set(const float pixels)
+{
+  if (ios_viewport_trailing_cover.exchange(pixels) != pixels) {
+    ios_viewport_cover_changed.store(true);
+    GHOST_ios_engine_wake();
+  }
+}
+
+extern "C" float WM_apple_ios_ui_viewport_trailing_cover()
+{
+  return ios_viewport_trailing_cover.load();
 }
 
 extern "C" bool WM_apple_ios_ui_navigation_top()
