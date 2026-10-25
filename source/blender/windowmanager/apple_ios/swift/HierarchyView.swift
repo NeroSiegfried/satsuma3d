@@ -113,6 +113,25 @@ final class HierarchyStore: ObservableObject {
     return kind == "object" && target.string("kind") == "object" && target.bool("accepts")
   }
 
+  /** The collection that children go back into when taken out from under their parent: the one
+   * they are shown in, which they all share. None when no row has an object for a parent. */
+  func unparentTarget(_ moving: [JSON]) -> JSON? {
+    guard !moving.isEmpty, moving.allSatisfy({ $0.string("kind") == "object" }),
+          moving.contains(where: { byKey[$0.string("parent") ?? ""]?.string("kind") == "object" })
+    else { return nil }
+    let collections = Set(moving.compactMap { node -> String? in
+      var key = node.string("parent")
+      while let current = key, let row = byKey[current] {
+        if row.string("kind") == "collection" { return current }
+        key = row.string("parent")
+      }
+      return nil
+    })
+    guard collections.count == 1, let key = collections.first, let target = byKey[key],
+          canMove(moving, to: target) else { return nil }
+    return target
+  }
+
   func move(_ moving: [JSON], to target: JSON) {
     guard canMove(moving, to: target) else { return }
     send(["action": target.string("kind") == "collection" ? "move" : "parent",
@@ -535,6 +554,12 @@ struct OutlineList: View {
       }
     }
     MoveToCollectionMenu(store: store, nodes: nodes)
+    if let target = store.unparentTarget(nodes) {
+      /* Out from under the parent, staying where it is, as dropping it on its collection does. */
+      Button { store.move(nodes, to: target) } label: {
+        Label("Clear Parent", systemImage: "arrow.uturn.backward")
+      }
+    }
     if store.allow(nodes, "delete") {
       Divider()
       Button(role: .destructive) { delete(nodes) } label: {
@@ -612,11 +637,13 @@ final class OutlineDropper: NSObject, UIDropInteractionDelegate {
     view.addInteraction(UIDropInteraction(delegate: self))
   }
 
-  /** The row under the drag, where the dragged rows can go. */
+  /** The row under the drag, where the dragged rows can go. Away from every row, children go
+   * back into their collection, out from under their parent. */
   private func row(_ session: UIDropSession) -> String? {
-    guard let view = collectionView, let store,
-          let index = view.indexPathForItem(at: session.location(in: view)), index.item < rows.count
-    else { return nil }
+    guard let view = collectionView, let store else { return nil }
+    guard let index = view.indexPathForItem(at: session.location(in: view)), index.item < rows.count else {
+      return store.unparentTarget(DraggedRows.current.compactMap { store.byKey[$0] })?.string("key")
+    }
     let key = rows[index.item]
     guard let node = store.byKey[key] else { return nil }
     return store.canMove(DraggedRows.current.compactMap { store.byKey[$0] }, to: node) ? key : nil
