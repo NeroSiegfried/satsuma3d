@@ -1000,6 +1000,12 @@ struct ToolRails: View {
             .transition(.opacity.combined(with: .scale(scale: 0.9)))
         }
         railLabel(safe: safe, layout: layout, frame: proxy.frame(in: .global), size: proxy.size)
+        if let hint = model.dragHint {
+          /* Below the bar: nothing else shows the command is waiting for a drag. */
+          DragHintBadge(hint: hint) { wm_apple_ios_window_send_key(model.window, "ESC") }
+            .position(x: safe.midX, y: safe.minY + 34)
+            .transition(.opacity.combined(with: .move(edge: .top)))
+        }
 #if !os(visionOS)
         if FaceControl.shared.running {
           /* Below the bar, while the face plays the brush. */
@@ -3009,3 +3015,34 @@ struct RailLayout: Equatable {
 }
 
 /** \} */
+
+/** What a command waiting for a drag wants, as Box Select chosen from the menu bar, with the way
+ * out: Done for one that goes on until then, as Circle Select, Cancel for the others. */
+struct DragHintBadge: View {
+  let hint: JSON
+  let finish: () -> Void
+
+  var body: some View {
+    let done = hint.bool("done")
+    HStack(spacing: 12) {
+      Image(systemName: "hand.draw")
+        .font(.title3)
+        .foregroundStyle(.secondary)
+      Text(hint.string("text") ?? "")
+        .font(.subheadline.weight(.medium))
+      Button(done ? "Done" : "Cancel", action: finish)
+        .font(.subheadline.weight(.semibold))
+        .buttonStyle(.plain)
+        .foregroundStyle(done ? Color.accentColor : .secondary)
+        .padding(.horizontal, 6)
+        .frame(minHeight: 32)
+        .contentShape(Capsule())
+    }
+    .padding(.leading, 14)
+    .padding(.trailing, 10)
+    .frame(height: 44)
+    .panelGlass(in: Capsule())
+    .accessibilityElement(children: .contain)
+    .accessibilityIdentifier("blender.drag-hint")
+  }
+}

@@ -379,6 +379,50 @@ wmOperator *ios_constraint_operator(wmWindow *win)
   return nullptr;
 }
 
+/**
+ * What to do for a command that waits for a drag in the view before it starts, as Box Select does
+ * when chosen from the menu bar: there is no pointer to show it, so the iPad says so. Null when
+ * nothing waits, or a tool's own drag already runs. `done` says it ends with Done rather than
+ * after one drag.
+ */
+static const char *ios_drag_hint(wmWindow *win, bool *r_done)
+{
+  *r_done = false;
+  if (win == nullptr) {
+    return nullptr;
+  }
+  static const std::map<std::string_view, const char *> hints = {
+      {"VIEW3D_OT_select_box", "Drag across the view to select"},
+      {"VIEW3D_OT_select_circle", "Brush over what to select"},
+      {"VIEW3D_OT_select_lasso", "Draw around what to select"},
+      {"VIEW3D_OT_zoom_border", "Drag across the view to zoom to it"},
+      {"VIEW3D_OT_clip_border", "Drag across the view to clip it"},
+      {"VIEW3D_OT_render_border", "Drag across the view to render only that"},
+      {"VIEW3D_OT_dolly", "Drag up or down to dolly the view"},
+  };
+  for (wmEventHandler &handler_base : win->runtime->modalhandlers) {
+    if (handler_base.type != WM_HANDLER_TYPE_OP) {
+      continue;
+    }
+    const wmOperator *op = reinterpret_cast<wmEventHandler_Op &>(handler_base).op;
+    const auto hint = op ? hints.find(op->type->idname) : hints.end();
+    if (hint == hints.end()) {
+      continue;
+    }
+    if (STREQ(op->type->idname, "VIEW3D_OT_dolly")) {
+      return hint->second;
+    }
+    /* A gesture waiting for its drag, not one a tool started with it. */
+    for (const wmGesture &gesture : win->runtime->gesture) {
+      if (gesture.wait_for_input || STREQ(op->type->idname, "VIEW3D_OT_select_circle")) {
+        *r_done = STREQ(op->type->idname, "VIEW3D_OT_select_circle") && gesture.wait_for_input;
+        return gesture.is_active && !*r_done ? nullptr : hint->second;
+      }
+    }
+  }
+  return nullptr;
+}
+
 std::vector<IOSActionItem> ios_action_items_for_tool(bContext *C,
                                                      const eContextObjectMode mode,
                                                      const char *active_tool_id)
@@ -3005,6 +3049,11 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
   /* Moving, turning or scaling: the held buttons are Snap and Precision then. */
   json += ",\"transforming\":";
   json += ios_constraint_operator(CTX_wm_window(C)) ? "true" : "false";
+  bool drag_done = false;
+  if (const char *drag_hint = ios_drag_hint(CTX_wm_window(C), &drag_done)) {
+    json += ",\"dragHint\":{\"text\":\"" + ios_json_escape(IFACE_(drag_hint)) + "\",\"done\":" +
+            (drag_done ? "true" : "false") + "}";
+  }
   json += ",\"panels\":";
   json += panels_json;
   json += ",\"render\":";

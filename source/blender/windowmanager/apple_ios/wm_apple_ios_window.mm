@@ -60,10 +60,11 @@ extern "C" void wm_apple_ios_window_send_key(void *window, const char *key)
   if (!window || !key) {
     return;
   }
-  const GHOST_TKey ghost_key = STREQ(key, "X") ? GHOST_kKeyX :
-                               STREQ(key, "Y") ? GHOST_kKeyY :
-                               STREQ(key, "Z") ? GHOST_kKeyZ :
-                                                 GHOST_kKeyUnknown;
+  const GHOST_TKey ghost_key = STREQ(key, "X")   ? GHOST_kKeyX :
+                               STREQ(key, "Y")   ? GHOST_kKeyY :
+                               STREQ(key, "Z")   ? GHOST_kKeyZ :
+                               STREQ(key, "ESC") ? GHOST_kKeyEsc :
+                                                   GHOST_kKeyUnknown;
   if (ghost_key != GHOST_kKeyUnknown) {
     GHOST_ios_window_send_key(ghost_window(window), ghost_key);
   }

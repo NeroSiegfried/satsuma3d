@@ -37,6 +37,9 @@ final class ShellModel {
   private(set) var direction: JSON?
   /** Moving, turning or scaling: the sidebar's + and - hold Snap and Precision. */
   private(set) var transforming = false
+  /** A command waiting for a drag in the view, as Box Select chosen from the menu bar: what to
+   * do, and whether it ends with Done. */
+  private(set) var dragHint: JSON?
   private(set) var canUndo = false
   private(set) var canRedo = false
   /** Adjust Last Operation: the last operator's settings, or none. */
@@ -149,6 +152,7 @@ final class ShellModel {
     set(\.brushes, toolbar.dict("brushes"), equal: { jsonEqual($0, $1) })
     set(\.direction, toolbar.dict("direction"), equal: { jsonEqual($0, $1) })
     set(\.transforming, toolbar.bool("transforming"))
+    set(\.dragHint, toolbar.dict("dragHint"), equal: { jsonEqual($0, $1) })
     set(\.brush, toolbar.dict("brush"), equal: { jsonEqual($0, $1) })
     set(\.canUndo, toolbar.bool("canUndo"))
     set(\.canRedo, toolbar.bool("canRedo"))
