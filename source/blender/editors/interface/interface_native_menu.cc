@@ -216,6 +216,7 @@ bool hidden_from_menu_bar(Button &but)
       "show_region_asset_shelf",
       "show_region_hud",
       "show_viewer",
+      "use_lock_interface",
   };
   if (but.optype && operators.contains(but.optype->idname)) {
     return true;
