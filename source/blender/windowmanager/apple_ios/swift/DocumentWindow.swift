@@ -510,7 +510,7 @@ public struct DocumentWindow: View {
           HierarchyPanel(store: shell.panels.hierarchy) { shell.panels.setHierarchyShown(false) }
             .environment(\.panelInWindow, true)
             .frame(width: Self.hierarchyWidth)
-            .background(Color(uiColor: .secondarySystemBackground).ignoresSafeArea(edges: .top))
+            .background(Color(uiColor: .secondarySystemBackground).ignoresSafeArea(edges: .vertical))
             .padding(.bottom, docked)
             .transition(.move(edge: .leading))
             .accessibilityIdentifier("blender.hierarchy.panel")
@@ -520,7 +520,7 @@ public struct DocumentWindow: View {
           InspectorPanel(store: shell.panels.inspector) { shell.panels.setInspectorShown(false) }
             .environment(\.panelInWindow, true)
             .frame(width: Self.inspectorWidth)
-            .background(Color(uiColor: .secondarySystemBackground).ignoresSafeArea(edges: .top))
+            .background(Color(uiColor: .secondarySystemBackground).ignoresSafeArea(edges: .vertical))
             .padding(.bottom, docked)
             .transition(.move(edge: .trailing))
             .accessibilityIdentifier("blender.inspector.panel")
