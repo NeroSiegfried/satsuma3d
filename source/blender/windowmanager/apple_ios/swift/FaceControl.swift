@@ -20,6 +20,8 @@ final class FaceControl: NSObject, ARSessionDelegate {
 
   /** Only with a camera that tracks faces, as iPads with Face ID have. */
   nonisolated static var supported: Bool { ARFaceTrackingConfiguration.isSupported }
+  /** Settings shows it beside the brush and in More; off until turned on there. */
+  static let shownKey = "BlenderShowFaceControl"
 
   private(set) var running = false
   /** A face is in view. */

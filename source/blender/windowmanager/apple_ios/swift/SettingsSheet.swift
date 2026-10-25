@@ -263,6 +263,11 @@ private struct IPadSettingsPage: View {
   @ObservedObject var model: SettingsModel
   @AppStorage("BlenderFingerDragsObjects") private var fingerDragsObjects = false
   @AppStorage("BlenderPencilSqueeze") private var squeeze = "palette"
+  /** The brush sidebar's size and strength as sliders, or pinched into dials. */
+  @AppStorage("BlenderSidebarDials") private var sidebarDials = false
+#if !os(visionOS)
+  @AppStorage(FaceControl.shownKey) private var faceControlShown = false
+#endif
   @AppStorage(SettingsModel.navigationTopKey) private var navigationTop = false
   /** Read as it changes by the app's event handling, see `show_touches` in `GHOST_SystemIOS.mm`. */
   @AppStorage("BlenderShowTouches") private var showTouches = false
@@ -318,6 +323,33 @@ private struct IPadSettingsPage: View {
       } footer: {
         Text("How hard to press for a full stroke. Lighter reaches full size and strength sooner.")
       }
+
+      Section {
+        ChoiceRow(title: "Large", detail: "Sliders for size and strength, to set them precisely.",
+                  symbol: "slider.vertical.3", selected: !sidebarDials) { sidebarDials = false }
+        ChoiceRow(title: "Compact", detail: "Dials, to leave more of the viewport free.",
+                  symbol: "dial.medium", selected: sidebarDials) { sidebarDials = true }
+      } header: {
+        Text("Brush Settings")
+      } footer: {
+        Text("Pinch the brush settings in or out to switch too. Where sliders don't fit, they show as dials.")
+      }
+#if !os(visionOS)
+
+      Section {
+        Toggle(isOn: $faceControlShown) {
+          Label("Face Control", systemImage: "face.smiling")
+        }
+        .disabled(!FaceControl.supported)
+        .onChange(of: faceControlShown) { _, shown in
+          if !shown { FaceControl.shared.stop() }
+        }
+      } footer: {
+        Text(FaceControl.supported ?
+          "Beside the brush settings and in More: the front camera follows your face, the mouth setting the brush's strength and the eyebrows its size." :
+          "Needs a front camera that tracks faces, as iPads with Face ID have.")
+      }
+#endif
 
       Section {
         ChoiceRow(title: "Tool Palette",

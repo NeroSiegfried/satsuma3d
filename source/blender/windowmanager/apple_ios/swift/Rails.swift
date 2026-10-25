@@ -811,6 +811,7 @@ struct ToolRails: View {
   @State private var brushesAvailable = false
   /** The sliders pinched into dials. */
   @AppStorage("BlenderSidebarDials") private var sidebarDials = false
+  @AppStorage(FaceControl.shownKey) private var faceControlShown = false
   @AppStorage(leftHandedInterfaceKey) private var leftHanded = false
   /** Where the sidebar was moved along its edge, from the top of its travel (0) to the bottom
    * (1); below 0 it rests halfway down. */
@@ -908,7 +909,7 @@ struct ToolRails: View {
         let content = SidebarContent(brush: model.brush,
                                      buttons: model.direction?.bool("hidden") != true || model.transforming,
                                      smooth: model.direction?.bool("smooth") == true && !model.transforming,
-                                     dial: dial)
+                                     dial: dial, face: faceControlShown)
         return (content, RailLayout(safe: safe, tray: model.bottomTray, tools: tools, toolCount: toolItems.count,
                                     brushes: brushesAvailable ? brushes : nil, brushCount: brushItems.count,
                                     sidebar: content,
@@ -1802,7 +1803,7 @@ struct SidebarContent: Equatable {
   /** Size and strength as rings, where the edge has no room for sliders or they were pinched in. */
   var dial = false
 
-  init(brush: JSON?, buttons: Bool, smooth: Bool = false, dial: Bool = false) {
+  init(brush: JSON?, buttons: Bool, smooth: Bool = false, dial: Bool = false, face: Bool = false) {
     self.dial = dial
     size = brush?.dict("size") != nil
     strength = brush?.dict("strength") != nil
@@ -1810,7 +1811,7 @@ struct SidebarContent: Equatable {
     self.buttons = buttons
     self.smooth = smooth
 #if !os(visionOS)
-    face = (size || strength) && FaceControl.supported
+    self.face = face && (size || strength) && FaceControl.supported
 #endif
   }
 

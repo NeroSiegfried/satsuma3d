@@ -217,6 +217,7 @@ struct DocumentToolbar: ToolbarContent {
   let shell: ShellPanels
   let commands: ShellCommands
   @Binding var stripWidth: CGFloat
+  @AppStorage(FaceControl.shownKey) private var faceControlShown = false
 
   var body: some ToolbarContent {
     if model.documentsAvailable {
@@ -495,7 +496,7 @@ struct DocumentToolbar: ToolbarContent {
       if let presenter = commands.presenter { wm_apple_ios_new_document(presenter) }
     }
 #if !os(visionOS)
-    if model.brush?.dict("size") != nil || model.brush?.dict("strength") != nil {
+    if faceControlShown, model.brush?.dict("size") != nil || model.brush?.dict("strength") != nil {
       Section {
         /* The face plays the brush: the mouth its strength, the eyebrows its size. */
         sidebarToggle("Face Control", icon: UIImage(systemName: "face.smiling"),
