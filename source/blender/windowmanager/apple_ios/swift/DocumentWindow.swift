@@ -103,6 +103,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
                                            object: nil)
     model.pullToolbar(copy: true)
     shell.pullSnapshots()
+    SoakProbe.start(model: model, shell: shell)
     model.refreshWindowState()
     /* Snapshots arrive by notification. Whether the viewport has drawn is read from the
      * presentation mailbox, as a held-up Blender publishes nothing. */
@@ -121,6 +122,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     let desktop = model.desktop
     model.pullToolbar()
     shell.pullSnapshots()
+    SoakProbe.shared?.snapshotsPublished()
     pullMenuPopup()
     if desktop != model.desktop { desktopChanged() }
     refreshMenuBar()

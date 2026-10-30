@@ -205,3 +205,146 @@ final class ShellModel {
 #endif
   }
 }
+
+/* -------------------------------------------------------------------- */
+/** \name Soak testing
+ *
+ * Long sessions, see `release/ios/soak/run_soak.py`. Started with `BLENDER_SOAK` in the
+ * environment, it writes every second what the native interface believes, beside the record
+ * Blender keeps of the same things, so the two can be compared once the session ends. With
+ * `BLENDER_SOAK_UI` too, it also drives Blender as the interface does: tools, brush values and
+ * modes picked through the same calls.
+ * \{ */
+
+@MainActor
+final class SoakProbe {
+  static var shared: SoakProbe?
+
+  private let model: ShellModel
+  private let shell: ShellPanels
+  private let samples: FileHandle
+  private let actions: FileHandle
+  private var timer: Timer?
+  private var snapshots = 0
+  private var lastSnapshot = Date()
+  private var random: UInt64
+  private var tick = 0
+  private let drives: Bool
+
+  static func start(model: ShellModel, shell: ShellPanels) {
+    let environment = ProcessInfo.processInfo.environment
+    guard shared == nil, environment["BLENDER_SOAK"] != nil else { return }
+    let directory = NSTemporaryDirectory() + "soak/"
+    try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+    func open(_ name: String) -> FileHandle? {
+      let path = directory + name
+      FileManager.default.createFile(atPath: path, contents: nil)
+      return FileHandle(forWritingAtPath: path)
+    }
+    guard let samples = open("native.jsonl"), let actions = open("native_actions.jsonl") else { return }
+    let seed = UInt64(environment["BLENDER_SOAK_SEED"] ?? "") ?? 1
+    let probe = SoakProbe(model: model, shell: shell, samples: samples, actions: actions, seed: seed,
+                          drives: environment["BLENDER_SOAK_UI"] != nil)
+    shared = probe
+    probe.timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+      MainActor.assumeIsolated { SoakProbe.shared?.sample() }
+    }
+  }
+
+  private init(model: ShellModel, shell: ShellPanels, samples: FileHandle, actions: FileHandle, seed: UInt64,
+               drives: Bool)
+  {
+    self.model = model
+    self.shell = shell
+    self.samples = samples
+    self.actions = actions
+    random = seed &* 0x9E37_79B9_7F4A_7C15 | 1
+    self.drives = drives
+  }
+
+  /** Blender published new snapshots, which the interface then took. */
+  func snapshotsPublished() {
+    snapshots += 1
+    lastSnapshot = Date()
+  }
+
+  private func next(_ bound: Int) -> Int {
+    /* SplitMix64, so a seed replays the same session. */
+    random &+= 0x9E37_79B9_7F4A_7C15
+    var z = random
+    z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+    z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+    return Int((z ^ (z >> 31)) % UInt64(max(1, bound)))
+  }
+
+  private static func write(_ object: [String: Any], to file: FileHandle) {
+    guard let data = try? JSONSerialization.data(withJSONObject: object) else { return }
+    file.write(data)
+    file.write(Data([0x0A]))
+  }
+
+  /** The app's memory as the system counts it, in megabytes. */
+  private static var footprint: Double {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+    let result = withUnsafeMutablePointer(to: &info) {
+      $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+        task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+      }
+    }
+    return result == KERN_SUCCESS ? Double(info.phys_footprint) / 1_048_576 : -1
+  }
+
+  private func sample() {
+    let timeline = shell.timeline.store
+    var line: [String: Any] = [
+      "t": Date().timeIntervalSince1970,
+      "mode": model.mode,
+      "objectMode": model.objectMode,
+      "activeName": model.activeName,
+      "tool": model.activeTool,
+      "frame": timeline.frame.blender,
+      "timelineVisible": timeline.visible,
+      "canUndo": model.canUndo,
+      "snapshots": snapshots,
+      "snapshotAge": Date().timeIntervalSince(lastSnapshot),
+      "memory": Self.footprint,
+    ]
+    if let size = model.brush?.dict("size")?.double("value") { line["brushSize"] = size }
+    if let strength = model.brush?.dict("strength")?.double("value") { line["brushStrength"] = strength }
+    Self.write(line, to: samples)
+    tick += 1
+    if drives, tick % 3 == 0 { drive() }
+  }
+
+  /** One thing the interface would do: a tool picked, a brush value set, or the mode changed. */
+  private func drive() {
+    var action: [String: Any] = ["t": Date().timeIntervalSince1970]
+    switch next(4) {
+      case 0, 1:
+        let tools = model.tools.compactMap { $0?.string("id") }
+        guard !tools.isEmpty else { return }
+        let tool = tools[next(tools.count)]
+        WM_apple_ios_ui_tool_set_by_id(tool)
+        action["tool"] = tool
+      case 2:
+        let key = next(2) == 0 ? "size" : "strength"
+        guard let json = model.brush?.dict(key), let low = json.double("min"), let high = json.double("max") else { return }
+        /* Within the slider's range, as dragging it gives. */
+        let top = key == "size" ? min(high, max(low * 4, 200)) : high
+        let value = low + (top - low) * Double(next(1000)) / 1000
+        sendBrushValue(key, value, commit: true)
+        action["brush"] = key
+        action["value"] = value
+      default:
+        let modes = model.modes.compactMap { $0.string("id") }
+        guard !modes.isEmpty else { return }
+        let mode = modes[next(modes.count)]
+        Engine.setting("object_mode", mode)
+        action["mode"] = mode
+    }
+    Self.write(action, to: actions)
+  }
+}
+
+/** \} */
