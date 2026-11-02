@@ -44,6 +44,7 @@
 #include "DNA_view3d_types.h"
 
 #include "BLI_math_color.h"
+#include "CLG_log.h"
 #include "GHOST_Mailbox.hh"
 
 #include "DEG_depsgraph.hh"
@@ -108,7 +109,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <os/log.h>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -140,6 +140,9 @@ std::string native_properties_menu_query(bContext *C, const std::string &request
 }  // namespace blender::ui
 
 namespace blender {
+
+static CLG_LogRef LOG = {"wm.native"};
+
 /* The scene as 3D geometry for a volumetric window, see `wm_apple_ios_volume.cc`. */
 void ios_volume_build(bContext *C);
 bool ios_volume_command(bContext *C, StringRef setting, StringRef value);
@@ -1522,8 +1525,9 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     }
 #endif
     ios_properties_error = ui::native_properties_query(C, command.value, true);
-    os_log(OS_LOG_DEFAULT, "BLENDERDIAG properties edit %{public}s -> %{public}s",
-           command.value.substr(0, 200).c_str(), ios_properties_error.c_str());
+    CLOG_DEBUG(&LOG,
+               "Properties edit %s -> %s",
+               command.value.substr(0, 200).c_str(), ios_properties_error.c_str());
     return;
   }
   if (command.setting == "native_panels") {
@@ -2811,7 +2815,8 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
           /* With no tree there is nothing to add to: offered again once there is one. */
           const bool has_tree = ios_nodes_json.find("\"nodes\"") != std::string::npos;
           ios_nodes_add_for = has_tree ? (with_add ? ios_nodes_state : ios_nodes_add_for) : "";
-          os_log(OS_LOG_DEFAULT, "BLENDERDIAG nodes read %lld ms, %zu bytes: %{public}s",
+          CLOG_DEBUG(&LOG,
+                     "Nodes read in %lld ms, %zu bytes: %s",
                  (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
                      std::chrono::steady_clock::now() - diag_start)
                      .count(),
