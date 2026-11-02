@@ -536,27 +536,26 @@ struct DocumentToolbar: ToolbarContent {
 
   /** The modes the active object has, as Blender's header lists them. */
   private var modeMenu: some View {
-    let current = model.modes.first { $0.string("id") == model.objectMode }
-    let title = current.flatMap { $0.string("label") } ?? "Object Mode"
+    let current = model.modes.first { $0.id == model.objectMode }
+    let title = current?.label ?? "Object Mode"
     return Menu {
       Picker("Mode", selection: Binding(
         get: { model.objectMode },
         set: { Engine.setting("object_mode", $0) })) {
         ForEach(Array(model.modes.enumerated()), id: \.offset) { _, mode in
-          let id = mode.string("id") ?? ""
           Label {
-            Text(mode.string("label").flatMap { $0.isEmpty ? nil : $0 } ?? id)
+            Text(mode.label.flatMap { $0.isEmpty ? nil : $0 } ?? mode.id)
           } icon: {
-            iconImage(BlenderIcon.image(mode.string("icon")))
+            iconImage(BlenderIcon.image(mode.icon))
           }
-          .tag(id)
+          .tag(mode.id)
         }
       }
     } label: {
       Label {
         Text(title)
       } icon: {
-        iconImage(BlenderIcon.image(current?.string("icon") ?? "OBJECT_DATAMODE"))
+        iconImage(BlenderIcon.image(current?.icon ?? "OBJECT_DATAMODE"))
       }
     }
     .accessibilityLabel("Mode")

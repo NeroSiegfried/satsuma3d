@@ -45,7 +45,7 @@ struct RailItem: Identifiable {
   var grouped: Bool { group.count > 1 }
 
   @MainActor
-  static func tools(_ tools: [JSON?], mode: String) -> [RailItem] {
+  static func tools(_ tools: [NativeUI.Tool?], mode: String) -> [RailItem] {
     var items: [RailItem] = []
     var gap = false
     for tool in tools {
@@ -61,28 +61,26 @@ struct RailItem: Identifiable {
   }
 
   @MainActor
-  private static func makeTool(_ tool: JSON, mode: String, gapBefore: Bool) -> RailItem? {
-    guard let id = tool.string("id"), !id.isEmpty, let title = tool.string("title"), !title.isEmpty,
-          tool.string("symbol") != nil
-    else { return nil }
+  private static func makeTool(_ tool: NativeUI.Tool, mode: String, gapBefore: Bool) -> RailItem? {
+    guard !tool.id.isEmpty, let title = tool.title, !title.isEmpty, tool.symbol != nil else { return nil }
     var group: [RailItem] = []
     var breaks: Set<Int> = []
-    for child in (tool["children"] as? [Any]) ?? [] {
-      guard let child = child as? JSON else {
+    for child in tool.children {
+      guard let child else {
         breaks.insert(group.count)
         continue
       }
       if let item = makeTool(child, mode: mode, gapBefore: false) { group.append(item) }
     }
-    return RailItem(id: id, title: title, image: toolImage(tool, mode: mode, selected: false),
+    return RailItem(id: tool.id, title: title, image: toolImage(tool, mode: mode, selected: false),
                     selectedImage: toolImage(tool, mode: mode, selected: true), gapBefore: gapBefore,
-                    group: group, groupBreaks: breaks, detail: tool.string("description") ?? "")
+                    group: group, groupBreaks: breaks, detail: tool.description ?? "")
   }
 
   /** Blender's colored tool artwork, or its monochrome icon, or a symbol. */
   @MainActor
-  static func toolImage(_ tool: JSON, mode: String, selected: Bool) -> UIImage? {
-    if let icon = tool.string("icon") {
+  static func toolImage(_ tool: NativeUI.Tool, mode: String, selected: Bool) -> UIImage? {
+    if let icon = tool.icon {
       if let colored = UIImage(named: (selected ? "blender.tool.selected." : "blender.tool.color.") + icon) {
         return colored.withRenderingMode(.alwaysOriginal)
       }
@@ -90,11 +88,10 @@ struct RailItem: Identifiable {
         return image.withRenderingMode(.alwaysTemplate)
       }
     }
-    let id = tool.string("id") ?? ""
     let prefix = selected ? "selected.tool." : "tool."
-    if let image = wm_apple_ios_icon("\(prefix)\(mode).\(id)", nil) { return image }
-    let symbol = tool.string("symbol") ?? ""
-    return wm_apple_ios_icon(prefix + id, symbol.isEmpty ? nil : symbol) ??
+    if let image = wm_apple_ios_icon("\(prefix)\(mode).\(tool.id)", nil) { return image }
+    let symbol = tool.symbol ?? ""
+    return wm_apple_ios_icon(prefix + tool.id, symbol.isEmpty ? nil : symbol) ??
       UIImage(systemName: "questionmark.circle")
   }
 
@@ -907,8 +904,8 @@ struct ToolRails: View {
         CGRect(x: safe.maxX - 100, y: safe.maxY - 100, width: 80, height: 80)
       let arrange = { (dial: Bool) -> (SidebarContent, RailLayout) in
         let content = SidebarContent(brush: model.brush,
-                                     buttons: model.direction?.bool("hidden") != true || model.transforming,
-                                     smooth: model.direction?.bool("smooth") == true && !model.transforming,
+                                     buttons: model.direction?.hidden != true || model.transforming,
+                                     smooth: model.direction?.smooth == true && !model.transforming,
                                      dial: dial, face: faceControlShown)
         return (content, RailLayout(safe: safe, tray: model.bottomTray, tools: tools, toolCount: toolItems.count,
                                     brushes: brushesAvailable ? brushes : nil, brushCount: brushItems.count,
@@ -1092,7 +1089,7 @@ struct ToolRails: View {
   private func updateSqueezePalette(toolItems: [RailItem], brushItems: [RailItem]) {
 #if !os(visionOS)
     RollDial.shared.activeBrush = model.brushes?.string("active")
-    let strokes = model.direction?.bool("hidden") == true ? nil : intent.strokes
+    let strokes = model.direction?.hidden == true ? nil : intent.strokes
     let palette = SqueezePalette.shared
     palette.update(tools: toolItems, activeTool: tools.active(model.activeTool), brushes: brushItems,
                    activeBrush: brushes.active(model.brushes?.string("active") ?? ""),
@@ -1273,12 +1270,11 @@ final class SelectIntentState {
   /** A direction just tapped, shown until Blender's brush follows. */
   @ObservationIgnored private var pendingInverted: (value: Bool, until: Date)?
 
-  func update(strokes json: JSON?) {
-    let next = json.map {
-      Strokes(brush: $0.bool("brush"), inverted: $0.bool("inverted"),
-              addName: $0.string("add") ?? "Add", subtractName: $0.string("subtract") ?? "Subtract",
-              addSymbol: $0.string("addSymbol") ?? "arrowshape.up",
-              subtractSymbol: $0.string("subtractSymbol") ?? "arrowshape.down")
+  func update(strokes direction: NativeUI.BrushDirection?) {
+    let next = direction.map {
+      Strokes(brush: $0.brush, inverted: $0.inverted, addName: $0.add ?? "Add",
+              subtractName: $0.subtract ?? "Subtract", addSymbol: $0.addSymbol ?? "arrowshape.up",
+              subtractSymbol: $0.subtractSymbol ?? "arrowshape.down")
     }
     if let pending = pendingInverted, next?.inverted == pending.value || Date() > pending.until {
       pendingInverted = nil
@@ -1840,7 +1836,7 @@ struct SidebarContent: Equatable {
  * below them, nearest the hand. */
 struct PaintSidebar: View {
   let state: SelectIntentState
-  let direction: JSON?
+  let direction: NativeUI.BrushDirection?
   let brush: JSON?
   let content: SidebarContent
   /** On the leading edge: value labels open towards the viewport, on the other side. */
@@ -1928,8 +1924,8 @@ struct PaintSidebar: View {
                value: state.active)
     .animation(UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: 0.2, dampingFraction: 0.7),
                value: pressing)
-    .onChange(of: direction.map { $0 as NSDictionary }, initial: true) { _, json in
-      state.update(strokes: json as? JSON)
+    .onChange(of: direction, initial: true) { _, direction in
+      state.update(strokes: direction)
     }
     .onChange(of: content.buttons) { _, shown in
       if !shown { state.clear() }
@@ -3020,16 +3016,16 @@ struct RailLayout: Equatable {
 /** What a command waiting for a drag wants, as Box Select chosen from the menu bar, with the way
  * out: Done for one that goes on until then, as Circle Select, Cancel for the others. */
 struct DragHintBadge: View {
-  let hint: JSON
+  let hint: NativeUI.DragHint
   let finish: () -> Void
 
   var body: some View {
-    let done = hint.bool("done")
+    let done = hint.done
     HStack(spacing: 12) {
       Image(systemName: "hand.draw")
         .font(.title3)
         .foregroundStyle(.secondary)
-      Text(hint.string("text") ?? "")
+      Text(hint.text)
         .font(.subheadline.weight(.medium))
       Button(done ? "Done" : "Cancel", action: finish)
         .font(.subheadline.weight(.semibold))

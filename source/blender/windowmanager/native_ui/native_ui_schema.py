@@ -341,7 +341,7 @@ def _swift_doc(lines, indent):
 
 def _swift_type(schema, field):
     if field.any:
-        return "Value"
+        return "Open"
     if field.type == "string":
         base = "String"
     elif field.type in SCALARS:
@@ -369,60 +369,77 @@ def _swift_default(schema, field):
     return None
 
 
+def _swift_read(schema, field, value):
+    """An expression reading `value`, an `Any?` from `JSONSerialization`, as the field's type, or
+    nil when it does not fit."""
+    if field.any:
+        return "Open(%s)" % value
+    def element(kind, item):
+        if kind == "string":
+            return "%s as? String" % item
+        if kind == "bool":
+            return "flag(%s)" % item
+        if kind in SCALARS:
+            swift = SWIFT_SCALARS.get(kind, "Int")
+            return "(%s as? NSNumber)?.%sValue" % (item, {"Bool": "bool", "Float": "float", "Double": "double",
+                                                       "Int64": "int64", "UInt64": "uint64"}.get(swift, "int"))
+        if kind in schema.enums:
+            return "(%s as? String).map { %s(rawValue: $0) ?? .unknown }" % (item, kind)
+        return "(%s as? [String: Any]).flatMap(%s.init(json:))" % (item, kind)
+    if field.vector:
+        inner = element(field.type, "$0")
+        if field.nullable_elements:
+            return "(%s as? [Any])?.map { $0 is NSNull ? nil : %s }" % (value, inner)
+        return "(%s as? [Any])?.compactMap { %s }" % (value, inner)
+    return element(field.type, value)
+
+
+def _swift_failable(schema, table):
+    return any(field.required and _swift_default(schema, field) is None
+               for field in table.fields if not field.deprecated)
+
+
 def generate_swift(schema):
     out = ["// SPDX-FileCopyrightText: 2026 Blender Authors\n//\n// SPDX-License-Identifier: GPL-2.0-or-later\n\n"]
     out.append("".join("// %s\n" % line for line in HEADER.splitlines()))
     out.append("\nimport Foundation\n\n")
     out.append(SWIFT_SUPPORT)
-    body = [SWIFT_VALUE]
+    body = [SWIFT_OPEN]
     for item in schema.order:
         if isinstance(item, Enum):
             body.append("\n" + _swift_doc(item.doc, ""))
-            body.append("enum %s: String, Decodable, Equatable, Sendable {\n" % item.name)
+            body.append("enum %s: String, Equatable, Sendable {\n" % item.name)
             for name, _, doc in item.values:
                 body.append(_swift_doc(doc, "  "))
                 body.append("  case %s = \"%s\"\n" % (_swift_case(name), name))
             body.append("  /// A value from a newer Blender than this interface knows.\n")
-            body.append("  case unknown\n\n")
-            body.append("  init(from decoder: Decoder) throws {\n")
-            body.append("    self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown\n")
-            body.append("  }\n}\n")
+            body.append("  case unknown\n}\n")
             continue
         body.append("\n" + _swift_doc(item.doc, ""))
-        body.append("struct %s: Decodable, Equatable, Sendable {\n" % item.name)
+        body.append("struct %s: Equatable, @unchecked Sendable {\n" % item.name)
         fields = [field for field in item.fields if not field.deprecated]
         for field in fields:
             body.append(_swift_doc(field.doc, "  "))
-            optional = "" if (_swift_default(schema, field) is not None or field.required) else "?"
+            # An open part holds JSON's null itself.
+            optional = "" if (_swift_default(schema, field) is not None or field.required or field.any) else "?"
             body.append("  var %s: %s%s\n" % (_swift_name(field.name), _swift_type(schema, field), optional))
-        body.append("\n  enum CodingKeys: String, CodingKey {\n")
-        for field in fields:
-            body.append("    case %s = \"%s\"\n" % (_swift_name(field.name), field.name))
-        body.append("  }\n\n  init(from decoder: Decoder) throws {\n")
-        if fields:
-            body.append("    let container = try decoder.container(keyedBy: CodingKeys.self)\n")
+        failable = _swift_failable(schema, item)
+        body.append("\n  /// From the snapshot as `JSONSerialization` reads it.%s\n"
+                    % (" Nil without its required fields." if failable else ""))
+        body.append("  init%s(json: [String: Any]) {\n" % ("?" if failable else ""))
         for field in fields:
             name = _swift_name(field.name)
-            kind = _swift_type(schema, field)
+            read = _swift_read(schema, field, "json[\"%s\"]" % field.name)
             default = _swift_default(schema, field)
-            if field.type == "bool" and not field.vector:
-                read = "container.decodeFlagIfPresent(forKey: .%s)" % name.strip("`")
+            if field.any:
+                body.append("    %s = %s\n" % (name, read))
+            elif field.required and default is None:
+                body.append("    guard let %s = %s else {\n      return nil\n    }\n" % (name.strip("`"), read))
+                body.append("    self.%s = %s\n" % (name, name.strip("`")))
+            elif default is not None:
+                body.append("    %s = %s ?? %s\n" % (name, read, default))
             else:
-                read = "container.decodeIfPresent(%s.self, forKey: .%s)" % (kind, name.strip("`"))
-            if field.required:
-                fallback = default if default is not None else None
-                if fallback is None:
-                    body.append("    guard let %s = try %s else {\n" % (name.strip("`"), read))
-                    body.append("      throw DecodingError.keyNotFound(CodingKeys.%s, .init(codingPath: "
-                               "container.codingPath, debugDescription: \"Required by the schema\"))\n    }\n"
-                               % name.strip("`"))
-                    body.append("    self.%s = %s\n" % (name, name.strip("`")))
-                    continue
-                default = fallback
-            if default is not None:
-                body.append("    %s = try %s ?? %s\n" % (name, read, default))
-            else:
-                body.append("    %s = try %s\n" % (name, read))
+                body.append("    %s = %s\n" % (name, read))
         body.append("  }\n}\n")
     # Within a namespace of their own, clear of the interface's own types.
     text = "".join(body)
@@ -432,59 +449,30 @@ def generate_swift(schema):
     return "".join(out)
 
 
-SWIFT_VALUE = '''/// A value the schema leaves open: any JSON, for parts of a snapshot still to be described.
-enum Value: Decodable, Equatable, Sendable {
-  case null
-  case bool(Bool)
-  case number(Double)
-  case string(String)
-  case array([Value])
-  case object([String: Value])
+SWIFT_OPEN = '''/// A part of a snapshot the schema leaves open, as `JSONSerialization` read it: any JSON, for parts
+/// still to be described. Nil for JSON\'s null.
+struct Open: Equatable, @unchecked Sendable {
+  let value: Any?
 
-  init(from decoder: Decoder) throws {
-    let container = try decoder.singleValueContainer()
-    if container.decodeNil() {
-      self = .null
-    }
-    else if let value = try? container.decode(Bool.self) {
-      self = .bool(value)
-    }
-    else if let value = try? container.decode(Double.self) {
-      self = .number(value)
-    }
-    else if let value = try? container.decode(String.self) {
-      self = .string(value)
-    }
-    else if let value = try? container.decode([Value].self) {
-      self = .array(value)
-    }
-    else {
-      self = .object(try container.decode([String: Value].self))
-    }
+  init(_ value: Any?) {
+    self.value = value is NSNull ? nil : value
   }
 
-  /// As `JSONSerialization` gives it, for code that reads snapshots untyped.
-  var foundation: Any {
-    switch self {
-      case .null: return NSNull()
-      case .bool(let value): return value
-      case .number(let value): return value
-      case .string(let value): return value
-      case .array(let value): return value.map(\\.foundation)
-      case .object(let value): return value.mapValues(\\.foundation)
+  var dictionary: [String: Any]? { value as? [String: Any] }
+
+  static func == (a: Open, b: Open) -> Bool {
+    switch (a.value, b.value) {
+      case (nil, nil): return true
+      case let (x as NSObject, y as NSObject): return x.isEqual(y)
+      default: return false
     }
   }
 }
 '''
 
-SWIFT_SUPPORT = '''fileprivate extension KeyedDecodingContainer {
-  /// Blender writes some flags as 0 and 1, others as false and true.
-  func decodeFlagIfPresent(forKey key: Key) throws -> Bool? {
-    if let value = try? decodeIfPresent(Bool.self, forKey: key) {
-      return value
-    }
-    return try decodeIfPresent(Int.self, forKey: key).map { $0 != 0 }
-  }
+SWIFT_SUPPORT = '''/// Blender writes some flags as 0 and 1, others as false and true.
+private func flag(_ value: Any?) -> Bool? {
+  (value as? NSNumber)?.boolValue
 }
 '''
 

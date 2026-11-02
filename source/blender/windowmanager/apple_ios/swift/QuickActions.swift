@@ -53,13 +53,13 @@ struct QuickAction: Identifiable, Equatable {
 
   var axis: Bool { ["X", "Y", "Z"].contains(key) }
 
-  static func list(_ snapshot: [JSON]) -> [QuickAction] {
+  static func list(_ snapshot: [NativeUI.Action]) -> [QuickAction] {
     snapshot.enumerated().compactMap { index, item in
-      guard let title = item.string("title"), !title.isEmpty, item.string("symbol") != nil else { return nil }
-      let action = QuickAction(id: index, title: title, operatorName: item.string("operator") ?? "",
-                               property: item.string("property") ?? "", value: item.string("value") ?? "",
-                               key: item.string("key") ?? "", action: item.string("action") ?? "",
-                               icon: item.string("icon") ?? "", selected: item.bool("selected"))
+      guard !item.title.isEmpty, item.symbol != nil else { return nil }
+      let action = QuickAction(id: index, title: item.title, operatorName: item.`operator` ?? "",
+                               property: item.property ?? "", value: item.value ?? "",
+                               key: item.key ?? "", action: item.action ?? "",
+                               icon: item.icon ?? "", selected: item.selected)
       return action.operatorName.isEmpty && action.key.isEmpty ? nil : action
     }
   }

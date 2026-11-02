@@ -12,6 +12,18 @@
 import SwiftUI
 import UIKit
 
+extension NativeUI.TransformSettings {
+  /** By the names the top bar's menus look them up by, which are the snapshot's. */
+  var byName: [String: String] {
+    var names = ["orientation": orientation.rawValue, "pivot": pivot.rawValue, "snap": snap.rawValue,
+                 "proportional": proportional.rawValue]
+    if let mirrorAxes { names["mirror_axes"] = mirrorAxes }
+    if let mirror { names["mirror"] = mirror }
+    if let mirrorTopology { names["mirror_topology"] = mirrorTopology.rawValue }
+    return names
+  }
+}
+
 @MainActor
 @Observable
 final class ShellModel {
@@ -21,12 +33,12 @@ final class ShellModel {
   /** The editing mode, such as `object`, `mesh_edit` or `sculpt`. */
   private(set) var mode = ""
   /** Blender's tools for the mode, in groups: `nil` separates two groups. */
-  private(set) var tools: [JSON?] = []
+  private(set) var tools: [NativeUI.Tool?] = []
   private(set) var activeTool = ""
   /** The active object's name, or the active bone's in an armature's modes, as Rename Active has
    * it. */
   private(set) var activeName = ""
-  private(set) var actions: [JSON] = []
+  private(set) var actions: [NativeUI.Action] = []
   /** Changes when what Blender's menus show may have: the active undo step moves with every
    * change an operator makes, once per action. */
   private(set) var menuContext = ""
@@ -34,12 +46,12 @@ final class ShellModel {
   /** The brush's size, strength and color, and Dyntopo's detail, see `bl_ui.native_brush`. */
   private(set) var brush: JSON?
   /** Which way brushes stroke, in modes that paint with them; none where Blender selects. */
-  private(set) var direction: JSON?
+  private(set) var direction: NativeUI.BrushDirection?
   /** Moving, turning or scaling: the sidebar's + and - hold Snap and Precision. */
   private(set) var transforming = false
   /** A command waiting for a drag in the view, as Box Select chosen from the menu bar: what to
    * do, and whether it ends with Done. */
-  private(set) var dragHint: JSON?
+  private(set) var dragHint: NativeUI.DragHint?
   private(set) var canUndo = false
   private(set) var canRedo = false
   /** Adjust Last Operation: the last operator's settings, or none. */
@@ -64,7 +76,7 @@ final class ShellModel {
   /** The color the viewport is cleared to, as red, green and blue in display space. */
   private(set) var viewportBackground: [Double] = []
   /** The modes the active object has, as Blender's header lists them, and the current one. */
-  private(set) var modes: [JSON] = []
+  private(set) var modes: [NativeUI.ModeItem] = []
   private(set) var objectMode = "OBJECT"
   /** The viewport's shading: `wireframe`, `solid`, `material` or `rendered`. */
   private(set) var shading = "solid"
@@ -142,45 +154,39 @@ final class ShellModel {
   }
 
   /** The toolbar snapshot, Blender's latest or a copy of it. */
-  func update(toolbar: JSON) {
-    set(\.mode, toolbar.string("mode") ?? "")
-    set(\.activeName, toolbar.string("activeName") ?? "")
-    set(\.tools, ((toolbar["tools"] as? [Any]) ?? []).map { $0 as? JSON },
-        equal: { jsonEqual($0.map { $0 as Any? ?? NSNull() } as NSArray, $1.map { $0 as Any? ?? NSNull() } as NSArray) })
-    set(\.activeTool, toolbar.string("active") ?? "")
-    set(\.actions, toolbar.array("actions"), equal: jsonListEqual)
-    set(\.brushes, toolbar.dict("brushes"), equal: { jsonEqual($0, $1) })
-    set(\.direction, toolbar.dict("direction"), equal: { jsonEqual($0, $1) })
-    set(\.transforming, toolbar.bool("transforming"))
-    set(\.dragHint, toolbar.dict("dragHint"), equal: { jsonEqual($0, $1) })
-    set(\.brush, toolbar.dict("brush"), equal: { jsonEqual($0, $1) })
-    set(\.canUndo, toolbar.bool("canUndo"))
-    set(\.canRedo, toolbar.bool("canRedo"))
-    set(\.menuContext, "\(toolbar.string("objectMode") ?? "")|\(toolbar.string("menuState") ?? "")")
-    set(\.redo, toolbar.dict("redo"), equal: { jsonEqual($0, $1) })
-    set(\.dialog, toolbar.dict("dialog"), equal: { jsonEqual($0, $1) })
-    set(\.textObject, toolbar.dict("textObject"), equal: { jsonEqual($0, $1) })
-    let gizmo = (toolbar["navigationGizmo"] as? [NSNumber])?.map(\.doubleValue) ?? []
-    if gizmo.count == 3 { set(\.navigationGizmo, gizmo) }
-    let background = (toolbar["viewportBackground"] as? [NSNumber])?.map(\.doubleValue) ?? []
-    if background.count == 3 { set(\.viewportBackground, background) }
-    let modes = toolbar.array("modes")
-    if !modes.isEmpty { set(\.modes, modes, equal: jsonListEqual) }
-    set(\.objectMode, toolbar.string("objectMode") ?? "OBJECT")
-    if let shading = toolbar.string("shading") { set(\.shading, shading) }
-    if let select = toolbar.string("meshSelectMode") { set(\.meshSelectMode, select) }
-    if let settings = toolbar["settings"] as? [String: String] { set(\.transformSettings, settings) }
-    set(\.viewport, toolbar.dict("viewport"), equal: { jsonEqual($0, $1) })
-    onRender?(toolbar["render"])
-    onPreferences?(toolbar["preferences"])
-    if let settings = onToolSettings?(toolbar.dict("toolSettings") ?? [:],
-                                      toolbar["propertiesAck"] as? NSNumber ?? 0)
-    {
+  func update(toolbar: NativeUI.Toolbar) {
+    set(\.mode, toolbar.mode)
+    set(\.activeName, toolbar.activeName ?? "")
+    set(\.tools, toolbar.tools)
+    set(\.activeTool, toolbar.active ?? "")
+    set(\.actions, toolbar.actions)
+    set(\.brushes, toolbar.brushes.dictionary, equal: { jsonEqual($0, $1) })
+    set(\.direction, toolbar.direction)
+    set(\.transforming, toolbar.transforming)
+    set(\.dragHint, toolbar.dragHint)
+    set(\.brush, toolbar.brush.dictionary, equal: { jsonEqual($0, $1) })
+    set(\.canUndo, toolbar.canUndo)
+    set(\.canRedo, toolbar.canRedo)
+    set(\.menuContext, "\(toolbar.objectMode.rawValue)|\(toolbar.menuState ?? "")")
+    set(\.redo, toolbar.redo.dictionary, equal: { jsonEqual($0, $1) })
+    set(\.dialog, toolbar.dialog.dictionary, equal: { jsonEqual($0, $1) })
+    set(\.textObject, toolbar.textObject.dictionary, equal: { jsonEqual($0, $1) })
+    if toolbar.navigationGizmo.count == 3 { set(\.navigationGizmo, toolbar.navigationGizmo.map(Double.init)) }
+    if toolbar.viewportBackground.count == 3 {
+      set(\.viewportBackground, toolbar.viewportBackground.map(Double.init))
+    }
+    if !toolbar.modes.isEmpty { set(\.modes, toolbar.modes) }
+    set(\.objectMode, toolbar.objectMode.rawValue)
+    set(\.shading, toolbar.shading.rawValue)
+    if let select = toolbar.meshSelectMode { set(\.meshSelectMode, select) }
+    if let settings = toolbar.settings { set(\.transformSettings, settings.byName) }
+    set(\.viewport, toolbar.viewport.dictionary, equal: { jsonEqual($0, $1) })
+    onRender?(toolbar.render.value)
+    onPreferences?(toolbar.preferences.value)
+    if let settings = onToolSettings?(toolbar.toolSettings.dictionary ?? [:], toolbar.propertiesAck as NSNumber) {
       set(\.toolSettingsShown, settings)
     }
-    if toolbar.has("desktop") {
-      set(\.desktop, toolbar.bool("desktop"))
-    }
+    set(\.desktop, toolbar.desktop)
   }
 
   /** Take Blender's toolbar snapshot when it changed, or copy it when `copy`. */
@@ -189,9 +195,10 @@ final class ShellModel {
     else { return }
     let data = Data(bytes: json, count: strlen(json))
     WM_native_ui_json_free(json)
-    if let toolbar = try? JSONSerialization.jsonObject(with: data) as? JSON {
-      update(toolbar: toolbar)
-    }
+    guard let object = try? JSONSerialization.jsonObject(with: data) as? JSON,
+          let toolbar = NativeUI.Toolbar(json: object)
+    else { return }
+    update(toolbar: toolbar)
   }
 
   /** Read without waiting for Blender: the presentation mailbox and the launcher. */
@@ -322,7 +329,7 @@ final class SoakProbe {
     var action: [String: Any] = ["t": Date().timeIntervalSince1970]
     switch next(4) {
       case 0, 1:
-        let tools = model.tools.compactMap { $0?.string("id") }
+        let tools = model.tools.compactMap { $0?.id }
         guard !tools.isEmpty else { return }
         let tool = tools[next(tools.count)]
         WM_native_ui_tool_set_by_id(tool)
@@ -337,7 +344,7 @@ final class SoakProbe {
         action["brush"] = key
         action["value"] = value
       default:
-        let modes = model.modes.compactMap { $0.string("id") }
+        let modes = model.modes.map(\.id)
         guard !modes.isEmpty else { return }
         let mode = modes[next(modes.count)]
         Engine.setting("object_mode", mode)

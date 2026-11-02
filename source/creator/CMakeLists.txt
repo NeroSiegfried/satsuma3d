@@ -369,6 +369,8 @@ else()
     set(CMAKE_Swift_LANGUAGE_VERSION 5)
     enable_language(Swift)
     set(IOS_LAUNCHER_SWIFT
+      # The types of what the bridge sends, generated from `native_ui.fbs`.
+      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/native_ui/generated/NativeUI.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/Assets.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/BlenderMenus.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/FileDrop.swift
