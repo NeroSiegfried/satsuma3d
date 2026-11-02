@@ -15,7 +15,7 @@
 
 // #define __CARBONSOUND__
 
-#include "GHOST_IOSMessageQueue.hh"
+#include "GHOST_Mailbox.hh"
 #include "GHOST_System.hh"
 #include <memory>
 
@@ -56,7 +56,7 @@ class GHOST_SystemIOS : public GHOST_System {
     std::unique_ptr<const GHOST_IEvent> event;
     std::shared_ptr<std::atomic<bool>> alive;
   };
-  GHOST_IOSMessageQueue<NativeEvent> native_events_;
+  GHOST_MessageQueue<NativeEvent> native_events_;
 
  public:
   GHOST_TSuccess pushEvent(std::unique_ptr<const GHOST_IEvent> event);

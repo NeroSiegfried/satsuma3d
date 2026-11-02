@@ -15,7 +15,7 @@
 #  include "DNA_space_types.h"
 #  include "DNA_windowmanager_types.h"
 #  include "GHOST_IOSDocumentPicker.hh"
-#  include "GHOST_IOSMessageQueue.hh"
+#  include "GHOST_Mailbox.hh"
 #  include "RNA_access.hh"
 #  include "WM_api.hh"
 #  include "wm_event_system.hh"
@@ -39,7 +39,7 @@ struct Result {
 };
 std::map<uint64_t, Request> requests;
 uint64_t next_request = 0;
-GHOST_IOSMessageQueue<Result> results;
+GHOST_MessageQueue<Result> results;
 
 bool boolean(wmOperator *op, const char *name)
 {

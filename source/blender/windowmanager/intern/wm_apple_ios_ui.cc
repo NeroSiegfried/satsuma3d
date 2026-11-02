@@ -44,7 +44,7 @@
 #include "DNA_view3d_types.h"
 
 #include "BLI_math_color.h"
-#include "GHOST_IOSMessageQueue.hh"
+#include "GHOST_Mailbox.hh"
 
 #include "DEG_depsgraph.hh"
 
@@ -239,8 +239,8 @@ using IOSUIMessage = std::variant<IOSUICommand,
                                   IOSBrushCommand,
                                   IOSAssetDragCommand>;
 /* A single inbox preserves ordering across tools, settings, operators and menus. */
-GHOST_IOSMessageQueue<IOSUIMessage> ios_ui_messages;
-GHOST_IOSMessageQueue<std::pair<uint64_t, std::string>> ios_menu_completed;
+GHOST_MessageQueue<IOSUIMessage> ios_ui_messages;
+GHOST_MessageQueue<std::pair<uint64_t, std::string>> ios_menu_completed;
 /* UIKit-owned result cache. */
 std::map<uint64_t, std::string> ios_menu_results;
 std::atomic<uint64_t> ios_menu_next_identifier{0};
@@ -286,8 +286,8 @@ bool ios_image_dirty = true;
 std::string ios_image_json;
 std::chrono::steady_clock::time_point ios_image_next_check;
 /** Its picture and UVs, taken by the native editor when they change. */
-GHOST_IOSLatest<ed::image::NativeImagePixels> ios_image_pixels;
-GHOST_IOSLatest<std::vector<float>> ios_image_uvs;
+GHOST_Latest<ed::image::NativeImagePixels> ios_image_pixels;
+GHOST_Latest<std::vector<float>> ios_image_uvs;
 /** The picture changed since it was last sent, which waits a little while painting. */
 bool ios_image_pixels_pending = true;
 bool ios_image_uvs_pending = true;
@@ -316,8 +316,8 @@ struct IOSPencilHoverRequest {
   bool active = false;
   int x = 0, y = 0;
 };
-GHOST_IOSLatest<IOSPencilHoverRequest> ios_hover_requests;
-GHOST_IOSLatest<std::string> ios_hover_snapshot;
+GHOST_Latest<IOSPencilHoverRequest> ios_hover_requests;
+GHOST_Latest<std::string> ios_hover_snapshot;
 /* Window coordinates of the asset drag in progress. */
 int2 ios_asset_drag_xy(0);
 IOSPencilHoverRequest ios_hover_request;
@@ -332,11 +332,11 @@ struct IOSActionItem {
   bool selected = false;
 };
 
-GHOST_IOSLatest<std::string> ios_toolbar_snapshot;
+GHOST_Latest<std::string> ios_toolbar_snapshot;
 /** One of Blender's menus to show natively where the pointer is, see #ios_menu_popup. */
-GHOST_IOSLatest<std::string> ios_menu_popup_snapshot;
-GHOST_IOSLatest<std::string> ios_panels_snapshot;
-GHOST_IOSLatest<std::string> ios_timeline_snapshot;
+GHOST_Latest<std::string> ios_menu_popup_snapshot;
+GHOST_Latest<std::string> ios_panels_snapshot;
+GHOST_Latest<std::string> ios_timeline_snapshot;
 std::string ios_timeline_json;
 /* Keyframes shown on the timeline, refreshed on the native cadence while it is open. */
 bool ios_timeline_visible = false;
@@ -346,7 +346,7 @@ std::chrono::steady_clock::time_point ios_timeline_next_keys;
 bool ios_assets_visible = false;
 std::string ios_assets_json;
 std::chrono::steady_clock::time_point ios_assets_next_snapshot;
-GHOST_IOSLatest<std::string> ios_assets_snapshot;
+GHOST_Latest<std::string> ios_assets_snapshot;
 std::string ios_toolbar_json =
     "{\"mode\":\"objectmode\",\"active\":\"builtin.select_box\",\"tools\":[]}";
 

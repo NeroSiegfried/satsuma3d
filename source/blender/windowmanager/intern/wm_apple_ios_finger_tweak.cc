@@ -47,7 +47,7 @@
 
 #  include "RNA_access.hh"
 
-#  include "GHOST_IOSMessageQueue.hh"
+#  include "GHOST_Mailbox.hh"
 #  include "GHOST_IOSNativeInterface.hh"
 
 #  include "WM_api.hh"
@@ -89,7 +89,7 @@ struct Finger {
   float3 start_location;
 };
 
-GHOST_IOSMessageQueue<FingerTouch> finger_touches;
+GHOST_MessageQueue<FingerTouch> finger_touches;
 /** Tweak is the tool, in Object Mode, with the native interface showing. */
 std::atomic<bool> finger_tweak_mode{false};
 /** Fingers landed, not picked yet: they may hold an object. */

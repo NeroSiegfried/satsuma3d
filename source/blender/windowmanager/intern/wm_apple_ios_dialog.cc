@@ -15,7 +15,7 @@
 #  include "BLT_translation.hh"
 #  include "DNA_screen_types.h"
 #  include "DNA_windowmanager_types.h"
-#  include "GHOST_IOSMessageQueue.hh"
+#  include "GHOST_Mailbox.hh"
 #  include "wm_apple_ios_alerts.hh"
 
 #  include <atomic>
@@ -39,7 +39,7 @@ struct Result {
 };
 std::atomic<uint64_t> next_request{0};
 std::map<uint64_t, std::unique_ptr<Request>> requests;
-GHOST_IOSMessageQueue<Result> results;
+GHOST_MessageQueue<Result> results;
 
 void completed(uint64_t id, int action, uint64_t toggles)
 {

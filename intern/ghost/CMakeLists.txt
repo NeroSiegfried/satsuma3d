@@ -34,6 +34,7 @@ set(SRC
   GHOST_ISystemPaths.hh
   GHOST_ITimerTask.hh
   GHOST_IWindow.hh
+  GHOST_Mailbox.hh
   GHOST_Rect.hh
   GHOST_Types.hh
 
@@ -181,7 +182,6 @@ elseif(APPLE AND NOT WITH_GHOST_X11)
 
         intern/GHOST_ContextIOS.mm
         intern/GHOST_ContextIOS.hh
-        GHOST_IOSMessageQueue.hh
         intern/GHOST_IOSPlatform.hh
         GHOST_IOSRuntime.hh
         intern/GHOST_IOSTheme.hh

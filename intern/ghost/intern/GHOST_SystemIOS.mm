@@ -124,14 +124,14 @@ static std::atomic<bool> engine_active{false};
 static std::atomic<bool> engine_wakeup{false};
 static std::condition_variable engine_condition;
 static std::mutex engine_wait_mutex;
-static GHOST_IOSMessageQueue<std::function<void()>> engine_requests;
+static GHOST_MessageQueue<std::function<void()>> engine_requests;
 /* Auto-save requested by UIKit when the app leaves the foreground; runs even while inactive. */
 static std::atomic<bool> engine_autosave_requested{false};
 static std::mutex engine_autosave_mutex;
 static std::vector<std::function<void()>> engine_autosave_done;
 /* Work for documents, which UIKit waits on. Runs while inactive too: iOS saves documents as the
  * app leaves the foreground. */
-static GHOST_IOSMessageQueue<std::function<void()>> engine_document_requests;
+static GHOST_MessageQueue<std::function<void()>> engine_document_requests;
 static std::atomic<bool> engine_document_pending{false};
 /* Requests waiting for a stroke or other operator to end; only the engine thread uses it. */
 static std::vector<std::function<void()>> engine_document_waiting;
@@ -176,7 +176,7 @@ static std::atomic<int64_t> engine_frame_microseconds{16667};
 /* UIKit is told once about any number of snapshots published before it gets to them. */
 static std::atomic<bool> mailbox_notification_pending{false};
 
-void GHOST_ios_mailbox_published()
+void GHOST_mailbox_published()
 {
   if (NSThread.isMainThread) {
     GHOST_ios_engine_wake();
