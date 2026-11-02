@@ -147,6 +147,96 @@ namespace blender {
 
 static CLG_LogRef LOG = {"wm.native"};
 
+/**
+ * With `BLENDER_NATIVE_UI_RECORD` in the environment, snapshots are also written to
+ * `native_ui_record/<table>/` in the temporary folder, named after the table of `native_ui.fbs`
+ * they fit, for `tests/python/native_ui_schema_test.py --snapshots` to validate. The first few
+ * hundred of each. Called on Blender's loop.
+ */
+static void bridge_record(const char *table, const std::string &json)
+{
+  static const bool record = getenv("BLENDER_NATIVE_UI_RECORD") != nullptr;
+  if (!record) {
+    return;
+  }
+  static std::map<std::string, int> counts;
+  int &count = counts[table];
+  if (count >= 500) {
+    return;
+  }
+  char directory[FILE_MAX];
+  BLI_path_join(directory, sizeof(directory), BKE_tempdir_base(), "native_ui_record", table);
+  BLI_dir_create_recursive(directory);
+  char path[FILE_MAX];
+  BLI_path_join(path, sizeof(path), directory, (std::to_string(count++) + ".json").c_str());
+  if (FILE *file = BLI_fopen(path, "wb")) {
+    fwrite(json.data(), 1, json.size(), file);
+    fclose(file);
+  }
+}
+
+/**
+ * How long a part of a snapshot took to build, with `BLENDER_NATIVE_UI_RECORD`: a line of
+ * `native_ui_record/timings.jsonl` for each, to find what makes the bridge slow.
+ */
+class BridgeTimer {
+  const char *part_;
+  std::chrono::steady_clock::time_point start_ = std::chrono::steady_clock::now();
+
+ public:
+  explicit BridgeTimer(const char *part) : part_(part) {}
+  ~BridgeTimer()
+  {
+    static const bool record = getenv("BLENDER_NATIVE_UI_RECORD") != nullptr;
+    static FILE *file = nullptr;
+    static int lines = 0;
+    if (!record || lines >= 1000000) {
+      return;
+    }
+    if (file == nullptr) {
+      char directory[FILE_MAX];
+      BLI_path_join(directory, sizeof(directory), BKE_tempdir_base(), "native_ui_record");
+      BLI_dir_create_recursive(directory);
+      char path[FILE_MAX];
+      BLI_path_join(path, sizeof(path), directory, "timings.jsonl");
+      file = BLI_fopen(path, "wb");
+      if (file == nullptr) {
+        return;
+      }
+    }
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                                start_)
+                          .count();
+    fprintf(file, "{\"part\":\"%s\",\"ms\":%.3f}\n", part_, ms);
+    if (++lines % 100 == 0) {
+      fflush(file);
+    }
+  }
+};
+
+/** Call \a fn, timed as \a part of a snapshot, see #BridgeTimer. */
+template<typename Fn> static auto bridge_timed(const char *part, Fn fn)
+{
+  BridgeTimer timer(part);
+  return fn();
+}
+
+#ifdef WITH_PYTHON
+/** Run a Python expression giving a string, for a part of a snapshot. */
+static bool bridge_python(bContext *C, const char *part, const char *expression, std::string &r_result)
+{
+  BridgeTimer timer(part);
+  const char *imports[] = {"bpy", "bl_ui", nullptr};
+  char *result = nullptr;
+  if (!BPY_run_string_as_string(C, imports, expression, nullptr, &result)) {
+    return false;
+  }
+  r_result = result;
+  MEM_delete(result);
+  return true;
+}
+#endif
+
 /* The scene as 3D geometry for a volumetric window, see `wm_apple_ios_volume.cc`. */
 void bridge_volume_build(bContext *C);
 bool bridge_volume_command(bContext *C, StringRef setting, StringRef value);
@@ -2497,6 +2587,7 @@ void bridge_assets_build(bContext *C)
   bridge_assets_next_snapshot = now + std::chrono::milliseconds(busy ? 40 : 500);
   if (json != bridge_assets_json) {
     bridge_assets_json = json;
+    bridge_record("Assets", json);
     bridge_assets_snapshot.publish(std::move(json));
   }
 }
@@ -2736,49 +2827,29 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
     /* Dragging with Move and the like selects rather than tweaking, see the function. */
     BPY_run_string_eval(
         C, imports, "bl_ui.space_toolsystem_common.native_select_fallback_keep(bpy.context)");
-    char *result = nullptr;
-    if (BPY_run_string_as_string(C,
-                                 imports,
-                                 "bl_ui.space_toolsystem_common.native_toolbar_json(bpy.context)",
-                                 nullptr,
-                                 &result))
-    {
-      tools_json = result;
-      MEM_delete(result);
-    }
-    for (auto [expression, target] :
-         {std::pair{"bl_ui.native_render.status_json(bpy.context)", &render_json},
-          std::pair{"bl_ui.native_render.viewport_json(bpy.context)", &viewport_json},
-          std::pair{"bl_ui.native_settings.preferences_json(bpy.context)", &preferences_json},
-          std::pair{"bl_ui.native_brush.brush_json(bpy.context)", &brush_json}})
-    {
-      result = nullptr;
-      if (BPY_run_string_as_string(C, imports, expression, nullptr, &result)) {
-        *target = result;
-        MEM_delete(result);
-      }
-    }
+    bridge_python(C,
+                  "tools",
+                  "bl_ui.space_toolsystem_common.native_toolbar_json(bpy.context)",
+                  tools_json);
+    bridge_python(C, "render", "bl_ui.native_render.status_json(bpy.context)", render_json);
+    bridge_python(C, "viewport", "bl_ui.native_render.viewport_json(bpy.context)", viewport_json);
+    bridge_python(
+        C, "preferences", "bl_ui.native_settings.preferences_json(bpy.context)", preferences_json);
+    bridge_python(C, "brush", "bl_ui.native_brush.brush_json(bpy.context)", brush_json);
     if (!bridge_constraint_operator(CTX_wm_window(C))) {
       /* Quick actions for the mode, tool and selection, chosen by `bl_ui.native_actions`. */
       const std::string expression = "bl_ui.native_actions.actions_json(bpy.context, \"" +
                                      bridge_json_escape(active_tool_id ? active_tool_id : "") + "\")";
-      result = nullptr;
-      if (BPY_run_string_as_string(C, imports, expression.c_str(), nullptr, &result)) {
-        quick_actions_json = result;
-        MEM_delete(result);
-      }
+      bridge_python(C, "actions", expression.c_str(), quick_actions_json);
     }
     const auto now = std::chrono::steady_clock::now();
     if (bridge_panels_visible && now >= bridge_panels_next_snapshot) {
       /* Scene projection follows the native refresh cadence, not the viewport frame rate. */
       bridge_panels_next_snapshot = now + std::chrono::milliseconds(250);
+      BridgeTimer panels_timer("panels");
       const std::string expression = "bl_ui.native_panels.snapshot_json(bpy.context, " +
                                      std::to_string(bridge_panels_visible & 2) + ")";
-      result = nullptr;
-      if (BPY_run_string_as_string(C, imports, expression.c_str(), nullptr, &result)) {
-        bridge_panels_json = result;
-        MEM_delete(result);
-      }
+      bridge_python(C, "panels.hierarchy", expression.c_str(), bridge_panels_json);
       using namespace io::serialize;
       std::istringstream base_stream(bridge_panels_json);
       auto base = JsonFormatter().deserialize(base_stream);
@@ -2795,8 +2866,9 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
         merged.append_str("error", bridge_properties_error);
       }
       if (bridge_panels_visible & 1) {
-        std::istringstream properties_stream(
-            ui::native_properties_query(C, bridge_properties_state, false));
+        std::istringstream properties_stream(bridge_timed("panels.inspector", [&] {
+          return ui::native_properties_query(C, bridge_properties_state, false);
+        }));
         auto properties = JsonFormatter().deserialize(properties_stream);
         if (properties) {
           merged.append("inspector", std::move(properties));
@@ -2819,7 +2891,8 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
             state.insert(state.size() - 1, ",\"with_add\":1");
           }
           const auto diag_start = std::chrono::steady_clock::now();
-          bridge_nodes_json = ui::native_nodes_query(C, state, false);
+          bridge_nodes_json = bridge_timed(
+              "panels.nodes", [&] { return ui::native_nodes_query(C, state, false); });
           /* With no tree there is nothing to add to: offered again once there is one. */
           const bool has_tree = bridge_nodes_json.find("\"nodes\"") != std::string::npos;
           bridge_nodes_add_for = has_tree ? (with_add ? bridge_nodes_state : bridge_nodes_add_for) : "";
@@ -2841,7 +2914,9 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
         if (bridge_graph_dirty || now >= bridge_graph_next_check) {
           bridge_graph_dirty = false;
           bridge_graph_next_check = now + std::chrono::seconds(2);
-          bridge_graph_json = ed::graph::native_graph_query(C, bridge_graph_state, false);
+          bridge_graph_json = bridge_timed("panels.graph", [&] {
+            return ed::graph::native_graph_query(C, bridge_graph_state, false);
+          });
         }
         merged.append_str("graph", "@native_graph_json@");
       }
@@ -2849,7 +2924,9 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
         if (bridge_image_dirty || now >= bridge_image_next_check) {
           bridge_image_dirty = false;
           bridge_image_next_check = now + std::chrono::seconds(2);
-          bridge_image_json = ed::image::native_image_query(C, bridge_image_state, false);
+          bridge_image_json = bridge_timed("panels.image", [&] {
+            return ed::image::native_image_query(C, bridge_image_state, false);
+          });
         }
         std::istringstream image_stream(bridge_image_json);
         if (auto image = JsonFormatter().deserialize(image_stream)) {
@@ -2862,7 +2939,9 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
           bridge_storyboard_dirty = false;
           /* Only what is there: the pictures still to draw are drawn as the window draws, see
            * #WM_native_ui_storyboard_draw. */
-          bridge_storyboard_json = ed::vse::native_storyboard_query(C, bridge_storyboard_state, false);
+          bridge_storyboard_json = bridge_timed("panels.storyboard", [&] {
+            return ed::vse::native_storyboard_query(C, bridge_storyboard_state, false);
+          });
           const bool pending = bridge_storyboard_json.find("\"pending\":1") != std::string::npos;
           bridge_storyboard_pending = pending;
           bridge_storyboard_next_check = now + std::chrono::milliseconds(pending ? 100 : 1000);
@@ -2876,8 +2955,9 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
       }
       if (bridge_panels_visible & 32) {
         bridge_preferences_save_when_changed(C, now);
-        std::istringstream preferences_stream(
-            ui::native_properties_query(C, bridge_preferences_state, false));
+        std::istringstream preferences_stream(bridge_timed("panels.preferences", [&] {
+          return ui::native_properties_query(C, bridge_preferences_state, false);
+        }));
         auto preferences = JsonFormatter().deserialize(preferences_stream);
         if (preferences && preferences->type() == eValueType::Dictionary) {
           auto *dictionary = static_cast<DictionaryValue *>(preferences.get());
@@ -2891,12 +2971,11 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
             expression = "bl_ui.native_settings.keymaps_json(bpy.context, \"" +
                          bridge_json_escape(bridge_keymaps_state) + "\")";
           }
-          result = nullptr;
+          std::string list_json;
           if (!expression.empty() &&
-              BPY_run_string_as_string(C, imports, expression.c_str(), nullptr, &result))
+              bridge_python(C, "panels.preferences.list", expression.c_str(), list_json))
           {
-            std::istringstream list_stream(result);
-            MEM_delete(result);
+            std::istringstream list_stream(list_json);
             if (auto list = JsonFormatter().deserialize(list_stream)) {
               dictionary->append(tab == "PREFERENCES_ADDONS" ? "addons" : "keymaps",
                                  std::move(list));
@@ -2908,8 +2987,9 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
         }
       }
       if (bridge_panels_visible & 4) {
-        std::istringstream shading_stream(
-            ui::native_properties_query(C, bridge_shading_state, false));
+        std::istringstream shading_stream(bridge_timed("panels.shading", [&] {
+          return ui::native_properties_query(C, bridge_shading_state, false);
+        }));
         auto shading = JsonFormatter().deserialize(shading_stream);
         if (shading) {
           merged.append("shading", std::move(shading));
@@ -2940,6 +3020,7 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
       /* Published when it changes: every snapshot wakes the native interface. */
       if (bridge_panels_json != bridge_panels_published) {
         bridge_panels_published = bridge_panels_json;
+        bridge_record("Panels", bridge_panels_json);
         bridge_panels_snapshot.publish(bridge_panels_json);
       }
     }
@@ -2952,8 +3033,9 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
   const bool can_redo = has_view3d_context && bridge_undo_available(C, "ED_OT_redo");
   const std::string settings_json = bridge_transform_settings_json(
       scene, CTX_data_active_object(C), mode);
-  const std::string tool_settings_json = has_view3d_context ? ui::native_properties_query(
-                                                                  C, "{\"tab\":\"TOOL\"}", false) :
+  const std::string tool_settings_json = has_view3d_context ? bridge_timed("tool_settings", [&] {
+    return ui::native_properties_query(C, "{\"tab\":\"TOOL\"}", false);
+  }) :
                                                               "{}";
   std::string navigation_json = "null";
   if (has_view3d_context) {
@@ -2980,17 +3062,21 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
                         "," + std::to_string(radius / width) + "]";
     }
   }
-  const std::string redo_json = has_view3d_context ? ui::native_operator_redo_query(C, "", false) :
+  const std::string redo_json = has_view3d_context ? bridge_timed("redo", [&] {
+    return ui::native_operator_redo_query(C, "", false);
+  }) :
                                                      "null";
   /* An operator's properties asked for before it runs, in place of Blender's dialog. */
-  const std::string dialog_json = ui::native_operator_dialog_query(C, "", false);
+  const std::string dialog_json = bridge_timed(
+      "dialog", [&] { return ui::native_operator_dialog_query(C, "", false); });
   if (!has_view3d_context) {
     bridge_brushes_json = "null";
   }
   else if (const auto now = std::chrono::steady_clock::now(); now >= bridge_brushes_next_snapshot) {
     /* Asset polling runs Python per brush, so follow the native refresh cadence. */
     bridge_brushes_next_snapshot = now + std::chrono::milliseconds(250);
-    bridge_brushes_json = bridge_brushes_build_json(C, mode);
+    bridge_brushes_json = bridge_timed("brushes",
+                                       [&] { return bridge_brushes_build_json(C, mode); });
     if (bridge_brushes_json.find("\"pending\":true") != std::string::npos ||
         bridge_brushes_json.find("\"loading\":true") != std::string::npos)
     {
@@ -3122,14 +3208,10 @@ void bridge_timeline_build(bContext *C)
       bridge_timeline_visible && now >= bridge_timeline_next_keys)
   {
     bridge_timeline_next_keys = now + std::chrono::milliseconds(250);
-    const char *imports[] = {"bpy", "bl_ui", nullptr};
-    char *result = nullptr;
-    if (BPY_run_string_as_string(
-            C, imports, "bl_ui.native_timeline.keys_json(bpy.context)", nullptr, &result))
-    {
-      bridge_timeline_keys_json = result;
-      MEM_delete(result);
-    }
+    bridge_python(C,
+                  "timeline.keys",
+                  "bl_ui.native_timeline.keys_json(bpy.context)",
+                  bridge_timeline_keys_json);
   }
 #endif
   /* A storyboard: the workspace's sequencer scene has shots, the window following the one under
@@ -3160,6 +3242,7 @@ void bridge_timeline_build(bContext *C)
                      "}";
   if (json != bridge_timeline_json) {
     bridge_timeline_json = json;
+    bridge_record("Timeline", json);
     bridge_timeline_snapshot.publish(std::move(json));
   }
 }
@@ -3186,14 +3269,16 @@ void bridge_toolbar_build(bContext *C, const bool handled_commands)
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
     WM_apple_ios_finger_tweak_mode_update(C);
 #endif
-    std::string json = bridge_toolbar_build_json_for_context(C);
+    std::string json = bridge_timed("toolbar",
+                                    [&] { return bridge_toolbar_build_json_for_context(C); });
     if (json != published) {
       published = json;
+      bridge_record("Toolbar", json);
       bridge_toolbar_snapshot.publish(std::move(json));
     }
   }
-  bridge_timeline_build(C);
-  bridge_assets_build(C);
+  bridge_timed("timeline", [&] { bridge_timeline_build(C); });
+  bridge_timed("assets", [&] { bridge_assets_build(C); });
 }
 
 std::string bridge_json_escape(const std::string &value)
