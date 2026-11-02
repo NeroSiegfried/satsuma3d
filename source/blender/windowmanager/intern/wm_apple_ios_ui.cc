@@ -3930,14 +3930,12 @@ extern "C" void WM_apple_ios_ui_bottom_tray_set(const float fraction)
   }
 }
 
-extern "C" void GHOST_ios_engine_wake();
-
-
+/* Set from the native interface: telling Blender a message waits wakes its loop. */
 extern "C" void WM_apple_ios_ui_viewport_cover_set(const float pixels)
 {
   if (ios_viewport_cover.exchange(pixels) != pixels) {
     ios_viewport_cover_changed.store(true);
-    GHOST_ios_engine_wake();
+    GHOST_mailbox_published();
   }
 }
 
@@ -3950,7 +3948,7 @@ extern "C" void WM_apple_ios_ui_viewport_trailing_cover_set(const float pixels)
 {
   if (ios_viewport_trailing_cover.exchange(pixels) != pixels) {
     ios_viewport_cover_changed.store(true);
-    GHOST_ios_engine_wake();
+    GHOST_mailbox_published();
   }
 }
 
