@@ -111,8 +111,8 @@ The iOS port has three independent execution paths:
 
 This separation follows [Apple's responsiveness guidance](https://developer.apple.com/documentation/xcode/improving-app-responsiveness).
 
-`GHOST_IOSMessageQueue` transfers owned commands/events without a consumer-held
-lock. All native command types share one FIFO inbox. `GHOST_IOSLatest` transfers
+`GHOST_MessageQueue` transfers owned commands/events without a consumer-held
+lock. All native command types share one FIFO inbox. `GHOST_Latest` transfers
 the latest immutable UI snapshot, replacing obsolete unpublished snapshots.
 UIKit keeps its last snapshot while the engine is busy. Native menu queries and
 file-picker results are asynchronous too.

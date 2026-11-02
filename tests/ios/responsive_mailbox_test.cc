@@ -1,14 +1,14 @@
 /* SPDX-FileCopyrightText: 2026 Blender Authors
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
-#include "GHOST_IOSMessageQueue.hh"
+#include "GHOST_Mailbox.hh"
 #include <cassert>
 #include <chrono>
 #include <memory>
 #include <thread>
 
 /* The app wakes Blender or UIKit here; this test has neither. */
-void GHOST_ios_mailbox_published() {}
+void GHOST_mailbox_published() {}
 
 struct Message {
   int producer, sequence;
@@ -17,7 +17,7 @@ struct Message {
 
 int main()
 {
-  GHOST_IOSMessageQueue<Message> queue;
+  GHOST_MessageQueue<Message> queue;
   auto lifetime = std::make_shared<std::atomic<bool>>(true);
   constexpr int producers = 4, count = 20000;
   std::atomic<int> ready{0};
@@ -60,7 +60,7 @@ int main()
     int token, value;
     bool preview;
   };
-  GHOST_IOSMessageQueue<Edit> edits;
+  GHOST_MessageQueue<Edit> edits;
   for (int i = 0; i < 1000; ++i) {
     edits.push({1, i, true});
   }
@@ -74,7 +74,7 @@ int main()
   assert(reduced[0].value == 1000 && !reduced[0].preview);
   assert(reduced[1].token == 2 && reduced[2].value == 1002);
 
-  GHOST_IOSLatest<std::unique_ptr<int>> latest;
+  GHOST_Latest<std::unique_ptr<int>> latest;
   std::atomic<bool> done{false};
   std::thread publisher([&] {
     for (int i = 0; i < 100000; i++) {
