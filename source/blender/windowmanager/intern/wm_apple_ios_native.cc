@@ -52,6 +52,7 @@ extern "C" void WM_apple_ios_ui_pencil_hover_set(bool active, int x, int y);
 extern "C" void WM_apple_ios_ui_pencil_roll_set(bool down, float angle, float tilt_x, float tilt_y);
 extern "C" void WM_apple_ios_ui_navigation_hover_set(bool active);
 extern "C" void WM_apple_ios_ui_view_roll_enqueue(float angle);
+extern "C" void wm_apple_ios_open_web_url(const char *url);
 void WM_apple_ios_ui_operator_input_adjust(bContext *C, wmOperator *op);
 bool ios_menu_popup(bContext *C, const char *menu);
 bool ios_enum_popup(bContext *C, wmOperator *op, PropertyRNA *prop);
@@ -254,6 +255,7 @@ wmNativeInterface native_interface_create()
   native.enum_popup = ios_enum_popup;
   native.panel_popup = ios_panel_popup;
   native.props_dialog = props_dialog;
+  native.web_url_open = wm_apple_ios_open_web_url;
   return native;
 }
 

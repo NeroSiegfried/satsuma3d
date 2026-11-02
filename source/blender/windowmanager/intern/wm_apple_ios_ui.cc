@@ -93,6 +93,7 @@
 
 #include "WM_api.hh"
 #include "WM_gizmo_api.hh"
+#include "WM_native_interface.hh"
 #include "WM_toolsystem.hh"
 #include "WM_types.hh"
 
@@ -3775,16 +3776,15 @@ void WM_OT_apple_ios_interface_toggle(wmOperatorType *ot)
   ot->get_name = ios_interface_toggle_get_name;
 }
 
-extern "C" void wm_apple_ios_open_web_url(const char *url);
-
 static wmOperatorStatus ios_url_open_exec(bContext * /*C*/, wmOperator *op)
 {
   char url[1024];
   RNA_string_get(op->ptr, "url", url);
-  if (!url[0]) {
+  const wmNativeInterface *native = WM_native_interface();
+  if (!url[0] || !native || !native->web_url_open) {
     return OPERATOR_CANCELLED;
   }
-  wm_apple_ios_open_web_url(url);
+  native->web_url_open(url);
   return OPERATOR_FINISHED;
 }
 

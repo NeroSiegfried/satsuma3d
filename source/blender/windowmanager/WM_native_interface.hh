@@ -141,6 +141,9 @@ struct wmNativeInterface {
   /** Show one of Blender's panels natively, such as Rename Active Item's. False for Blender's. */
   bool (*panel_popup)(bContext *C, const char *panel) = nullptr;
 
+  /** Open a web page in the platform's browser: Help's links, an add-on's documentation. */
+  void (*web_url_open)(const char *url) = nullptr;
+
   /**
    * The barrel roll of a Pencil touching the screen, in radians, for moving things to turn them
    * too. False with no Pencil down.
