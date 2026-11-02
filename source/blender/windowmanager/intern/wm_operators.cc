@@ -102,8 +102,8 @@
 #include "UI_resources.hh"
 
 #include "WM_api.hh"
-#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
-#  include "WM_apple_ios.hh"
+#ifdef WITH_NATIVE_UI
+#  include "WM_native_ui.hh"
 #endif
 #include "WM_keymap.hh"
 #include "WM_native_interface.hh"
@@ -4299,9 +4299,9 @@ static void WM_OT_stereo3d_set(wmOperatorType *ot)
 
 void wm_operatortypes_register()
 {
-#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
-  WM_operatortype_append(WM_OT_apple_ios_interface_toggle);
-  WM_operatortype_append(WM_OT_apple_ios_url_open);
+#ifdef WITH_NATIVE_UI
+  WM_operatortype_append(WM_OT_native_interface_toggle);
+  WM_operatortype_append(WM_OT_native_url_open);
 #endif
   WM_operatortype_append(WM_OT_window_close);
   WM_operatortype_append(WM_OT_window_new);

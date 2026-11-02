@@ -23,7 +23,7 @@ probe.blender_device_probe_dialog_start()
 free = ctypes.CDLL('/usr/lib/libSystem.B.dylib').free
 free.argtypes = [ctypes.c_void_p]
 engine = ctypes.CDLL(None)
-engine.WM_apple_ios_ui_operator_enqueue.argtypes = [ctypes.c_char_p]
+engine.WM_native_ui_operator_enqueue.argtypes = [ctypes.c_char_p]
 report = {'checks': []}
 output = Path.home() / 'Documents/hierarchy-swipe-test.json'
 
@@ -102,14 +102,14 @@ def tests():
     check(not bpy.data.objects.get('Swipe Copy') and bpy.data.objects.get('Camera') and bpy.data.objects.get('Cube'),
           'Confirmed delete removes only the swiped object')
     check(camera.select_get() and cube.select_get(), 'Deleting a row preserves other selected objects')
-    engine.WM_apple_ios_ui_operator_enqueue(b'ed.undo')
+    engine.WM_native_ui_operator_enqueue(b'ed.undo')
     yield 1.0
     check(bpy.data.objects.get('Swipe Copy') is not None, 'One undo restores the deleted object')
-    engine.WM_apple_ios_ui_operator_enqueue(b'ed.undo')
+    engine.WM_native_ui_operator_enqueue(b'ed.undo')
     yield 1.0
     check(bpy.data.objects.get('Cube.001') is not None and not bpy.data.objects.get('Swipe Copy'),
           'One undo reverses the rename')
-    engine.WM_apple_ios_ui_operator_enqueue(b'ed.undo')
+    engine.WM_native_ui_operator_enqueue(b'ed.undo')
     yield 1.0
     check(bpy.data.objects.get('Cube.001') is None, 'One undo reverses the duplicate')
     cube = bpy.data.objects['Cube']

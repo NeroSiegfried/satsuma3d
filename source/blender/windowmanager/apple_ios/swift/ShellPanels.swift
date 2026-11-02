@@ -72,16 +72,16 @@ final class ShellPanels {
 
   /** Blender's panels, timeline and asset snapshots, whichever changed. */
   func pullSnapshots() {
-    if let timelineSnapshot = takeJSON(WM_apple_ios_ui_timeline_take_json()) { timeline.updateSnapshot(timelineSnapshot) }
-    if let assetsSnapshot = takeJSON(WM_apple_ios_ui_assets_take_json()) { assets.updateSnapshot(assetsSnapshot) }
-    if let panelsSnapshot = takeJSON(WM_apple_ios_ui_panels_take_json()) { panels.updateSnapshot(panelsSnapshot) }
+    if let timelineSnapshot = takeJSON(WM_native_ui_timeline_take_json()) { timeline.updateSnapshot(timelineSnapshot) }
+    if let assetsSnapshot = takeJSON(WM_native_ui_assets_take_json()) { assets.updateSnapshot(assetsSnapshot) }
+    if let panelsSnapshot = takeJSON(WM_native_ui_panels_take_json()) { panels.updateSnapshot(panelsSnapshot) }
     panels.image.pullPixels()
   }
 
   private func takeJSON(_ json: UnsafeMutablePointer<CChar>?) -> Any? {
     guard let json else { return nil }
     let data = Data(bytes: json, count: strlen(json))
-    WM_apple_ios_ui_toolbar_free_json(json)
+    WM_native_ui_json_free(json)
     return try? JSONSerialization.jsonObject(with: data)
   }
 }

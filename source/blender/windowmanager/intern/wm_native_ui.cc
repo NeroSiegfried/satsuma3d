@@ -5,7 +5,9 @@
 /** \file
  * \ingroup wm
  *
- * iPad shell glue for the native UIKit overlay.
+ * The bridge between Blender and a platform's own interface, such as the iPad's SwiftUI one: the
+ * commands it sends, run on Blender's loop, and snapshots of Blender for it to show, as JSON. The
+ * interface calls in through `WM_native_ui.h`; Blender's own code through `WM_native_ui.hh`.
  */
 
 #include "AS_asset_catalog.hh"
@@ -95,6 +97,8 @@
 #include "WM_api.hh"
 #include "WM_gizmo_api.hh"
 #include "WM_native_interface.hh"
+#include "WM_native_ui.h"
+#include "WM_native_ui.hh"
 #include "WM_toolsystem.hh"
 #include "WM_types.hh"
 
@@ -144,14 +148,14 @@ namespace blender {
 static CLG_LogRef LOG = {"wm.native"};
 
 /* The scene as 3D geometry for a volumetric window, see `wm_apple_ios_volume.cc`. */
-void ios_volume_build(bContext *C);
-bool ios_volume_command(bContext *C, StringRef setting, StringRef value);
+void bridge_volume_build(bContext *C);
+bool bridge_volume_command(bContext *C, StringRef setting, StringRef value);
 
-void ios_interface_set(bContext *C, bool desktop);
+void bridge_interface_set(bContext *C, bool desktop);
 
 namespace {
 
-enum class IOSUICommand {
+enum class BridgeCommand {
   SetModeObject = 0,
   SetModeEdit = 1,
   SetModeSculpt = 2,
@@ -187,45 +191,51 @@ enum class IOSUICommand {
   ViewTop = 32,
   ViewBottom = 33,
 };
+static_assert(int(BridgeCommand::SetModeObject) == int(WM_NATIVE_UI_COMMAND_SET_MODE_OBJECT) &&
+                  int(BridgeCommand::ViewBottom) == int(WM_NATIVE_UI_COMMAND_VIEW_BOTTOM),
+              "Commands as WM_native_ui.h numbers them");
 
-struct IOSOperatorPropertyCommand {
+struct BridgeOperatorPropertyCommand {
   std::string op_name;
   std::string prop_name;
   std::string prop_value;
 };
 
-struct IOSOperatorCommand {
+struct BridgeOperatorCommand {
   std::string op_name;
 };
 
-struct IOSSettingCommand {
+struct BridgeSettingCommand {
   std::string setting;
   std::string value;
 };
 
-struct IOSBrushCommand {
+struct BridgeBrushCommand {
   std::string key;
 };
 
-/** Native asset pane drags; see #ios_asset_drag. */
-enum IOSAssetDragPhase {
-  IOS_ASSET_DRAG_BEGIN,
-  IOS_ASSET_DRAG_MOVE,
-  IOS_ASSET_DRAG_DROP,
-  IOS_ASSET_DRAG_CANCEL,
+/** Native asset pane drags; see #bridge_asset_drag. */
+enum BridgeAssetDragPhase {
+  BRIDGE_ASSET_DRAG_BEGIN,
+  BRIDGE_ASSET_DRAG_MOVE,
+  BRIDGE_ASSET_DRAG_DROP,
+  BRIDGE_ASSET_DRAG_CANCEL,
   /** Drop at the 3D cursor, or onto the active object for materials and node groups. */
-  IOS_ASSET_ADD,
-  /** Internal second step of #IOS_ASSET_ADD: release at window coordinates. */
-  IOS_ASSET_ADD_RELEASE,
+  BRIDGE_ASSET_ADD,
+  /** Internal second step of #BRIDGE_ASSET_ADD: release at window coordinates. */
+  BRIDGE_ASSET_ADD_RELEASE,
 };
+static_assert(int(BRIDGE_ASSET_DRAG_BEGIN) == int(WM_NATIVE_UI_ASSET_DRAG_BEGIN) &&
+                  int(BRIDGE_ASSET_ADD) == int(WM_NATIVE_UI_ASSET_ADD),
+              "Asset drags as WM_native_ui.h numbers them");
 
-struct IOSAssetDragCommand {
-  int phase = IOS_ASSET_DRAG_MOVE;
+struct BridgeAssetDragCommand {
+  int phase = BRIDGE_ASSET_DRAG_MOVE;
   std::string key;
   int x = 0, y = 0;
 };
 
-struct IOSMenuRequest {
+struct BridgeMenuRequest {
   uint64_t identifier;
   std::string route;
   bool execute;
@@ -233,100 +243,98 @@ struct IOSMenuRequest {
   int x = 0, y = 0;
   int retries = 0;
 };
-using IOSUIMessage = std::variant<IOSUICommand,
-                                  IOSOperatorCommand,
-                                  IOSOperatorPropertyCommand,
-                                  IOSSettingCommand,
+using BridgeMessage = std::variant<BridgeCommand,
+                                  BridgeOperatorCommand,
+                                  BridgeOperatorPropertyCommand,
+                                  BridgeSettingCommand,
                                   std::string,
                                   float,
-                                  IOSMenuRequest,
-                                  IOSBrushCommand,
-                                  IOSAssetDragCommand>;
+                                  BridgeMenuRequest,
+                                  BridgeBrushCommand,
+                                  BridgeAssetDragCommand>;
 /* A single inbox preserves ordering across tools, settings, operators and menus. */
-GHOST_MessageQueue<IOSUIMessage> ios_ui_messages;
-GHOST_MessageQueue<std::pair<uint64_t, std::string>> ios_menu_completed;
-/* UIKit-owned result cache. */
-std::map<uint64_t, std::string> ios_menu_results;
-std::atomic<uint64_t> ios_menu_next_identifier{0};
-bool ios_ui_layout_ready = false;
-bool ios_ui_gizmo_refresh_pending = true;
+GHOST_MessageQueue<BridgeMessage> bridge_messages;
+GHOST_MessageQueue<std::pair<uint64_t, std::string>> bridge_menu_completed;
+/* Results the native interface has yet to take. */
+std::map<uint64_t, std::string> bridge_menu_results;
+std::atomic<uint64_t> bridge_menu_next_identifier{0};
+bool bridge_layout_ready = false;
+bool bridge_gizmo_refresh_pending = true;
 /** Blender's own interface instead of the native one: normal screens, no native controls. */
-std::atomic<bool> ios_desktop_ui{false};
-int ios_panels_visible = 0;
-std::chrono::steady_clock::time_point ios_panels_next_snapshot;
-/* The last panels snapshot UIKit was given; cleared when it asks for different panels. */
-std::string ios_panels_published;
-std::string ios_panels_json = "null";
-std::string ios_properties_state = "{\"tab\":\"OBJECT\"}";
-std::string ios_shading_state = "{\"tab\":\"SHADING\"}";
+std::atomic<bool> bridge_desktop_ui{false};
+int bridge_panels_visible = 0;
+std::chrono::steady_clock::time_point bridge_panels_next_snapshot;
+/* The last panels snapshot the native interface was given; cleared when it asks for different panels. */
+std::string bridge_panels_published;
+std::string bridge_panels_json = "null";
+std::string bridge_properties_state = "{\"tab\":\"OBJECT\"}";
+std::string bridge_shading_state = "{\"tab\":\"SHADING\"}";
 /** Blender's Preferences, a section at a time, in the iPad's Settings, see `SettingsSheet.swift`. */
-std::string ios_preferences_state = "{\"tab\":\"PREFERENCES_INTERFACE\"}";
+std::string bridge_preferences_state = "{\"tab\":\"PREFERENCES_INTERFACE\"}";
 /** The keymaps Settings shows with their items and what it searches for, as JSON. */
-std::string ios_keymaps_state = "{}";
+std::string bridge_keymaps_state = "{}";
 /** Changed preferences are saved shortly after, as the iPad may end the app without warning. */
-bool ios_preferences_save_pending = false;
-std::chrono::steady_clock::time_point ios_preferences_save_at;
+bool bridge_preferences_save_pending = false;
+std::chrono::steady_clock::time_point bridge_preferences_save_at;
 /** The node tree the native node editor shows: its kind and the groups entered. */
-std::string ios_nodes_state = "{\"tree\":\"SHADER\"}";
+std::string bridge_nodes_state = "{\"tree\":\"SHADER\"}";
 /** The tree last read, to read it again at once when another is chosen. */
-std::string ios_nodes_identity;
+std::string bridge_nodes_identity;
 /* The node tree read last, read again only when something may have changed it: notifiers, the
  * editor's own commands, or a slow check. Reading a large tree takes a while. */
-bool ios_nodes_dirty = true;
+bool bridge_nodes_dirty = true;
 /** Composite once the tree is read, for a compositor backdrop just shown. */
-bool ios_nodes_composite = false;
-std::string ios_nodes_json;
-std::chrono::steady_clock::time_point ios_nodes_next_check;
+bool bridge_nodes_composite = false;
+std::string bridge_nodes_json;
+std::chrono::steady_clock::time_point bridge_nodes_next_check;
 /** The tree the Add Node list was sent for, sent again only for another. */
-std::string ios_nodes_add_for;
+std::string bridge_nodes_add_for;
 /** The native curve editor's state, curves and whether they need reading again. */
-std::string ios_graph_state = "{}";
-bool ios_graph_dirty = true;
-std::string ios_graph_json;
-std::chrono::steady_clock::time_point ios_graph_next_check;
+std::string bridge_graph_state = "{}";
+bool bridge_graph_dirty = true;
+std::string bridge_graph_json;
+std::chrono::steady_clock::time_point bridge_graph_next_check;
 /** The native image editor's state: the image chosen and whether UVs show over it. */
-std::string ios_image_state = "{}";
-bool ios_image_dirty = true;
-std::string ios_image_json;
-std::chrono::steady_clock::time_point ios_image_next_check;
+std::string bridge_image_state = "{}";
+bool bridge_image_dirty = true;
+std::string bridge_image_json;
+std::chrono::steady_clock::time_point bridge_image_next_check;
 /** Its picture and UVs, taken by the native editor when they change. */
-GHOST_Latest<ed::image::NativeImagePixels> ios_image_pixels;
-GHOST_Latest<std::vector<float>> ios_image_uvs;
+GHOST_Latest<ed::image::NativeImagePixels> bridge_image_pixels;
+GHOST_Latest<std::vector<float>> bridge_image_uvs;
 /** The picture changed since it was last sent, which waits a little while painting. */
-bool ios_image_pixels_pending = true;
-bool ios_image_uvs_pending = true;
+bool bridge_image_pixels_pending = true;
+bool bridge_image_uvs_pending = true;
 /* The storyboard: the sequencer scene's shots, see `sequencer_native.cc`. */
-bool ios_storyboard_dirty = true;
+bool bridge_storyboard_dirty = true;
 /* How the native storyboard shows the shots: the frames between their pictures, and their size. */
-std::string ios_storyboard_state = "{}";
+std::string bridge_storyboard_state = "{}";
 /* Pictures of shots were still to draw at the last look, or it has not looked yet. */
-bool ios_storyboard_pending = true;
-std::string ios_storyboard_json;
-std::chrono::steady_clock::time_point ios_storyboard_next_check;
-std::string ios_properties_error;
-int64_t ios_panels_sequence = 0;
-std::atomic<bool> ios_navigation_hover_active{false};
-std::atomic<bool> ios_navigation_redraw_pending{false};
+bool bridge_storyboard_pending = true;
+std::string bridge_storyboard_json;
+std::chrono::steady_clock::time_point bridge_storyboard_next_check;
+std::string bridge_properties_error;
+int64_t bridge_panels_sequence = 0;
+std::atomic<bool> bridge_navigation_hover_active{false};
+std::atomic<bool> bridge_navigation_redraw_pending{false};
 /** Height of the native bottom tray (the asset pane) as a fraction of the window height. */
-std::atomic<float> ios_bottom_tray{0.0f};
+std::atomic<float> bridge_bottom_tray{0.0f};
 /** Window pixels a native panel covers at the bottom, which the 3D views leave out. */
-std::atomic<float> ios_viewport_cover{0.0f};
+std::atomic<float> bridge_viewport_cover{0.0f};
 /** Window pixels a native panel covers at the right, such as the Image Editor beside the 3D view. */
-std::atomic<float> ios_viewport_trailing_cover{0.0f};
-std::atomic<bool> ios_viewport_cover_changed{false};
-extern "C" int WM_apple_ios_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region);
-extern "C" int WM_apple_ios_ui_top_bar_ymax(const wmWindow *win, const ARegion *region);
-struct IOSPencilHoverRequest {
+std::atomic<float> bridge_viewport_trailing_cover{0.0f};
+std::atomic<bool> bridge_viewport_cover_changed{false};
+struct BridgePencilHoverRequest {
   bool active = false;
   int x = 0, y = 0;
 };
-GHOST_Latest<IOSPencilHoverRequest> ios_hover_requests;
-GHOST_Latest<std::string> ios_hover_snapshot;
+GHOST_Latest<BridgePencilHoverRequest> bridge_hover_requests;
+GHOST_Latest<std::string> bridge_hover_snapshot;
 /* Window coordinates of the asset drag in progress. */
-int2 ios_asset_drag_xy(0);
-IOSPencilHoverRequest ios_hover_request;
+int2 bridge_asset_drag_xy(0);
+BridgePencilHoverRequest bridge_hover_request;
 
-struct IOSActionItem {
+struct BridgeActionItem {
   const char *title;
   const char *op_name;
   const char *symbol;
@@ -336,28 +344,28 @@ struct IOSActionItem {
   bool selected = false;
 };
 
-GHOST_Latest<std::string> ios_toolbar_snapshot;
-/** One of Blender's menus to show natively where the pointer is, see #ios_menu_popup. */
-GHOST_Latest<std::string> ios_menu_popup_snapshot;
-GHOST_Latest<std::string> ios_panels_snapshot;
-GHOST_Latest<std::string> ios_timeline_snapshot;
-std::string ios_timeline_json;
+GHOST_Latest<std::string> bridge_toolbar_snapshot;
+/** One of Blender's menus to show natively where the pointer is, see #bridge_menu_popup. */
+GHOST_Latest<std::string> bridge_menu_popup_snapshot;
+GHOST_Latest<std::string> bridge_panels_snapshot;
+GHOST_Latest<std::string> bridge_timeline_snapshot;
+std::string bridge_timeline_json;
 /* Keyframes shown on the timeline, refreshed on the native cadence while it is open. */
-bool ios_timeline_visible = false;
-std::string ios_timeline_keys_json = "[]";
-std::chrono::steady_clock::time_point ios_timeline_next_keys;
+bool bridge_timeline_visible = false;
+std::string bridge_timeline_keys_json = "[]";
+std::chrono::steady_clock::time_point bridge_timeline_next_keys;
 /* Native asset pane: listed only while shown. */
-bool ios_assets_visible = false;
-std::string ios_assets_json;
-std::chrono::steady_clock::time_point ios_assets_next_snapshot;
-GHOST_Latest<std::string> ios_assets_snapshot;
-std::string ios_toolbar_json =
+bool bridge_assets_visible = false;
+std::string bridge_assets_json;
+std::chrono::steady_clock::time_point bridge_assets_next_snapshot;
+GHOST_Latest<std::string> bridge_assets_snapshot;
+std::string bridge_toolbar_json =
     "{\"mode\":\"objectmode\",\"active\":\"builtin.select_box\",\"tools\":[]}";
 
-std::string ios_json_escape(const std::string &value);
-void ios_brush_direction_set(bContext *C, bool add);
+std::string bridge_json_escape(const std::string &value);
+void bridge_brush_direction_set(bContext *C, bool add);
 
-void ios_action_add_key(std::vector<IOSActionItem> &items,
+void bridge_action_add_key(std::vector<BridgeActionItem> &items,
                         const char *title,
                         const char *symbol,
                         const char *key)
@@ -365,7 +373,7 @@ void ios_action_add_key(std::vector<IOSActionItem> &items,
   items.push_back({title, "", symbol, "", "", key});
 }
 
-wmOperator *ios_constraint_operator(wmWindow *win)
+wmOperator *bridge_constraint_operator(wmWindow *win)
 {
   if (win == nullptr) {
     return nullptr;
@@ -391,7 +399,7 @@ wmOperator *ios_constraint_operator(wmWindow *win)
  * nothing waits, or a tool's own drag already runs. `done` says it ends with Done rather than
  * after one drag.
  */
-static const char *ios_drag_hint(wmWindow *win, bool *r_done)
+static const char *bridge_drag_hint(wmWindow *win, bool *r_done)
 {
   *r_done = false;
   if (win == nullptr) {
@@ -429,18 +437,18 @@ static const char *ios_drag_hint(wmWindow *win, bool *r_done)
   return nullptr;
 }
 
-std::vector<IOSActionItem> ios_action_items_for_tool(bContext *C,
+std::vector<BridgeActionItem> bridge_action_items_for_tool(bContext *C,
                                                      const eContextObjectMode mode,
                                                      const char *active_tool_id)
 {
-  std::vector<IOSActionItem> items;
+  std::vector<BridgeActionItem> items;
 
-  if (wmOperator *op = ios_constraint_operator(CTX_wm_window(C))) {
+  if (wmOperator *op = bridge_constraint_operator(CTX_wm_window(C))) {
     int axes;
     blender::ed::transform::modal_constraint_get(op, axes);
     for (int axis = 0; axis < 3; axis++) {
       const char *name = axis == 0 ? "X" : axis == 1 ? "Y" : "Z";
-      ios_action_add_key(items, name, "", name);
+      bridge_action_add_key(items, name, "", name);
       items.back().selected = (axes & (1 << axis)) != 0;
     }
     return items;
@@ -451,7 +459,7 @@ std::vector<IOSActionItem> ios_action_items_for_tool(bContext *C,
   return items;
 }
 
-ScrArea *ios_find_view3d_area(bScreen *screen)
+ScrArea *bridge_find_view3d_area(bScreen *screen)
 {
   if (screen == nullptr) {
     return nullptr;
@@ -473,7 +481,7 @@ ScrArea *ios_find_view3d_area(bScreen *screen)
   return best_area;
 }
 
-ARegion *ios_find_window_region(ScrArea *area)
+ARegion *bridge_find_window_region(ScrArea *area)
 {
   if (area == nullptr) {
     return nullptr;
@@ -488,7 +496,7 @@ ARegion *ios_find_window_region(ScrArea *area)
   return nullptr;
 }
 
-wmWindow *ios_active_window(bContext *C)
+wmWindow *bridge_active_window(bContext *C)
 {
   wmWindow *win = CTX_wm_window(C);
   if (win != nullptr) {
@@ -502,21 +510,21 @@ wmWindow *ios_active_window(bContext *C)
   return static_cast<wmWindow *>(wm->windows.first);
 }
 
-struct IOSContextStore {
+struct BridgeContextStore {
   wmWindow *win;
   bScreen *screen;
   ScrArea *area;
   ARegion *region;
 };
 
-IOSContextStore ios_context_push_view3d(bContext *C)
+BridgeContextStore bridge_context_push_view3d(bContext *C)
 {
-  IOSContextStore store = {CTX_wm_window(C), CTX_wm_screen(C), CTX_wm_area(C), CTX_wm_region(C)};
+  BridgeContextStore store = {CTX_wm_window(C), CTX_wm_screen(C), CTX_wm_area(C), CTX_wm_region(C)};
 
-  wmWindow *win = ios_active_window(C);
+  wmWindow *win = bridge_active_window(C);
   bScreen *screen = win ? WM_window_get_active_screen(win) : CTX_wm_screen(C);
-  ScrArea *area = ios_find_view3d_area(screen);
-  ARegion *region = ios_find_window_region(area);
+  ScrArea *area = bridge_find_view3d_area(screen);
+  ARegion *region = bridge_find_window_region(area);
 
   CTX_wm_window_set(C, win);
   CTX_wm_screen_set(C, screen);
@@ -526,13 +534,13 @@ IOSContextStore ios_context_push_view3d(bContext *C)
   return store;
 }
 
-void ios_context_pop(bContext *C, const IOSContextStore &store)
+void bridge_context_pop(bContext *C, const BridgeContextStore &store)
 {
-  if (ios_ui_layout_ready) {
-    wmWindow *win = ios_active_window(C);
+  if (bridge_layout_ready) {
+    wmWindow *win = bridge_active_window(C);
     bScreen *screen = win ? WM_window_get_active_screen(win) : store.screen;
-    ScrArea *area = ios_find_view3d_area(screen);
-    ARegion *region = ios_find_window_region(area);
+    ScrArea *area = bridge_find_view3d_area(screen);
+    ARegion *region = bridge_find_window_region(area);
 
     CTX_wm_window_set(C, win);
     CTX_wm_screen_set(C, screen);
@@ -547,7 +555,7 @@ void ios_context_pop(bContext *C, const IOSContextStore &store)
   CTX_wm_region_set(C, store.region);
 }
 
-void ios_operator_call(bContext *C, const char *op_name, PointerRNA *props = nullptr)
+void bridge_operator_call(bContext *C, const char *op_name, PointerRNA *props = nullptr)
 {
   if (WM_operator_name_poll(C, op_name)) {
     /* Smooth view uses OP_IS_INVOKE, including for operators with only an exec callback.
@@ -569,7 +577,7 @@ void ios_operator_call(bContext *C, const char *op_name, PointerRNA *props = nul
   }
 }
 
-bool ios_undo_available(bContext *C, const char *op_name = "ED_OT_undo")
+bool bridge_undo_available(bContext *C, const char *op_name = "ED_OT_undo")
 {
   wmWindow *win = CTX_wm_window(C);
   if (win == nullptr) {
@@ -585,10 +593,10 @@ bool ios_undo_available(bContext *C, const char *op_name = "ED_OT_undo")
   return WM_operator_name_poll(C, op_name);
 }
 
-void ios_operator_invoke(bContext *C, const char *op_name)
+void bridge_operator_invoke(bContext *C, const char *op_name)
 {
   if ((STREQ(op_name, "ED_OT_undo") || STREQ(op_name, "ED_OT_redo")) &&
-      !ios_undo_available(C, op_name))
+      !bridge_undo_available(C, op_name))
   {
     return;
   }
@@ -598,7 +606,7 @@ void ios_operator_invoke(bContext *C, const char *op_name)
   }
 }
 
-void ios_operator_call_with_enum_property(bContext *C,
+void bridge_operator_call_with_enum_property(bContext *C,
                                           const char *op_name,
                                           const char *prop_name,
                                           const char *prop_value)
@@ -606,7 +614,7 @@ void ios_operator_call_with_enum_property(bContext *C,
   if (op_name == nullptr || prop_name == nullptr || prop_value == nullptr ||
       prop_name[0] == '\0' || prop_value[0] == '\0')
   {
-    ios_operator_call(C, op_name);
+    bridge_operator_call(C, op_name);
     return;
   }
 
@@ -617,18 +625,18 @@ void ios_operator_call_with_enum_property(bContext *C,
 
   PointerRNA props = WM_operator_properties_create_ptr(ot);
   RNA_enum_set_identifier(C, &props, prop_name, prop_value);
-  ios_operator_call(C, op_name, &props);
+  bridge_operator_call(C, op_name, &props);
   WM_operator_properties_free(&props);
 }
 
-PropertyRNA *ios_rna_boolean_set(bContext *C,
+PropertyRNA *bridge_rna_boolean_set(bContext *C,
                                  PointerRNA &ptr,
                                  const char *identifier,
                                  bool value);
-void ios_rna_undo_push(bContext *C, PropertyRNA *prop);
+void bridge_rna_undo_push(bContext *C, PropertyRNA *prop);
 
 /** The text object being edited, if one is. */
-static Curve *ios_text_object_edited(bContext *C)
+static Curve *bridge_text_object_edited(bContext *C)
 {
   Object *object = CTX_data_edit_object(C);
   if (object == nullptr || object->type != OB_FONT) {
@@ -639,9 +647,9 @@ static Curve *ios_text_object_edited(bContext *C)
 }
 
 /** The text object being edited, else the active one, for its style, font and alignment. */
-static Curve *ios_text_object_active(bContext *C)
+static Curve *bridge_text_object_active(bContext *C)
 {
-  if (Curve *curve = ios_text_object_edited(C)) {
+  if (Curve *curve = bridge_text_object_edited(C)) {
     return curve;
   }
   Object *object = CTX_data_active_object(C);
@@ -649,9 +657,9 @@ static Curve *ios_text_object_active(bContext *C)
 }
 
 /** The style the system's formatting panel shows: the selection's, else what typing adds. */
-static std::string ios_text_object_json(bContext *C)
+static std::string bridge_text_object_json(bContext *C)
 {
-  Curve *curve = ios_text_object_edited(C);
+  Curve *curve = bridge_text_object_edited(C);
   if (curve == nullptr) {
     return "null";
   }
@@ -670,7 +678,7 @@ static std::string ios_text_object_json(bContext *C)
   json += std::string(",\"underline\":") + ((flag & CU_CHINFO_UNDERLINE) ? "true" : "false");
   json += ",\"align\":\"" + std::string(align) + "\"";
   json += ",\"font_file\":\"" +
-          ios_json_escape(curve->vfont ? curve->vfont->filepath : "") + "\"";
+          bridge_json_escape(curve->vfont ? curve->vfont->filepath : "") + "\"";
   json += "}";
   return json;
 }
@@ -679,9 +687,9 @@ static std::string ios_text_object_json(bContext *C)
  * Sets a style on the selection and on what typing adds next, as Blender's Font panel does; out
  * of Edit Mode, on all of the text, as a text box is styled.
  */
-static void ios_text_object_style(bContext *C, const std::string &style, const bool on)
+static void bridge_text_object_style(bContext *C, const std::string &style, const bool on)
 {
-  Curve *curve = ios_text_object_active(C);
+  Curve *curve = bridge_text_object_active(C);
   const struct {
     const char *name;
     const char *format_prop;
@@ -711,20 +719,20 @@ static void ios_text_object_style(bContext *C, const std::string &style, const b
     PointerRNA props = WM_operator_properties_create_ptr(ot);
     RNA_enum_set_identifier(C, &props, "style", style.c_str());
     RNA_boolean_set(&props, "clear", !on);
-    ios_operator_call(C, "FONT_OT_style_set", &props);
+    bridge_operator_call(C, "FONT_OT_style_set", &props);
     WM_operator_properties_free(&props);
   }
   PointerRNA curve_ptr = RNA_id_pointer_create(&curve->id);
   PointerRNA format = RNA_pointer_get(&curve_ptr, "edit_format");
-  ios_rna_boolean_set(C, format, found->format_prop, on);
+  bridge_rna_boolean_set(C, format, found->format_prop, on);
   ED_undo_push(C, "Set Style");
 }
 
 /** Fonts the system's formatting panel picked, as `slot=path` lines: written font files, which
  * are packed, as they are only a cache. */
-static void ios_text_object_fonts(bContext *C, const std::string &lines)
+static void bridge_text_object_fonts(bContext *C, const std::string &lines)
 {
-  Curve *curve = ios_text_object_active(C);
+  Curve *curve = bridge_text_object_active(C);
   if (curve == nullptr) {
     return;
   }
@@ -768,7 +776,7 @@ static void ios_text_object_fonts(bContext *C, const std::string &lines)
  * system's text formatting: `insert:<text>`, `delete`, `line_break`, `move:<FONT_OT_move type>`,
  * `style:<BOLD|ITALIC|UNDERLINE|SMALL_CAPS>:<0|1>`, `align:<align_x>` or `font:<slot=path lines>`.
  */
-void ios_text_object_edit(bContext *C, const std::string &command)
+void bridge_text_object_edit(bContext *C, const std::string &command)
 {
   const size_t colon = command.find(':');
   const std::string action = command.substr(0, colon);
@@ -780,39 +788,39 @@ void ios_text_object_edit(bContext *C, const std::string &command)
     }
     PointerRNA props = WM_operator_properties_create_ptr(ot);
     RNA_string_set(&props, "text", argument.c_str());
-    ios_operator_call(C, "FONT_OT_text_insert", &props);
+    bridge_operator_call(C, "FONT_OT_text_insert", &props);
     WM_operator_properties_free(&props);
   }
   else if (action == "delete") {
-    ios_operator_call_with_enum_property(C, "FONT_OT_delete", "type", "PREVIOUS_OR_SELECTION");
+    bridge_operator_call_with_enum_property(C, "FONT_OT_delete", "type", "PREVIOUS_OR_SELECTION");
   }
   else if (action == "line_break") {
-    ios_operator_call(C, "FONT_OT_line_break");
+    bridge_operator_call(C, "FONT_OT_line_break");
   }
   else if (action == "move") {
-    ios_operator_call_with_enum_property(C, "FONT_OT_move", "type", argument.c_str());
+    bridge_operator_call_with_enum_property(C, "FONT_OT_move", "type", argument.c_str());
   }
   else if (action == "style") {
     const size_t separator = argument.find(':');
-    ios_text_object_style(
+    bridge_text_object_style(
         C, argument.substr(0, separator), separator != std::string::npos && argument.substr(separator + 1) == "1");
   }
   else if (action == "align") {
-    if (Curve *curve = ios_text_object_active(C)) {
+    if (Curve *curve = bridge_text_object_active(C)) {
       PointerRNA curve_ptr = RNA_id_pointer_create(&curve->id);
       if (PropertyRNA *prop = RNA_struct_find_property(&curve_ptr, "align_x")) {
         RNA_enum_set_identifier(C, &curve_ptr, "align_x", argument.c_str());
         RNA_property_update(C, &curve_ptr, prop);
-        ios_rna_undo_push(C, prop);
+        bridge_rna_undo_push(C, prop);
       }
     }
   }
   else if (action == "font") {
-    ios_text_object_fonts(C, argument);
+    bridge_text_object_fonts(C, argument);
   }
   else if (action == "align_y" || action == "value") {
     /* `align_y:<enum>`, or `value:<size|space_line|space_character|space_word>:<number>`. */
-    Curve *curve = ios_text_object_active(C);
+    Curve *curve = bridge_text_object_active(C);
     if (curve == nullptr) {
       return;
     }
@@ -833,11 +841,11 @@ void ios_text_object_edit(bContext *C, const std::string &command)
       RNA_property_float_set(&curve_ptr, prop, std::clamp(float(value), minimum, maximum));
     }
     RNA_property_update(C, &curve_ptr, prop);
-    ios_rna_undo_push(C, prop);
+    bridge_rna_undo_push(C, prop);
   }
 }
 
-void ios_mode_set(bContext *C, const char *mode)
+void bridge_mode_set(bContext *C, const char *mode)
 {
   wmOperatorType *ot = WM_operatortype_find("OBJECT_OT_mode_set", false);
   if (ot == nullptr) {
@@ -856,7 +864,7 @@ void ios_mode_set(bContext *C, const char *mode)
 /** Modes the active object supports, as listed by Blender's own header mode menu.
  * Filter directly: `OBJECT_OT_mode_set` items read through owner-less operator properties
  * are resolved without context, which lists every mode for every object type. */
-std::string ios_object_modes_json(bContext *C)
+std::string bridge_object_modes_json(bContext *C)
 {
   const Object *active = CTX_data_active_object(C);
   std::string json = "[";
@@ -870,14 +878,14 @@ std::string ios_object_modes_json(bContext *C)
     const char *icon = nullptr;
     RNA_enum_identifier(rna_enum_icon_items, item->icon, &icon);
     json += json.size() > 1 ? "," : "";
-    json += "{\"id\":\"" + ios_json_escape(item->identifier) + "\",\"label\":\"" +
-            ios_json_escape(item->name ? item->name : item->identifier) + "\",\"icon\":\"" +
-            ios_json_escape(icon ? icon : "") + "\"}";
+    json += "{\"id\":\"" + bridge_json_escape(item->identifier) + "\",\"label\":\"" +
+            bridge_json_escape(item->name ? item->name : item->identifier) + "\",\"icon\":\"" +
+            bridge_json_escape(icon ? icon : "") + "\"}";
   }
   return json + "]";
 }
 
-void ios_view_axis(bContext *C, const char *axis_type)
+void bridge_view_axis(bContext *C, const char *axis_type)
 {
   wmOperatorType *ot = WM_operatortype_find("VIEW3D_OT_view_axis", false);
   if (ot == nullptr) {
@@ -888,11 +896,11 @@ void ios_view_axis(bContext *C, const char *axis_type)
   RNA_enum_set_identifier(C, &props, "type", axis_type);
   RNA_boolean_set(&props, "align_active", false);
   RNA_boolean_set(&props, "relative", false);
-  ios_operator_call(C, "VIEW3D_OT_view_axis", &props);
+  bridge_operator_call(C, "VIEW3D_OT_view_axis", &props);
   WM_operator_properties_free(&props);
 }
 
-void ios_view_orbit(bContext *C, const char *direction)
+void bridge_view_orbit(bContext *C, const char *direction)
 {
   wmOperatorType *ot = WM_operatortype_find("VIEW3D_OT_view_orbit", false);
   if (ot == nullptr) {
@@ -901,11 +909,11 @@ void ios_view_orbit(bContext *C, const char *direction)
 
   PointerRNA props = WM_operator_properties_create_ptr(ot);
   RNA_enum_set_identifier(C, &props, "type", direction);
-  ios_operator_call(C, "VIEW3D_OT_view_orbit", &props);
+  bridge_operator_call(C, "VIEW3D_OT_view_orbit", &props);
   WM_operator_properties_free(&props);
 }
 
-void ios_view_roll_angle(bContext *C, const float angle)
+void bridge_view_roll_angle(bContext *C, const float angle)
 {
   wmOperatorType *ot = WM_operatortype_find("VIEW3D_OT_view_roll", false);
   if (ot == nullptr) {
@@ -921,7 +929,7 @@ void ios_view_roll_angle(bContext *C, const float angle)
   WM_operator_properties_free(&props);
 }
 
-void ios_viewport_shading_set(bContext *C, const int shading_type)
+void bridge_viewport_shading_set(bContext *C, const int shading_type)
 {
   Main *bmain = CTX_data_main(C);
   ScrArea *area = CTX_wm_area(C);
@@ -945,7 +953,7 @@ void ios_viewport_shading_set(bContext *C, const int shading_type)
   WM_event_add_notifier(C, NC_SPACE | ND_SPACE_VIEW3D | NS_VIEW3D_SHADING, v3d);
 }
 
-int ios_orientation_value_for_id(const std::string &value)
+int bridge_orientation_value_for_id(const std::string &value)
 {
   if (value == "local") {
     return V3D_ORIENT_LOCAL;
@@ -968,7 +976,7 @@ int ios_orientation_value_for_id(const std::string &value)
   return V3D_ORIENT_GLOBAL;
 }
 
-int ios_pivot_value_for_id(const std::string &value)
+int bridge_pivot_value_for_id(const std::string &value)
 {
   if (value == "bounds") {
     return V3D_AROUND_CENTER_BOUNDS;
@@ -985,7 +993,7 @@ int ios_pivot_value_for_id(const std::string &value)
   return V3D_AROUND_CENTER_MEDIAN;
 }
 
-eSnapMode ios_snap_mode_for_id(const std::string &value)
+eSnapMode bridge_snap_mode_for_id(const std::string &value)
 {
   if (value == "grid") {
     return SCE_SNAP_TO_GRID;
@@ -1005,7 +1013,7 @@ eSnapMode ios_snap_mode_for_id(const std::string &value)
   return SCE_SNAP_TO_INCREMENT;
 }
 
-const char *ios_orientation_id(const int orientation)
+const char *bridge_orientation_id(const int orientation)
 {
   switch (orientation) {
     case V3D_ORIENT_GLOBAL:
@@ -1027,7 +1035,7 @@ const char *ios_orientation_id(const int orientation)
   }
 }
 
-const char *ios_pivot_id(const int pivot)
+const char *bridge_pivot_id(const int pivot)
 {
   switch (pivot) {
     case V3D_AROUND_CENTER_BOUNDS:
@@ -1043,20 +1051,20 @@ const char *ios_pivot_id(const int pivot)
   }
 }
 
-const char *ios_snap_id(const ToolSettings *settings)
+const char *bridge_snap_id(const ToolSettings *settings)
 {
   if (!(settings->snap_flag & SCE_SNAP)) {
     return "off";
   }
   for (const char *id : {"increment", "grid", "vertex", "edge", "face", "volume"}) {
-    if (settings->snap_mode == ios_snap_mode_for_id(id)) {
+    if (settings->snap_mode == bridge_snap_mode_for_id(id)) {
       return id;
     }
   }
   return "mixed";
 }
 
-const char *ios_proportional_id(const ToolSettings *settings, const eContextObjectMode mode)
+const char *bridge_proportional_id(const ToolSettings *settings, const eContextObjectMode mode)
 {
   const bool enabled = mode == CTX_MODE_OBJECT ?
                            settings->proportional_objects :
@@ -1074,7 +1082,7 @@ const char *ios_proportional_id(const ToolSettings *settings, const eContextObje
 }
 
 /** The mode's mirror options, as its header's Mirror popover shows them. */
-struct IOSMirror {
+struct BridgeMirror {
   /** What has the axes, named `prefix` and the axis: `use_mesh_mirror_x`. */
   PointerRNA axes;
   const char *prefix;
@@ -1084,25 +1092,25 @@ struct IOSMirror {
   std::optional<PointerRNA> topology;
 };
 
-static std::optional<IOSMirror> ios_mirror(Object *ob, const eContextObjectMode mode)
+static std::optional<BridgeMirror> bridge_mirror(Object *ob, const eContextObjectMode mode)
 {
   if (ob == nullptr || ob->data == nullptr) {
     return std::nullopt;
   }
   switch (mode) {
     case CTX_MODE_EDIT_MESH:
-      return IOSMirror{RNA_id_pointer_create(&ob->id),
+      return BridgeMirror{RNA_id_pointer_create(&ob->id),
                        "use_mesh_mirror_",
                        "xyz",
                        RNA_id_pointer_create(static_cast<ID *>(ob->data))};
     case CTX_MODE_EDIT_ARMATURE:
-      return IOSMirror{
+      return BridgeMirror{
           RNA_id_pointer_create(static_cast<ID *>(ob->data)), "use_mirror_", "x", std::nullopt};
     case CTX_MODE_POSE:
       if (ob->pose == nullptr) {
         return std::nullopt;
       }
-      return IOSMirror{RNA_pointer_create_discrete(&ob->id, RNA_Pose, ob->pose),
+      return BridgeMirror{RNA_pointer_create_discrete(&ob->id, RNA_Pose, ob->pose),
                        "use_mirror_",
                        "x",
                        std::nullopt};
@@ -1111,7 +1119,7 @@ static std::optional<IOSMirror> ios_mirror(Object *ob, const eContextObjectMode 
   }
 }
 
-std::string ios_transform_settings_json(const Scene *scene,
+std::string bridge_transform_settings_json(const Scene *scene,
                                         Object *ob,
                                         const eContextObjectMode mode)
 {
@@ -1122,15 +1130,15 @@ std::string ios_transform_settings_json(const Scene *scene,
   const int orientation = BKE_scene_orientation_slot_get_index(
       &scene->orientation_slots[SCE_ORIENT_DEFAULT]);
   std::string json = "{\"orientation\":\"";
-  json += ios_orientation_id(orientation);
+  json += bridge_orientation_id(orientation);
   json += "\",\"pivot\":\"";
-  json += ios_pivot_id(settings->transform_pivot_point);
+  json += bridge_pivot_id(settings->transform_pivot_point);
   json += "\",\"snap\":\"";
-  json += ios_snap_id(settings);
+  json += bridge_snap_id(settings);
   json += "\",\"proportional\":\"";
-  json += ios_proportional_id(settings, mode);
+  json += bridge_proportional_id(settings, mode);
   json += "\"";
-  if (std::optional<IOSMirror> mirror = ios_mirror(ob, mode)) {
+  if (std::optional<BridgeMirror> mirror = bridge_mirror(ob, mode)) {
     /* The axes there are, and which of them mirror. */
     json += ",\"mirror_axes\":\"";
     json += mirror->letters;
@@ -1151,7 +1159,7 @@ std::string ios_transform_settings_json(const Scene *scene,
   return json;
 }
 
-std::string ios_mesh_select_mode_string(const ToolSettings *tool_settings)
+std::string bridge_mesh_select_mode_string(const ToolSettings *tool_settings)
 {
   if (tool_settings == nullptr) {
     return "VERT";
@@ -1165,7 +1173,7 @@ std::string ios_mesh_select_mode_string(const ToolSettings *tool_settings)
   return "VERT";
 }
 
-void ios_mesh_select_mode_set(bContext *C, const std::string &value)
+void bridge_mesh_select_mode_set(bContext *C, const std::string &value)
 {
   wmOperatorType *ot = WM_operatortype_find("MESH_OT_select_mode", false);
   if (ot == nullptr) {
@@ -1187,7 +1195,7 @@ void ios_mesh_select_mode_set(bContext *C, const std::string &value)
  * Set a property as Blender's own header buttons do: through RNA, so its update runs and
  * notifiers are sent. Returns the property, or null when it does not exist.
  */
-PropertyRNA *ios_rna_enum_set(bContext *C,
+PropertyRNA *bridge_rna_enum_set(bContext *C,
                               PointerRNA &ptr,
                               const char *identifier,
                               const int value)
@@ -1201,7 +1209,7 @@ PropertyRNA *ios_rna_enum_set(bContext *C,
   return prop;
 }
 
-PropertyRNA *ios_rna_boolean_set(bContext *C,
+PropertyRNA *bridge_rna_boolean_set(bContext *C,
                                  PointerRNA &ptr,
                                  const char *identifier,
                                  const bool value)
@@ -1216,7 +1224,7 @@ PropertyRNA *ios_rna_boolean_set(bContext *C,
 }
 
 /** One undo step for a tool setting, named after it as the header's buttons name theirs. */
-void ios_rna_undo_push(bContext *C, PropertyRNA *prop)
+void bridge_rna_undo_push(bContext *C, PropertyRNA *prop)
 {
   if (prop != nullptr) {
     ED_undo_push(C, RNA_property_ui_name(prop));
@@ -1226,7 +1234,7 @@ void ios_rna_undo_push(bContext *C, PropertyRNA *prop)
 /** The active tool, with the area's tool synced to the mode first: the snapshot is read right
  * after operators, which can change the mode (as adding an object from Sculpt Mode does), before
  * Blender's own update syncs it. */
-static bToolRef *ios_active_tool(bContext *C)
+static bToolRef *bridge_active_tool(bContext *C)
 {
   if (ScrArea *area = CTX_wm_area(C)) {
     if (WorkSpace *workspace = CTX_wm_workspace(C)) {
@@ -1238,9 +1246,9 @@ static bToolRef *ios_active_tool(bContext *C)
 }
 
 /** Save the preferences, when changed, as Blender does on quit unless that is turned off. */
-static void ios_preferences_save(bContext *C)
+static void bridge_preferences_save(bContext *C)
 {
-  ios_preferences_save_pending = false;
+  bridge_preferences_save_pending = false;
   if (U.runtime.is_dirty && (U.pref_flag & USER_PREF_FLAG_SAVE) &&
       (G.f & G_FLAG_USERPREF_NO_SAVE_ON_EXIT) == 0)
   {
@@ -1250,55 +1258,55 @@ static void ios_preferences_save(bContext *C)
 }
 
 /** While Settings shows them, preferences are saved a second after they last changed. */
-static void ios_preferences_save_when_changed(bContext *C,
+static void bridge_preferences_save_when_changed(bContext *C,
                                               const std::chrono::steady_clock::time_point now)
 {
   if (!U.runtime.is_dirty) {
-    ios_preferences_save_pending = false;
+    bridge_preferences_save_pending = false;
   }
-  else if (!ios_preferences_save_pending) {
-    ios_preferences_save_pending = true;
-    ios_preferences_save_at = now + std::chrono::seconds(1);
+  else if (!bridge_preferences_save_pending) {
+    bridge_preferences_save_pending = true;
+    bridge_preferences_save_at = now + std::chrono::seconds(1);
   }
-  else if (now >= ios_preferences_save_at) {
-    ios_preferences_save(C);
+  else if (now >= bridge_preferences_save_at) {
+    bridge_preferences_save(C);
   }
 }
 
 /* What a drag with Tweak does, from the top bar's Drag menu: move, roll, tilt. */
-static std::atomic<bool> ios_tweak_move = true;
-static std::atomic<bool> ios_tweak_roll = true;
-static std::atomic<bool> ios_tweak_tilt = true;
+static std::atomic<bool> bridge_tweak_move = true;
+static std::atomic<bool> bridge_tweak_roll = true;
+static std::atomic<bool> bridge_tweak_tilt = true;
 
 /* Whether what the Pencil or pointer hovers over is highlighted, from the iPad's Settings. */
-static bool ios_hover_highlight = true;
+static bool bridge_hover_highlight = true;
 
 /* The navigation gizmo's corner of the viewport, from the iPad's Settings, and mirrored for the
  * left hand. */
-static std::atomic<bool> ios_navigation_top = false;
-static std::atomic<bool> ios_navigation_left = false;
+static std::atomic<bool> bridge_navigation_top = false;
+static std::atomic<bool> bridge_navigation_left = false;
 
-void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
+void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
 {
   if (command.setting == "navigation_corner") {
-    ios_navigation_top = command.value.starts_with("top");
-    ios_navigation_left = command.value.ends_with("left");
+    bridge_navigation_top = command.value.starts_with("top");
+    bridge_navigation_left = command.value.ends_with("left");
     WM_main_add_notifier(NC_SPACE | ND_SPACE_VIEW3D, nullptr);
     return;
   }
   if (command.setting == "hover_highlight") {
-    ios_hover_highlight = command.value == "1";
+    bridge_hover_highlight = command.value == "1";
     return;
   }
   if (command.setting == "tweak_drag") {
     /* The letters of what is on: "m" move, "r" roll, "t" tilt. */
-    ios_tweak_move = command.value.find('m') != std::string::npos;
-    ios_tweak_roll = command.value.find('r') != std::string::npos;
-    ios_tweak_tilt = command.value.find('t') != std::string::npos;
+    bridge_tweak_move = command.value.find('m') != std::string::npos;
+    bridge_tweak_roll = command.value.find('r') != std::string::npos;
+    bridge_tweak_tilt = command.value.find('t') != std::string::npos;
     return;
   }
   bool preview = false;
-  if (ios_volume_command(C, command.setting, command.value)) {
+  if (bridge_volume_command(C, command.setting, command.value)) {
     return;
   }
   if (command.setting == "native_redo_edit") {
@@ -1310,146 +1318,146 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     return;
   }
   if (command.setting == "interface") {
-    ios_interface_set(C, command.value == "desktop");
+    bridge_interface_set(C, command.value == "desktop");
     return;
   }
   if (command.setting == "native_shading_state") {
-    ios_shading_state = command.value;
-    ios_panels_next_snapshot = {};
-    ios_panels_published.clear();
+    bridge_shading_state = command.value;
+    bridge_panels_next_snapshot = {};
+    bridge_panels_published.clear();
     return;
   }
   if (command.setting == "native_shading_visible") {
-    ios_panels_visible = (ios_panels_visible & ~4) | (command.value == "1" ? 4 : 0);
-    ios_panels_next_snapshot = {};
-    ios_panels_published.clear();
+    bridge_panels_visible = (bridge_panels_visible & ~4) | (command.value == "1" ? 4 : 0);
+    bridge_panels_next_snapshot = {};
+    bridge_panels_published.clear();
     return;
   }
   if (command.setting == "native_preferences_state") {
-    ios_preferences_state = command.value;
-    ios_panels_next_snapshot = {};
-    ios_panels_published.clear();
+    bridge_preferences_state = command.value;
+    bridge_panels_next_snapshot = {};
+    bridge_panels_published.clear();
     return;
   }
   if (command.setting == "native_preferences_visible") {
-    ios_panels_visible = (ios_panels_visible & ~32) | (command.value == "1" ? 32 : 0);
-    ios_panels_next_snapshot = {};
-    ios_panels_published.clear();
+    bridge_panels_visible = (bridge_panels_visible & ~32) | (command.value == "1" ? 32 : 0);
+    bridge_panels_next_snapshot = {};
+    bridge_panels_published.clear();
     if (command.value != "1") {
-      ios_preferences_save(C);
+      bridge_preferences_save(C);
     }
     return;
   }
   if (command.setting == "native_nodes_state") {
-    ios_nodes_dirty = true;
-    ios_nodes_composite = command.value.find("COMPOSITOR") != std::string::npos;
-    ios_nodes_state = command.value;
-    ios_panels_next_snapshot = {};
-    ios_panels_published.clear();
+    bridge_nodes_dirty = true;
+    bridge_nodes_composite = command.value.find("COMPOSITOR") != std::string::npos;
+    bridge_nodes_state = command.value;
+    bridge_panels_next_snapshot = {};
+    bridge_panels_published.clear();
     return;
   }
   if (command.setting == "native_nodes_visible") {
-    ios_nodes_dirty = true;
-    ios_panels_visible = (ios_panels_visible & ~8) | (command.value == "1" ? 8 : 0);
-    ios_panels_next_snapshot = {};
-    ios_panels_published.clear();
+    bridge_nodes_dirty = true;
+    bridge_panels_visible = (bridge_panels_visible & ~8) | (command.value == "1" ? 8 : 0);
+    bridge_panels_next_snapshot = {};
+    bridge_panels_published.clear();
     return;
   }
   if (command.setting == "native_nodes_edit") {
-    ios_nodes_dirty = true;
+    bridge_nodes_dirty = true;
     std::istringstream stream(command.value);
     auto value = io::serialize::JsonFormatter().deserialize(stream);
     if (const auto *request = value ? value->as_dictionary_value() : nullptr) {
-      ios_panels_sequence = request->lookup_int("sequence").value_or(ios_panels_sequence);
+      bridge_panels_sequence = request->lookup_int("sequence").value_or(bridge_panels_sequence);
       preview = request->lookup_str("phase").value_or("") == "update";
     }
     if (!preview) {
-      ios_panels_next_snapshot = {};
+      bridge_panels_next_snapshot = {};
     }
-    ios_properties_error = ui::native_nodes_query(C, command.value, true);
+    bridge_properties_error = ui::native_nodes_query(C, command.value, true);
     return;
   }
   if (command.setting == "native_image_state") {
-    ios_image_dirty = true;
-    ios_image_pixels_pending = true;
-    ios_image_uvs_pending = true;
-    ios_image_state = command.value;
-    ios_panels_next_snapshot = {};
+    bridge_image_dirty = true;
+    bridge_image_pixels_pending = true;
+    bridge_image_uvs_pending = true;
+    bridge_image_state = command.value;
+    bridge_panels_next_snapshot = {};
     return;
   }
   if (command.setting == "native_image_visible") {
-    ios_image_dirty = true;
-    ios_image_pixels_pending = true;
-    ios_image_uvs_pending = true;
-    ios_panels_visible = (ios_panels_visible & ~128) | (command.value == "1" ? 128 : 0);
-    ios_panels_next_snapshot = {};
-    ios_panels_published.clear();
+    bridge_image_dirty = true;
+    bridge_image_pixels_pending = true;
+    bridge_image_uvs_pending = true;
+    bridge_panels_visible = (bridge_panels_visible & ~128) | (command.value == "1" ? 128 : 0);
+    bridge_panels_next_snapshot = {};
+    bridge_panels_published.clear();
     return;
   }
   if (command.setting == "native_image_edit") {
-    ios_image_dirty = true;
-    ios_image_pixels_pending = true;
+    bridge_image_dirty = true;
+    bridge_image_pixels_pending = true;
     std::istringstream stream(command.value);
     auto value = io::serialize::JsonFormatter().deserialize(stream);
     if (const auto *request = value ? value->as_dictionary_value() : nullptr) {
-      ios_panels_sequence = request->lookup_int("sequence").value_or(ios_panels_sequence);
+      bridge_panels_sequence = request->lookup_int("sequence").value_or(bridge_panels_sequence);
     }
-    ios_panels_next_snapshot = {};
-    ios_properties_error = ed::image::native_image_query(C, command.value, true);
+    bridge_panels_next_snapshot = {};
+    bridge_properties_error = ed::image::native_image_query(C, command.value, true);
     return;
   }
   if (command.setting == "native_graph_state") {
-    ios_graph_dirty = true;
-    ios_graph_state = command.value;
-    ios_panels_next_snapshot = {};
-    ios_panels_published.clear();
+    bridge_graph_dirty = true;
+    bridge_graph_state = command.value;
+    bridge_panels_next_snapshot = {};
+    bridge_panels_published.clear();
     return;
   }
   if (command.setting == "native_graph_visible") {
-    ios_graph_dirty = true;
-    ios_panels_visible = (ios_panels_visible & ~16) | (command.value == "1" ? 16 : 0);
-    ios_panels_next_snapshot = {};
-    ios_panels_published.clear();
+    bridge_graph_dirty = true;
+    bridge_panels_visible = (bridge_panels_visible & ~16) | (command.value == "1" ? 16 : 0);
+    bridge_panels_next_snapshot = {};
+    bridge_panels_published.clear();
     return;
   }
   if (command.setting == "native_storyboard_visible") {
-    ios_storyboard_dirty = true;
-    ios_panels_visible = (ios_panels_visible & ~64) | (command.value == "1" ? 64 : 0);
-    ios_panels_next_snapshot = {};
-    ios_panels_published.clear();
+    bridge_storyboard_dirty = true;
+    bridge_panels_visible = (bridge_panels_visible & ~64) | (command.value == "1" ? 64 : 0);
+    bridge_panels_next_snapshot = {};
+    bridge_panels_published.clear();
     return;
   }
   if (command.setting == "native_storyboard_state") {
-    ios_storyboard_dirty = true;
-    ios_storyboard_state = command.value;
-    ios_panels_next_snapshot = {};
+    bridge_storyboard_dirty = true;
+    bridge_storyboard_state = command.value;
+    bridge_panels_next_snapshot = {};
     return;
   }
   if (command.setting == "native_storyboard_edit") {
-    ios_storyboard_dirty = true;
+    bridge_storyboard_dirty = true;
     std::istringstream stream(command.value);
     auto value = io::serialize::JsonFormatter().deserialize(stream);
     if (const auto *request = value ? value->as_dictionary_value() : nullptr) {
-      ios_panels_sequence = request->lookup_int("sequence").value_or(ios_panels_sequence);
+      bridge_panels_sequence = request->lookup_int("sequence").value_or(bridge_panels_sequence);
     }
-    ios_panels_next_snapshot = {};
-    ios_properties_error = ed::vse::native_storyboard_query(C, command.value, true);
+    bridge_panels_next_snapshot = {};
+    bridge_properties_error = ed::vse::native_storyboard_query(C, command.value, true);
     return;
   }
   if (command.setting == "native_graph_edit") {
-    ios_graph_dirty = true;
+    bridge_graph_dirty = true;
     std::istringstream stream(command.value);
     auto value = io::serialize::JsonFormatter().deserialize(stream);
     if (const auto *request = value ? value->as_dictionary_value() : nullptr) {
-      ios_panels_sequence = request->lookup_int("sequence").value_or(ios_panels_sequence);
+      bridge_panels_sequence = request->lookup_int("sequence").value_or(bridge_panels_sequence);
     }
-    ios_panels_next_snapshot = {};
-    ios_properties_error = ed::graph::native_graph_query(C, command.value, true);
+    bridge_panels_next_snapshot = {};
+    bridge_properties_error = ed::graph::native_graph_query(C, command.value, true);
     return;
   }
   if (command.setting == "native_nodes_create") {
-    ios_nodes_dirty = true;
-    ios_nodes_add_for.clear();
+    bridge_nodes_dirty = true;
+    bridge_nodes_add_for.clear();
     /* A material, Geometry Nodes or compositor nodes for the node editor to show, as their own
      * buttons make them. */
     const char *imports[] = {"bpy", nullptr};
@@ -1492,49 +1500,49 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
 #else
     UNUSED_VARS(imports);
 #endif
-    ios_panels_next_snapshot = {};
+    bridge_panels_next_snapshot = {};
     return;
   }
   if (command.setting == "native_properties_state") {
-    ios_properties_state = command.value;
-    ios_panels_next_snapshot = {};
-    ios_panels_published.clear();
+    bridge_properties_state = command.value;
+    bridge_panels_next_snapshot = {};
+    bridge_panels_published.clear();
     return;
   }
   if (command.setting == "native_properties_edit" || command.setting == "native_panel_edit") {
     std::istringstream stream(command.value);
     auto value = io::serialize::JsonFormatter().deserialize(stream);
     if (const auto *request = value ? value->as_dictionary_value() : nullptr) {
-      ios_panels_sequence = request->lookup_int("sequence").value_or(ios_panels_sequence);
+      bridge_panels_sequence = request->lookup_int("sequence").value_or(bridge_panels_sequence);
       preview = request->lookup_str("phase").value_or("") == "update";
     }
-    ios_properties_error.clear();
+    bridge_properties_error.clear();
   }
   if (command.setting == "native_properties_edit") {
     /* Local controls already show the drag value. Keep expensive full-panel snapshots
      * on their normal cadence while evaluation and viewport redraw run live. */
     if (!preview) {
-      ios_panels_next_snapshot = {};
+      bridge_panels_next_snapshot = {};
     }
-    /* While a stroke or other operator runs, only values arrive here, see #ios_ui_message_live;
+    /* While a stroke or other operator runs, only values arrive here, see #bridge_message_live;
      * their undo steps wait for it to end. */
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
     if (WM_apple_ios_dialog_active(CTX_wm_window(C))) {
-      ios_properties_error = "Finish the current dialog before editing properties.";
+      bridge_properties_error = "Finish the current dialog before editing properties.";
       return;
     }
 #endif
-    ios_properties_error = ui::native_properties_query(C, command.value, true);
+    bridge_properties_error = ui::native_properties_query(C, command.value, true);
     CLOG_DEBUG(&LOG,
                "Properties edit %s -> %s",
-               command.value.substr(0, 200).c_str(), ios_properties_error.c_str());
+               command.value.substr(0, 200).c_str(), bridge_properties_error.c_str());
     return;
   }
   if (command.setting == "native_panels") {
-    ios_panels_next_snapshot = {};
-    ios_panels_published.clear();
+    bridge_panels_next_snapshot = {};
+    bridge_panels_published.clear();
     /* Settings, open over the window, stays as it is. */
-    ios_panels_visible = (ios_panels_visible & (4 | 32 | 64 | 128)) | (command.value == "3" ? 3 :
+    bridge_panels_visible = (bridge_panels_visible & (4 | 32 | 64 | 128)) | (command.value == "3" ? 3 :
                                                      command.value == "2" ? 2 :
                                                      command.value == "1" ? 1 :
                                                                             0);
@@ -1545,13 +1553,13 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     /* From the iPad's Settings, see `bl_ui.native_settings`. */
     const char *imports[] = {"bpy", "bl_ui", nullptr};
     const std::string expression = "bl_ui.native_settings.keymap_set(bpy.context, \"" +
-                                   ios_json_escape(command.value) + "\")";
+                                   bridge_json_escape(command.value) + "\")";
     BPY_run_string_eval(C, imports, expression.c_str());
     return;
   }
   if (command.setting == "native_keymaps_state") {
-    ios_keymaps_state = command.value;
-    ios_panels_next_snapshot = {};
+    bridge_keymaps_state = command.value;
+    bridge_panels_next_snapshot = {};
     return;
   }
   if (command.setting == "native_addon" || command.setting == "native_keymap_item_active") {
@@ -1559,20 +1567,20 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     const char *imports[] = {"bpy", "bl_ui", nullptr};
     const std::string expression = "bl_ui.native_settings.command(bpy.context, \"" +
                                    command.setting.substr(strlen("native_")) + "\", \"" +
-                                   ios_json_escape(command.value) + "\")";
+                                   bridge_json_escape(command.value) + "\")";
     BPY_run_string_eval(C, imports, expression.c_str());
-    ios_panels_next_snapshot = {};
+    bridge_panels_next_snapshot = {};
     return;
   }
   if (command.setting == "render" || command.setting == "viewport_toggle") {
     /* Rendering and viewport options from the iPad's Share and More menus, see
      * `bl_ui.native_render`. */
-    const IOSContextStore context_store = ios_context_push_view3d(C);
+    const BridgeContextStore context_store = bridge_context_push_view3d(C);
     const char *imports[] = {"bpy", "bl_ui", nullptr};
     std::string expression;
     if (command.setting == "viewport_toggle") {
       expression = "bl_ui.native_render.viewport_toggle(bpy.context, \"" +
-                   ios_json_escape(command.value) + "\")";
+                   bridge_json_escape(command.value) + "\")";
     }
     else if (command.value == "cancel") {
       WM_jobs_kill_type(CTX_wm_manager(C), nullptr, WM_JOB_TYPE_RENDER);
@@ -1586,71 +1594,71 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
                    (command.value == "animation" ? "True" : "False") + ")";
     }
     BPY_run_string_eval(C, imports, expression.c_str());
-    ios_context_pop(C, context_store);
+    bridge_context_pop(C, context_store);
     return;
   }
   if (command.setting == "native_brush") {
     /* The sidebar's size and strength, and the color well, see `bl_ui.native_brush`. A drag
      * sends many values and one undo step as it ends. */
-    const IOSContextStore context_store = ios_context_push_view3d(C);
+    const BridgeContextStore context_store = bridge_context_push_view3d(C);
     const char *imports[] = {"bpy", "bl_ui", nullptr};
     const std::string expression = "bl_ui.native_brush.brush_set(bpy.context, \"" +
-                                   ios_json_escape(command.value) + "\")";
+                                   bridge_json_escape(command.value) + "\")";
     BPY_run_string_eval(C, imports, expression.c_str());
     if (command.value.find("\"commit\":true") != std::string::npos) {
       ED_undo_push(C, "Brush Setting");
     }
     WM_main_add_notifier(NC_BRUSH | NA_EDITED, nullptr);
-    ios_context_pop(C, context_store);
+    bridge_context_pop(C, context_store);
     return;
   }
   if (command.setting == "rename_active") {
     /* Rename Active from the native interface, which asks for the name itself rather than
      * Blender's popup; see `bl_ui.native_actions.rename_active`. */
-    const IOSContextStore context_store = ios_context_push_view3d(C);
+    const BridgeContextStore context_store = bridge_context_push_view3d(C);
     const char *imports[] = {"bpy", "bl_ui", nullptr};
     const std::string expression = "bl_ui.native_actions.rename_active(bpy.context, \"" +
-                                   ios_json_escape(command.value) + "\")";
+                                   bridge_json_escape(command.value) + "\")";
     BPY_run_string_eval(C, imports, expression.c_str());
     ED_undo_push(C, "Rename");
     WM_main_add_notifier(NC_ID | NA_RENAME, nullptr);
-    ios_context_pop(C, context_store);
+    bridge_context_pop(C, context_store);
     return;
   }
   if (command.setting == "native_action") {
     /* The button may predate a context change; `run` checks the action still applies. */
-    const bToolRef *tool = ios_active_tool(C);
+    const bToolRef *tool = bridge_active_tool(C);
     const char *imports[] = {"bpy", "bl_ui", nullptr};
     const std::string expression = "bl_ui.native_actions.run(bpy.context, \"" +
-                                   ios_json_escape(command.value) + "\", \"" +
-                                   ios_json_escape(tool ? tool->idname : "") + "\")";
+                                   bridge_json_escape(command.value) + "\", \"" +
+                                   bridge_json_escape(tool ? tool->idname : "") + "\")";
     BPY_run_string_eval(C, imports, expression.c_str());
     return;
   }
   if (command.setting == "native_panel_edit") {
-    ios_panels_next_snapshot = {};
+    bridge_panels_next_snapshot = {};
     const char *imports[] = {"bpy", "bl_ui", nullptr};
     bool blocked = false;
 #  if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
     blocked = WM_apple_ios_dialog_active(CTX_wm_window(C));
 #  endif
     const std::string expression = "bl_ui.native_panels.apply_json(bpy.context, \"" +
-                                   ios_json_escape(command.value) + "\", " +
+                                   bridge_json_escape(command.value) + "\", " +
                                    (blocked ? "True" : "False") + ")";
     BPY_run_string_eval(C, imports, expression.c_str());
     return;
   }
 #endif
   if (command.setting == "text_object_edit") {
-    ios_text_object_edit(C, command.value);
+    bridge_text_object_edit(C, command.value);
     return;
   }
   if (command.setting == "object_mode") {
-    ios_mode_set(C, command.value.c_str());
+    bridge_mode_set(C, command.value.c_str());
     return;
   }
   if (command.setting == "brush_direction") {
-    ios_brush_direction_set(C, command.value == "add");
+    bridge_brush_direction_set(C, command.value == "add");
     return;
   }
   if (command.setting == "constraint_axis") {
@@ -1659,7 +1667,7 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
                      command.value == "Z" ? 2 :
                                             -1;
     blender::ed::transform::modal_constraint_toggle(
-        C, ios_constraint_operator(CTX_wm_window(C)), axis);
+        C, bridge_constraint_operator(CTX_wm_window(C)), axis);
     return;
   }
   Scene *scene = CTX_data_scene(C);
@@ -1676,49 +1684,49 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
   if (command.setting == "orientation") {
     PointerRNA slot_ptr = RNA_pointer_create_discrete(
         &scene->id, RNA_TransformOrientationSlot, &scene->orientation_slots[SCE_ORIENT_DEFAULT]);
-    ios_rna_undo_push(
-        C, ios_rna_enum_set(C, slot_ptr, "type", ios_orientation_value_for_id(command.value)));
+    bridge_rna_undo_push(
+        C, bridge_rna_enum_set(C, slot_ptr, "type", bridge_orientation_value_for_id(command.value)));
     return;
   }
 
   if (command.setting == "pivot") {
-    ios_rna_undo_push(
+    bridge_rna_undo_push(
         C,
-        ios_rna_enum_set(
-            C, tool_settings_ptr, "transform_pivot_point", ios_pivot_value_for_id(command.value)));
+        bridge_rna_enum_set(
+            C, tool_settings_ptr, "transform_pivot_point", bridge_pivot_value_for_id(command.value)));
     return;
   }
 
   if (command.setting == "snap") {
     if (command.value != "off") {
-      ios_rna_enum_set(C, tool_settings_ptr, "snap_elements", ios_snap_mode_for_id(command.value));
+      bridge_rna_enum_set(C, tool_settings_ptr, "snap_elements", bridge_snap_mode_for_id(command.value));
     }
-    ios_rna_undo_push(
-        C, ios_rna_boolean_set(C, tool_settings_ptr, "use_snap", command.value != "off"));
+    bridge_rna_undo_push(
+        C, bridge_rna_boolean_set(C, tool_settings_ptr, "use_snap", command.value != "off"));
     return;
   }
 
   if (command.setting == "mirror" || command.setting == "mirror_topology") {
     /* An axis, as the letter, or Topology Mirror: each a toggle, as in the Mirror popover. */
-    std::optional<IOSMirror> mirror = ios_mirror(CTX_data_active_object(C), CTX_data_mode_enum(C));
+    std::optional<BridgeMirror> mirror = bridge_mirror(CTX_data_active_object(C), CTX_data_mode_enum(C));
     if (!mirror) {
       return;
     }
     if (command.setting == "mirror_topology") {
       if (mirror->topology) {
         PointerRNA &mesh = *mirror->topology;
-        ios_rna_undo_push(
+        bridge_rna_undo_push(
             C,
-            ios_rna_boolean_set(
+            bridge_rna_boolean_set(
                 C, mesh, "use_mirror_topology", !RNA_boolean_get(&mesh, "use_mirror_topology")));
       }
       return;
     }
     if (command.value.size() == 1 && strchr(mirror->letters, command.value[0])) {
       const std::string name = mirror->prefix + command.value;
-      ios_rna_undo_push(
+      bridge_rna_undo_push(
           C,
-          ios_rna_boolean_set(
+          bridge_rna_boolean_set(
               C, mirror->axes, name.c_str(), !RNA_boolean_get(&mirror->axes, name.c_str())));
     }
     return;
@@ -1726,38 +1734,38 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
 
   if (command.setting == "proportional") {
     const bool enabled = command.value != "off";
-    ios_rna_boolean_set(C,
+    bridge_rna_boolean_set(C,
                         tool_settings_ptr,
                         CTX_data_mode_enum(C) == CTX_MODE_OBJECT ?
                             "use_proportional_edit_objects" :
                             "use_proportional_edit",
                         enabled);
-    ios_rna_boolean_set(
+    bridge_rna_boolean_set(
         C, tool_settings_ptr, "use_proportional_connected", command.value == "connected");
-    ios_rna_undo_push(
+    bridge_rna_undo_push(
         C,
-        ios_rna_boolean_set(
+        bridge_rna_boolean_set(
             C, tool_settings_ptr, "use_proportional_projected", command.value == "projected"));
     return;
   }
 
   if (command.setting == "mesh_select_mode") {
     /* MESH_OT_select_mode notifies and pushes its own undo step. */
-    ios_mesh_select_mode_set(C, command.value);
+    bridge_mesh_select_mode_set(C, command.value);
     return;
   }
 
   if (command.setting == "assets") {
     /* The pane is listed only while shown; showing it publishes a fresh list. */
-    ios_assets_visible = command.value == "show";
-    ios_assets_json.clear();
-    ios_assets_next_snapshot = {};
+    bridge_assets_visible = command.value == "show";
+    bridge_assets_json.clear();
+    bridge_assets_next_snapshot = {};
     return;
   }
 
   if (command.setting == "timeline_visible") {
-    ios_timeline_visible = command.value == "1";
-    ios_timeline_next_keys = {};
+    bridge_timeline_visible = command.value == "1";
+    bridge_timeline_next_keys = {};
     return;
   }
 
@@ -1793,7 +1801,7 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     }
     const char *imports[] = {"bpy", nullptr};
     BPY_run_string_eval(C, imports, expression.c_str());
-    ios_timeline_next_keys = {};
+    bridge_timeline_next_keys = {};
     return;
   }
 #endif
@@ -1821,11 +1829,11 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
       PropertyRNA *prop = RNA_struct_find_property(&ptr, "use_keyframe_insert_auto");
       RNA_property_boolean_set(&ptr, prop, !RNA_property_boolean_get(&ptr, prop));
       RNA_property_update(C, &ptr, prop);
-      ios_rna_undo_push(C, prop);
+      bridge_rna_undo_push(C, prop);
       return;
     }
     if (command.value == "play") {
-      ios_operator_call(C, "SCREEN_OT_animation_play");
+      bridge_operator_call(C, "SCREEN_OT_animation_play");
       return;
     }
     const bool jump = command.value == "start" || command.value == "end";
@@ -1837,138 +1845,138 @@ void ios_setting_execute(bContext *C, const IOSSettingCommand &command)
     PointerRNA props = WM_operator_properties_create_ptr(ot);
     RNA_boolean_set(
         &props, jump ? "end" : "next", command.value == "end" || command.value == "next_key");
-    ios_operator_call(C, op_name, &props);
+    bridge_operator_call(C, op_name, &props);
     WM_operator_properties_free(&props);
   }
 }
 
-void ios_command_execute(bContext *C, IOSUICommand command)
+void bridge_command_execute(bContext *C, BridgeCommand command)
 {
-  const IOSContextStore context_store = ios_context_push_view3d(C);
+  const BridgeContextStore context_store = bridge_context_push_view3d(C);
   if (CTX_wm_window(C) == nullptr || CTX_wm_area(C) == nullptr || CTX_wm_region(C) == nullptr) {
-    ios_context_pop(C, context_store);
+    bridge_context_pop(C, context_store);
     return;
   }
 
   switch (command) {
-    case IOSUICommand::SetModeObject:
-      ios_mode_set(C, "OBJECT");
+    case BridgeCommand::SetModeObject:
+      bridge_mode_set(C, "OBJECT");
       break;
-    case IOSUICommand::SetModeEdit:
-      ios_mode_set(C, "EDIT");
+    case BridgeCommand::SetModeEdit:
+      bridge_mode_set(C, "EDIT");
       break;
-    case IOSUICommand::SetModeSculpt:
-      ios_mode_set(C, "SCULPT");
+    case BridgeCommand::SetModeSculpt:
+      bridge_mode_set(C, "SCULPT");
       break;
-    case IOSUICommand::SetModeVertexPaint:
-      ios_mode_set(C, "VERTEX_PAINT");
+    case BridgeCommand::SetModeVertexPaint:
+      bridge_mode_set(C, "VERTEX_PAINT");
       break;
-    case IOSUICommand::SetModeWeightPaint:
-      ios_mode_set(C, "WEIGHT_PAINT");
+    case BridgeCommand::SetModeWeightPaint:
+      bridge_mode_set(C, "WEIGHT_PAINT");
       break;
-    case IOSUICommand::SetModeTexturePaint:
-      ios_mode_set(C, "TEXTURE_PAINT");
+    case BridgeCommand::SetModeTexturePaint:
+      bridge_mode_set(C, "TEXTURE_PAINT");
       break;
-    case IOSUICommand::SelectToolSelectBox:
+    case BridgeCommand::SelectToolSelectBox:
       WM_toolsystem_ref_set_by_id(C, "builtin.select_box");
       break;
-    case IOSUICommand::SelectToolCursor:
+    case BridgeCommand::SelectToolCursor:
       WM_toolsystem_ref_set_by_id(C, "builtin.cursor");
       break;
-    case IOSUICommand::SelectToolMove:
+    case BridgeCommand::SelectToolMove:
       WM_toolsystem_ref_set_by_id(C, "builtin.move");
       break;
-    case IOSUICommand::SelectToolRotate:
+    case BridgeCommand::SelectToolRotate:
       WM_toolsystem_ref_set_by_id(C, "builtin.rotate");
       break;
-    case IOSUICommand::SelectToolScale:
+    case BridgeCommand::SelectToolScale:
       WM_toolsystem_ref_set_by_id(C, "builtin.scale");
       break;
-    case IOSUICommand::SelectToolTransform:
+    case BridgeCommand::SelectToolTransform:
       WM_toolsystem_ref_set_by_id(C, "builtin.transform");
       break;
-    case IOSUICommand::SelectToolAnnotate:
+    case BridgeCommand::SelectToolAnnotate:
       WM_toolsystem_ref_set_by_id(C, "builtin.annotate");
       break;
-    case IOSUICommand::SelectToolMeasure:
+    case BridgeCommand::SelectToolMeasure:
       WM_toolsystem_ref_set_by_id(C, "builtin.measure");
       break;
-    case IOSUICommand::FrameSelected:
-      ios_operator_call(C, "VIEW3D_OT_view_selected");
+    case BridgeCommand::FrameSelected:
+      bridge_operator_call(C, "VIEW3D_OT_view_selected");
       break;
-    case IOSUICommand::ResetView:
-      ios_view_axis(C, "FRONT");
+    case BridgeCommand::ResetView:
+      bridge_view_axis(C, "FRONT");
       break;
-    case IOSUICommand::OrbitLeft:
-      ios_view_orbit(C, "ORBITLEFT");
+    case BridgeCommand::OrbitLeft:
+      bridge_view_orbit(C, "ORBITLEFT");
       break;
-    case IOSUICommand::OrbitRight:
-      ios_view_orbit(C, "ORBITRIGHT");
+    case BridgeCommand::OrbitRight:
+      bridge_view_orbit(C, "ORBITRIGHT");
       break;
-    case IOSUICommand::OrbitUp:
-      ios_view_orbit(C, "ORBITUP");
+    case BridgeCommand::OrbitUp:
+      bridge_view_orbit(C, "ORBITUP");
       break;
-    case IOSUICommand::OrbitDown:
-      ios_view_orbit(C, "ORBITDOWN");
+    case BridgeCommand::OrbitDown:
+      bridge_view_orbit(C, "ORBITDOWN");
       break;
-    case IOSUICommand::SetViewportWireframe:
-      ios_viewport_shading_set(C, OB_WIRE);
+    case BridgeCommand::SetViewportWireframe:
+      bridge_viewport_shading_set(C, OB_WIRE);
       break;
-    case IOSUICommand::SetViewportSolid:
-      ios_viewport_shading_set(C, OB_SOLID);
+    case BridgeCommand::SetViewportSolid:
+      bridge_viewport_shading_set(C, OB_SOLID);
       break;
-    case IOSUICommand::SetViewportMaterial:
-      ios_viewport_shading_set(C, OB_MATERIAL);
+    case BridgeCommand::SetViewportMaterial:
+      bridge_viewport_shading_set(C, OB_MATERIAL);
       break;
-    case IOSUICommand::SetViewportRendered:
-      ios_viewport_shading_set(C, OB_RENDER);
+    case BridgeCommand::SetViewportRendered:
+      bridge_viewport_shading_set(C, OB_RENDER);
       break;
-    case IOSUICommand::ViewAll:
-      ios_operator_call(C, "VIEW3D_OT_view_all");
+    case BridgeCommand::ViewAll:
+      bridge_operator_call(C, "VIEW3D_OT_view_all");
       break;
-    case IOSUICommand::ViewLocal:
-      ios_operator_call(C, "VIEW3D_OT_localview");
+    case BridgeCommand::ViewLocal:
+      bridge_operator_call(C, "VIEW3D_OT_localview");
       break;
-    case IOSUICommand::ViewCamera:
-      ios_operator_call(C, "VIEW3D_OT_view_camera");
+    case BridgeCommand::ViewCamera:
+      bridge_operator_call(C, "VIEW3D_OT_view_camera");
       break;
-    case IOSUICommand::ViewPerspOrtho:
-      ios_operator_call(C, "VIEW3D_OT_view_persportho");
+    case BridgeCommand::ViewPerspOrtho:
+      bridge_operator_call(C, "VIEW3D_OT_view_persportho");
       break;
-    case IOSUICommand::ViewFront:
-      ios_view_axis(C, "FRONT");
+    case BridgeCommand::ViewFront:
+      bridge_view_axis(C, "FRONT");
       break;
-    case IOSUICommand::ViewBack:
-      ios_view_axis(C, "BACK");
+    case BridgeCommand::ViewBack:
+      bridge_view_axis(C, "BACK");
       break;
-    case IOSUICommand::ViewRight:
-      ios_view_axis(C, "RIGHT");
+    case BridgeCommand::ViewRight:
+      bridge_view_axis(C, "RIGHT");
       break;
-    case IOSUICommand::ViewLeft:
-      ios_view_axis(C, "LEFT");
+    case BridgeCommand::ViewLeft:
+      bridge_view_axis(C, "LEFT");
       break;
-    case IOSUICommand::ViewTop:
-      ios_view_axis(C, "TOP");
+    case BridgeCommand::ViewTop:
+      bridge_view_axis(C, "TOP");
       break;
-    case IOSUICommand::ViewBottom:
-      ios_view_axis(C, "BOTTOM");
+    case BridgeCommand::ViewBottom:
+      bridge_view_axis(C, "BOTTOM");
       break;
   }
 
-  ios_context_pop(C, context_store);
+  bridge_context_pop(C, context_store);
 }
 
-void ios_tool_set_by_id(bContext *C, const std::string &tool_id)
+void bridge_tool_set_by_id(bContext *C, const std::string &tool_id)
 {
   if (tool_id.empty()) {
     return;
   }
 
-  const IOSContextStore context_store = ios_context_push_view3d(C);
+  const BridgeContextStore context_store = bridge_context_push_view3d(C);
   if (CTX_wm_window(C) != nullptr && CTX_wm_area(C) != nullptr && CTX_wm_region(C) != nullptr) {
     WM_toolsystem_ref_set_by_id(C, tool_id.c_str());
   }
-  ios_context_pop(C, context_store);
+  bridge_context_pop(C, context_store);
 }
 
 /* -------------------------------------------------------------------- */
@@ -1979,13 +1987,13 @@ void ios_tool_set_by_id(bContext *C, const std::string &tool_id)
  * the same brushes as Blender's own asset shelf popup (without its per-tool filter).
  * \{ */
 
-std::string ios_brushes_json = "null";
-std::chrono::steady_clock::time_point ios_brushes_next_snapshot;
-/* Session-lifetime PNG copies of brush previews, keyed like #ios_brush_key(). An empty path means
+std::string bridge_brushes_json = "null";
+std::chrono::steady_clock::time_point bridge_brushes_next_snapshot;
+/* Session-lifetime PNG copies of brush previews, keyed like #bridge_brush_key(). An empty path means
  * the asset has no usable preview. */
-std::map<std::string, std::string> ios_brush_preview_paths;
+std::map<std::string, std::string> bridge_brush_preview_paths;
 
-const AssetShelfType *ios_brush_shelf_type(const eContextObjectMode mode)
+const AssetShelfType *bridge_brush_shelf_type(const eContextObjectMode mode)
 {
   /* The brush shelves of `space_view3d.py`, one for each mode that paints with brushes. */
   const char *idname = nullptr;
@@ -2023,7 +2031,7 @@ const AssetShelfType *ios_brush_shelf_type(const eContextObjectMode mode)
   return ed::asset::shelf::type_find_from_idname(idname);
 }
 
-std::string ios_brush_key(const AssetWeakReference &reference)
+std::string bridge_brush_key(const AssetWeakReference &reference)
 {
   std::string key = std::to_string(reference.asset_library_type);
   key += ":";
@@ -2034,11 +2042,11 @@ std::string ios_brush_key(const AssetWeakReference &reference)
 }
 
 /**
- * Write the asset's preview to a PNG UIKit can load, or nothing yet while it loads. Previews of
+ * Write the asset's preview to a PNG the native interface can load, or nothing yet while it loads. Previews of
  * assets in other files load in the background as in the Asset Browser: reading one opens its
  * whole file, too slow for the thread Blender runs on.
  */
-std::optional<std::string> ios_brush_preview_write(const bContext *C,
+std::optional<std::string> bridge_brush_preview_write(const bContext *C,
                                                    asset_system::AssetRepresentation &asset,
                                                    const std::string &key)
 {
@@ -2086,9 +2094,9 @@ std::optional<std::string> ios_brush_preview_write(const bContext *C,
   return saved ? filepath : "";
 }
 
-std::string ios_brushes_build_json(bContext *C, const eContextObjectMode mode)
+std::string bridge_brushes_build_json(bContext *C, const eContextObjectMode mode)
 {
-  const AssetShelfType *shelf_type = ios_brush_shelf_type(mode);
+  const AssetShelfType *shelf_type = bridge_brush_shelf_type(mode);
   Paint *paint = BKE_paint_get_active_from_context(C);
   if (shelf_type == nullptr || paint == nullptr) {
     return "null";
@@ -2098,7 +2106,7 @@ std::string ios_brushes_build_json(bContext *C, const eContextObjectMode mode)
   ed::asset::list::storage_fetch(&library_ref, C);
   if (!ed::asset::list::is_loaded(&library_ref)) {
     /* Keep the previous list while the asset libraries are (re)loading. */
-    return ios_brushes_json == "null" ? "{\"loading\":true,\"items\":[]}" : ios_brushes_json;
+    return bridge_brushes_json == "null" ? "{\"loading\":true,\"items\":[]}" : bridge_brushes_json;
   }
 
   struct BrushItem {
@@ -2116,7 +2124,7 @@ std::string ios_brushes_build_json(bContext *C, const eContextObjectMode mode)
       return true;
     }
     BrushItem item;
-    item.key = ios_brush_key(asset.make_weak_reference());
+    item.key = bridge_brush_key(asset.make_weak_reference());
     item.name = asset.get_name();
     if (const asset_system::AssetCatalog *catalog =
             asset.owner_asset_library().catalog_service().find_catalog(
@@ -2124,14 +2132,14 @@ std::string ios_brushes_build_json(bContext *C, const eContextObjectMode mode)
     {
       item.catalog = catalog->path.str();
     }
-    auto preview = ios_brush_preview_paths.find(item.key);
-    if (preview == ios_brush_preview_paths.end() && preview_budget > 0) {
+    auto preview = bridge_brush_preview_paths.find(item.key);
+    if (preview == bridge_brush_preview_paths.end() && preview_budget > 0) {
       preview_budget--;
-      if (std::optional<std::string> path = ios_brush_preview_write(C, asset, item.key)) {
-        preview = ios_brush_preview_paths.emplace(item.key, *path).first;
+      if (std::optional<std::string> path = bridge_brush_preview_write(C, asset, item.key)) {
+        preview = bridge_brush_preview_paths.emplace(item.key, *path).first;
       }
     }
-    if (preview != ios_brush_preview_paths.end()) {
+    if (preview != bridge_brush_preview_paths.end()) {
       item.preview = preview->second;
     }
     else {
@@ -2149,12 +2157,12 @@ std::string ios_brushes_build_json(bContext *C, const eContextObjectMode mode)
   });
 
   const std::string active = paint->brush_asset_reference ?
-                                 ios_brush_key(*paint->brush_asset_reference) :
+                                 bridge_brush_key(*paint->brush_asset_reference) :
                                  "";
   std::string json = "{\"shelf\":\"";
-  json += ios_json_escape(shelf_type->idname);
+  json += bridge_json_escape(shelf_type->idname);
   json += "\",\"active\":\"";
-  json += ios_json_escape(active);
+  json += bridge_json_escape(active);
   json += "\",\"pending\":";
   json += previews_missing ? "true" : "false";
   json += ",\"items\":[";
@@ -2164,16 +2172,16 @@ std::string ios_brushes_build_json(bContext *C, const eContextObjectMode mode)
       json += ",";
     }
     const std::string catalog_name = item.catalog.substr(item.catalog.rfind('/') + 1);
-    json += "{\"id\":\"" + ios_json_escape(item.key) + "\",\"title\":\"" +
-            ios_json_escape(item.name) + "\",\"catalog\":\"" + ios_json_escape(catalog_name) +
-            "\",\"preview\":\"" + ios_json_escape(item.preview) + "\"}";
+    json += "{\"id\":\"" + bridge_json_escape(item.key) + "\",\"title\":\"" +
+            bridge_json_escape(item.name) + "\",\"catalog\":\"" + bridge_json_escape(catalog_name) +
+            "\",\"preview\":\"" + bridge_json_escape(item.preview) + "\"}";
   }
   json += "]}";
   return json;
 }
 
 /** Modes that stroke brushes, where the + and - pill picks the stroke's direction. */
-bool ios_mode_strokes(const eContextObjectMode mode)
+bool bridge_mode_strokes(const eContextObjectMode mode)
 {
   return ELEM(mode,
               CTX_MODE_SCULPT,
@@ -2187,7 +2195,7 @@ bool ios_mode_strokes(const eContextObjectMode mode)
 }
 
 /** The active brush's Direction, for sculpt brushes that have one. */
-std::optional<PointerRNA> ios_brush_direction_ptr(bContext *C)
+std::optional<PointerRNA> bridge_brush_direction_ptr(bContext *C)
 {
   if (CTX_data_mode_enum(C) != CTX_MODE_SCULPT) {
     return std::nullopt;
@@ -2207,7 +2215,7 @@ std::optional<PointerRNA> ios_brush_direction_ptr(bContext *C)
 
 /** Symbols for a brush's two Direction choices, by their untranslated names, one mirroring the
  * other. Up and down for a pair without its own. */
-static std::pair<const char *, const char *> ios_brush_direction_symbols(const char *add,
+static std::pair<const char *, const char *> bridge_brush_direction_symbols(const char *add,
                                                                          const char *subtract)
 {
   struct Pair {
@@ -2242,9 +2250,9 @@ static std::pair<const char *, const char *> ios_brush_direction_symbols(const c
  * select. Null elsewhere, where the pill adds to or subtracts from the selection. In Sculpt
  * Mode, "smooth" adds a Smooth button to hold, as Shift is with a keyboard.
  */
-std::string ios_direction_json(bContext *C, const eContextObjectMode mode)
+std::string bridge_direction_json(bContext *C, const eContextObjectMode mode)
 {
-  if (!ios_mode_strokes(mode)) {
+  if (!bridge_mode_strokes(mode)) {
     /* Drawing Grease Pencil strokes, and the tools that never select, such as the 3D Cursor,
      * have nothing to add to or subtract from: no pill. */
     const bToolRef *tref = WM_toolsystem_ref_from_context(C);
@@ -2257,7 +2265,7 @@ std::string ios_direction_json(bContext *C, const eContextObjectMode mode)
     }
     return "null";
   }
-  std::optional<PointerRNA> brush_ptr = ios_brush_direction_ptr(C);
+  std::optional<PointerRNA> brush_ptr = bridge_brush_direction_ptr(C);
   if (!brush_ptr) {
     const bool colors = ELEM(mode,
                              CTX_MODE_SCULPT,
@@ -2291,7 +2299,7 @@ std::string ios_direction_json(bContext *C, const eContextObjectMode mode)
       untranslated[n++] = items[i].name;
     }
   }
-  auto [add_symbol, subtract_symbol] = ios_brush_direction_symbols(untranslated[0],
+  auto [add_symbol, subtract_symbol] = bridge_brush_direction_symbols(untranslated[0],
                                                                    untranslated[1]);
   if (free) {
     MEM_delete(items);
@@ -2306,16 +2314,16 @@ std::string ios_direction_json(bContext *C, const eContextObjectMode mode)
   }
   return "{\"brush\":true,\"inverted\":" +
          std::string((brush->flag & BRUSH_DIR_IN) ? "true" : "false") + ",\"add\":\"" +
-         ios_json_escape(names[0]) + "\",\"subtract\":\"" + ios_json_escape(names[1]) +
+         bridge_json_escape(names[0]) + "\",\"subtract\":\"" + bridge_json_escape(names[1]) +
          "\",\"addSymbol\":\"" + add_symbol + "\",\"subtractSymbol\":\"" + subtract_symbol +
          "\",\"smooth\":" + (mode == CTX_MODE_SCULPT ? "true" : "false") + "}";
 }
 
 /** Set the active brush's Direction to its first (\a add) or second choice. */
-void ios_brush_direction_set(bContext *C, const bool add)
+void bridge_brush_direction_set(bContext *C, const bool add)
 {
-  const IOSContextStore context_store = ios_context_push_view3d(C);
-  std::optional<PointerRNA> brush_ptr = ios_brush_direction_ptr(C);
+  const BridgeContextStore context_store = bridge_context_push_view3d(C);
+  std::optional<PointerRNA> brush_ptr = bridge_brush_direction_ptr(C);
   if (!brush_ptr) {
     return;
   }
@@ -2333,14 +2341,14 @@ void ios_brush_direction_set(bContext *C, const bool add)
   if (free) {
     MEM_delete(items);
   }
-  ios_rna_undo_push(C, ios_rna_enum_set(C, *brush_ptr, "direction", values[add ? 0 : 1]));
+  bridge_rna_undo_push(C, bridge_rna_enum_set(C, *brush_ptr, "direction", values[add ? 0 : 1]));
 }
 
-void ios_brush_activate(bContext *C, const std::string &key)
+void bridge_brush_activate(bContext *C, const std::string &key)
 {
-  const IOSContextStore context_store = ios_context_push_view3d(C);
+  const BridgeContextStore context_store = bridge_context_push_view3d(C);
   const AssetShelfType *shelf_type = CTX_wm_area(C) && CTX_wm_region(C) ?
-                                         ios_brush_shelf_type(CTX_data_mode_enum(C)) :
+                                         bridge_brush_shelf_type(CTX_data_mode_enum(C)) :
                                          nullptr;
   wmOperatorType *ot = shelf_type ?
                            WM_operatortype_find(shelf_type->activate_operator.c_str(), true) :
@@ -2348,7 +2356,7 @@ void ios_brush_activate(bContext *C, const std::string &key)
   if (ot) {
     const AssetLibraryReference library_ref = asset_system::all_library_reference();
     ed::asset::list::iterate(library_ref, [&](asset_system::AssetRepresentation &asset) {
-      if (ios_brush_key(asset.make_weak_reference()) != key) {
+      if (bridge_brush_key(asset.make_weak_reference()) != key) {
         return true;
       }
       /* Same call as activating an item of the asset shelf. */
@@ -2359,9 +2367,9 @@ void ios_brush_activate(bContext *C, const std::string &key)
       return false;
     });
   }
-  ios_context_pop(C, context_store);
+  bridge_context_pop(C, context_store);
   /* Publish the new active brush with the next snapshot. */
-  ios_brushes_next_snapshot = {};
+  bridge_brushes_next_snapshot = {};
 }
 
 /** \} */
@@ -2379,7 +2387,7 @@ void ios_brush_activate(bContext *C, const std::string &key)
  * Assets the viewport accepts as drops. Brushes have their own rail. Node groups are listed only
  * when they are Geometry Nodes modifiers, the same check as Blender's Add Modifier menu.
  */
-bool ios_asset_listed(const asset_system::AssetRepresentation &asset)
+bool bridge_asset_listed(const asset_system::AssetRepresentation &asset)
 {
   const ID_Type type = asset.get_id_type();
   if (ELEM(type, ID_OB, ID_GR, ID_MA, ID_WO)) {
@@ -2397,12 +2405,12 @@ bool ios_asset_listed(const asset_system::AssetRepresentation &asset)
 }
 
 /** The pane's type name: listed node groups are modifiers. */
-const char *ios_asset_type_name(const ID_Type type)
+const char *bridge_asset_type_name(const ID_Type type)
 {
   return type == ID_NT ? "Modifier" : BKE_idtype_idcode_to_name(type);
 }
 
-std::string ios_asset_library_name(asset_system::AssetLibrary &library)
+std::string bridge_asset_library_name(asset_system::AssetLibrary &library)
 {
   switch (library.library_type()) {
     case ASSET_LIBRARY_LOCAL:
@@ -2414,13 +2422,13 @@ std::string ios_asset_library_name(asset_system::AssetLibrary &library)
   }
 }
 
-std::string ios_assets_build_json(bContext *C)
+std::string bridge_assets_build_json(bContext *C)
 {
   const AssetLibraryReference library_ref = asset_system::all_library_reference();
   ed::asset::list::storage_fetch(&library_ref, C);
   if (!ed::asset::list::is_loaded(&library_ref)) {
     /* Keep the previous list while the asset libraries are (re)loading. */
-    return ios_assets_json.empty() ? "{\"loading\":true,\"items\":[]}" : ios_assets_json;
+    return bridge_assets_json.empty() ? "{\"loading\":true,\"items\":[]}" : bridge_assets_json;
   }
 
   std::string items;
@@ -2428,11 +2436,11 @@ std::string ios_assets_build_json(bContext *C)
   int preview_budget = 8;
   bool previews_missing = false;
   ed::asset::list::iterate(library_ref, [&](asset_system::AssetRepresentation &asset) {
-    if (!ios_asset_listed(asset)) {
+    if (!bridge_asset_listed(asset)) {
       return true;
     }
     const ID_Type type = asset.get_id_type();
-    const std::string key = ios_brush_key(asset.make_weak_reference());
+    const std::string key = bridge_brush_key(asset.make_weak_reference());
     const AssetMetaData &metadata = asset.get_metadata();
     asset_system::AssetLibrary &library = asset.owner_asset_library();
     std::string catalog;
@@ -2441,31 +2449,31 @@ std::string ios_assets_build_json(bContext *C)
     {
       catalog = found->path.str();
     }
-    auto preview = ios_brush_preview_paths.find(key);
-    if (preview == ios_brush_preview_paths.end() && preview_budget > 0) {
+    auto preview = bridge_brush_preview_paths.find(key);
+    if (preview == bridge_brush_preview_paths.end() && preview_budget > 0) {
       preview_budget--;
-      if (std::optional<std::string> path = ios_brush_preview_write(C, asset, key)) {
-        preview = ios_brush_preview_paths.emplace(key, *path).first;
+      if (std::optional<std::string> path = bridge_brush_preview_write(C, asset, key)) {
+        preview = bridge_brush_preview_paths.emplace(key, *path).first;
       }
     }
-    if (preview == ios_brush_preview_paths.end()) {
+    if (preview == bridge_brush_preview_paths.end()) {
       previews_missing = true;
     }
     std::string tags;
     for (const AssetTag &tag : metadata.tags) {
       tags += tags.empty() ? "\"" : ",\"";
-      tags += ios_json_escape(tag.name) + "\"";
+      tags += bridge_json_escape(tag.name) + "\"";
     }
     items += items.empty() ? "{" : ",{";
-    items += "\"id\":\"" + ios_json_escape(key) + "\",\"name\":\"" +
-             ios_json_escape(asset.get_name()) + "\",\"type\":\"" +
-             ios_json_escape(ios_asset_type_name(type)) + "\",\"library\":\"" +
-             ios_json_escape(ios_asset_library_name(library)) + "\",\"catalog\":\"" +
-             ios_json_escape(catalog) + "\",\"description\":\"" +
-             ios_json_escape(metadata.description ? metadata.description : "") +
-             "\",\"author\":\"" + ios_json_escape(metadata.author ? metadata.author : "") +
+    items += "\"id\":\"" + bridge_json_escape(key) + "\",\"name\":\"" +
+             bridge_json_escape(asset.get_name()) + "\",\"type\":\"" +
+             bridge_json_escape(bridge_asset_type_name(type)) + "\",\"library\":\"" +
+             bridge_json_escape(bridge_asset_library_name(library)) + "\",\"catalog\":\"" +
+             bridge_json_escape(catalog) + "\",\"description\":\"" +
+             bridge_json_escape(metadata.description ? metadata.description : "") +
+             "\",\"author\":\"" + bridge_json_escape(metadata.author ? metadata.author : "") +
              "\",\"tags\":[" + tags + "],\"preview\":\"" +
-             ios_json_escape(preview != ios_brush_preview_paths.end() ? preview->second : "") +
+             bridge_json_escape(preview != bridge_brush_preview_paths.end() ? preview->second : "") +
              "\"}";
     return true;
   });
@@ -2473,32 +2481,32 @@ std::string ios_assets_build_json(bContext *C)
          items + "]}";
 }
 
-void ios_assets_build(bContext *C)
+void bridge_assets_build(bContext *C)
 {
-  if (!ios_assets_visible) {
+  if (!bridge_assets_visible) {
     return;
   }
   const auto now = std::chrono::steady_clock::now();
-  if (now < ios_assets_next_snapshot) {
+  if (now < bridge_assets_next_snapshot) {
     return;
   }
   /* Asset lists change rarely; keep loading previews quickly while some are missing. */
-  std::string json = ios_assets_build_json(C);
+  std::string json = bridge_assets_build_json(C);
   const bool busy = json.find("\"pending\":true") != std::string::npos ||
                     json.find("\"loading\":true") != std::string::npos;
-  ios_assets_next_snapshot = now + std::chrono::milliseconds(busy ? 40 : 500);
-  if (json != ios_assets_json) {
-    ios_assets_json = json;
-    ios_assets_snapshot.publish(std::move(json));
+  bridge_assets_next_snapshot = now + std::chrono::milliseconds(busy ? 40 : 500);
+  if (json != bridge_assets_json) {
+    bridge_assets_json = json;
+    bridge_assets_snapshot.publish(std::move(json));
   }
 }
 
-asset_system::AssetRepresentation *ios_asset_find(const std::string &key)
+asset_system::AssetRepresentation *bridge_asset_find(const std::string &key)
 {
   asset_system::AssetRepresentation *result = nullptr;
   ed::asset::list::iterate(asset_system::all_library_reference(),
                            [&](asset_system::AssetRepresentation &asset) {
-                             if (ios_brush_key(asset.make_weak_reference()) != key) {
+                             if (bridge_brush_key(asset.make_weak_reference()) != key) {
                                return true;
                              }
                              result = &asset;
@@ -2508,7 +2516,7 @@ asset_system::AssetRepresentation *ios_asset_find(const std::string &key)
 }
 
 /** Start a drag of \a asset, as the Asset Browser and asset shelf do. */
-void ios_asset_drag_start(bContext *C, asset_system::AssetRepresentation &asset)
+void bridge_asset_drag_start(bContext *C, asset_system::AssetRepresentation &asset)
 {
   if (ID *local_id = asset.local_id()) {
     WM_event_start_drag(C, ICON_NONE, WM_DRAG_ID, local_id, WM_DRAG_NOP);
@@ -2529,7 +2537,7 @@ void ios_asset_drag_start(bContext *C, asset_system::AssetRepresentation &asset)
 }
 
 /** Queue a pointer event at window coordinates \a xy, after the events already queued. */
-void ios_asset_drag_event(wmWindow *win, const int xy[2], const wmEventType type, const short val)
+void bridge_asset_drag_event(wmWindow *win, const int xy[2], const wmEventType type, const short val)
 {
   wmEvent event = *win->runtime->eventstate;
   event.type = type;
@@ -2545,7 +2553,7 @@ void ios_asset_drag_event(wmWindow *win, const int xy[2], const wmEventType type
 }
 
 /** Where tapping an asset adds it: the 3D cursor, or the active object for data it takes. */
-bool ios_asset_add_location(bContext *C, const ID_Type type, int r_xy[2])
+bool bridge_asset_add_location(bContext *C, const ID_Type type, int r_xy[2])
 {
   ARegion *region = CTX_wm_region(C);
   Scene *scene = CTX_data_scene(C);
@@ -2575,14 +2583,14 @@ bool ios_asset_add_location(bContext *C, const ID_Type type, int r_xy[2])
 }
 
 /** Name of the bundled library of starter assets, in `datafiles/starter_assets`. */
-constexpr const char *IOS_STARTER_LIBRARY_NAME = "Starter";
+constexpr const char *BRIDGE_STARTER_LIBRARY_NAME = "Starter";
 
 /**
  * Bring the drop's snap target up to date at window coordinates \a xy. Drops place objects with
  * the snap data the viewport computes while drawing; a quick drag or a tap can be released before
  * the viewport has drawn at that point.
  */
-void ios_asset_drop_snap_update(bContext *C, const int xy[2])
+void bridge_asset_drop_snap_update(bContext *C, const int xy[2])
 {
   ARegion *region = CTX_wm_region(C);
   if (!region || region->regiontype != RGN_TYPE_WINDOW || !CTX_wm_view3d(C)) {
@@ -2596,75 +2604,75 @@ void ios_asset_drop_snap_update(bContext *C, const int xy[2])
   ED_view3d_cursor_snap_data_update(state, C, region, mval);
 }
 
-void ios_asset_drag(bContext *C, const IOSAssetDragCommand &command)
+void bridge_asset_drag(bContext *C, const BridgeAssetDragCommand &command)
 {
-  const IOSContextStore context_store = ios_context_push_view3d(C);
+  const BridgeContextStore context_store = bridge_context_push_view3d(C);
   wmWindowManager *wm = CTX_wm_manager(C);
   wmWindow *win = CTX_wm_window(C);
   if (!win || !win->runtime->eventstate) {
-    ios_context_pop(C, context_store);
+    bridge_context_pop(C, context_store);
     return;
   }
   const bool dragging = !BLI_listbase_is_empty(&wm->runtime->drags);
   int xy[2] = {command.x, command.y};
-  if (!ELEM(command.phase, IOS_ASSET_ADD, IOS_ASSET_ADD_RELEASE)) {
+  if (!ELEM(command.phase, BRIDGE_ASSET_ADD, BRIDGE_ASSET_ADD_RELEASE)) {
     wm_cursor_position_from_ghost_client_coords(win, &xy[0], &xy[1]);
   }
 
   switch (command.phase) {
-    case IOS_ASSET_DRAG_BEGIN:
-    case IOS_ASSET_ADD: {
-      asset_system::AssetRepresentation *asset = ios_asset_find(command.key);
+    case BRIDGE_ASSET_DRAG_BEGIN:
+    case BRIDGE_ASSET_ADD: {
+      asset_system::AssetRepresentation *asset = bridge_asset_find(command.key);
       if (!asset || dragging ||
-          (command.phase == IOS_ASSET_ADD && !ios_asset_add_location(C, asset->get_id_type(), xy)))
+          (command.phase == BRIDGE_ASSET_ADD && !bridge_asset_add_location(C, asset->get_id_type(), xy)))
       {
         break;
       }
-      ios_asset_drag_start(C, *asset);
-      ios_asset_drag_xy = int2(xy[0], xy[1]);
-      ios_asset_drag_event(win, xy, MOUSEMOVE, KM_NOTHING);
-      if (command.phase == IOS_ASSET_ADD) {
+      bridge_asset_drag_start(C, *asset);
+      bridge_asset_drag_xy = int2(xy[0], xy[1]);
+      bridge_asset_drag_event(win, xy, MOUSEMOVE, KM_NOTHING);
+      if (command.phase == BRIDGE_ASSET_ADD) {
         /* Release on the next update, once the move has entered the drop box and its snap
          * target exists, as when a finger lifts after a drag. */
-        ios_ui_messages.push(IOSAssetDragCommand{IOS_ASSET_ADD_RELEASE, "", xy[0], xy[1]});
+        bridge_messages.push(BridgeAssetDragCommand{BRIDGE_ASSET_ADD_RELEASE, "", xy[0], xy[1]});
       }
       break;
     }
-    case IOS_ASSET_ADD_RELEASE:
+    case BRIDGE_ASSET_ADD_RELEASE:
       if (dragging) {
-        ios_asset_drop_snap_update(C, xy);
-        ios_asset_drag_event(win, xy, LEFTMOUSE, KM_RELEASE);
+        bridge_asset_drop_snap_update(C, xy);
+        bridge_asset_drag_event(win, xy, LEFTMOUSE, KM_RELEASE);
       }
       break;
-    case IOS_ASSET_DRAG_MOVE:
+    case BRIDGE_ASSET_DRAG_MOVE:
       if (dragging) {
-        ios_asset_drag_xy = int2(xy[0], xy[1]);
-        ios_asset_drag_event(win, xy, MOUSEMOVE, KM_NOTHING);
+        bridge_asset_drag_xy = int2(xy[0], xy[1]);
+        bridge_asset_drag_event(win, xy, MOUSEMOVE, KM_NOTHING);
       }
       break;
-    case IOS_ASSET_DRAG_DROP:
+    case BRIDGE_ASSET_DRAG_DROP:
       if (dragging) {
         /* The release over a drop box becomes #EVT_DROP, as when releasing a dragged button. */
-        ios_asset_drop_snap_update(C, xy);
-        ios_asset_drag_event(win, xy, MOUSEMOVE, KM_NOTHING);
-        ios_asset_drag_event(win, xy, LEFTMOUSE, KM_RELEASE);
+        bridge_asset_drop_snap_update(C, xy);
+        bridge_asset_drag_event(win, xy, MOUSEMOVE, KM_NOTHING);
+        bridge_asset_drag_event(win, xy, LEFTMOUSE, KM_RELEASE);
       }
       break;
-    case IOS_ASSET_DRAG_CANCEL:
+    case BRIDGE_ASSET_DRAG_CANCEL:
       if (dragging) {
         /* Escape cancels a drag; queued, it also follows any pending moves. */
-        ios_asset_drag_event(win, win->runtime->eventstate->xy, EVT_ESCKEY, KM_PRESS);
+        bridge_asset_drag_event(win, win->runtime->eventstate->xy, EVT_ESCKEY, KM_PRESS);
       }
       break;
   }
-  ios_context_pop(C, context_store);
+  bridge_context_pop(C, context_store);
 }
 
 /** \} */
 
-std::string ios_toolbar_build_json_for_context(bContext *C)
+std::string bridge_toolbar_build_json_for_context(bContext *C)
 {
-  const IOSContextStore context_store = ios_context_push_view3d(C);
+  const BridgeContextStore context_store = bridge_context_push_view3d(C);
   const bool has_view3d_context = CTX_wm_window(C) != nullptr && CTX_wm_area(C) != nullptr &&
                                   CTX_wm_region(C) != nullptr;
   Scene *scene = has_view3d_context ? CTX_data_scene(C) : nullptr;
@@ -2694,7 +2702,7 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
    * armature's modes, otherwise the active object. */
   std::string active_name;
   if (has_view3d_context) {
-    object_modes_json = ios_object_modes_json(C);
+    object_modes_json = bridge_object_modes_json(C);
     if (const Object *active = CTX_data_active_object(C)) {
       RNA_enum_identifier(rna_enum_object_mode_items, active->mode, &object_mode);
       active_name = active->id.name + 2;
@@ -2711,9 +2719,9 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
     }
   }
   const std::string mesh_select_mode = mode == CTX_MODE_EDIT_MESH ?
-                                           ios_mesh_select_mode_string(tool_settings) :
+                                           bridge_mesh_select_mode_string(tool_settings) :
                                            "";
-  bToolRef *active_tool = has_view3d_context ? ios_active_tool(C) : nullptr;
+  bToolRef *active_tool = has_view3d_context ? bridge_active_tool(C) : nullptr;
   const char *active_tool_id = active_tool ? active_tool->idname : "builtin.select_box";
   std::string tools_json = "[]";
   std::string panels_json = "null";
@@ -2750,10 +2758,10 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
         MEM_delete(result);
       }
     }
-    if (!ios_constraint_operator(CTX_wm_window(C))) {
+    if (!bridge_constraint_operator(CTX_wm_window(C))) {
       /* Quick actions for the mode, tool and selection, chosen by `bl_ui.native_actions`. */
       const std::string expression = "bl_ui.native_actions.actions_json(bpy.context, \"" +
-                                     ios_json_escape(active_tool_id ? active_tool_id : "") + "\")";
+                                     bridge_json_escape(active_tool_id ? active_tool_id : "") + "\")";
       result = nullptr;
       if (BPY_run_string_as_string(C, imports, expression.c_str(), nullptr, &result)) {
         quick_actions_json = result;
@@ -2761,115 +2769,115 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
       }
     }
     const auto now = std::chrono::steady_clock::now();
-    if (ios_panels_visible && now >= ios_panels_next_snapshot) {
+    if (bridge_panels_visible && now >= bridge_panels_next_snapshot) {
       /* Scene projection follows the native refresh cadence, not the viewport frame rate. */
-      ios_panels_next_snapshot = now + std::chrono::milliseconds(250);
+      bridge_panels_next_snapshot = now + std::chrono::milliseconds(250);
       const std::string expression = "bl_ui.native_panels.snapshot_json(bpy.context, " +
-                                     std::to_string(ios_panels_visible & 2) + ")";
+                                     std::to_string(bridge_panels_visible & 2) + ")";
       result = nullptr;
       if (BPY_run_string_as_string(C, imports, expression.c_str(), nullptr, &result)) {
-        ios_panels_json = result;
+        bridge_panels_json = result;
         MEM_delete(result);
       }
       using namespace io::serialize;
-      std::istringstream base_stream(ios_panels_json);
+      std::istringstream base_stream(bridge_panels_json);
       auto base = JsonFormatter().deserialize(base_stream);
       DictionaryValue merged;
       if (const auto *dictionary = base ? base->as_dictionary_value() : nullptr) {
         for (const auto &item : dictionary->elements()) {
-          if (item.first != "ack" && (item.first != "error" || ios_properties_error.empty())) {
+          if (item.first != "ack" && (item.first != "error" || bridge_properties_error.empty())) {
             merged.append(item.first, item.second);
           }
         }
       }
-      merged.append_int("ack", ios_panels_sequence);
-      if (!ios_properties_error.empty()) {
-        merged.append_str("error", ios_properties_error);
+      merged.append_int("ack", bridge_panels_sequence);
+      if (!bridge_properties_error.empty()) {
+        merged.append_str("error", bridge_properties_error);
       }
-      if (ios_panels_visible & 1) {
+      if (bridge_panels_visible & 1) {
         std::istringstream properties_stream(
-            ui::native_properties_query(C, ios_properties_state, false));
+            ui::native_properties_query(C, bridge_properties_state, false));
         auto properties = JsonFormatter().deserialize(properties_stream);
         if (properties) {
           merged.append("inspector", std::move(properties));
         }
       }
-      if (ios_panels_visible & 8) {
+      if (bridge_panels_visible & 8) {
         /* Another object, material or modifier chosen anywhere shows straight away. */
-        std::string identity = ui::native_nodes_identity(C, ios_nodes_state);
-        if (identity != ios_nodes_identity) {
-          ios_nodes_identity = std::move(identity);
-          ios_nodes_dirty = true;
+        std::string identity = ui::native_nodes_identity(C, bridge_nodes_state);
+        if (identity != bridge_nodes_identity) {
+          bridge_nodes_identity = std::move(identity);
+          bridge_nodes_dirty = true;
         }
-        if (ios_nodes_dirty || now >= ios_nodes_next_check) {
-          ios_nodes_dirty = false;
-          ios_nodes_next_check = now + std::chrono::seconds(2);
-          std::string state = ios_nodes_state;
-          const bool with_add = state != ios_nodes_add_for;
+        if (bridge_nodes_dirty || now >= bridge_nodes_next_check) {
+          bridge_nodes_dirty = false;
+          bridge_nodes_next_check = now + std::chrono::seconds(2);
+          std::string state = bridge_nodes_state;
+          const bool with_add = state != bridge_nodes_add_for;
           if (with_add) {
             /* The nodes it can add, once for each tree. */
             state.insert(state.size() - 1, ",\"with_add\":1");
           }
           const auto diag_start = std::chrono::steady_clock::now();
-          ios_nodes_json = ui::native_nodes_query(C, state, false);
+          bridge_nodes_json = ui::native_nodes_query(C, state, false);
           /* With no tree there is nothing to add to: offered again once there is one. */
-          const bool has_tree = ios_nodes_json.find("\"nodes\"") != std::string::npos;
-          ios_nodes_add_for = has_tree ? (with_add ? ios_nodes_state : ios_nodes_add_for) : "";
+          const bool has_tree = bridge_nodes_json.find("\"nodes\"") != std::string::npos;
+          bridge_nodes_add_for = has_tree ? (with_add ? bridge_nodes_state : bridge_nodes_add_for) : "";
           CLOG_DEBUG(&LOG,
                      "Nodes read in %lld ms, %zu bytes: %s",
                  (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
                      std::chrono::steady_clock::now() - diag_start)
                      .count(),
-                 ios_nodes_json.size(), ios_nodes_json.substr(0, 160).c_str());
-          if (ios_nodes_composite) {
-            ios_nodes_composite = false;
+                 bridge_nodes_json.size(), bridge_nodes_json.substr(0, 160).c_str());
+          if (bridge_nodes_composite) {
+            bridge_nodes_composite = false;
             ui::native_nodes_compositor_job(C);
           }
         }
         /* Spliced in as it is below, rather than read and written again: it is large. */
         merged.append_str("nodes", "@native_nodes_json@");
       }
-      if (ios_panels_visible & 16) {
-        if (ios_graph_dirty || now >= ios_graph_next_check) {
-          ios_graph_dirty = false;
-          ios_graph_next_check = now + std::chrono::seconds(2);
-          ios_graph_json = ed::graph::native_graph_query(C, ios_graph_state, false);
+      if (bridge_panels_visible & 16) {
+        if (bridge_graph_dirty || now >= bridge_graph_next_check) {
+          bridge_graph_dirty = false;
+          bridge_graph_next_check = now + std::chrono::seconds(2);
+          bridge_graph_json = ed::graph::native_graph_query(C, bridge_graph_state, false);
         }
         merged.append_str("graph", "@native_graph_json@");
       }
-      if (ios_panels_visible & 128) {
-        if (ios_image_dirty || now >= ios_image_next_check) {
-          ios_image_dirty = false;
-          ios_image_next_check = now + std::chrono::seconds(2);
-          ios_image_json = ed::image::native_image_query(C, ios_image_state, false);
+      if (bridge_panels_visible & 128) {
+        if (bridge_image_dirty || now >= bridge_image_next_check) {
+          bridge_image_dirty = false;
+          bridge_image_next_check = now + std::chrono::seconds(2);
+          bridge_image_json = ed::image::native_image_query(C, bridge_image_state, false);
         }
-        std::istringstream image_stream(ios_image_json);
+        std::istringstream image_stream(bridge_image_json);
         if (auto image = JsonFormatter().deserialize(image_stream)) {
           merged.append("image", std::move(image));
         }
       }
-      if (ios_panels_visible & 64) {
+      if (bridge_panels_visible & 64) {
         /* Soon again while shots still need their pictures drawn, one at a time. */
-        if (ios_storyboard_dirty || now >= ios_storyboard_next_check) {
-          ios_storyboard_dirty = false;
+        if (bridge_storyboard_dirty || now >= bridge_storyboard_next_check) {
+          bridge_storyboard_dirty = false;
           /* Only what is there: the pictures still to draw are drawn as the window draws, see
-           * #WM_apple_ios_ui_storyboard_draw. */
-          ios_storyboard_json = ed::vse::native_storyboard_query(C, ios_storyboard_state, false);
-          const bool pending = ios_storyboard_json.find("\"pending\":1") != std::string::npos;
-          ios_storyboard_pending = pending;
-          ios_storyboard_next_check = now + std::chrono::milliseconds(pending ? 100 : 1000);
+           * #WM_native_ui_storyboard_draw. */
+          bridge_storyboard_json = ed::vse::native_storyboard_query(C, bridge_storyboard_state, false);
+          const bool pending = bridge_storyboard_json.find("\"pending\":1") != std::string::npos;
+          bridge_storyboard_pending = pending;
+          bridge_storyboard_next_check = now + std::chrono::milliseconds(pending ? 100 : 1000);
           if (pending) {
             /* The pictures still to draw arrive a few at a time, sooner than other changes. */
-            ios_panels_next_snapshot = std::min(ios_panels_next_snapshot,
+            bridge_panels_next_snapshot = std::min(bridge_panels_next_snapshot,
                                                 now + std::chrono::milliseconds(100));
           }
         }
         merged.append_str("storyboard", "@native_storyboard_json@");
       }
-      if (ios_panels_visible & 32) {
-        ios_preferences_save_when_changed(C, now);
+      if (bridge_panels_visible & 32) {
+        bridge_preferences_save_when_changed(C, now);
         std::istringstream preferences_stream(
-            ui::native_properties_query(C, ios_preferences_state, false));
+            ui::native_properties_query(C, bridge_preferences_state, false));
         auto preferences = JsonFormatter().deserialize(preferences_stream);
         if (preferences && preferences->type() == eValueType::Dictionary) {
           auto *dictionary = static_cast<DictionaryValue *>(preferences.get());
@@ -2881,7 +2889,7 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
           }
           else if (tab == "PREFERENCES_KEYMAP") {
             expression = "bl_ui.native_settings.keymaps_json(bpy.context, \"" +
-                         ios_json_escape(ios_keymaps_state) + "\")";
+                         bridge_json_escape(bridge_keymaps_state) + "\")";
           }
           result = nullptr;
           if (!expression.empty() &&
@@ -2899,9 +2907,9 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
           merged.append("preferences", std::move(preferences));
         }
       }
-      if (ios_panels_visible & 4) {
+      if (bridge_panels_visible & 4) {
         std::istringstream shading_stream(
-            ui::native_properties_query(C, ios_shading_state, false));
+            ui::native_properties_query(C, bridge_shading_state, false));
         auto shading = JsonFormatter().deserialize(shading_stream);
         if (shading) {
           merged.append("shading", std::move(shading));
@@ -2909,40 +2917,40 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
       }
       std::ostringstream merged_stream;
       JsonFormatter().serialize(merged_stream, merged);
-      ios_panels_json = merged_stream.str();
-      if (ios_panels_visible & 16) {
+      bridge_panels_json = merged_stream.str();
+      if (bridge_panels_visible & 16) {
         const std::string placeholder = "\"@native_graph_json@\"";
-        if (const size_t at = ios_panels_json.find(placeholder); at != std::string::npos) {
-          ios_panels_json.replace(at, placeholder.size(), ios_graph_json.empty() ? "null" : ios_graph_json);
+        if (const size_t at = bridge_panels_json.find(placeholder); at != std::string::npos) {
+          bridge_panels_json.replace(at, placeholder.size(), bridge_graph_json.empty() ? "null" : bridge_graph_json);
         }
       }
-      if (ios_panels_visible & 64) {
+      if (bridge_panels_visible & 64) {
         const std::string placeholder = "\"@native_storyboard_json@\"";
-        if (const size_t at = ios_panels_json.find(placeholder); at != std::string::npos) {
-          ios_panels_json.replace(at, placeholder.size(),
-                                  ios_storyboard_json.empty() ? "null" : ios_storyboard_json);
+        if (const size_t at = bridge_panels_json.find(placeholder); at != std::string::npos) {
+          bridge_panels_json.replace(at, placeholder.size(),
+                                  bridge_storyboard_json.empty() ? "null" : bridge_storyboard_json);
         }
       }
-      if (ios_panels_visible & 8) {
+      if (bridge_panels_visible & 8) {
         const std::string placeholder = "\"@native_nodes_json@\"";
-        if (const size_t at = ios_panels_json.find(placeholder); at != std::string::npos) {
-          ios_panels_json.replace(at, placeholder.size(), ios_nodes_json.empty() ? "null" : ios_nodes_json);
+        if (const size_t at = bridge_panels_json.find(placeholder); at != std::string::npos) {
+          bridge_panels_json.replace(at, placeholder.size(), bridge_nodes_json.empty() ? "null" : bridge_nodes_json);
         }
       }
-      /* Published when it changes: every snapshot wakes UIKit. */
-      if (ios_panels_json != ios_panels_published) {
-        ios_panels_published = ios_panels_json;
-        ios_panels_snapshot.publish(ios_panels_json);
+      /* Published when it changes: every snapshot wakes the native interface. */
+      if (bridge_panels_json != bridge_panels_published) {
+        bridge_panels_published = bridge_panels_json;
+        bridge_panels_snapshot.publish(bridge_panels_json);
       }
     }
   }
 #endif
-  const std::vector<IOSActionItem> actions = has_view3d_context ? ios_action_items_for_tool(
+  const std::vector<BridgeActionItem> actions = has_view3d_context ? bridge_action_items_for_tool(
                                                                       C, mode, active_tool_id) :
-                                                                  std::vector<IOSActionItem>();
-  const bool can_undo = has_view3d_context && ios_undo_available(C);
-  const bool can_redo = has_view3d_context && ios_undo_available(C, "ED_OT_redo");
-  const std::string settings_json = ios_transform_settings_json(
+                                                                  std::vector<BridgeActionItem>();
+  const bool can_undo = has_view3d_context && bridge_undo_available(C);
+  const bool can_redo = has_view3d_context && bridge_undo_available(C, "ED_OT_redo");
+  const std::string settings_json = bridge_transform_settings_json(
       scene, CTX_data_active_object(C), mode);
   const std::string tool_settings_json = has_view3d_context ? ui::native_properties_query(
                                                                   C, "{\"tab\":\"TOOL\"}", false) :
@@ -2952,21 +2960,21 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
     const wmWindow *win = CTX_wm_window(C);
     ARegion *region = CTX_wm_region(C);
     rcti visible = *ED_region_visible_rect(region);
-    visible.ymin = std::max(visible.ymin, WM_apple_ios_ui_bottom_tray_ymin(win, region));
-    visible.ymax = std::min(visible.ymax, WM_apple_ios_ui_top_bar_ymax(win, region));
+    visible.ymin = std::max(visible.ymin, WM_native_ui_bottom_tray_ymin(win, region));
+    visible.ymax = std::min(visible.ymax, WM_native_ui_top_bar_ymax(win, region));
     const float width = WM_window_native_pixel_x(win);
     const float height = WM_window_native_pixel_y(win);
     const float radius = U.gizmo_size_navigate_v3d * 0.5f * U.scale_factor;
     const float inset = radius + 10.0f * U.scale_factor;
     if (width > 0 && height > 0) {
-      /* Match view3d_gizmo_navigate.cc, in normalized UIKit window coordinates.
+      /* Match view3d_gizmo_navigate.cc, in normalized window coordinates from the top left.
        * The native shell can follow the last frame during asynchronous resizing. */
       /* Over the part of the window a native panel leaves showing, as the native controls
        * that follow the gizmo are laid out. */
-      const float cover = std::min(ios_viewport_cover.load(), height * 0.9f);
+      const float cover = std::min(bridge_viewport_cover.load(), height * 0.9f);
       /* In whichever corner Settings has it. */
-      const float x = ios_navigation_left ? visible.xmin + inset : visible.xmax - inset;
-      const float y = ios_navigation_top ? visible.ymax - inset : visible.ymin + inset;
+      const float x = bridge_navigation_left ? visible.xmin + inset : visible.xmax - inset;
+      const float y = bridge_navigation_top ? visible.ymax - inset : visible.ymin + inset;
       navigation_json = "[" + std::to_string((region->winrct.xmin + x) / width) + "," +
                         std::to_string(1.0f - (region->winrct.ymin + y - cover) / (height - cover)) +
                         "," + std::to_string(radius / width) + "]";
@@ -2977,37 +2985,37 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
   /* An operator's properties asked for before it runs, in place of Blender's dialog. */
   const std::string dialog_json = ui::native_operator_dialog_query(C, "", false);
   if (!has_view3d_context) {
-    ios_brushes_json = "null";
+    bridge_brushes_json = "null";
   }
-  else if (const auto now = std::chrono::steady_clock::now(); now >= ios_brushes_next_snapshot) {
+  else if (const auto now = std::chrono::steady_clock::now(); now >= bridge_brushes_next_snapshot) {
     /* Asset polling runs Python per brush, so follow the native refresh cadence. */
-    ios_brushes_next_snapshot = now + std::chrono::milliseconds(250);
-    ios_brushes_json = ios_brushes_build_json(C, mode);
-    if (ios_brushes_json.find("\"pending\":true") != std::string::npos ||
-        ios_brushes_json.find("\"loading\":true") != std::string::npos)
+    bridge_brushes_next_snapshot = now + std::chrono::milliseconds(250);
+    bridge_brushes_json = bridge_brushes_build_json(C, mode);
+    if (bridge_brushes_json.find("\"pending\":true") != std::string::npos ||
+        bridge_brushes_json.find("\"loading\":true") != std::string::npos)
     {
       /* Keep loading previews without waiting for the native cadence. */
-      ios_brushes_next_snapshot = now + std::chrono::milliseconds(30);
+      bridge_brushes_next_snapshot = now + std::chrono::milliseconds(30);
     }
   }
-  ios_context_pop(C, context_store);
+  bridge_context_pop(C, context_store);
 
   std::string json = "{\"mode\":\"";
-  json += ios_json_escape(mode_string ? mode_string : "objectmode");
+  json += bridge_json_escape(mode_string ? mode_string : "objectmode");
   json += "\",\"shading\":\"";
   json += shading;
   json += "\",\"desktop\":";
-  json += ios_desktop_ui ? "true" : "false";
+  json += bridge_desktop_ui ? "true" : "false";
   json += ",\"activeName\":\"";
-  json += ios_json_escape(active_name);
+  json += bridge_json_escape(active_name);
   json += "\",\"objectMode\":\"";
-  json += ios_json_escape(object_mode);
+  json += bridge_json_escape(object_mode);
   json += "\",\"modes\":";
   json += object_modes_json;
   json += ",\"meshSelectMode\":\"";
-  json += ios_json_escape(mesh_select_mode);
+  json += bridge_json_escape(mesh_select_mode);
   json += "\",\"active\":\"";
-  json += ios_json_escape(active_tool_id ? active_tool_id : "");
+  json += bridge_json_escape(active_tool_id ? active_tool_id : "");
   json += "\",\"canUndo\":";
   json += can_undo ? "true" : "false";
   json += ",\"canRedo\":";
@@ -3026,13 +3034,13 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
   json += settings_json;
   json += ",\"toolSettings\":";
   json += tool_settings_json;
-  json += ",\"propertiesAck\":" + std::to_string(ios_panels_sequence);
+  json += ",\"propertiesAck\":" + std::to_string(bridge_panels_sequence);
   json += ",\"redo\":";
   json += redo_json;
   json += ",\"dialog\":";
   json += dialog_json;
   json += ",\"textObject\":";
-  json += has_view3d_context ? ios_text_object_json(C) : "null";
+  json += has_view3d_context ? bridge_text_object_json(C) : "null";
   json += ",\"navigationGizmo\":";
   json += navigation_json;
   if (view3d && scene) {
@@ -3049,17 +3057,17 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
   json += ",\"tools\":";
   json += tools_json;
   json += ",\"brushes\":";
-  json += ios_brushes_json;
+  json += bridge_brushes_json;
   json += ",\"brush\":";
   json += brush_json;
   json += ",\"direction\":";
-  json += has_view3d_context ? ios_direction_json(C, mode) : "null";
+  json += has_view3d_context ? bridge_direction_json(C, mode) : "null";
   /* Moving, turning or scaling: the held buttons are Snap and Precision then. */
   json += ",\"transforming\":";
-  json += ios_constraint_operator(CTX_wm_window(C)) ? "true" : "false";
+  json += bridge_constraint_operator(CTX_wm_window(C)) ? "true" : "false";
   bool drag_done = false;
-  if (const char *drag_hint = ios_drag_hint(CTX_wm_window(C), &drag_done)) {
-    json += ",\"dragHint\":{\"text\":\"" + ios_json_escape(IFACE_(drag_hint)) + "\",\"done\":" +
+  if (const char *drag_hint = bridge_drag_hint(CTX_wm_window(C), &drag_done)) {
+    json += ",\"dragHint\":{\"text\":\"" + bridge_json_escape(IFACE_(drag_hint)) + "\",\"done\":" +
             (drag_done ? "true" : "false") + "}";
   }
   json += ",\"panels\":";
@@ -3077,23 +3085,23 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
   json += ",\"actions\":[";
 
   bool needs_comma = false;
-  for (const IOSActionItem &action : actions) {
+  for (const BridgeActionItem &action : actions) {
     if (needs_comma) {
       json += ",";
     }
     needs_comma = true;
     json += "{\"title\":\"";
-    json += ios_json_escape(action.title);
+    json += bridge_json_escape(action.title);
     json += "\",\"operator\":\"";
-    json += ios_json_escape(action.op_name);
+    json += bridge_json_escape(action.op_name);
     json += "\",\"symbol\":\"";
-    json += ios_json_escape(action.symbol);
+    json += bridge_json_escape(action.symbol);
     json += "\",\"property\":\"";
-    json += ios_json_escape(action.prop_name ? action.prop_name : "");
+    json += bridge_json_escape(action.prop_name ? action.prop_name : "");
     json += "\",\"value\":\"";
-    json += ios_json_escape(action.prop_value ? action.prop_value : "");
+    json += bridge_json_escape(action.prop_value ? action.prop_value : "");
     json += "\",\"key\":\"";
-    json += ios_json_escape(action.key ? action.key : "");
+    json += bridge_json_escape(action.key ? action.key : "");
     json += "\",\"selected\":";
     json += action.selected ? "true" : "false";
     json += "}";
@@ -3102,7 +3110,7 @@ std::string ios_toolbar_build_json_for_context(bContext *C)
   return json;
 }
 
-void ios_timeline_build(bContext *C)
+void bridge_timeline_build(bContext *C)
 {
   const Scene *scene = CTX_data_scene(C);
   const wmWindowManager *wm = CTX_wm_manager(C);
@@ -3111,15 +3119,15 @@ void ios_timeline_build(bContext *C)
   }
 #ifdef WITH_PYTHON
   if (const auto now = std::chrono::steady_clock::now();
-      ios_timeline_visible && now >= ios_timeline_next_keys)
+      bridge_timeline_visible && now >= bridge_timeline_next_keys)
   {
-    ios_timeline_next_keys = now + std::chrono::milliseconds(250);
+    bridge_timeline_next_keys = now + std::chrono::milliseconds(250);
     const char *imports[] = {"bpy", "bl_ui", nullptr};
     char *result = nullptr;
     if (BPY_run_string_as_string(
             C, imports, "bl_ui.native_timeline.keys_json(bpy.context)", nullptr, &result))
     {
-      ios_timeline_keys_json = result;
+      bridge_timeline_keys_json = result;
       MEM_delete(result);
     }
   }
@@ -3132,8 +3140,8 @@ void ios_timeline_build(bContext *C)
                           (workspace->flags & WORKSPACE_SYNC_SCENE_TIME) &&
                           sequencer_scene->ed &&
                           !BLI_listbase_is_empty(seq::active_seqbase_get(sequencer_scene->ed));
-  /* Playback changes the frame every redraw; publish only what UIKit has not seen. */
-  std::string json = "{\"keys\":" + (ios_timeline_visible ? ios_timeline_keys_json : "[]") +
+  /* Playback changes the frame every redraw; publish only what the native interface has not seen. */
+  std::string json = "{\"keys\":" + (bridge_timeline_visible ? bridge_timeline_keys_json : "[]") +
                      ",\"storyboard\":" + (storyboard ? "true" : "false") +
                      ",\"edit_frame\":" +
                      std::to_string(sequencer_scene ? sequencer_scene->r.cfra : 0) +
@@ -3150,16 +3158,16 @@ void ios_timeline_build(bContext *C)
                           "true" :
                           "false") +
                      "}";
-  if (json != ios_timeline_json) {
-    ios_timeline_json = json;
-    ios_timeline_snapshot.publish(std::move(json));
+  if (json != bridge_timeline_json) {
+    bridge_timeline_json = json;
+    bridge_timeline_snapshot.publish(std::move(json));
   }
 }
 
-/** Set when Blender sent notifiers, see #WM_apple_ios_ui_tag_changed. */
-bool ios_ui_changed = true;
+/** Set when Blender sent notifiers, see #WM_native_ui_tag_changed. */
+bool bridge_changed = true;
 
-void ios_toolbar_build(bContext *C, const bool handled_commands)
+void bridge_toolbar_build(bContext *C, const bool handled_commands)
 {
   /* Describing the toolbar runs Python and is costly. Do it only when something may have changed:
    * a native command ran or Blender sent notifiers, as it does for any change of state; or
@@ -3169,26 +3177,26 @@ void ios_toolbar_build(bContext *C, const bool handled_commands)
   static std::chrono::steady_clock::time_point next_check, last_build;
   static std::string published;
   const auto now = std::chrono::steady_clock::now();
-  const bool wanted = handled_commands || ios_ui_changed || now >= next_check ||
-                      (ios_panels_visible && now >= ios_panels_next_snapshot);
+  const bool wanted = handled_commands || bridge_changed || now >= next_check ||
+                      (bridge_panels_visible && now >= bridge_panels_next_snapshot);
   if (wanted && (handled_commands || now - last_build >= std::chrono::milliseconds(100))) {
-    ios_ui_changed = false;
+    bridge_changed = false;
     last_build = now;
     next_check = now + std::chrono::seconds(1);
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
     WM_apple_ios_finger_tweak_mode_update(C);
 #endif
-    std::string json = ios_toolbar_build_json_for_context(C);
+    std::string json = bridge_toolbar_build_json_for_context(C);
     if (json != published) {
       published = json;
-      ios_toolbar_snapshot.publish(std::move(json));
+      bridge_toolbar_snapshot.publish(std::move(json));
     }
   }
-  ios_timeline_build(C);
-  ios_assets_build(C);
+  bridge_timeline_build(C);
+  bridge_assets_build(C);
 }
 
-std::string ios_json_escape(const std::string &value)
+std::string bridge_json_escape(const std::string &value)
 {
   std::string escaped;
   escaped.reserve(value.size() + 8);
@@ -3219,7 +3227,7 @@ std::string ios_json_escape(const std::string &value)
 
 }  // namespace
 
-void WM_apple_ios_starter_library_ensure()
+void WM_native_ui_starter_library_ensure()
 {
   const std::optional<std::string> path = BKE_appdir_folder_id(BLENDER_DATAFILES,
                                                                "starter_assets");
@@ -3227,9 +3235,9 @@ void WM_apple_ios_starter_library_ensure()
     return;
   }
   bUserAssetLibrary *library = BKE_preferences_asset_library_find_by_name(
-      &U, IOS_STARTER_LIBRARY_NAME);
+      &U, BRIDGE_STARTER_LIBRARY_NAME);
   if (library == nullptr) {
-    library = BKE_preferences_asset_library_add(&U, IOS_STARTER_LIBRARY_NAME, path->c_str());
+    library = BKE_preferences_asset_library_add(&U, BRIDGE_STARTER_LIBRARY_NAME, path->c_str());
   }
   else if (!STREQ(library->dirpath, path->c_str())) {
     /* The app's install location changes with every install and update. */
@@ -3239,71 +3247,71 @@ void WM_apple_ios_starter_library_ensure()
   library->import_method = ASSET_IMPORT_APPEND_REUSE;
 }
 
-extern "C" void WM_apple_ios_ui_command_enqueue(int command)
+extern "C" void WM_native_ui_command_enqueue(int command)
 {
-  if (command < int(IOSUICommand::SetModeObject) || command > int(IOSUICommand::ViewBottom)) {
+  if (command < int(BridgeCommand::SetModeObject) || command > int(BridgeCommand::ViewBottom)) {
     return;
   }
 
-  ios_ui_messages.push(IOSUICommand(command));
+  bridge_messages.push(BridgeCommand(command));
 }
 
-extern "C" void WM_apple_ios_ui_pencil_hover_set(bool active, int x, int y)
+extern "C" void WM_native_ui_stylus_hover_set(bool active, int x, int y)
 {
-  ios_hover_requests.publish({active, x, y});
+  bridge_hover_requests.publish({active, x, y});
 }
 
-bool WM_apple_ios_pencil_hover_active()
+bool WM_native_ui_stylus_hover_active()
 {
-  return ios_hover_request.active;
+  return bridge_hover_request.active;
 }
 
-/* The barrel roll of a Pencil on the screen, set from UIKit's thread. */
-static std::atomic<bool> ios_pencil_roll_down = false;
-static std::atomic<float> ios_pencil_roll_angle = 0.0f;
-static std::atomic<float> ios_pencil_tilt_x = 0.0f;
-static std::atomic<float> ios_pencil_tilt_y = 0.0f;
+/* The barrel roll of a Pencil on the screen, set from the native interface's thread. */
+static std::atomic<bool> bridge_pencil_roll_down = false;
+static std::atomic<float> bridge_pencil_roll_angle = 0.0f;
+static std::atomic<float> bridge_pencil_tilt_x = 0.0f;
+static std::atomic<float> bridge_pencil_tilt_y = 0.0f;
 
-extern "C" void WM_apple_ios_ui_pencil_roll_set(bool down, float angle, float tilt_x, float tilt_y)
+extern "C" void WM_native_ui_stylus_roll_set(bool down, float angle, float tilt_x, float tilt_y)
 {
-  ios_pencil_roll_angle = angle;
-  ios_pencil_tilt_x = tilt_x;
-  ios_pencil_tilt_y = tilt_y;
-  ios_pencil_roll_down = down;
+  bridge_pencil_roll_angle = angle;
+  bridge_pencil_tilt_x = tilt_x;
+  bridge_pencil_tilt_y = tilt_y;
+  bridge_pencil_roll_down = down;
 }
 
-void WM_apple_ios_tweak_drag(bool *r_move, bool *r_roll, bool *r_tilt)
+void WM_native_ui_tweak_drag(bool *r_move, bool *r_roll, bool *r_tilt)
 {
-  *r_move = ios_tweak_move;
-  *r_roll = ios_tweak_roll;
-  *r_tilt = ios_tweak_tilt;
+  *r_move = bridge_tweak_move;
+  *r_roll = bridge_tweak_roll;
+  *r_tilt = bridge_tweak_tilt;
 }
 
-bool WM_apple_ios_pencil_roll(float *r_angle, float r_tilt[2])
+bool WM_native_ui_stylus_roll(float *r_angle, float r_tilt[2])
 {
-  *r_angle = ios_pencil_roll_angle;
-  r_tilt[0] = ios_pencil_tilt_x;
-  r_tilt[1] = ios_pencil_tilt_y;
-  return ios_pencil_roll_down;
+  *r_angle = bridge_pencil_roll_angle;
+  r_tilt[0] = bridge_pencil_tilt_x;
+  r_tilt[1] = bridge_pencil_tilt_y;
+  return bridge_pencil_roll_down;
 }
 
-extern "C" char *WM_apple_ios_ui_pencil_hover_copy_json()
+extern "C" char *WM_native_ui_stylus_hover_copy_json()
 {
   static std::string snapshot = "{}";
-  ios_hover_snapshot.take(snapshot);
+  bridge_hover_snapshot.take(snapshot);
   return strdup(snapshot.c_str());
 }
 
-extern "C" void WM_apple_ios_ui_operator_enqueue(const char *op_name)
+extern "C" void WM_native_ui_operator_enqueue(const char *op_name)
 {
   if (op_name == nullptr || op_name[0] == '\0') {
     return;
   }
 
-  ios_ui_messages.push(IOSOperatorCommand{op_name});
+  bridge_messages.push(BridgeOperatorCommand{op_name});
 }
 
-extern "C" void WM_apple_ios_ui_operator_enum_enqueue(const char *op_name,
+extern "C" void WM_native_ui_operator_enum_enqueue(const char *op_name,
                                                       const char *prop_name,
                                                       const char *prop_value)
 {
@@ -3311,35 +3319,35 @@ extern "C" void WM_apple_ios_ui_operator_enum_enqueue(const char *op_name,
     return;
   }
 
-  ios_ui_messages.push(IOSOperatorPropertyCommand{
+  bridge_messages.push(BridgeOperatorPropertyCommand{
       op_name, prop_name ? prop_name : "", prop_value ? prop_value : ""});
 }
 
-extern "C" void WM_apple_ios_ui_setting_enqueue(const char *setting, const char *value)
+extern "C" void WM_native_ui_setting_enqueue(const char *setting, const char *value)
 {
   if (setting == nullptr || setting[0] == '\0' || value == nullptr || value[0] == '\0') {
     return;
   }
 
-  ios_ui_messages.push(IOSSettingCommand{setting, value});
+  bridge_messages.push(BridgeSettingCommand{setting, value});
 }
 
-extern "C" void WM_apple_ios_ui_tool_set_by_id(const char *tool_id)
+extern "C" void WM_native_ui_tool_set_by_id(const char *tool_id)
 {
   if (tool_id == nullptr || tool_id[0] == '\0') {
     return;
   }
 
-  ios_ui_messages.push(std::string(tool_id));
+  bridge_messages.push(std::string(tool_id));
 }
 
-extern "C" void WM_apple_ios_ui_brush_activate(const char *brush_id)
+extern "C" void WM_native_ui_brush_activate(const char *brush_id)
 {
   if (brush_id == nullptr || brush_id[0] == '\0') {
     return;
   }
 
-  ios_ui_messages.push(IOSBrushCommand{brush_id});
+  bridge_messages.push(BridgeBrushCommand{brush_id});
 }
 
 /* -------------------------------------------------------------------- */
@@ -3352,14 +3360,16 @@ extern "C" void WM_apple_ios_ui_brush_activate(const char *brush_id)
  * \{ */
 
 /* Smooth: brush strokes smooth instead, as with Shift, while the Smooth button is held. */
-enum class IOSSelectIntent { None = 0, Add = 1, Subtract = 2, Smooth = 3 };
+enum class BridgeSelectIntent { None = 0, Add = 1, Subtract = 2, Smooth = 3 };
+static_assert(int(BridgeSelectIntent::Smooth) == int(WM_NATIVE_UI_SELECT_INTENT_SMOOTH),
+              "Intents as WM_native_ui.h numbers them");
 
-static std::atomic<int> ios_select_intent = int(IOSSelectIntent::None);
+static std::atomic<int> bridge_select_intent = int(BridgeSelectIntent::None);
 
-/** \a intent is an #IOSSelectIntent. Called from the main thread. */
-extern "C" void WM_apple_ios_ui_select_intent_set(int intent)
+/** \a intent is an #BridgeSelectIntent. Called from the main thread. */
+extern "C" void WM_native_ui_select_intent_set(int intent)
 {
-  ios_select_intent = intent;
+  bridge_select_intent = intent;
 }
 
 static bool operator_enum_has(bContext *C, PointerRNA *ptr, PropertyRNA *prop, const char *id)
@@ -3377,16 +3387,16 @@ static void operator_bool_set(PointerRNA *ptr, const char *name, const bool valu
   }
 }
 
-void WM_apple_ios_ui_operator_input_adjust(bContext *C, wmOperator *op)
+void WM_native_ui_operator_input_adjust(bContext *C, wmOperator *op)
 {
-  const IOSSelectIntent intent = IOSSelectIntent(ios_select_intent.load());
-  if (intent == IOSSelectIntent::None) {
+  const BridgeSelectIntent intent = BridgeSelectIntent(bridge_select_intent.load());
+  if (intent == BridgeSelectIntent::None) {
     return;
   }
-  const bool add = intent == IOSSelectIntent::Add;
+  const bool add = intent == BridgeSelectIntent::Add;
   PointerRNA *ptr = op->ptr;
 
-  if (intent == IOSSelectIntent::Smooth) {
+  if (intent == BridgeSelectIntent::Smooth) {
     /* The stroke's temporary brush, as Shift sets it; operators without one smooth by mode. */
     for (const char *name : {"brush_toggle", "mode"}) {
       PropertyRNA *prop = RNA_struct_find_property(ptr, name);
@@ -3443,68 +3453,67 @@ void WM_apple_ios_ui_operator_input_adjust(bContext *C, wmOperator *op)
 /** \} */
 
 /**
- * Native asset pane drag: \a phase is a #IOSAssetDragPhase, \a x and \a y are GHOST client
+ * Native asset pane drag: \a phase is a #BridgeAssetDragPhase, \a x and \a y are GHOST client
  * coordinates. \a asset_id is only needed to begin a drag or add an asset.
  */
-extern "C" void WM_apple_ios_ui_asset_drag(int phase, const char *asset_id, int x, int y)
+extern "C" void WM_native_ui_asset_drag(int phase, const char *asset_id, int x, int y)
 {
-  ios_ui_messages.push(IOSAssetDragCommand{phase, asset_id ? asset_id : "", x, y});
+  bridge_messages.push(BridgeAssetDragCommand{phase, asset_id ? asset_id : "", x, y});
 }
 
-extern "C" void WM_apple_ios_ui_view_roll_enqueue(float angle)
+extern "C" void WM_native_ui_view_roll_enqueue(float angle)
 {
   if (angle == 0.0f) {
     return;
   }
 
-  ios_ui_messages.push(angle);
+  bridge_messages.push(angle);
 }
 
-void WM_apple_ios_ui_tag_changed()
+void WM_native_ui_tag_changed()
 {
-  ios_nodes_dirty = true;
-  ios_graph_dirty = true;
-  ios_image_dirty = true;
-  ios_image_pixels_pending = true;
-  ios_image_uvs_pending = true;
-  ios_ui_changed = true;
+  bridge_nodes_dirty = true;
+  bridge_graph_dirty = true;
+  bridge_image_dirty = true;
+  bridge_image_pixels_pending = true;
+  bridge_image_uvs_pending = true;
+  bridge_changed = true;
 }
 
-extern "C" char *WM_apple_ios_ui_toolbar_take_json()
+extern "C" char *WM_native_ui_toolbar_take_json()
 {
-  /* Only a description that changed since UIKit last took one. */
-  if (!ios_toolbar_snapshot.take(ios_toolbar_json)) {
+  /* Only a description that changed since the native interface last took one. */
+  if (!bridge_toolbar_snapshot.take(bridge_toolbar_json)) {
     return nullptr;
   }
-  char *json_copy = static_cast<char *>(std::malloc(ios_toolbar_json.size() + 1));
+  char *json_copy = static_cast<char *>(std::malloc(bridge_toolbar_json.size() + 1));
   if (json_copy != nullptr) {
-    std::memcpy(json_copy, ios_toolbar_json.c_str(), ios_toolbar_json.size() + 1);
+    std::memcpy(json_copy, bridge_toolbar_json.c_str(), bridge_toolbar_json.size() + 1);
   }
   return json_copy;
 }
 
-extern "C" char *WM_apple_ios_ui_toolbar_copy_json()
+extern "C" char *WM_native_ui_toolbar_copy_json()
 {
-  ios_toolbar_snapshot.take(ios_toolbar_json);
+  bridge_toolbar_snapshot.take(bridge_toolbar_json);
 
-  char *json_copy = static_cast<char *>(std::malloc(ios_toolbar_json.size() + 1));
+  char *json_copy = static_cast<char *>(std::malloc(bridge_toolbar_json.size() + 1));
   if (json_copy == nullptr) {
     return nullptr;
   }
-  std::memcpy(json_copy, ios_toolbar_json.c_str(), ios_toolbar_json.size() + 1);
+  std::memcpy(json_copy, bridge_toolbar_json.c_str(), bridge_toolbar_json.size() + 1);
   return json_copy;
 }
 
-extern "C" bool WM_apple_ios_ui_desktop_mode();
 
 /**
  * One of Blender's menus, which a key or mouse button would open (a right-click's context menu,
  * Shift-A's Add menu, a pie), shown natively where the pointer is, as on a Mac. The native side
  * shows it from Blender's menu projection, see `BlenderMenus.swift`, and runs what is chosen.
  */
-bool ios_menu_popup(bContext *C, const char *menu)
+bool bridge_menu_popup(bContext *C, const char *menu)
 {
-  if (WM_apple_ios_ui_desktop_mode() || WM_menutype_find(menu, true) == nullptr) {
+  if (WM_native_ui_desktop_mode() || WM_menutype_find(menu, true) == nullptr) {
     return false;
   }
   /* Where the pointer is, as fractions of the window from its top left. */
@@ -3518,13 +3527,13 @@ bool ios_menu_popup(bContext *C, const char *menu)
       y = 1.0f - win->runtime->eventstate->xy[1] / height;
     }
   }
-  ios_menu_popup_snapshot.publish("{\"menu\":\"" + ios_json_escape(menu) + "\",\"x\":" +
+  bridge_menu_popup_snapshot.publish("{\"menu\":\"" + bridge_json_escape(menu) + "\",\"x\":" +
                                   std::to_string(x) + ",\"y\":" + std::to_string(y) + "}");
   return true;
 }
 
 /** Where the pointer is, as fractions of the window from its top left, for a popup there. */
-static std::string ios_popup_position(bContext *C)
+static std::string bridge_popup_position(bContext *C)
 {
   float x = 0.5f, y = 0.5f;
   wmWindow *win = CTX_wm_window(C);
@@ -3544,9 +3553,9 @@ static std::string ios_popup_position(bContext *C)
  * pointer is in place of Blender's popup menu, its headings as sections. The native side runs the
  * operator with the one chosen.
  */
-bool ios_enum_popup(bContext *C, wmOperator *op, PropertyRNA *prop)
+bool bridge_enum_popup(bContext *C, wmOperator *op, PropertyRNA *prop)
 {
-  if (WM_apple_ios_ui_desktop_mode()) {
+  if (WM_native_ui_desktop_mode()) {
     return false;
   }
   const EnumPropertyItem *items = nullptr;
@@ -3556,9 +3565,9 @@ bool ios_enum_popup(bContext *C, wmOperator *op, PropertyRNA *prop)
   if (!items || count == 0) {
     return false;
   }
-  std::string json = "{\"title\":\"" + ios_json_escape(WM_operatortype_name(op->type, op->ptr)) +
-                     "\",\"operator\":\"" + ios_json_escape(op->type->idname) +
-                     "\",\"property\":\"" + ios_json_escape(RNA_property_identifier(prop)) +
+  std::string json = "{\"title\":\"" + bridge_json_escape(WM_operatortype_name(op->type, op->ptr)) +
+                     "\",\"operator\":\"" + bridge_json_escape(op->type->idname) +
+                     "\",\"property\":\"" + bridge_json_escape(RNA_property_identifier(prop)) +
                      "\",\"items\":[";
   bool first = true;
   for (int i = 0; i < count; i++) {
@@ -3570,42 +3579,42 @@ bool ios_enum_popup(bContext *C, wmOperator *op, PropertyRNA *prop)
     if (item.icon) {
       RNA_enum_identifier(rna_enum_icon_items, item.icon, &icon);
     }
-    json += std::string(first ? "" : ",") + "{\"title\":\"" + ios_json_escape(item.name ? item.name : "") +
-            "\",\"value\":\"" + ios_json_escape(item.identifier) + "\",\"heading\":" +
-            (item.identifier[0] ? "0" : "1") + ",\"icon\":\"" + ios_json_escape(icon ? icon : "") +
+    json += std::string(first ? "" : ",") + "{\"title\":\"" + bridge_json_escape(item.name ? item.name : "") +
+            "\",\"value\":\"" + bridge_json_escape(item.identifier) + "\",\"heading\":" +
+            (item.identifier[0] ? "0" : "1") + ",\"icon\":\"" + bridge_json_escape(icon ? icon : "") +
             "\"}";
     first = false;
   }
   if (free) {
     MEM_delete(items);
   }
-  ios_menu_popup_snapshot.publish(json + "]," + ios_popup_position(C) + "}");
+  bridge_menu_popup_snapshot.publish(json + "]," + bridge_popup_position(C) + "}");
   return true;
 }
 
 /** Rename Active Item's panel, as a native field; the other panels are Blender's own. */
-bool ios_panel_popup(bContext *C, const char *panel)
+bool bridge_panel_popup(bContext *C, const char *panel)
 {
-  if (WM_apple_ios_ui_desktop_mode() || !STREQ(panel, "TOPBAR_PT_name")) {
+  if (WM_native_ui_desktop_mode() || !STREQ(panel, "TOPBAR_PT_name")) {
     return false;
   }
-  ios_menu_popup_snapshot.publish("{\"rename\":1," + ios_popup_position(C) + "}");
+  bridge_menu_popup_snapshot.publish("{\"rename\":1," + bridge_popup_position(C) + "}");
   return true;
 }
 
-extern "C" char *WM_apple_ios_ui_menu_popup_take_json()
+extern "C" char *WM_native_ui_menu_popup_take_json()
 {
   std::string json;
-  if (!ios_menu_popup_snapshot.take(json)) {
+  if (!bridge_menu_popup_snapshot.take(json)) {
     return nullptr;
   }
   return strdup(json.c_str());
 }
 
-extern "C" char *WM_apple_ios_ui_panels_take_json()
+extern "C" char *WM_native_ui_panels_take_json()
 {
   std::string json;
-  if (!ios_panels_snapshot.take(json)) {
+  if (!bridge_panels_snapshot.take(json)) {
     return nullptr;
   }
   char *copy = static_cast<char *>(std::malloc(json.size() + 1));
@@ -3615,10 +3624,10 @@ extern "C" char *WM_apple_ios_ui_panels_take_json()
   return copy;
 }
 
-extern "C" char *WM_apple_ios_ui_timeline_take_json()
+extern "C" char *WM_native_ui_timeline_take_json()
 {
   std::string json;
-  if (!ios_timeline_snapshot.take(json)) {
+  if (!bridge_timeline_snapshot.take(json)) {
     return nullptr;
   }
   char *copy = static_cast<char *>(std::malloc(json.size() + 1));
@@ -3628,10 +3637,10 @@ extern "C" char *WM_apple_ios_ui_timeline_take_json()
   return copy;
 }
 
-extern "C" char *WM_apple_ios_ui_assets_take_json()
+extern "C" char *WM_native_ui_assets_take_json()
 {
   std::string json;
-  if (!ios_assets_snapshot.take(json)) {
+  if (!bridge_assets_snapshot.take(json)) {
     return nullptr;
   }
   char *copy = static_cast<char *>(std::malloc(json.size() + 1));
@@ -3641,18 +3650,18 @@ extern "C" char *WM_apple_ios_ui_assets_take_json()
   return copy;
 }
 
-extern "C" void WM_apple_ios_ui_toolbar_free_json(char *json)
+extern "C" void WM_native_ui_json_free(char *json)
 {
   std::free(json);
 }
 
-void ios_ui_apply_viewport_preferences(bContext *C)
+void bridge_apply_viewport_preferences(bContext *C)
 {
   if (C == nullptr) {
     return;
   }
 
-  bool refresh_gizmo_map = ios_ui_gizmo_refresh_pending;
+  bool refresh_gizmo_map = bridge_gizmo_refresh_pending;
 
   /* Keep taps (including Pencil jitter) on Blender's click-selection path, which
    * also sets the active object. Real tool drags start after a small movement,
@@ -3680,7 +3689,7 @@ void ios_ui_apply_viewport_preferences(bContext *C)
     refresh_gizmo_map = true;
   }
 
-  const IOSContextStore context_store = ios_context_push_view3d(C);
+  const BridgeContextStore context_store = bridge_context_push_view3d(C);
   ScrArea *area = CTX_wm_area(C);
 
   if (area != nullptr && area->spacetype == SPACE_VIEW3D) {
@@ -3701,7 +3710,7 @@ void ios_ui_apply_viewport_preferences(bContext *C)
         ED_region_visibility_change_update(C, area, &shelf_region);
       }
     }
-    ARegion *region = ios_find_window_region(area);
+    ARegion *region = bridge_find_window_region(area);
     if (refresh_gizmo_map && region != nullptr && region->runtime->gizmo_map != nullptr) {
       WM_gizmomap_reinit(region->runtime->gizmo_map);
       WM_gizmomap_tag_refresh(region->runtime->gizmo_map);
@@ -3709,31 +3718,31 @@ void ios_ui_apply_viewport_preferences(bContext *C)
     }
   }
 
-  ios_ui_gizmo_refresh_pending = false;
-  ios_context_pop(C, context_store);
+  bridge_gizmo_refresh_pending = false;
+  bridge_context_pop(C, context_store);
 }
 
 /** Name the toggle by where it goes. Menus show the operator's registered name, as they have no
  * properties to ask #wmOperatorType::get_name with. */
-static void ios_interface_toggle_name_update()
+static void bridge_interface_toggle_name_update()
 {
-  wmOperatorType *ot = WM_operatortype_find("WM_OT_apple_ios_interface_toggle", false);
+  wmOperatorType *ot = WM_operatortype_find("WM_OT_native_interface_toggle", false);
   if (ot == nullptr) {
     return;
   }
-  ot->name = ios_desktop_ui ? "Return to iPad Interface" : "Switch to Desktop Interface";
+  ot->name = bridge_desktop_ui ? "Return to iPad Interface" : "Switch to Desktop Interface";
   RNA_def_struct_ui_text(ot->srna, ot->name, ot->description);
 }
 
 /** Switch between the native interface and Blender's own, as on a Mac. */
-void ios_interface_set(bContext *C, const bool desktop)
+void bridge_interface_set(bContext *C, const bool desktop)
 {
-  if (ios_desktop_ui == desktop) {
+  if (bridge_desktop_ui == desktop) {
     return;
   }
-  ios_desktop_ui = desktop;
-  ios_interface_toggle_name_update();
-  const IOSContextStore context_store = ios_context_push_view3d(C);
+  bridge_desktop_ui = desktop;
+  bridge_interface_toggle_name_update();
+  const BridgeContextStore context_store = bridge_context_push_view3d(C);
   wmWindow *win = CTX_wm_window(C);
   bScreen *screen = CTX_wm_screen(C);
   ScrArea *area = CTX_wm_area(C);
@@ -3742,46 +3751,46 @@ void ios_interface_set(bContext *C, const bool desktop)
   {
     /* Leave the full-screen 3D View for the screen's editors, headers and toolbars. */
     ED_screen_state_toggle(C, win, area, SCREENFULL);
-    area = ios_find_view3d_area(WM_window_get_active_screen(win));
+    area = bridge_find_view3d_area(WM_window_get_active_screen(win));
   }
   /* The navigation gizmo moves between the native bottom-right and Blender's top-right. */
-  if (ARegion *region = ios_find_window_region(area)) {
+  if (ARegion *region = bridge_find_window_region(area)) {
     if (region->runtime->gizmo_map != nullptr) {
       WM_gizmomap_reinit(region->runtime->gizmo_map);
       WM_gizmomap_tag_refresh(region->runtime->gizmo_map);
     }
     ED_region_tag_redraw(region);
   }
-  ios_ui_gizmo_refresh_pending = true;
-  ios_context_pop(C, context_store);
+  bridge_gizmo_refresh_pending = true;
+  bridge_context_pop(C, context_store);
   if (win != nullptr) {
     WM_event_add_notifier(C, NC_WINDOW, nullptr);
   }
 }
 
-static wmOperatorStatus ios_interface_toggle_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus bridge_interface_toggle_exec(bContext *C, wmOperator * /*op*/)
 {
-  ios_interface_set(C, !ios_desktop_ui);
+  bridge_interface_set(C, !bridge_desktop_ui);
   return OPERATOR_FINISHED;
 }
 
-static std::string ios_interface_toggle_get_name(wmOperatorType * /*ot*/, PointerRNA * /*ptr*/)
+static std::string bridge_interface_toggle_get_name(wmOperatorType * /*ot*/, PointerRNA * /*ptr*/)
 {
-  return ios_desktop_ui ? IFACE_("Return to iPad Interface") :
+  return bridge_desktop_ui ? IFACE_("Return to iPad Interface") :
                           IFACE_("Switch to Desktop Interface");
 }
 
-void WM_OT_apple_ios_interface_toggle(wmOperatorType *ot)
+void WM_OT_native_interface_toggle(wmOperatorType *ot)
 {
   ot->name = "Switch to Desktop Interface";
-  ot->idname = "WM_OT_apple_ios_interface_toggle";
+  ot->idname = "WM_OT_native_interface_toggle";
   ot->description =
       "Switch between the iPad interface and Blender's own interface, as on a desktop computer";
-  ot->exec = ios_interface_toggle_exec;
-  ot->get_name = ios_interface_toggle_get_name;
+  ot->exec = bridge_interface_toggle_exec;
+  ot->get_name = bridge_interface_toggle_get_name;
 }
 
-static wmOperatorStatus ios_url_open_exec(bContext * /*C*/, wmOperator *op)
+static wmOperatorStatus bridge_url_open_exec(bContext * /*C*/, wmOperator *op)
 {
   char url[1024];
   RNA_string_get(op->ptr, "url", url);
@@ -3793,41 +3802,42 @@ static wmOperatorStatus ios_url_open_exec(bContext * /*C*/, wmOperator *op)
   return OPERATOR_FINISHED;
 }
 
-void WM_OT_apple_ios_url_open(wmOperatorType *ot)
+void WM_OT_native_url_open(wmOperatorType *ot)
 {
   ot->name = "Open URL";
-  ot->idname = "WM_OT_apple_ios_url_open";
+  ot->idname = "WM_OT_native_url_open";
   ot->description = "Open a web page in the browser";
-  ot->exec = ios_url_open_exec;
+  ot->exec = bridge_url_open_exec;
   ot->flag = OPTYPE_INTERNAL;
   RNA_def_string(ot->srna, "url", nullptr, 1024, "URL", "");
 }
 
-extern "C" bool WM_apple_ios_ui_desktop_mode()
+bool WM_native_ui_desktop_mode()
 {
-  return ios_desktop_ui;
+  /* Without a platform interface registered, Blender's own is all there is. */
+  return bridge_desktop_ui || WM_native_interface() == nullptr;
 }
 
-extern "C" void WM_apple_ios_ui_ensure_layout(bContext *C)
+void WM_native_ui_ensure_layout(bContext *C)
 {
   if (C == nullptr) {
     return;
   }
 
-  if (ios_desktop_ui) {
+  if (bridge_desktop_ui) {
     /* Blender's own interface keeps whatever screens the files bring. */
     return;
   }
 
   /* The native interface shows the 3D View full screen. Every new or opened file brings its own
    * screen with Blender's editors, so check on every update, not only at startup. */
-  const IOSContextStore context_store = ios_context_push_view3d(C);
+  const BridgeContextStore context_store = bridge_context_push_view3d(C);
   wmWindow *win = CTX_wm_window(C);
   bScreen *screen = CTX_wm_screen(C);
   ScrArea *area = CTX_wm_area(C);
   if (win != nullptr && screen != nullptr && area != nullptr && screen->state == SCREENNORMAL) {
     ED_screen_state_toggle(C, win, area, SCREENFULL);
-    ios_ui_gizmo_refresh_pending = true;
+    bridge_gizmo_refresh_pending = true;
   }
   else if (win != nullptr && screen != nullptr && area != nullptr && screen->state == SCREENFULL) {
     /* A file saved on the iPad reopens already full screen, but with the 3D View's headers and
@@ -3854,143 +3864,143 @@ extern "C" void WM_apple_ios_ui_ensure_layout(bContext *C)
       ED_area_tag_redraw(area);
     }
   }
-  ios_ui_layout_ready = true;
-  ios_context_pop(C, context_store);
+  bridge_layout_ready = true;
+  bridge_context_pop(C, context_store);
 
-  ios_ui_apply_viewport_preferences(C);
+  bridge_apply_viewport_preferences(C);
 }
 
-extern "C" uint64_t WM_apple_ios_ui_menu_request(const char *route, bool execute)
+extern "C" uint64_t WM_native_ui_menu_request(const char *route, bool execute)
 {
-  const uint64_t identifier = ++ios_menu_next_identifier;
-  ios_ui_messages.push(IOSMenuRequest{identifier, route ? route : "{}", execute});
+  const uint64_t identifier = ++bridge_menu_next_identifier;
+  bridge_messages.push(BridgeMenuRequest{identifier, route ? route : "{}", execute});
   return identifier;
 }
 
-extern "C" uint64_t WM_apple_ios_ui_menu_at_position_request(const char *route,
+extern "C" uint64_t WM_native_ui_menu_at_position_request(const char *route,
                                                              bool execute,
                                                              int x,
                                                              int y)
 {
-  const uint64_t identifier = ++ios_menu_next_identifier;
-  ios_ui_messages.push(IOSMenuRequest{identifier, route ? route : "{}", execute, true, x, y});
+  const uint64_t identifier = ++bridge_menu_next_identifier;
+  bridge_messages.push(BridgeMenuRequest{identifier, route ? route : "{}", execute, true, x, y});
   return identifier;
 }
 
-/* UIKit only exchanges owned JSON with the engine, never live Blender UI pointers. */
-extern "C" char *WM_apple_ios_ui_menu_take_result(uint64_t identifier)
+/* The native interface only exchanges owned JSON with the engine, never live Blender UI pointers. */
+extern "C" char *WM_native_ui_menu_take_result(uint64_t identifier)
 {
-  for (auto &result : ios_menu_completed.take()) {
-    ios_menu_results.emplace(result.first, std::move(result.second));
+  for (auto &result : bridge_menu_completed.take()) {
+    bridge_menu_results.emplace(result.first, std::move(result.second));
   }
-  while (ios_menu_results.size() > 128) {
-    ios_menu_results.erase(ios_menu_results.begin());
+  while (bridge_menu_results.size() > 128) {
+    bridge_menu_results.erase(bridge_menu_results.begin());
   }
-  const auto found = ios_menu_results.find(identifier);
-  if (found == ios_menu_results.end()) {
+  const auto found = bridge_menu_results.find(identifier);
+  if (found == bridge_menu_results.end()) {
     return nullptr;
   }
   char *result = strdup(found->second.c_str());
-  ios_menu_results.erase(found);
+  bridge_menu_results.erase(found);
   return result;
 }
 
-extern "C" void WM_apple_ios_ui_navigation_hover_set(bool active)
+extern "C" void WM_native_ui_navigation_hover_set(bool active)
 {
-  if (ios_navigation_hover_active.exchange(active) != active) {
-    ios_navigation_redraw_pending.store(true);
+  if (bridge_navigation_hover_active.exchange(active) != active) {
+    bridge_navigation_redraw_pending.store(true);
   }
 }
 
-extern "C" bool WM_apple_ios_ui_navigation_hover_active()
+bool WM_native_ui_navigation_hover_active()
 {
-  return ios_navigation_hover_active.load();
+  return bridge_navigation_hover_active.load();
 }
 
-extern "C" void WM_apple_ios_ui_navigation_redraw_request()
+void WM_native_ui_navigation_redraw_request()
 {
-  ios_navigation_redraw_pending.store(true);
+  bridge_navigation_redraw_pending.store(true);
 }
 
 /* How much of the window's height, from the top, the native top bar covers. */
-static std::atomic<float> ios_top_bar = 0.0f;
+static std::atomic<float> bridge_top_bar = 0.0f;
 
-extern "C" void WM_apple_ios_ui_top_bar_set(const float fraction)
+extern "C" void WM_native_ui_top_bar_set(const float fraction)
 {
-  if (ios_top_bar.exchange(fraction) != fraction) {
-    ios_navigation_redraw_pending.store(true);
+  if (bridge_top_bar.exchange(fraction) != fraction) {
+    bridge_navigation_redraw_pending.store(true);
   }
 }
 
-extern "C" int WM_apple_ios_ui_top_bar_ymax(const wmWindow *win, const ARegion *region)
+int WM_native_ui_top_bar_ymax(const wmWindow *win, const ARegion *region)
 {
   /* The navigation gizmo sits below the top bar, in region pixels. */
-  return int((1.0f - ios_top_bar.load()) * WM_window_native_pixel_y(win)) - region->winrct.ymin;
+  return int((1.0f - bridge_top_bar.load()) * WM_window_native_pixel_y(win)) - region->winrct.ymin;
 }
 
-extern "C" void WM_apple_ios_ui_bottom_tray_set(const float fraction)
+extern "C" void WM_native_ui_bottom_tray_set(const float fraction)
 {
-  if (ios_bottom_tray.exchange(fraction) != fraction) {
-    ios_navigation_redraw_pending.store(true);
+  if (bridge_bottom_tray.exchange(fraction) != fraction) {
+    bridge_navigation_redraw_pending.store(true);
   }
 }
 
 /* Set from the native interface: telling Blender a message waits wakes its loop. */
-extern "C" void WM_apple_ios_ui_viewport_cover_set(const float pixels)
+extern "C" void WM_native_ui_viewport_cover_set(const float pixels)
 {
-  if (ios_viewport_cover.exchange(pixels) != pixels) {
-    ios_viewport_cover_changed.store(true);
+  if (bridge_viewport_cover.exchange(pixels) != pixels) {
+    bridge_viewport_cover_changed.store(true);
     GHOST_mailbox_published();
   }
 }
 
-extern "C" float WM_apple_ios_ui_viewport_cover()
+float WM_native_ui_viewport_cover()
 {
-  return ios_viewport_cover.load();
+  return bridge_viewport_cover.load();
 }
 
-extern "C" void WM_apple_ios_ui_viewport_trailing_cover_set(const float pixels)
+extern "C" void WM_native_ui_viewport_trailing_cover_set(const float pixels)
 {
-  if (ios_viewport_trailing_cover.exchange(pixels) != pixels) {
-    ios_viewport_cover_changed.store(true);
+  if (bridge_viewport_trailing_cover.exchange(pixels) != pixels) {
+    bridge_viewport_cover_changed.store(true);
     GHOST_mailbox_published();
   }
 }
 
-extern "C" float WM_apple_ios_ui_viewport_trailing_cover()
+float WM_native_ui_viewport_trailing_cover()
 {
-  return ios_viewport_trailing_cover.load();
+  return bridge_viewport_trailing_cover.load();
 }
 
-extern "C" bool WM_apple_ios_ui_navigation_top()
+bool WM_native_ui_navigation_top()
 {
-  return ios_navigation_top.load();
+  return bridge_navigation_top.load();
 }
 
-extern "C" bool WM_apple_ios_ui_navigation_left()
+bool WM_native_ui_navigation_left()
 {
-  return ios_navigation_left.load();
+  return bridge_navigation_left.load();
 }
 
-extern "C" int WM_apple_ios_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region)
+int WM_native_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region)
 {
   /* The navigation gizmo sits above the tray, in region pixels. */
-  return int(ios_bottom_tray.load() * WM_window_native_pixel_y(win)) - region->winrct.ymin;
+  return int(bridge_bottom_tray.load() * WM_window_native_pixel_y(win)) - region->winrct.ymin;
 }
 
-static void ios_ui_dispatch_operator(bContext *C, IOSOperatorCommand &command)
+static void bridge_dispatch_operator(bContext *C, BridgeOperatorCommand &command)
 {
-  const IOSContextStore context_store = ios_context_push_view3d(C);
+  const BridgeContextStore context_store = bridge_context_push_view3d(C);
   wmWindow *win = CTX_wm_window(C);
   if (win && CTX_wm_area(C) && CTX_wm_region(C)) {
-    ios_operator_invoke(C, command.op_name.c_str());
+    bridge_operator_invoke(C, command.op_name.c_str());
   }
-  ios_context_pop(C, context_store);
+  bridge_context_pop(C, context_store);
 }
 
-static void ios_ui_dispatch_menu(bContext *C, IOSMenuRequest &request)
+static void bridge_dispatch_menu(bContext *C, BridgeMenuRequest &request)
 {
-  const IOSContextStore context_store = ios_context_push_view3d(C);
+  const BridgeContextStore context_store = bridge_context_push_view3d(C);
   std::string result = "[]";
   wmWindow *win = CTX_wm_window(C);
   bool ready = true;
@@ -4003,8 +4013,8 @@ static void ios_ui_dispatch_menu(bContext *C, IOSMenuRequest &request)
       }
     }
     if (!ready && request.retries++ < 2) {
-      ios_ui_messages.push(request);
-      ios_context_pop(C, context_store);
+      bridge_messages.push(request);
+      bridge_context_pop(C, context_store);
       return;
     }
     if (ready && win->runtime->eventstate) {
@@ -4017,17 +4027,17 @@ static void ios_ui_dispatch_menu(bContext *C, IOSMenuRequest &request)
   if (ready && win && CTX_wm_area(C) && CTX_wm_region(C)) {
     result = blender::ui::native_properties_menu_query(C, request.route, request.execute);
   }
-  ios_context_pop(C, context_store);
+  bridge_context_pop(C, context_store);
   if (!request.execute) {
-    ios_menu_completed.push({request.identifier, std::move(result)});
+    bridge_menu_completed.push({request.identifier, std::move(result)});
   }
 }
 
-static void ios_ui_dispatch(bContext *C, IOSUIMessage &message)
+static void bridge_dispatch(bContext *C, BridgeMessage &message)
 {
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
-  const auto *setting = std::get_if<IOSSettingCommand>(&message);
-  const auto *menu = std::get_if<IOSMenuRequest>(&message);
+  const auto *setting = std::get_if<BridgeSettingCommand>(&message);
+  const auto *menu = std::get_if<BridgeMenuRequest>(&message);
   if ((!menu || menu->execute) && (!setting || (setting->setting != "native_properties_edit" &&
                                                 setting->setting != "native_properties_state" &&
                                                 setting->setting != "native_shading_state" &&
@@ -4046,9 +4056,9 @@ static void ios_ui_dispatch(bContext *C, IOSUIMessage &message)
                                                 setting->setting != "native_storyboard_edit" &&
                                                 setting->setting != "native_storyboard_state")))
   {
-    const IOSContextStore context_store = ios_context_push_view3d(C);
+    const BridgeContextStore context_store = bridge_context_push_view3d(C);
     ui::native_properties_interaction_finish(C);
-    ios_context_pop(C, context_store);
+    bridge_context_pop(C, context_store);
   }
   const bool panel_message = setting && (setting->setting == "native_panels" ||
                                          setting->setting == "native_shading_state" ||
@@ -4069,9 +4079,9 @@ static void ios_ui_dispatch(bContext *C, IOSUIMessage &message)
                                          setting->setting == "native_storyboard_edit" ||
                                          setting->setting == "native_storyboard_state");
   if (WM_apple_ios_dialog_active(CTX_wm_window(C)) && !panel_message) {
-    if (const auto *request = std::get_if<IOSMenuRequest>(&message)) {
+    if (const auto *request = std::get_if<BridgeMenuRequest>(&message)) {
       if (!request->execute) {
-        ios_menu_completed.push({request->identifier, "[]"});
+        bridge_menu_completed.push({request->identifier, "[]"});
       }
     }
     return;
@@ -4080,105 +4090,105 @@ static void ios_ui_dispatch(bContext *C, IOSUIMessage &message)
   std::visit(
       [&](auto &command) {
         using T = std::decay_t<decltype(command)>;
-        if constexpr (std::is_same_v<T, IOSUICommand>) {
-          ios_command_execute(C, command);
+        if constexpr (std::is_same_v<T, BridgeCommand>) {
+          bridge_command_execute(C, command);
         }
         else if constexpr (std::is_same_v<T, std::string>) {
-          ios_tool_set_by_id(C, command);
+          bridge_tool_set_by_id(C, command);
         }
-        else if constexpr (std::is_same_v<T, IOSOperatorCommand>) {
-          ios_ui_dispatch_operator(C, command);
+        else if constexpr (std::is_same_v<T, BridgeOperatorCommand>) {
+          bridge_dispatch_operator(C, command);
         }
-        else if constexpr (std::is_same_v<T, IOSMenuRequest>) {
-          ios_ui_dispatch_menu(C, command);
+        else if constexpr (std::is_same_v<T, BridgeMenuRequest>) {
+          bridge_dispatch_menu(C, command);
         }
-        else if constexpr (std::is_same_v<T, IOSBrushCommand>) {
-          ios_brush_activate(C, command.key);
+        else if constexpr (std::is_same_v<T, BridgeBrushCommand>) {
+          bridge_brush_activate(C, command.key);
         }
-        else if constexpr (std::is_same_v<T, IOSAssetDragCommand>) {
-          ios_asset_drag(C, command);
+        else if constexpr (std::is_same_v<T, BridgeAssetDragCommand>) {
+          bridge_asset_drag(C, command);
         }
         else {
-          const IOSContextStore context_store = ios_context_push_view3d(C);
+          const BridgeContextStore context_store = bridge_context_push_view3d(C);
           if (CTX_wm_window(C) && CTX_wm_area(C) && CTX_wm_region(C)) {
-            if constexpr (std::is_same_v<T, IOSSettingCommand>) {
-              ios_setting_execute(C, command);
+            if constexpr (std::is_same_v<T, BridgeSettingCommand>) {
+              bridge_setting_execute(C, command);
             }
             else if constexpr (std::is_same_v<T, float>) {
-              ios_view_roll_angle(C, command);
+              bridge_view_roll_angle(C, command);
             }
-            else if constexpr (std::is_same_v<T, IOSOperatorPropertyCommand>) {
-              ios_operator_call_with_enum_property(C,
+            else if constexpr (std::is_same_v<T, BridgeOperatorPropertyCommand>) {
+              bridge_operator_call_with_enum_property(C,
                                                    command.op_name.c_str(),
                                                    command.prop_name.c_str(),
                                                    command.prop_value.c_str());
             }
           }
-          ios_context_pop(C, context_store);
+          bridge_context_pop(C, context_store);
         }
       },
       message);
 }
 
-extern "C" void WM_apple_ios_ui_storyboard_draw(bContext *C)
+void WM_native_ui_storyboard_draw(bContext *C)
 {
   /* Just before the window draws, with its GPU context: the window is then drawn whole, so
    * nothing the pictures' drawing leaves behind is ever shown. */
   wmWindowManager *wm = CTX_wm_manager(C);
-  if (!(ios_panels_visible & 64) || !ios_storyboard_pending || !wm) {
+  if (!(bridge_panels_visible & 64) || !bridge_storyboard_pending || !wm) {
     return;
   }
   /* In the window's context, as the storyboard's snapshot is read. */
-  const IOSContextStore context_store = ios_context_push_view3d(C);
+  const BridgeContextStore context_store = bridge_context_push_view3d(C);
   wmWindow *win = CTX_wm_window(C);
   if (win) {
     wm_window_make_drawable(wm, win);
-    ios_storyboard_pending = ed::vse::native_storyboard_draw(C, ios_storyboard_state);
+    bridge_storyboard_pending = ed::vse::native_storyboard_draw(C, bridge_storyboard_state);
     if (bScreen *screen = WM_window_get_active_screen(win)) {
       screen->do_draw = true;
     }
   }
-  ios_context_pop(C, context_store);
+  bridge_context_pop(C, context_store);
   /* The new pictures, to the native interface at once. */
-  ios_storyboard_dirty = true;
-  ios_panels_next_snapshot = {};
+  bridge_storyboard_dirty = true;
+  bridge_panels_next_snapshot = {};
 }
 
-extern "C" void WM_apple_ios_ui_image_update(bContext *C)
+void WM_native_ui_image_update(bContext *C)
 {
   /* The image editor's picture follows painting closely, not at the panels' slower pace: each
    * time Blender changes something, though no closer together than the last one took to make. */
   static std::chrono::steady_clock::time_point next_pixels;
-  if (!(ios_panels_visible & 128) || !(ios_image_pixels_pending || ios_image_uvs_pending)) {
+  if (!(bridge_panels_visible & 128) || !(bridge_image_pixels_pending || bridge_image_uvs_pending)) {
     return;
   }
   const auto now = std::chrono::steady_clock::now();
-  const IOSContextStore context_store = ios_context_push_view3d(C);
-  if (ios_image_pixels_pending && now >= next_pixels) {
-    ios_image_pixels_pending = false;
+  const BridgeContextStore context_store = bridge_context_push_view3d(C);
+  if (bridge_image_pixels_pending && now >= next_pixels) {
+    bridge_image_pixels_pending = false;
     ed::image::NativeImagePixels pixels;
-    if (ed::image::native_image_pixels(C, ios_image_state, pixels)) {
-      ios_image_pixels.publish(std::move(pixels));
+    if (ed::image::native_image_pixels(C, bridge_image_state, pixels)) {
+      bridge_image_pixels.publish(std::move(pixels));
     }
     const auto took = std::chrono::steady_clock::now() - now;
     next_pixels = now + std::max<std::chrono::steady_clock::duration>(
                             std::chrono::milliseconds(33), took * 2);
   }
-  if (ios_image_uvs_pending) {
+  if (bridge_image_uvs_pending) {
     static std::vector<float> sent;
     static bool sent_any = false;
-    ios_image_uvs_pending = false;
+    bridge_image_uvs_pending = false;
     std::vector<float> uvs = ed::image::native_image_uvs(C);
     if (!sent_any || uvs != sent) {
       sent_any = true;
       sent = uvs;
-      ios_image_uvs.publish(std::move(uvs));
+      bridge_image_uvs.publish(std::move(uvs));
     }
   }
-  ios_context_pop(C, context_store);
+  bridge_context_pop(C, context_store);
 }
 
-extern "C" bool WM_apple_ios_ui_image_take_pixels(char **r_name,
+extern "C" bool WM_native_ui_image_take_pixels(char **r_name,
                                                   uint8_t **r_rgba,
                                                   int *r_width,
                                                   int *r_height,
@@ -4186,7 +4196,7 @@ extern "C" bool WM_apple_ios_ui_image_take_pixels(char **r_name,
                                                   int *r_full_height)
 {
   ed::image::NativeImagePixels pixels;
-  if (!ios_image_pixels.take(pixels)) {
+  if (!bridge_image_pixels.take(pixels)) {
     return false;
   }
   *r_name = strdup(pixels.name.c_str());
@@ -4204,10 +4214,10 @@ extern "C" bool WM_apple_ios_ui_image_take_pixels(char **r_name,
   return true;
 }
 
-extern "C" bool WM_apple_ios_ui_image_take_uvs(float **r_segments, int *r_count)
+extern "C" bool WM_native_ui_image_take_uvs(float **r_segments, int *r_count)
 {
   std::vector<float> uvs;
-  if (!ios_image_uvs.take(uvs)) {
+  if (!bridge_image_uvs.take(uvs)) {
     return false;
   }
   *r_count = int(uvs.size());
@@ -4224,20 +4234,20 @@ extern "C" bool WM_apple_ios_ui_image_take_uvs(float **r_segments, int *r_count)
   return true;
 }
 
-extern "C" double WM_apple_ios_engine_idle_seconds(bContext *C)
+double WM_native_ui_engine_idle_seconds(bContext *C)
 {
   /* How long Blender's loop has nothing to do: no events, notifiers or redraws pending, until
    * its next timer. The loop then sleeps, waking at once for input, instead of running every
    * frame. A rendered viewport is polled every frame, its engine draws on its own thread. */
   wmWindowManager *wm = CTX_wm_manager(C);
-  if (wm == nullptr || ios_ui_changed || !BLI_listbase_is_empty(&wm->runtime->notifier_queue)) {
+  if (wm == nullptr || bridge_changed || !BLI_listbase_is_empty(&wm->runtime->notifier_queue)) {
     return 0.0;
   }
-  if ((ios_panels_visible & 64) && ios_storyboard_pending) {
+  if ((bridge_panels_visible & 64) && bridge_storyboard_pending) {
     /* The storyboard's pictures still to draw, a few each pass. */
     return 0.1;
   }
-  if ((ios_panels_visible & 128) && (ios_image_pixels_pending || ios_image_uvs_pending)) {
+  if ((bridge_panels_visible & 128) && (bridge_image_pixels_pending || bridge_image_uvs_pending)) {
     /* The image editor's picture, held back while painting changes it quickly. */
     return 0.03;
   }
@@ -4280,16 +4290,16 @@ extern "C" double WM_apple_ios_engine_idle_seconds(bContext *C)
 /* While a stroke or another modal operator runs, one hand can keep changing things with the
  * other: the native controls are not blocked as Blender's own buttons are. Values change live;
  * what would change Blender's data under the operator waits for it to end, see
- * #ios_ui_message_live. */
-static Vector<IOSUIMessage> ios_ui_messages_waiting;
+ * #bridge_message_live. */
+static Vector<BridgeMessage> bridge_messages_waiting;
 /* Set while a native control is handled, so its undo steps wait for the operator too. */
-static bool ios_ui_dispatching = false;
-/* The undo step held back, pushed when the operator ends; see #WM_apple_ios_ui_undo_push_defer. */
-static std::optional<std::string> ios_undo_pending;
+static bool bridge_dispatching = false;
+/* The undo step held back, pushed when the operator ends; see #WM_native_ui_undo_push_defer. */
+static std::optional<std::string> bridge_undo_pending;
 
 /* Whether a stroke or another modal operator is running. The file browser waits for the system's
  * picker, holding no data half changed. */
-static bool ios_modal_operator_running(bContext *C)
+static bool bridge_modal_operator_running(bContext *C)
 {
   wmWindowManager *wm = CTX_wm_manager(C);
   if (wm->runtime->undo_stack && wm->runtime->undo_stack->step_init) {
@@ -4308,7 +4318,7 @@ static bool ios_modal_operator_running(bContext *C)
 }
 
 /* A panel's edit that only sets a value, not a button, list, menu or operator. */
-static bool ios_edit_sets_value(const std::string &json)
+static bool bridge_edit_sets_value(const std::string &json)
 {
   std::istringstream stream(json);
   auto value = io::serialize::JsonFormatter().deserialize(stream);
@@ -4333,20 +4343,20 @@ static bool ios_edit_sets_value(const std::string &json)
  * shown and the view. Modes, tools, brushes, operators, undo, frames and assets change data the
  * operator holds, and wait for it to end.
  */
-static bool ios_ui_message_live(const IOSUIMessage &message)
+static bool bridge_message_live(const BridgeMessage &message)
 {
-  if (const auto *command = std::get_if<IOSUICommand>(&message)) {
+  if (const auto *command = std::get_if<BridgeCommand>(&message)) {
     /* The view and its shading; not Local View, which hides objects. */
-    return *command >= IOSUICommand::FrameSelected && *command <= IOSUICommand::ViewBottom &&
-           *command != IOSUICommand::ViewLocal;
+    return *command >= BridgeCommand::FrameSelected && *command <= BridgeCommand::ViewBottom &&
+           *command != BridgeCommand::ViewLocal;
   }
   if (std::holds_alternative<float>(message)) {
     return true;
   }
-  if (const auto *menu = std::get_if<IOSMenuRequest>(&message)) {
+  if (const auto *menu = std::get_if<BridgeMenuRequest>(&message)) {
     return !menu->execute;
   }
-  const auto *setting = std::get_if<IOSSettingCommand>(&message);
+  const auto *setting = std::get_if<BridgeSettingCommand>(&message);
   if (setting == nullptr) {
     return false;
   }
@@ -4372,21 +4382,21 @@ static bool ios_ui_message_live(const IOSUIMessage &message)
     return true;
   }
   if (ELEM(name, "native_properties_edit", "native_panel_edit", "native_nodes_edit")) {
-    return ios_edit_sets_value(setting->value);
+    return bridge_edit_sets_value(setting->value);
   }
   return false;
 }
 
-static void ios_undo_push_pending(bContext *C)
+static void bridge_undo_push_pending(bContext *C)
 {
-  if (!ios_undo_pending) {
+  if (!bridge_undo_pending) {
     return;
   }
-  const std::string name = std::move(*ios_undo_pending);
-  ios_undo_pending.reset();
-  const IOSContextStore context_store = ios_context_push_view3d(C);
+  const std::string name = std::move(*bridge_undo_pending);
+  bridge_undo_pending.reset();
+  const BridgeContextStore context_store = bridge_context_push_view3d(C);
   ED_undo_push(C, name.empty() ? nullptr : name.c_str());
-  ios_context_pop(C, context_store);
+  bridge_context_pop(C, context_store);
 }
 
 /**
@@ -4394,21 +4404,21 @@ static void ios_undo_push_pending(bContext *C)
  * would close the operator's own step half way, and the stroke crashes as it goes on. It is
  * pushed once the operator ends instead. Blender's own pushes, as an operator finishing, go ahead.
  */
-extern "C" bool WM_apple_ios_ui_undo_push_defer(bContext *C, const char *name)
+bool WM_native_ui_undo_push_defer(bContext *C, const char *name)
 {
-  if (!ios_ui_dispatching || !ios_modal_operator_running(C)) {
+  if (!bridge_dispatching || !bridge_modal_operator_running(C)) {
     return false;
   }
-  ios_undo_pending = name ? name : "";
+  bridge_undo_pending = name ? name : "";
   return true;
 }
 
-extern "C" bool WM_apple_ios_ui_engine_busy(bContext *C)
+bool WM_native_ui_engine_busy(bContext *C)
 {
-  return ios_modal_operator_running(C);
+  return bridge_modal_operator_running(C);
 }
 
-extern "C" void WM_apple_ios_ui_flush_commands(bContext *C)
+void WM_native_ui_flush_commands(bContext *C)
 {
   if (C == nullptr) {
     return;
@@ -4418,9 +4428,9 @@ extern "C" void WM_apple_ios_ui_flush_commands(bContext *C)
   WM_apple_ios_dialog_flush(C);
   WM_apple_ios_fileselect_flush(C);
 #endif
-  WM_apple_ios_ui_ensure_layout(C);
+  WM_native_ui_ensure_layout(C);
 
-  if (ios_viewport_cover_changed.exchange(false)) {
+  if (bridge_viewport_cover_changed.exchange(false)) {
     /* The 3D views are shortened to the part a panel leaves showing, see #area_calc_totrct. */
     for (wmWindow &win : CTX_wm_manager(C)->windows) {
       bScreen *screen = WM_window_get_active_screen(&win);
@@ -4431,19 +4441,19 @@ extern "C" void WM_apple_ios_ui_flush_commands(bContext *C)
         }
       }
     }
-    ios_navigation_redraw_pending.store(true);
+    bridge_navigation_redraw_pending.store(true);
   }
-  if (ios_navigation_redraw_pending.exchange(false)) {
-    const IOSContextStore context_store = ios_context_push_view3d(C);
+  if (bridge_navigation_redraw_pending.exchange(false)) {
+    const BridgeContextStore context_store = bridge_context_push_view3d(C);
     if (ARegion *region = CTX_wm_region(C)) {
       ED_region_tag_redraw_editor_overlays(region);
     }
-    ios_context_pop(C, context_store);
+    bridge_context_pop(C, context_store);
   }
 
-  auto supersedes_preview = [](const IOSUIMessage &previous, const IOSUIMessage &next) {
-    const auto *a = std::get_if<IOSSettingCommand>(&previous);
-    const auto *b = std::get_if<IOSSettingCommand>(&next);
+  auto supersedes_preview = [](const BridgeMessage &previous, const BridgeMessage &next) {
+    const auto *a = std::get_if<BridgeSettingCommand>(&previous);
+    const auto *b = std::get_if<BridgeSettingCommand>(&next);
     if (a && b && a->setting == "timeline_frame" && b->setting == "timeline_frame") {
       return true;
     }
@@ -4454,10 +4464,10 @@ extern "C" void WM_apple_ios_ui_flush_commands(bContext *C)
     {
       return true;
     }
-    const auto *drag_a = std::get_if<IOSAssetDragCommand>(&previous);
-    const auto *drag_b = std::get_if<IOSAssetDragCommand>(&next);
-    if (drag_a && drag_b && drag_a->phase == IOS_ASSET_DRAG_MOVE &&
-        drag_b->phase == IOS_ASSET_DRAG_MOVE)
+    const auto *drag_a = std::get_if<BridgeAssetDragCommand>(&previous);
+    const auto *drag_b = std::get_if<BridgeAssetDragCommand>(&next);
+    if (drag_a && drag_b && drag_a->phase == BRIDGE_ASSET_DRAG_MOVE &&
+        drag_b->phase == BRIDGE_ASSET_DRAG_MOVE)
     {
       return true;
     }
@@ -4481,32 +4491,32 @@ extern "C" void WM_apple_ios_ui_flush_commands(bContext *C)
   bool handled_commands = false;
   /* Waiting messages first, in the order they came; a stroke or move may start or end between
    * any two of them. Live messages go ahead of any still waiting. */
-  Vector<IOSUIMessage> messages = std::move(ios_ui_messages_waiting);
-  ios_ui_messages_waiting.clear();
-  for (IOSUIMessage &message : ios_ui_messages.take_coalesced(supersedes_preview)) {
+  Vector<BridgeMessage> messages = std::move(bridge_messages_waiting);
+  bridge_messages_waiting.clear();
+  for (BridgeMessage &message : bridge_messages.take_coalesced(supersedes_preview)) {
     messages.append(std::move(message));
   }
-  for (IOSUIMessage &message : messages) {
-    const bool running = ios_modal_operator_running(C);
+  for (BridgeMessage &message : messages) {
+    const bool running = bridge_modal_operator_running(C);
     if (!running) {
-      ios_undo_push_pending(C);
+      bridge_undo_push_pending(C);
     }
-    if ((running || !ios_ui_messages_waiting.is_empty()) && !ios_ui_message_live(message)) {
-      ios_ui_messages_waiting.append(std::move(message));
+    if ((running || !bridge_messages_waiting.is_empty()) && !bridge_message_live(message)) {
+      bridge_messages_waiting.append(std::move(message));
       continue;
     }
-    ios_ui_dispatching = true;
-    ios_ui_dispatch(C, message);
-    ios_ui_dispatching = false;
+    bridge_dispatching = true;
+    bridge_dispatch(C, message);
+    bridge_dispatching = false;
     handled_commands = true;
   }
-  if (!ios_modal_operator_running(C)) {
-    ios_undo_push_pending(C);
+  if (!bridge_modal_operator_running(C)) {
+    bridge_undo_push_pending(C);
   }
 
-  const bool hover_changed = ios_hover_requests.take(ios_hover_request);
+  const bool hover_changed = bridge_hover_requests.take(bridge_hover_request);
   {
-    const IOSContextStore context_store = ios_context_push_view3d(C);
+    const BridgeContextStore context_store = bridge_context_push_view3d(C);
     ARegion *region = CTX_wm_region(C);
     wmWindow *window = CTX_wm_window(C);
     if (hover_changed && window) {
@@ -4516,7 +4526,7 @@ extern "C" void WM_apple_ios_ui_flush_commands(bContext *C)
         screen->do_draw_gesture = true;
       }
     }
-    bool active = ios_hover_request.active && ios_hover_highlight && window && region;
+    bool active = bridge_hover_request.active && bridge_hover_highlight && window && region;
     if (active) {
       for (wmEventHandler &handler : window->runtime->modalhandlers) {
         if (handler.type == WM_HANDLER_TYPE_OP || handler.type == WM_HANDLER_TYPE_UI) {
@@ -4528,7 +4538,7 @@ extern "C" void WM_apple_ios_ui_flush_commands(bContext *C)
         active = false;
       }
     }
-    int mval[2] = {ios_hover_request.x, ios_hover_request.y};
+    int mval[2] = {bridge_hover_request.x, bridge_hover_request.y};
     if (window && region) {
       wm_cursor_position_from_ghost_client_coords(window, &mval[0], &mval[1]);
       mval[0] -= region->winrct.xmin;
@@ -4544,27 +4554,27 @@ extern "C" void WM_apple_ios_ui_flush_commands(bContext *C)
                                  WM_drag_is_ID_type(drag, ID_NT));
     if (drag_to_object) {
       active = true;
-      mval[0] = ios_asset_drag_xy.x - region->winrct.xmin;
-      mval[1] = ios_asset_drag_xy.y - region->winrct.ymin;
+      mval[0] = bridge_asset_drag_xy.x - region->winrct.xmin;
+      mval[1] = bridge_asset_drag_xy.y - region->winrct.ymin;
     }
     ED_view3d_pencil_hover_update(C, active, mval, drag_to_object);
     const View3DPencilHover hit = ED_view3d_pencil_hover_get(region);
-    /* Published when it changes: every snapshot wakes UIKit. */
+    /* Published when it changes: every snapshot wakes the native interface. */
     static std::string hover_published;
     std::string hover = "{\"object\":" + std::to_string(hit.object_uid) +
                         ",\"kind\":" + std::to_string(hit.kind) +
                         ",\"index\":" + std::to_string(hit.index) +
-                        ",\"cursorVisible\":" + (ios_hover_request.active ? "true" : "false") +
+                        ",\"cursorVisible\":" + (bridge_hover_request.active ? "true" : "false") +
                         "}";
     if (hover != hover_published) {
       hover_published = hover;
-      ios_hover_snapshot.publish(std::move(hover));
+      bridge_hover_snapshot.publish(std::move(hover));
     }
-    ios_context_pop(C, context_store);
+    bridge_context_pop(C, context_store);
   }
 
-  ios_toolbar_build(C, handled_commands);
-  ios_volume_build(C);
+  bridge_toolbar_build(C, handled_commands);
+  bridge_volume_build(C);
 }
 
 }  // namespace blender

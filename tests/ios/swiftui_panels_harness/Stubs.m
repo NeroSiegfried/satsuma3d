@@ -11,43 +11,43 @@
 
 #import "wm_apple_ios_swift_bridge.h"
 
-char *WM_apple_ios_ui_assets_take_json(void)
+char *WM_native_ui_assets_take_json(void)
 {
   return NULL;
 }
-char *WM_apple_ios_ui_panels_take_json(void)
+char *WM_native_ui_panels_take_json(void)
 {
   return NULL;
 }
-char *WM_apple_ios_ui_timeline_take_json(void)
+char *WM_native_ui_timeline_take_json(void)
 {
   return NULL;
 }
-char *WM_apple_ios_ui_toolbar_copy_json(void)
+char *WM_native_ui_toolbar_copy_json(void)
 {
   return NULL;
 }
-char *WM_apple_ios_ui_toolbar_take_json(void)
+char *WM_native_ui_toolbar_take_json(void)
 {
   return NULL;
 }
-void WM_apple_ios_ui_toolbar_free_json(char *json)
+void WM_native_ui_json_free(char *json)
 {
   free(json);
 }
-void WM_apple_ios_ui_bottom_tray_set(float fraction) {}
-void WM_apple_ios_ui_brush_activate(const char *brush_id) {}
-void WM_apple_ios_ui_tool_set_by_id(const char *tool_id) {}
-void WM_apple_ios_ui_operator_enum_enqueue(const char *op_name,
+void WM_native_ui_bottom_tray_set(float fraction) {}
+void WM_native_ui_brush_activate(const char *brush_id) {}
+void WM_native_ui_tool_set_by_id(const char *tool_id) {}
+void WM_native_ui_operator_enum_enqueue(const char *op_name,
                                            const char *prop_name,
                                            const char *prop_value)
 {
 }
-uint64_t WM_apple_ios_ui_menu_request(const char *route, bool execute)
+uint64_t WM_native_ui_menu_request(const char *route, bool execute)
 {
   return 0;
 }
-char *WM_apple_ios_ui_menu_take_result(uint64_t identifier)
+char *WM_native_ui_menu_take_result(uint64_t identifier)
 {
   return strdup("[]");
 }

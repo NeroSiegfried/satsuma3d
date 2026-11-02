@@ -39,6 +39,10 @@
 
 #include "view3d_intern.hh"
 
+#ifdef WITH_NATIVE_UI
+#  include "WM_native_ui.hh"
+#endif
+
 namespace blender {
 
 /* Radius of the entire background. */
@@ -55,9 +59,6 @@ namespace blender {
 #define AXIS_DEPTH_BIAS 0.01f
 
 #ifdef WITH_NATIVE_UI
-extern "C" bool WM_apple_ios_ui_navigation_hover_active();
-extern "C" void WM_apple_ios_ui_navigation_redraw_request();
-
 struct NavigateRotateGizmo {
   wmGizmo gizmo;
   float hover[6];
@@ -117,12 +118,12 @@ static void gizmo_axis_draw(const bContext *C, wmGizmo *gz)
 #ifdef WITH_NATIVE_UI
   constexpr bool minimal = true;
   NavigateRotateGizmo *axis_gizmo = reinterpret_cast<NavigateRotateGizmo *>(gz);
-  const int hover_part = is_active && WM_apple_ios_ui_navigation_hover_active() ?
+  const int hover_part = is_active && WM_native_ui_navigation_hover_active() ?
                              gz->highlight_part : -1;
   if (gizmo_axis_hover_update(axis_gizmo, BLI_time_now_seconds(), hover_part)) {
     /* The UIKit display link consumes this before the next Blender draw. Stop
      * requesting frames as soon as all six elements have reached their targets. */
-    WM_apple_ios_ui_navigation_redraw_request();
+    WM_native_ui_navigation_redraw_request();
   }
 #else
   constexpr bool minimal = false;

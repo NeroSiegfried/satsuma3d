@@ -11,7 +11,7 @@
 import SwiftUI
 import UIKit
 
-/* Matches #IOSAssetDragPhase in `wm_apple_ios_ui.cc`. */
+/* Matches #BridgeAssetDragPhase in `wm_native_ui.cc`. */
 enum AssetDragPhase: Int32 {
   case begin = 0, move = 1, drop = 2, cancel = 3, add = 4
 }
@@ -120,7 +120,7 @@ final class AssetsStore: ObservableObject {
   }
 
   func add(_ item: JSON) {
-    WM_apple_ios_ui_asset_drag(AssetDragPhase.add.rawValue, item.string("id") ?? "", 0, 0)
+    WM_native_ui_asset_drag(AssetDragPhase.add.rawValue, item.string("id") ?? "", 0, 0)
     Haptics.impact()
   }
 }
@@ -408,16 +408,16 @@ final class SwiftAssets: NSObject, UIDropInteractionDelegate {
           showPullPreview(item, over: over, in: window)
           if over { Haptics.selection() }
           withAnimation(.easeOut(duration: 0.15)) { store.overViewport = over }
-          WM_apple_ios_ui_asset_drag(over ? AssetDragPhase.begin.rawValue : AssetDragPhase.cancel.rawValue,
+          WM_native_ui_asset_drag(over ? AssetDragPhase.begin.rawValue : AssetDragPhase.cancel.rawValue,
                                      id, Int32(client.x.rounded()), Int32(client.y.rounded()))
         }
         else if over {
-          WM_apple_ios_ui_asset_drag(AssetDragPhase.move.rawValue, id, Int32(client.x.rounded()),
+          WM_native_ui_asset_drag(AssetDragPhase.move.rawValue, id, Int32(client.x.rounded()),
                                      Int32(client.y.rounded()))
         }
       case .drop:
         if pullOverViewport {
-          WM_apple_ios_ui_asset_drag(AssetDragPhase.drop.rawValue, id, Int32(client.x.rounded()),
+          WM_native_ui_asset_drag(AssetDragPhase.drop.rawValue, id, Int32(client.x.rounded()),
                                      Int32(client.y.rounded()))
           Haptics.impact(.medium)
         }
@@ -498,7 +498,7 @@ final class SwiftAssets: NSObject, UIDropInteractionDelegate {
     guard let view = dropInteraction.view else { return }
     let point = session.location(in: view)
     let client = clientPoint?(point) ?? point
-    WM_apple_ios_ui_asset_drag(phase.rawValue, asset(session)?.string("id") ?? "", Int32(client.x.rounded()),
+    WM_native_ui_asset_drag(phase.rawValue, asset(session)?.string("id") ?? "", Int32(client.x.rounded()),
                                Int32(client.y.rounded()))
   }
 
@@ -571,7 +571,7 @@ final class SwiftAssets: NSObject, UIDropInteractionDelegate {
     else if dragging {
       /* Back over the pane: stop previewing in the viewport. */
       dragging = false
-      WM_apple_ios_ui_asset_drag(AssetDragPhase.cancel.rawValue, nil, 0, 0)
+      WM_native_ui_asset_drag(AssetDragPhase.cancel.rawValue, nil, 0, 0)
     }
     return UIDropProposal(operation: over ? .copy : .cancel)
   }
@@ -589,12 +589,12 @@ final class SwiftAssets: NSObject, UIDropInteractionDelegate {
     setOverViewport(false, session)
     if dragging {
       dragging = false
-      WM_apple_ios_ui_asset_drag(AssetDragPhase.cancel.rawValue, nil, 0, 0)
+      WM_native_ui_asset_drag(AssetDragPhase.cancel.rawValue, nil, 0, 0)
     }
   }
 
   func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnd session: UIDropSession) {
-    if dragging && !dropped { WM_apple_ios_ui_asset_drag(AssetDragPhase.cancel.rawValue, nil, 0, 0) }
+    if dragging && !dropped { WM_native_ui_asset_drag(AssetDragPhase.cancel.rawValue, nil, 0, 0) }
     dragging = false
     store.overViewport = false
     store.dragged = nil

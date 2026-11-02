@@ -39,7 +39,7 @@ func jsonEqual(_ a: Any?, _ b: Any?) -> Bool {
 enum Engine {
   /** Queue a setting for the engine; `value` is usually JSON. */
   static func setting(_ name: String, _ value: String) {
-    WM_apple_ios_ui_setting_enqueue(name, value)
+    WM_native_ui_setting_enqueue(name, value)
   }
 
   static func setting(_ name: String, json: Any) {
@@ -51,7 +51,7 @@ enum Engine {
   }
 
   static func operatorCall(_ idname: String) {
-    WM_apple_ios_ui_operator_enqueue(idname)
+    WM_native_ui_operator_enqueue(idname)
   }
 }
 

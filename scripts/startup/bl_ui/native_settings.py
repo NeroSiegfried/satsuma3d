@@ -122,7 +122,7 @@ def command(context, name, value):
         kmi.active = bool(value.get("active"))
     else:
         return
-    # Saved with the other preferences, see `ios_preferences_save` in `wm_apple_ios_ui.cc`.
+    # Saved with the other preferences, see `bridge_preferences_save` in `wm_native_ui.cc`.
     context.preferences.is_dirty = True
 
 

@@ -10,7 +10,7 @@ Copy into the app's Documents directory and launch with `--factory-startup --pyt
     exec(compile((Path.home() / 'Documents/assets_device_test.py').read_text(),
                  'assets_device_test.py', 'exec'))
 
-Each asset goes through `WM_apple_ios_ui_asset_drag`, the entry point the native pane uses: a tap
+Each asset goes through `WM_native_ui_asset_drag`, the entry point the native pane uses: a tap
 adds it (objects at the 3D cursor, materials and modifiers onto the active object), and one asset
 is also dragged and dropped at a viewport point, and one drag is cancelled. Blender's own drag and
 drop does the rest. Results are written to `Documents/assets-device-test.json`.
@@ -31,9 +31,9 @@ LIBRARY = "Starter"
 CUSTOM_LIBRARY = 100
 
 engine = ctypes.CDLL(None)
-drag = engine.WM_apple_ios_ui_asset_drag
+drag = engine.WM_native_ui_asset_drag
 drag.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
-setting = engine.WM_apple_ios_ui_setting_enqueue
+setting = engine.WM_native_ui_setting_enqueue
 setting.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
 
 output = Path.home() / "Documents/assets-device-test.json"
@@ -281,7 +281,7 @@ def tests():
         def hovered():
             return json.loads(ctypes.string_at(hover_json()).decode()).get("object", 0)
 
-        hover_json = engine.WM_apple_ios_ui_pencil_hover_copy_json
+        hover_json = engine.WM_native_ui_stylus_hover_copy_json
         hover_json.restype = ctypes.c_void_p
         material = next((f, n) for f, names in contents.items() for n in names["materials"])
         cube_point = view3d_utils.location_3d_to_region_2d(region, area.spaces.active.region_3d,

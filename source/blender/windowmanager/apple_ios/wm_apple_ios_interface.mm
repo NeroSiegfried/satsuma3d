@@ -167,7 +167,7 @@ UIImage *blenderIOSMenuIcon(NSDictionary *item)
 
 NSArray *blenderIOSMenuResult(uint64_t identifier)
 {
-  char *json = WM_apple_ios_ui_menu_take_result(identifier);
+  char *json = WM_native_ui_menu_take_result(identifier);
   if (!json) {
     return nil;
   }
@@ -183,7 +183,7 @@ NSArray *blenderIOSMenuResult(uint64_t identifier)
 - (void)blenderMenuCommand:(UIKeyCommand *)command
 {
   if ([command.propertyList isKindOfClass:NSString.class]) {
-    WM_apple_ios_ui_menu_request([command.propertyList UTF8String], true);
+    WM_native_ui_menu_request([command.propertyList UTF8String], true);
   }
 }
 @end
@@ -195,7 +195,7 @@ UIMenu *blenderIOSNativeSubmenu(NSDictionary *item, NSString *identifier)
    * The engine fills the request in its event pump; UIKit never calls into Python. */
   UIDeferredMenuElement *content = [UIDeferredMenuElement
       elementWithUncachedProvider:^(void (^completion)(NSArray<UIMenuElement *> *)) {
-        const uint64_t request = WM_apple_ios_ui_menu_request(route.UTF8String, false);
+        const uint64_t request = WM_native_ui_menu_request(route.UTF8String, false);
         const CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + 60.0;
         NSTimer *poll = [NSTimer
             timerWithTimeInterval:0.025
@@ -368,7 +368,7 @@ NSArray<UIMenuElement *> *blenderIOSNativeMenuElements(NSArray *items)
                                            image:icon
                                       identifier:nil
                                          handler:^(__kindof UIAction *) {
-                                           WM_apple_ios_ui_menu_request(route.UTF8String, true);
+                                           WM_native_ui_menu_request(route.UTF8String, true);
                                          }];
     action.attributes = [item[@"disabled"] boolValue] ? UIMenuElementAttributesDisabled : 0;
     action.state = [item[@"checked"] boolValue] ? UIMenuElementStateOn : UIMenuElementStateOff;

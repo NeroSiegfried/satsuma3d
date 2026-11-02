@@ -114,13 +114,13 @@ extension View {
                     contentAlignment: .trailing)
     {
       RailOrnament(items: RailItem.tools(model.tools, mode: model.mode), active: model.activeTool, brush: false,
-                   title: "Tools") { WM_apple_ios_ui_tool_set_by_id($0.id) }
+                   title: "Tools") { WM_native_ui_tool_set_by_id($0.id) }
     }
     .ornament(visibility: shown && !brushes.isEmpty ? .visible : .hidden, attachmentAnchor: .scene(.trailing),
               contentAlignment: .leading)
     {
       RailOrnament(items: brushes, active: model.brushes?.string("active") ?? "", brush: true,
-                   title: "Brushes") { WM_apple_ios_ui_brush_activate($0.id) }
+                   title: "Brushes") { WM_native_ui_brush_activate($0.id) }
     }
     .ornament(visibility: shown ? .visible : .hidden, attachmentAnchor: .scene(.bottom), contentAlignment: .top) {
       ActionsOrnament(model: model)

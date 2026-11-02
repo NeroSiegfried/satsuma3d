@@ -27,11 +27,11 @@ probe.blender_device_probe_cancel_picker.restype = ctypes.c_bool
 free = ctypes.CDLL('/usr/lib/libSystem.B.dylib').free
 free.argtypes = [ctypes.c_void_p]
 engine = ctypes.CDLL(None)
-engine.WM_apple_ios_ui_tool_set_by_id.argtypes = [ctypes.c_char_p]
-engine.WM_apple_ios_ui_command_enqueue.argtypes = [ctypes.c_int]
-engine.WM_apple_ios_ui_setting_enqueue.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-engine.WM_apple_ios_ui_operator_enqueue.argtypes = [ctypes.c_char_p]
-engine.WM_apple_ios_ui_operator_enum_enqueue.argtypes = [ctypes.c_char_p] * 3
+engine.WM_native_ui_tool_set_by_id.argtypes = [ctypes.c_char_p]
+engine.WM_native_ui_command_enqueue.argtypes = [ctypes.c_int]
+engine.WM_native_ui_setting_enqueue.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+engine.WM_native_ui_operator_enqueue.argtypes = [ctypes.c_char_p]
+engine.WM_native_ui_operator_enum_enqueue.argtypes = [ctypes.c_char_p] * 3
 deadline = time.monotonic() + 180
 generator = None
 
@@ -79,7 +79,7 @@ def steps():
           'Visible native ellipsis exposes full Blender menus, including Add')
     axes_absent('Idle selection has no XYZ constraints')
     for tool in ('builtin.move', 'builtin.rotate', 'builtin.scale', 'builtin.select_box'):
-        engine.WM_apple_ios_ui_tool_set_by_id(tool.encode())
+        engine.WM_native_ui_tool_set_by_id(tool.encode())
         yield 0.6
         check(snapshot()['active'] == tool, f'Tool change reaches native snapshot: {tool}')
         axes_absent(f'Idle {tool} has no XYZ constraints')
@@ -109,29 +109,29 @@ def steps():
     yield 0.6
     axes_absent('Confirmed transform removes XYZ')
     for command, mode in ((1, 'mesh_edit'), (0, 'objectmode')):
-        engine.WM_apple_ios_ui_command_enqueue(command)
+        engine.WM_native_ui_command_enqueue(command)
         yield 0.8
         check(snapshot()['mode'] == mode, f'Mode change updates native UI: {mode}')
         check(('Mesh' if mode == 'mesh_edit' else 'Object') in snapshot()['nativeMenus'],
               f'Visible menu roots follow {mode}')
         axes_absent(f'{mode} idle state hides XYZ')
     count = len(bpy.context.scene.objects)
-    engine.WM_apple_ios_ui_operator_enum_enqueue(b'OBJECT_OT_duplicate', b'', b'')
+    engine.WM_native_ui_operator_enum_enqueue(b'OBJECT_OT_duplicate', b'', b'')
     yield 0.5
     check(len(bpy.context.scene.objects) == count + 1, 'Duplicate creates a new scene object')
     check(snapshot()['canUndo'], 'Native Undo enables after an edit')
     for operator, expected in ((b'ED_OT_undo', count), (b'ED_OT_redo', count + 1), (b'ED_OT_undo', count)):
-        engine.WM_apple_ios_ui_operator_enqueue(operator)
+        engine.WM_native_ui_operator_enqueue(operator)
         yield 0.8
         check(len(bpy.context.scene.objects) == expected, f'Native {operator.decode()} restores scene state')
     for command, shading in ((20, 'wireframe'), (21, 'solid'), (22, 'material'), (21, 'solid')):
-        engine.WM_apple_ios_ui_command_enqueue(command)
+        engine.WM_native_ui_command_enqueue(command)
         yield 1.5
         check(snapshot()['shading'] == shading, f'Shading reaches native snapshot: {shading}')
-    engine.WM_apple_ios_ui_tool_set_by_id(b'builtin.move')
+    engine.WM_native_ui_tool_set_by_id(b'builtin.move')
     yield 0.5
     for orientation in (b'local', b'global'):
-        engine.WM_apple_ios_ui_setting_enqueue(b'orientation', orientation)
+        engine.WM_native_ui_setting_enqueue(b'orientation', orientation)
         yield 0.5
         check(snapshot()['settings']['orientation'] == orientation.decode(),
               f'Orientation state follows native command: {orientation.decode()}')
@@ -157,7 +157,7 @@ def steps():
     check(bpy.context.scene.get('deep_qa_marker') == 'round-trip', 'Real .blend load restores scene data')
     check('Add' in snapshot()['nativeMenus'], 'Native menus recover after file load')
     axes_absent('File load does not leave XYZ constraints behind')
-    engine.WM_apple_ios_ui_tool_set_by_id(b'builtin.select_box')
+    engine.WM_native_ui_tool_set_by_id(b'builtin.select_box')
     yield 0.5
     report['passed'] = True
     report['stage'] = 'complete'

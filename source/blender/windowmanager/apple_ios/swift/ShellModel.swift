@@ -185,10 +185,10 @@ final class ShellModel {
 
   /** Take Blender's toolbar snapshot when it changed, or copy it when `copy`. */
   func pullToolbar(copy: Bool = false) {
-    guard let json = copy ? WM_apple_ios_ui_toolbar_copy_json() : WM_apple_ios_ui_toolbar_take_json()
+    guard let json = copy ? WM_native_ui_toolbar_copy_json() : WM_native_ui_toolbar_take_json()
     else { return }
     let data = Data(bytes: json, count: strlen(json))
-    WM_apple_ios_ui_toolbar_free_json(json)
+    WM_native_ui_json_free(json)
     if let toolbar = try? JSONSerialization.jsonObject(with: data) as? JSON {
       update(toolbar: toolbar)
     }
@@ -325,7 +325,7 @@ final class SoakProbe {
         let tools = model.tools.compactMap { $0?.string("id") }
         guard !tools.isEmpty else { return }
         let tool = tools[next(tools.count)]
-        WM_apple_ios_ui_tool_set_by_id(tool)
+        WM_native_ui_tool_set_by_id(tool)
         action["tool"] = tool
       case 2:
         let key = next(2) == 0 ? "size" : "strength"

@@ -11,7 +11,7 @@ import bpy
 probe = ctypes.CDLL(str(Path(bpy.app.binary_path).parent / 'Frameworks/ResponsiveDeviceProbe.dylib'))
 free = ctypes.CDLL('/usr/lib/libSystem.B.dylib').free
 free.argtypes = [ctypes.c_void_p]
-enqueue = ctypes.CDLL(None).WM_apple_ios_ui_operator_enqueue
+enqueue = ctypes.CDLL(None).WM_native_ui_operator_enqueue
 enqueue.argtypes = [ctypes.c_char_p]
 report = {'checks': []}
 output = Path.home() / 'Documents/number-sensitivity-test.json'

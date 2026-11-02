@@ -126,7 +126,7 @@
   }
   self.last = link.timestamp;
   self.ticks++;
-  auto snapshot = (char *(*)())dlsym(RTLD_DEFAULT, "WM_apple_ios_ui_toolbar_copy_json");
+  auto snapshot = (char *(*)())dlsym(RTLD_DEFAULT, "WM_native_ui_toolbar_copy_json");
   char *json = snapshot();
   if (json && strlen(json) > 2) {
     self.snapshots++;
@@ -143,7 +143,7 @@
   }
   self.scrollDistance = MAX(self.scrollDistance, self.scroll.contentOffset.y);
   if (self.commands < 20 && elapsed > 0.2 * (self.commands + 1)) {
-    auto enqueue = (void (*)(const char *))dlsym(RTLD_DEFAULT, "WM_apple_ios_ui_operator_enqueue");
+    auto enqueue = (void (*)(const char *))dlsym(RTLD_DEFAULT, "WM_native_ui_operator_enqueue");
     enqueue("WM_OT_responsive_device_probe");
     self.commands++;
   }
@@ -1246,7 +1246,7 @@ extern "C" char *blender_device_probe_snapshot()
 {
   __block char *result;
   dispatch_sync(dispatch_get_main_queue(), ^{
-    auto copy = (char *(*)())dlsym(RTLD_DEFAULT, "WM_apple_ios_ui_toolbar_copy_json");
+    auto copy = (char *(*)())dlsym(RTLD_DEFAULT, "WM_native_ui_toolbar_copy_json");
     char *json = copy();
     NSData *data = [NSData dataWithBytes:json length:strlen(json)];
     free(json);
@@ -1458,7 +1458,7 @@ extern "C" char *blender_device_probe_end()
 
 extern "C" char *blender_device_probe_menu_result(uint64_t identifier)
 {
-  auto take = (char *(*)(uint64_t))dlsym(RTLD_DEFAULT, "WM_apple_ios_ui_menu_take_result");
+  auto take = (char *(*)(uint64_t))dlsym(RTLD_DEFAULT, "WM_native_ui_menu_take_result");
   __block char *result;
   dispatch_sync(dispatch_get_main_queue(), ^{
     result = take(identifier);

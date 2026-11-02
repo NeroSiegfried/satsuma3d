@@ -48,11 +48,11 @@
 #include "RNA_define.hh"
 #include "RNA_enum_types.hh"
 
-namespace blender {
-
 #ifdef WITH_NATIVE_UI
-extern "C" bool WM_apple_ios_ui_undo_push_defer(bContext *C, const char *name);
+#  include "WM_native_ui.hh"
 #endif
+
+namespace blender {
 
 /** We only need this locally. */
 static CLG_LogRef LOG = {"undo"};
@@ -102,7 +102,7 @@ void ED_undo_push(bContext *C, const char *str)
 {
 #ifdef WITH_NATIVE_UI
   /* A native control used while a stroke or other operator runs: its step waits for it. */
-  if (WM_apple_ios_ui_undo_push_defer(C, str)) {
+  if (WM_native_ui_undo_push_defer(C, str)) {
     return;
   }
 #endif

@@ -185,7 +185,7 @@ static void volume_color(const Object *ob, float r_color[4])
 }
 
 /** Gathers a frame when the scene changed; the last one stays pending until it is taken. */
-void ios_volume_build(bContext *C)
+void bridge_volume_build(bContext *C)
 {
   if (!volume_visible.load()) {
     return;
@@ -307,7 +307,7 @@ static Object *volume_object(bContext *C, const char *name)
 /** Where a move began, so each step moves from there. */
 static float volume_move_start[4][4];
 
-bool ios_volume_command(bContext *C, const StringRef setting, const StringRef value)
+bool bridge_volume_command(bContext *C, const StringRef setting, const StringRef value)
 {
   if (setting == "volume_visible") {
     const bool visible = value == "1";

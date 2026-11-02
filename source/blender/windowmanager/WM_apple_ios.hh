@@ -15,7 +15,6 @@ namespace blender {
 struct bContext;
 struct wmWindow;
 struct ReportList;
-struct wmOperatorType;
 
 /* Engine-thread API. UIKit exchanges only owned values and request identifiers. */
 /**
@@ -41,11 +40,6 @@ void WM_apple_ios_document_set_modified(bool modified);
 /** Open the document at an `NSURL *` the system handed to the app. */
 void WM_apple_ios_open_url(void *url);
 
-bool WM_apple_ios_pencil_hover_active();
-/** The barrel roll of a Pencil touching the screen, false with none down. */
-bool WM_apple_ios_pencil_roll(float *r_angle, float r_tilt[2]);
-/** What a drag with the Tweak tool does, see #wmNativeInterface::tweak_drag. */
-void WM_apple_ios_tweak_drag(bool *r_move, bool *r_roll, bool *r_tilt);
 /**
  * Fingers moving objects with the Tweak tool, see `wm_apple_ios_finger_tweak.cc`. GHOST asks
  * whether they do and hands over their touches from UIKit's thread, see
@@ -58,8 +52,6 @@ int WM_apple_ios_finger_tweak_holding(bool *r_landing);
 /** Follow the active tool and mode, as they change. */
 void WM_apple_ios_finger_tweak_mode_update(bContext *C);
 void WM_apple_ios_finger_tweak_flush(bContext *C);
-/** Something in Blender changed (notifiers were sent): describe it to the native interface. */
-void WM_apple_ios_ui_tag_changed();
 bool WM_apple_ios_dialog_begin(bContext *C,
                                const wmIOSDialog &dialog,
                                std::function<void(bContext *, int, uint64_t)> complete,
@@ -68,11 +60,6 @@ bool WM_apple_ios_dialog_begin(bContext *C,
 void WM_apple_ios_dialog_flush(bContext *C);
 bool WM_apple_ios_dialog_active(const wmWindow *win);
 void WM_apple_ios_reports(wmWindow *win, ReportList *reports, int minimum_level);
-/**
- * Register the bundled "Starter" asset library, or refresh its path, since the app's install
- * location changes with every install. Call after loading the preferences.
- */
-void WM_apple_ios_starter_library_ensure();
 /** Keep auto-save on: iOS ends apps without warning. Call after loading the preferences. */
 void WM_apple_ios_autosave_ensure();
 /** Write the auto-save now, in any mode, when the app goes to the background. */
@@ -98,9 +85,5 @@ std::string WM_apple_ios_document_template_write(bContext *C,
                                                  const char *filepath,
                                                  const char *preview,
                                                  std::string &attribution);
-/** Switch between the native iPad interface and Blender's own, as on a desktop computer. */
-void WM_OT_apple_ios_interface_toggle(wmOperatorType *ot);
-/** Open a web page in the system's browser. */
-void WM_OT_apple_ios_url_open(wmOperatorType *ot);
 
 }  // namespace blender

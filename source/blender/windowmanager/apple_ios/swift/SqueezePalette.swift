@@ -1261,7 +1261,7 @@ final class SqueezePalette {
     /* Where the Pencil is, so what follows the pointer, as Bevel does, starts from there. */
     if let tip {
       let pixels = wm_apple_ios_window_pixels(blenderWindow, tip)
-      _ = item.route.withCString { WM_apple_ios_ui_menu_at_position_request($0, true, Int32(pixels.x), Int32(pixels.y)) }
+      _ = item.route.withCString { WM_native_ui_menu_at_position_request($0, true, Int32(pixels.x), Int32(pixels.y)) }
     }
     else {
       BlenderMenus.shared.run(item)

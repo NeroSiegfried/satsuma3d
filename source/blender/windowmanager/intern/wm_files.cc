@@ -115,6 +115,7 @@
 #  include "GHOST_IOSDocumentPicker.hh"
 #  include "WM_apple_ios.hh"
 #  include "wm_apple_ios_document.hh"
+#  include "WM_native_ui.hh"
 #endif
 #include <memory>
 #include "ED_image.hh"
@@ -560,7 +561,7 @@ static void wm_init_userdef(Main *bmain)
   BKE_tempdir_init(U.tempdir);
 
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
-  WM_apple_ios_starter_library_ensure();
+  WM_native_ui_starter_library_ensure();
   WM_apple_ios_autosave_ensure();
 #endif
 

@@ -104,7 +104,7 @@ def stall():
 # Result consumption belongs to UIKit after the threading refactor. The test-only
 # adapter transfers its owned result back to this engine-thread test.
 menu_source = (documents / 'native_menubar_device_test.py').read_text().replace(
-    'take_result = engine.WM_apple_ios_ui_menu_take_result',
+    'take_result = engine.WM_native_ui_menu_take_result',
     'take_result = probe.blender_device_probe_menu_result')
 (documents / 'native-menubar-test.json').unlink(missing_ok=True)
 exec(compile(menu_source, 'native_menubar_device_test.py', 'exec'), {'probe': probe})

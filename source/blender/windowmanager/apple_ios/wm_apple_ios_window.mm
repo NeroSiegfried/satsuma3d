@@ -257,7 +257,7 @@ extern "C" void wm_apple_ios_window_drop_files(void *window,
     return;
   }
   const CGPoint pixels = [self pixels:point from:menu];
-  const uint64_t request = WM_apple_ios_ui_menu_at_position_request(
+  const uint64_t request = WM_native_ui_menu_at_position_request(
       blenderIOSMenuRoute(route).UTF8String, false, pixels.x, pixels.y);
   const CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + 60.0;
   NSTimer *poll = [NSTimer timerWithTimeInterval:0.025
@@ -283,7 +283,7 @@ extern "C" void wm_apple_ios_window_drop_files(void *window,
     return;
   }
   const CGPoint pixels = [self pixels:point from:menu];
-  WM_apple_ios_ui_menu_at_position_request(
+  WM_native_ui_menu_at_position_request(
       blenderIOSMenuRoute(item[@"route"]).UTF8String, true, pixels.x, pixels.y);
 }
 
@@ -365,7 +365,7 @@ extern "C" void wm_apple_ios_build_menu_bar(id<UIMenuBuilder> builder, NSArray *
 /** Ask Blender for its menu bar's menus; the answer comes later, see the next function. */
 extern "C" uint64_t wm_apple_ios_menu_bar_request()
 {
-  return WM_apple_ios_ui_menu_request("{\"root\":\"menubar\",\"path\":[]}", false);
+  return WM_native_ui_menu_request("{\"root\":\"menubar\",\"path\":[]}", false);
 }
 
 extern "C" NSArray *wm_apple_ios_menu_result(uint64_t request)

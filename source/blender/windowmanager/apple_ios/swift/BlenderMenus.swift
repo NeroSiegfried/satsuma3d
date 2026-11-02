@@ -133,7 +133,7 @@ final class BlenderMenus {
 
   /**
    * An operator's choice of its enum items, as Blender would show in a popup menu: its headings
-   * begin sections, and choosing one runs the operator with it, see `ios_enum_popup`.
+   * begin sections, and choosing one runs the operator with it, see `bridge_enum_popup`.
    */
   static func enumMenu(_ request: JSON) -> UIMenu? {
     guard let op = request.string("operator"), let property = request.string("property") else { return nil }
@@ -155,7 +155,7 @@ final class BlenderMenus {
       let icon = item.string("icon") ?? ""
       let image = ["", "NONE", "BLANK1"].contains(icon) ? nil : BlenderIcon.image(icon)
       children.append(UIAction(title: title, image: image) { _ in
-        WM_apple_ios_ui_operator_enum_enqueue(op, property, value)
+        WM_native_ui_operator_enum_enqueue(op, property, value)
       })
     }
     flush()
@@ -204,14 +204,14 @@ final class BlenderMenus {
 
   /** Run an item in Blender. */
   func run(_ item: BlenderMenuItem) {
-    _ = item.route.withCString { WM_apple_ios_ui_menu_request($0, true) }
+    _ = item.route.withCString { WM_native_ui_menu_request($0, true) }
   }
 
   private static func request(_ route: String) async -> [BlenderMenuItem]? {
-    let request = route.withCString { WM_apple_ios_ui_menu_request($0, false) }
+    let request = route.withCString { WM_native_ui_menu_request($0, false) }
     /* Blender answers between frames; it may be busy for a while, as when compiling shaders. */
     for _ in 0..<2400 {
-      if let json = WM_apple_ios_ui_menu_take_result(request) {
+      if let json = WM_native_ui_menu_take_result(request) {
         let data = Data(bytes: json, count: strlen(json))
         free(json)
         let list = (try? JSONSerialization.jsonObject(with: data)) as? [Any] ?? []
@@ -386,7 +386,7 @@ struct EnumChoiceList: View {
           Section(section.heading) {
             ForEach(Array(section.items.enumerated()), id: \.offset) { _, item in
               Button {
-                WM_apple_ios_ui_operator_enum_enqueue(op, property, item.string("value") ?? "")
+                WM_native_ui_operator_enum_enqueue(op, property, item.string("value") ?? "")
                 dismiss()
               } label: {
                 Label {

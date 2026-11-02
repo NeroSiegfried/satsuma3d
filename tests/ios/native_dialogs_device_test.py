@@ -20,7 +20,7 @@ probe.blender_device_probe_cancel_picker.restype = ctypes.c_bool
 free = ctypes.CDLL('/usr/lib/libSystem.B.dylib').free
 free.argtypes = [ctypes.c_void_p]
 engine = ctypes.CDLL(None)
-engine.WM_apple_ios_ui_operator_enqueue.argtypes = [ctypes.c_char_p]
+engine.WM_native_ui_operator_enqueue.argtypes = [ctypes.c_char_p]
 output = Path.home() / 'Documents/native-dialogs-test.json'
 report = {'checks': []}
 deadline = time.monotonic() + 120
@@ -82,7 +82,7 @@ def steps():
     choose('Delete')
     yield 1
     check(len(bpy.context.scene.objects) == count - 1, 'Confirmed Delete executes the real operator')
-    engine.WM_apple_ios_ui_operator_enqueue(b'ED_OT_undo')
+    engine.WM_native_ui_operator_enqueue(b'ED_OT_undo')
     yield 1
     check(len(bpy.context.scene.objects) == count, 'Native-confirmed Delete is undoable')
 
@@ -124,7 +124,7 @@ def steps():
     check(bpy.context.scene.get('native_dialog_marker') == 'save-before-open',
           'Save confirmation wrote the changed scene')
 
-    engine.WM_apple_ios_ui_operator_enqueue(b'WM_OT_native_warning_probe')
+    engine.WM_native_ui_operator_enqueue(b'WM_OT_native_warning_probe')
     yield 1
     state = snapshot()
     check(state['class'] == 'UIAlertController' and 'QA native save failure' in state['message'],

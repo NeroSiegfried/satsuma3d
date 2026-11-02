@@ -940,7 +940,7 @@ struct ToolRails: View {
                  carry(move, .brushes, center: layout.brushCenter, edge: layout.brushEdge, safe: safe,
                        local: local) { brushEdgeName = $0.rawValue }
                }) { item in
-            WM_apple_ios_ui_brush_activate(item.id)
+            WM_native_ui_brush_activate(item.id)
           }
           .position(carriedCenter(.brushes, size: CGSize(width: layout.brushWidth, height: layout.brushHeight)) ??
                     layout.brushCenter)
@@ -953,7 +953,7 @@ struct ToolRails: View {
                carry(move, .tools, center: layout.toolCenter, edge: layout.toolEdge, safe: safe,
                      local: local) { toolEdge = $0 }
              }) { item in
-          WM_apple_ios_ui_tool_set_by_id(item.id)
+          WM_native_ui_tool_set_by_id(item.id)
         }
         .position(carriedCenter(.tools, size: CGSize(width: layout.toolWidth, height: layout.toolHeight)) ??
                   layout.toolCenter)
@@ -1102,11 +1102,11 @@ struct ToolRails: View {
     /* The rails show what is chosen there at once, as if chosen on them. */
     palette.chooseTool = { [tools] item in
       tools.choose(item.id)
-      WM_apple_ios_ui_tool_set_by_id(item.id)
+      WM_native_ui_tool_set_by_id(item.id)
     }
     palette.chooseBrush = { [brushes] item in
       brushes.choose(item.id)
-      WM_apple_ios_ui_brush_activate(item.id)
+      WM_native_ui_brush_activate(item.id)
     }
     palette.setDirection = { [intent] inverted in intent.choose(inverted ? .subtract : .add) }
     palette.runAction = { [model] action in action.run(in: model) }
@@ -1346,7 +1346,7 @@ final class SelectIntentState {
       active = held
       intent = held
     }
-    WM_apple_ios_ui_select_intent_set(smoothing ? 3 : Int32(intent.rawValue))
+    WM_native_ui_select_intent_set(smoothing ? 3 : Int32(intent.rawValue))
   }
 }
 
@@ -1585,7 +1585,7 @@ final class RollDial {
   /** The tools around a Pencil holding the tool settings. */
   func beginTools(at point: CGPoint) {
     begin(items: tools, active: activeTool, at: point) { item in
-      WM_apple_ios_ui_tool_set_by_id(item.id)
+      WM_native_ui_tool_set_by_id(item.id)
     }
   }
 

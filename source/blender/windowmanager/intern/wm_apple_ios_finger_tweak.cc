@@ -52,13 +52,13 @@
 
 #  include "WM_api.hh"
 #  include "WM_apple_ios.hh"
+#  include "WM_native_ui.hh"
 #  include "WM_native_interface.hh"
 #  include "WM_toolsystem.hh"
 #  include "WM_types.hh"
 
 #  include "wm_window.hh"
 
-extern "C" bool WM_apple_ios_ui_desktop_mode();
 
 namespace blender {
 
@@ -360,7 +360,7 @@ void WM_apple_ios_finger_tweak_mode_update(bContext *C)
 {
   wmWindow *win = document_window(C);
   bool active = false;
-  if (win && !WM_apple_ios_ui_desktop_mode()) {
+  if (win && !WM_native_ui_desktop_mode()) {
     Scene *scene = WM_window_get_active_scene(win);
     ViewLayer *view_layer = WM_window_get_active_view_layer(win);
     WorkSpace *workspace = WM_window_get_active_workspace(win);

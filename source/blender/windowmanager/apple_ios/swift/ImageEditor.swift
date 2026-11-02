@@ -126,7 +126,7 @@ final class ImageEditorModel {
     var name: UnsafeMutablePointer<CChar>?
     var pixels: UnsafeMutablePointer<UInt8>?
     var width: Int32 = 0, height: Int32 = 0, fullWidth: Int32 = 0, fullHeight: Int32 = 0
-    if WM_apple_ios_ui_image_take_pixels(&name, &pixels, &width, &height, &fullWidth, &fullHeight) {
+    if WM_native_ui_image_take_pixels(&name, &pixels, &width, &height, &fullWidth, &fullHeight) {
       let named = name.map { String(cString: $0) } ?? ""
       free(name)
       if let pixels, width > 0, height > 0 {
@@ -146,7 +146,7 @@ final class ImageEditorModel {
     }
     var segments: UnsafeMutablePointer<Float>?
     var count: Int32 = 0
-    if WM_apple_ios_ui_image_take_uvs(&segments, &count) {
+    if WM_native_ui_image_take_uvs(&segments, &count) {
       uvs = segments.map { Array(UnsafeBufferPointer(start: $0, count: Int(count))) } ?? []
       free(segments)
     }

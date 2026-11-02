@@ -86,7 +86,7 @@ class ExportIconsTest(unittest.TestCase):
         release = Path(__file__).resolve().parents[2] / "release"
         manifest = release / "ios" / "blender_icons.json"
         mapping = json.loads(manifest.read_text())
-        bridge = release.parent / "source/blender/windowmanager/intern/wm_apple_ios_ui.cc"
+        bridge = release.parent / "source/blender/windowmanager/intern/wm_native_ui.cc"
         tool_ids = set(re.findall(r'"(builtin(?:_brush)?\.[a-z_]+)"', bridge.read_text()))
         for tool_id in tool_ids:
             self.assertIn("tool." + tool_id, mapping)

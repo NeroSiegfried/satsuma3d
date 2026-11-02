@@ -26,7 +26,7 @@ import traceback
 import bpy
 
 engine = ctypes.CDLL(None)
-setting = engine.WM_apple_ios_ui_setting_enqueue
+setting = engine.WM_native_ui_setting_enqueue
 setting.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
 
 output = Path.home() / "Documents/matcap-device-test.json"

@@ -16,19 +16,19 @@ import UIKit
 /** \name Engine inbox stand-ins
  * \{ */
 
-@_cdecl("WM_apple_ios_ui_setting_enqueue")
+@_cdecl("WM_native_ui_setting_enqueue")
 func harnessSettingEnqueue(_ setting: UnsafePointer<CChar>, _ value: UnsafePointer<CChar>) {
   let name = String(cString: setting)
   let text = String(cString: value)
   DispatchQueue.main.async { FakeEngine.shared.receive(name, text) }
 }
 
-@_cdecl("WM_apple_ios_ui_operator_enqueue")
+@_cdecl("WM_native_ui_operator_enqueue")
 func harnessOperatorEnqueue(_ name: UnsafePointer<CChar>) {
   FakeEngine.shared.log(["setting": "operator", "value": String(cString: name)])
 }
 
-@_cdecl("WM_apple_ios_ui_asset_drag")
+@_cdecl("WM_native_ui_asset_drag")
 func harnessAssetDrag(_ phase: Int32, _ asset: UnsafePointer<CChar>?, _ x: Int32, _ y: Int32) {
   FakeEngine.shared.log(["setting": "asset_drag", "value": ["phase": Int(phase),
                                                              "id": asset.map { String(cString: $0) } ?? ""]])
@@ -42,7 +42,7 @@ func harnessContinueWork(_ continues: Bool) {
   FakeEngine.shared.log(["setting": "continue_work", "value": continues])
 }
 
-@_cdecl("WM_apple_ios_ui_command_enqueue")
+@_cdecl("WM_native_ui_command_enqueue")
 func harnessCommandEnqueue(_ command: Int32) {
   FakeEngine.shared.log(["setting": "command", "value": Int(command)])
 }

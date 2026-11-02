@@ -75,6 +75,8 @@ set(SRC
   WM_apple_ios.hh
   WM_keymap.hh
   WM_native_interface.hh
+  WM_native_ui.h
+  WM_native_ui.hh
   WM_message.hh
   WM_toolsystem.hh
   WM_types.hh
@@ -184,8 +186,9 @@ endif()
 if(WITH_NATIVE_UI)
   # The bridge to a platform's own interface: the commands it sends Blender, and the snapshots of
   # Blender it shows, as JSON.
+  add_definitions(-DWITH_NATIVE_UI)
   list(APPEND SRC
-    intern/wm_apple_ios_ui.cc
+    intern/wm_native_ui.cc
     intern/wm_apple_ios_volume.cc
 
     intern/wm_apple_ios_volume.h

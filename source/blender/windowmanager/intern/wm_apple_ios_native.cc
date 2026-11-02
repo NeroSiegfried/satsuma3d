@@ -32,6 +32,8 @@
 #  include "WM_api.hh"
 #  include "WM_apple_ios.hh"
 #  include "WM_keymap.hh"
+#  include "WM_native_ui.h"
+#  include "WM_native_ui.hh"
 #  include "WM_native_interface.hh"
 #  include "WM_types.hh"
 
@@ -42,21 +44,10 @@
 
 namespace blender {
 
-extern "C" void WM_apple_ios_ui_flush_commands(bContext *C);
-extern "C" void WM_apple_ios_ui_storyboard_draw(bContext *C);
-extern "C" void WM_apple_ios_ui_image_update(bContext *C);
-extern "C" double WM_apple_ios_engine_idle_seconds(bContext *C);
-extern "C" bool WM_apple_ios_ui_engine_busy(bContext *C);
-extern "C" bool WM_apple_ios_ui_desktop_mode();
-extern "C" void WM_apple_ios_ui_pencil_hover_set(bool active, int x, int y);
-extern "C" void WM_apple_ios_ui_pencil_roll_set(bool down, float angle, float tilt_x, float tilt_y);
-extern "C" void WM_apple_ios_ui_navigation_hover_set(bool active);
-extern "C" void WM_apple_ios_ui_view_roll_enqueue(float angle);
 extern "C" void wm_apple_ios_open_web_url(const char *url);
-void WM_apple_ios_ui_operator_input_adjust(bContext *C, wmOperator *op);
-bool ios_menu_popup(bContext *C, const char *menu);
-bool ios_enum_popup(bContext *C, wmOperator *op, PropertyRNA *prop);
-bool ios_panel_popup(bContext *C, const char *panel);
+bool bridge_menu_popup(bContext *C, const char *menu);
+bool bridge_enum_popup(bContext *C, wmOperator *op, PropertyRNA *prop);
+bool bridge_panel_popup(bContext *C, const char *panel);
 
 namespace ui {
 bool native_operator_dialog_begin(bContext *C,
@@ -152,7 +143,7 @@ bool props_dialog(bContext *C,
                   const std::string &confirm,
                   const std::string &message)
 {
-  if (WM_apple_ios_ui_desktop_mode()) {
+  if (WM_native_ui_desktop_mode()) {
     return false;
   }
   return ui::native_operator_dialog_begin(C, op, title, confirm, message);
@@ -177,14 +168,14 @@ void keyconfig_default_ensure(wmKeyConfig *keyconf)
  */
 bool keymap_item_hidden(const wmKeyMapItem *kmi)
 {
-  if (WM_apple_ios_ui_desktop_mode()) {
+  if (WM_native_ui_desktop_mode()) {
     return false;
   }
   const wmOperatorType *ot = WM_operatortype_find(kmi->idname, true);
   if (ot == nullptr) {
     return false;
   }
-  /* Menus and pies show natively, see #ios_menu_popup. */
+  /* Menus and pies show natively, see #bridge_menu_popup. */
   static const Set<StringRef> shows_interface = {
       "WM_OT_call_panel",
       "WM_OT_call_asset_shelf_popover",
@@ -230,9 +221,9 @@ bool keymap_item_hidden(const wmKeyMapItem *kmi)
 wmNativeInterface native_interface_create()
 {
   wmNativeInterface native;
-  native.state_changed = WM_apple_ios_ui_tag_changed;
+  native.state_changed = WM_native_ui_tag_changed;
   native.reports_added = WM_apple_ios_reports;
-  native.replaces_redo_panel = [] { return !WM_apple_ios_ui_desktop_mode(); };
+  native.replaces_redo_panel = [] { return !WM_native_ui_desktop_mode(); };
   native.operator_registered = ui::native_redo_operator_register;
   native.operator_freed = ui::native_redo_operator_free;
   native.redo_cleared = ui::native_redo_operator_clear;
@@ -243,17 +234,17 @@ wmNativeInterface native_interface_create()
   native.fileselect_cancel = WM_apple_ios_fileselect_cancel;
   native.alert = alert;
   native.confirm = confirm;
-  native.pointer_hovering = WM_apple_ios_pencil_hover_active;
-  native.pencil_roll = WM_apple_ios_pencil_roll;
-  native.tweak_drag = WM_apple_ios_tweak_drag;
+  native.pointer_hovering = WM_native_ui_stylus_hover_active;
+  native.pencil_roll = WM_native_ui_stylus_roll;
+  native.tweak_drag = WM_native_ui_tweak_drag;
   native.direct_gizmo_press = true;
   native.hide_gizmo_tooltips = true;
-  native.operator_input_adjust = WM_apple_ios_ui_operator_input_adjust;
+  native.operator_input_adjust = WM_native_ui_operator_input_adjust;
   native.keyconfig_default_ensure = keyconfig_default_ensure;
   native.keymap_item_hidden = keymap_item_hidden;
-  native.menu_popup = ios_menu_popup;
-  native.enum_popup = ios_enum_popup;
-  native.panel_popup = ios_panel_popup;
+  native.menu_popup = bridge_menu_popup;
+  native.enum_popup = bridge_enum_popup;
+  native.panel_popup = bridge_panel_popup;
   native.props_dialog = props_dialog;
   native.web_url_open = wm_apple_ios_open_web_url;
   return native;
@@ -262,17 +253,17 @@ wmNativeInterface native_interface_create()
 /** One pass of Blender's loop, run by GHOST on its engine thread, see #WM_main_loop_body. */
 void engine_step(bContext *C)
 {
-  WM_apple_ios_ui_flush_commands(C);
+  WM_native_ui_flush_commands(C);
   WM_apple_ios_finger_tweak_flush(C);
   wm_window_events_process(C);
   wm_event_do_handlers(C);
   wm_event_do_notifiers(C);
-  WM_apple_ios_ui_image_update(C);
+  WM_native_ui_image_update(C);
   /* Input is always taken, but drawing waits for the GPU to catch up: the next frame then shows
    * all input since, instead of queuing behind frames still to be rendered. GHOST wakes this loop
    * as a frame completes. */
   if (GHOST_ios_gpu_ready()) {
-    WM_apple_ios_ui_storyboard_draw(C);
+    WM_native_ui_storyboard_draw(C);
     wm_draw_update(C);
   }
 }
@@ -281,13 +272,13 @@ GHOST_IOSNativeInterface ghost_interface_create()
 {
   GHOST_IOSNativeInterface native;
   native.engine_step = engine_step;
-  native.engine_idle_seconds = WM_apple_ios_engine_idle_seconds;
+  native.engine_idle_seconds = WM_native_ui_engine_idle_seconds;
   native.autosave_now = WM_apple_ios_autosave_now;
-  native.engine_busy = WM_apple_ios_ui_engine_busy;
-  native.pencil_hover = WM_apple_ios_ui_pencil_hover_set;
-  native.pencil_roll = WM_apple_ios_ui_pencil_roll_set;
-  native.navigation_hover = WM_apple_ios_ui_navigation_hover_set;
-  native.view_roll = WM_apple_ios_ui_view_roll_enqueue;
+  native.engine_busy = WM_native_ui_engine_busy;
+  native.pencil_hover = WM_native_ui_stylus_hover_set;
+  native.pencil_roll = WM_native_ui_stylus_roll_set;
+  native.navigation_hover = WM_native_ui_navigation_hover_set;
+  native.view_roll = WM_native_ui_view_roll_enqueue;
   native.finger_tweak_active = WM_apple_ios_finger_tweak_active;
   native.finger_tweak_touch = WM_apple_ios_finger_tweak_touch;
   native.finger_tweak_holding = WM_apple_ios_finger_tweak_holding;

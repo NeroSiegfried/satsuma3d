@@ -16,13 +16,13 @@ from pathlib import Path
 
 
 engine = ctypes.CDLL(None)
-request = engine.WM_apple_ios_ui_menu_request
+request = engine.WM_native_ui_menu_request
 request.argtypes = [ctypes.c_char_p, ctypes.c_bool]
 request.restype = ctypes.c_uint64
-positioned_request = engine.WM_apple_ios_ui_menu_at_position_request
+positioned_request = engine.WM_native_ui_menu_at_position_request
 positioned_request.argtypes = [ctypes.c_char_p, ctypes.c_bool, ctypes.c_int, ctypes.c_int]
 positioned_request.restype = ctypes.c_uint64
-take_result = engine.WM_apple_ios_ui_menu_take_result
+take_result = engine.WM_native_ui_menu_take_result
 take_result.argtypes = [ctypes.c_uint64]
 take_result.restype = ctypes.c_void_p
 probe_path = Path(bpy.app.binary_path).parent / 'Frameworks/ResponsiveDeviceProbe.dylib'

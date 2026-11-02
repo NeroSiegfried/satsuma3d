@@ -82,7 +82,7 @@ struct QuickAction: Identifiable, Equatable {
       wm_apple_ios_window_send_key(model.window, key)
     }
     else {
-      WM_apple_ios_ui_operator_enum_enqueue(operatorName, property, value)
+      WM_native_ui_operator_enum_enqueue(operatorName, property, value)
     }
   }
 

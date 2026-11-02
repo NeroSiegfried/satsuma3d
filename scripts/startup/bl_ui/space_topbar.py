@@ -564,8 +564,8 @@ class TOPBAR_MT_window(Menu):
         layout = self.layout
 
         # The iPad app switches between its own interface and this one.
-        if "apple_ios_interface_toggle" in dir(bpy.ops.wm):
-            layout.operator("wm.apple_ios_interface_toggle", icon='WINDOW')
+        if "native_interface_toggle" in dir(bpy.ops.wm):
+            layout.operator("wm.native_interface_toggle", icon='WINDOW')
             layout.separator()
 
         layout.operator("wm.window_new")

@@ -62,12 +62,11 @@
 
 #include "screen_intern.hh"
 
-namespace blender {
-
 #ifdef WITH_NATIVE_UI
-extern "C" float WM_apple_ios_ui_viewport_cover();
-extern "C" float WM_apple_ios_ui_viewport_trailing_cover();
+#  include "WM_native_ui.hh"
 #endif
+
+namespace blender {
 
 /* general area and region code */
 
@@ -2003,12 +2002,12 @@ static void area_calc_totrct(const bScreen *screen, ScrArea *area, const rcti *w
    * to the part left showing, so its renders, overlays and gizmos all fit what can be seen. The
    * Image Editor beside it narrows it the same way. */
   if (area->spacetype == SPACE_VIEW3D && !ED_area_is_global(area)) {
-    const int cover = int(WM_apple_ios_ui_viewport_cover());
+    const int cover = int(WM_native_ui_viewport_cover());
     if (cover > 0) {
       area->totrct.ymin = std::min(std::max(area->totrct.ymin, window_rect->ymin + cover),
                                    area->totrct.ymax - int(UI_SCALE_FAC * 80.0f));
     }
-    const int trailing = int(WM_apple_ios_ui_viewport_trailing_cover());
+    const int trailing = int(WM_native_ui_viewport_trailing_cover());
     if (trailing > 0) {
       area->totrct.xmax = std::max(std::min(area->totrct.xmax, window_rect->xmax - trailing),
                                    area->totrct.xmin + int(UI_SCALE_FAC * 80.0f));

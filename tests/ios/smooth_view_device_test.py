@@ -13,11 +13,11 @@ from pathlib import Path
 from mathutils import Quaternion
 
 engine = ctypes.CDLL(None)
-command = engine.WM_apple_ios_ui_command_enqueue
+command = engine.WM_native_ui_command_enqueue
 command.argtypes = [ctypes.c_int]
-quick_action = engine.WM_apple_ios_ui_operator_enum_enqueue
+quick_action = engine.WM_native_ui_operator_enum_enqueue
 quick_action.argtypes = [ctypes.c_char_p] * 3
-operator = engine.WM_apple_ios_ui_operator_enqueue
+operator = engine.WM_native_ui_operator_enqueue
 operator.argtypes = [ctypes.c_char_p]
 output = Path.home() / 'Documents/smooth-view-test.json'
 report = {'checks': [], 'transitions': {}}

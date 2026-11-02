@@ -20,13 +20,13 @@ choose = probe.blender_device_probe_dialog_choose
 choose.argtypes = [ctypes.c_char_p]
 choose.restype = ctypes.c_bool
 probe.blender_device_probe_dialog_start()
-request = engine.WM_apple_ios_ui_menu_request
+request = engine.WM_native_ui_menu_request
 request.argtypes = [ctypes.c_char_p, ctypes.c_bool]
 request.restype = ctypes.c_uint64
 take = probe.blender_device_probe_menu_result
 take.argtypes = [ctypes.c_uint64]
 take.restype = ctypes.c_void_p
-enqueue = engine.WM_apple_ios_ui_operator_enqueue
+enqueue = engine.WM_native_ui_operator_enqueue
 enqueue.argtypes = [ctypes.c_char_p]
 free = ctypes.CDLL('/usr/lib/libSystem.B.dylib').free
 free.argtypes = [ctypes.c_void_p]

@@ -1075,8 +1075,8 @@ class WM_OT_url_open(Operator):
         import webbrowser
         complete_url = self._add_utm_param_to_url(self.url, self._get_utm_source())
         # On iPadOS, the system opens it: Python's own browser support there needs the UI thread.
-        if "apple_ios_url_open" in dir(bpy.ops.wm):
-            bpy.ops.wm.apple_ios_url_open(url=complete_url)
+        if "native_url_open" in dir(bpy.ops.wm):
+            bpy.ops.wm.native_url_open(url=complete_url)
             return {'FINISHED'}
         webbrowser.open(complete_url)
         return {'FINISHED'}

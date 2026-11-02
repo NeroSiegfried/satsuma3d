@@ -200,7 +200,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     if model.topBarBottom != bottom {
       model.topBarBottom = bottom
       /* Blender keeps the navigation gizmo below it. */
-      WM_apple_ios_ui_top_bar_set(view.bounds.height > 0 ? Float(bottom / view.bounds.height) : 0)
+      WM_native_ui_top_bar_set(view.bounds.height > 0 ? Float(bottom / view.bounds.height) : 0)
     }
   }
 
@@ -254,7 +254,7 @@ extension DocumentController: UIEditMenuInteractionDelegate, UIGestureRecognizer
   }
 
   private func pullMenuPopup() {
-    guard let json = WM_apple_ios_ui_menu_popup_take_json() else { return }
+    guard let json = WM_native_ui_menu_popup_take_json() else { return }
     let data = Data(bytes: json, count: strlen(json))
     free(json)
     guard let request = (try? JSONSerialization.jsonObject(with: data)) as? JSON else { return }
@@ -413,8 +413,8 @@ final class ViewportContainer: UIView {
     metalView.contentScaleFactor = scale
     metalView.layer.contentsScale = scale
     let size = CGSize(width: max(1, frame.width * scale), height: max(1, frame.height * scale))
-    WM_apple_ios_ui_viewport_cover_set(Float((shownCover * scale).rounded()))
-    WM_apple_ios_ui_viewport_trailing_cover_set(Float((shownTrailingCover * scale).rounded()))
+    WM_native_ui_viewport_cover_set(Float((shownCover * scale).rounded()))
+    WM_native_ui_viewport_trailing_cover_set(Float((shownTrailingCover * scale).rounded()))
     if metalView.drawableSize != size {
       metalView.drawableSize = size
     }
@@ -1024,12 +1024,12 @@ struct BottomTrayLayer: View {
     }
     model.nodesCoverDragging = timeline.curvesDragging
     if cover > 0 {
-      WM_apple_ios_ui_bottom_tray_set(0)
+      WM_native_ui_bottom_tray_set(0)
       return
     }
     /* Blender keeps its own overlays, such as the navigation gizmo, above the tray. */
     let top = height - model.safeAreaInsets.bottom - 6 - (tray > 0 ? tray - 8 : 0)
-    WM_apple_ios_ui_bottom_tray_set(tray > 0 ? Float((height - top) / height) : 0)
+    WM_native_ui_bottom_tray_set(tray > 0 ? Float((height - top) / height) : 0)
   }
 }
 

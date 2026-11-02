@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 /** \file
- * What the native interface's Swift code may call outside Swift: the engine inbox that UIKit
- * feeds. These functions only queue work or copy out the latest snapshot; none waits for
- * Blender, see `release/ios/README.md`.
+ * What the native interface's Swift code may call outside Swift. The bridge to Blender, shared
+ * with any platform's interface, is `WM_native_ui.h`; the rest here is the iPad's own: its
+ * windows, documents, icons and menus. None of it waits for Blender, see `release/ios/README.md`.
  */
 
 #pragma once
@@ -15,22 +15,14 @@
 #import "GHOST_IOSPencilMenu.hh"
 #import "GHOST_IOSRuntime.hh"
 #import "../intern/wm_apple_ios_volume.h"
+#import "../WM_native_ui.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void WM_apple_ios_ui_setting_enqueue(const char *setting, const char *value);
-void WM_apple_ios_ui_operator_enqueue(const char *op_name);
-void WM_apple_ios_ui_command_enqueue(int command);
-void WM_apple_ios_ui_asset_drag(int phase, const char *asset_id, int x, int y);
 /** The open document's file, or nil. */
 NSURL *_Nullable wm_apple_ios_document_url(void);
-
-/** Blender's toolbar snapshot as JSON: the latest one once (null when unchanged), or a copy. */
-char *_Nullable WM_apple_ios_ui_toolbar_take_json(void);
-char *_Nullable WM_apple_ios_ui_toolbar_copy_json(void);
-void WM_apple_ios_ui_toolbar_free_json(char *_Nullable json);
 
 /* Blender's window (`GHOST_WindowIOS`), see `wm_apple_ios_window.mm`. */
 bool wm_apple_ios_window_presented_frame(void *_Nullable window);
@@ -49,9 +41,6 @@ UIImage *_Nullable wm_apple_ios_action_icon(NSString *_Nonnull op_name,
                                             NSString *_Nonnull value);
 /** Blender's context menu for the viewport, resolved when it opens. */
 UIMenu *_Nonnull wm_apple_ios_context_menu(void);
-void WM_apple_ios_ui_operator_enum_enqueue(const char *_Nonnull op_name,
-                                           const char *_Nonnull prop_name,
-                                           const char *_Nonnull prop_value);
 /** A tap on the navigation gizmo, which picks the axis under it. */
 void wm_apple_ios_window_navigation_tap(void *_Nullable window,
                                         UITapGestureRecognizer *_Nonnull tap);
@@ -63,34 +52,9 @@ UIImage *_Nullable wm_apple_ios_command_icon(int command, NSString *_Nonnull sym
 UIImage *_Nullable wm_apple_ios_icon(NSString *_Nonnull key, NSString *_Nullable symbol);
 /** A brush's preview, round, at a diameter in points. */
 UIImage *_Nullable wm_apple_ios_brush_image(NSString *_Nonnull preview, CGFloat diameter);
-void WM_apple_ios_ui_tool_set_by_id(const char *_Nonnull tool_id);
-void WM_apple_ios_ui_brush_activate(const char *_Nonnull brush_id);
-/** Held + and -: 0 for neither, 1 to add, 2 to subtract, see #IOSSelectIntent. */
-void WM_apple_ios_ui_select_intent_set(int intent);
 /** The modifier keys held on a hardware keyboard, bits by GHOST's #GHOST_TModifierKey, whichever
  * window has the keyboard. */
 unsigned int GHOST_ios_held_modifiers(void);
-char *_Nullable WM_apple_ios_ui_panels_take_json(void);
-/** One of Blender's menus to show where the pointer is: its name and place, or null. */
-char *_Nullable WM_apple_ios_ui_menu_popup_take_json(void);
-char *_Nullable WM_apple_ios_ui_timeline_take_json(void);
-char *_Nullable WM_apple_ios_ui_assets_take_json(void);
-/** The image editor's picture when it changed: its image's name, straight RGBA top row first, as
- * sent and as large as the image is. No pixels without an image. Each is freed with `free`. */
-bool WM_apple_ios_ui_image_take_pixels(char *_Nullable *_Nonnull r_name,
-                                       uint8_t *_Nullable *_Nonnull r_rgba,
-                                       int *_Nonnull r_width,
-                                       int *_Nonnull r_height,
-                                       int *_Nonnull r_full_width,
-                                       int *_Nonnull r_full_height);
-/** The UV edges over it when they changed, two points each. */
-bool WM_apple_ios_ui_image_take_uvs(float *_Nullable *_Nonnull r_segments, int *_Nonnull r_count);
-/** How much of the window's height, from the bottom, the asset pane and timeline cover. */
-void WM_apple_ios_ui_bottom_tray_set(float fraction);
-/** How much of the window's height, from the top, the native top bar covers. */
-void WM_apple_ios_ui_top_bar_set(float fraction);
-void WM_apple_ios_ui_viewport_cover_set(float pixels);
-void WM_apple_ios_ui_viewport_trailing_cover_set(float pixels);
 UIDocument *_Nullable wm_apple_ios_open_document(void);
 /** Choose a template and create a new document, presented from `presenter`. */
 void wm_apple_ios_new_document(UIViewController *_Nonnull presenter);
@@ -117,13 +81,6 @@ bool wm_apple_ios_shader_compilation(int *_Nonnull finished,
 void wm_apple_ios_build_menu_bar(id<UIMenuBuilder> _Nonnull builder, NSArray *_Nonnull items);
 uint64_t wm_apple_ios_menu_bar_request(void);
 NSArray *_Nullable wm_apple_ios_menu_result(uint64_t request);
-/** Ask for one of Blender's menus by its JSON route, or run its item when `execute`; the answer
- * is taken with #WM_apple_ios_ui_menu_take_result. */
-uint64_t WM_apple_ios_ui_menu_request(const char *_Nonnull route, bool execute);
-/** As #WM_apple_ios_ui_menu_request, with Blender's cursor at \a x, \a y in the window's pixels,
- * for operators that follow the pointer from there, such as Bevel. */
-uint64_t WM_apple_ios_ui_menu_at_position_request(const char *_Nonnull route, bool execute, int x, int y);
-char *_Nullable WM_apple_ios_ui_menu_take_result(uint64_t identifier);
 /** The document window's controller is closing. */
 void wm_apple_ios_document_controller_closed(id _Nonnull controller);
 /** Ask Blender to carry out one of the app's intents, see `bl_ui.native_intents`: `request` is

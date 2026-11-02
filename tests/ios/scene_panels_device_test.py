@@ -19,7 +19,7 @@ query.restype = ctypes.c_void_p
 free = ctypes.CDLL('/usr/lib/libSystem.B.dylib').free
 free.argtypes = [ctypes.c_void_p]
 engine = ctypes.CDLL(None)
-engine.WM_apple_ios_ui_operator_enqueue.argtypes = [ctypes.c_char_p]
+engine.WM_native_ui_operator_enqueue.argtypes = [ctypes.c_char_p]
 report = {'checks': []}
 output = Path.home() / 'Documents/scene-panels-test.json'
 
@@ -133,7 +133,7 @@ def tests():
     yield 0.7
     check(abs(bpy.data.objects['Cube'].location.x - expected_x) < 1e-6,
           'Releasing a number drag commits the value to Blender')
-    engine.WM_apple_ios_ui_operator_enqueue(b'ED_OT_undo')
+    engine.WM_native_ui_operator_enqueue(b'ED_OT_undo')
     yield 0.7
     check(abs(bpy.data.objects['Cube'].location.x - start_x) < 1e-6,
           'An entire number drag is one undo step')
@@ -169,10 +169,10 @@ def tests():
     ui(action='group_option', key=heading['key'], value='ZYX')
     yield 1.0
     check(bpy.data.objects['Cube'].rotation_mode == 'ZYX', 'Native Rotation heading changes the Blender rotation mode')
-    engine.WM_apple_ios_ui_operator_enqueue(b'ED_OT_undo')
+    engine.WM_native_ui_operator_enqueue(b'ED_OT_undo')
     yield 1.0
     check(bpy.data.objects['Cube'].rotation_mode == 'XYZ', 'Rotation heading edits are undoable')
-    engine.WM_apple_ios_ui_operator_enqueue(b'ED_OT_redo')
+    engine.WM_native_ui_operator_enqueue(b'ED_OT_redo')
     yield 1.0
     check(bpy.data.objects['Cube'].rotation_mode == 'ZYX', 'Rotation heading edits are redoable')
     for order in ['XZY', 'YXZ', 'YZX', 'ZXY', 'XYZ']:
@@ -199,10 +199,10 @@ def tests():
           'Native Lock action changes only the corresponding Blender axis')
     check(ui(action='lock_menu', key=location_x['key'])['lockMenu'] == 'Unlock',
           'Native property menu updates to Unlock after the snapshot arrives')
-    engine.WM_apple_ios_ui_operator_enqueue(b'ED_OT_undo')
+    engine.WM_native_ui_operator_enqueue(b'ED_OT_undo')
     yield 1.0
     check(not any(bpy.data.objects['Cube'].lock_location), 'Native property locking is undoable')
-    engine.WM_apple_ios_ui_operator_enqueue(b'ED_OT_redo')
+    engine.WM_native_ui_operator_enqueue(b'ED_OT_redo')
     yield 1.0
     check(bpy.data.objects['Cube'].lock_location[0], 'Native property locking is redoable')
     ui(action='property_lock', key=location_x['key'])
@@ -258,10 +258,10 @@ def tests():
     yield 1.0
     check(location_curves()[0].keyframe_points[0].co.y == 3,
           'Replace Keyframe captures the edited property value')
-    engine.WM_apple_ios_ui_operator_enqueue(b'ED_OT_undo')
+    engine.WM_native_ui_operator_enqueue(b'ED_OT_undo')
     yield 1.0
     check(location_curves()[0].keyframe_points[0].co.y == 0, 'Native keyframe replacement is undoable')
-    engine.WM_apple_ios_ui_operator_enqueue(b'ED_OT_redo')
+    engine.WM_native_ui_operator_enqueue(b'ED_OT_redo')
     yield 1.0
     check(location_curves()[0].keyframe_points[0].co.y == 3, 'Native keyframe replacement is redoable')
     bpy.context.scene.frame_set(10)
@@ -283,7 +283,7 @@ def tests():
     yield 1.0
     check({curve.array_index for curve in location_curves()} == {1, 2},
           'Clear Single Keyframes removes the pressed axis curve and preserves the others')
-    engine.WM_apple_ios_ui_operator_enqueue(b'ED_OT_undo')
+    engine.WM_native_ui_operator_enqueue(b'ED_OT_undo')
     yield 1.0
     check({curve.array_index for curve in location_curves()} == {0, 1, 2},
           'Clearing property animation is undoable')
@@ -310,10 +310,10 @@ def tests():
     ui(action='property', key='data.lens.', value='72')
     yield 1.0
     check(bpy.data.objects['Camera'].data.lens == 72, 'Native camera field edits real RNA')
-    engine.WM_apple_ios_ui_operator_enqueue(b'ED_OT_undo')
+    engine.WM_native_ui_operator_enqueue(b'ED_OT_undo')
     yield 1.0
     check(bpy.data.objects['Camera'].data.lens == old_lens, 'Native inspector edit is undoable')
-    engine.WM_apple_ios_ui_operator_enqueue(b'ED_OT_redo')
+    engine.WM_native_ui_operator_enqueue(b'ED_OT_redo')
     yield 1.0
     check(bpy.data.objects['Camera'].data.lens == 72, 'Native inspector edit is redoable')
     lens = next(item for section in ui()['properties']['sections'] for item in section['properties']
@@ -361,7 +361,7 @@ def tests():
     expected_safe = safe_slider['slider']['min'] + 0.6 * (safe_slider['slider']['max'] - safe_slider['slider']['min'])
     check(abs(bpy.context.scene.safe_areas.title[0] - expected_safe) < 1e-5,
           'Slider release updates the real Blender property')
-    engine.WM_apple_ios_ui_operator_enqueue(b'ED_OT_undo')
+    engine.WM_native_ui_operator_enqueue(b'ED_OT_undo')
     yield 1.0
     check(abs(bpy.context.scene.safe_areas.title[0] - old_safe) < 1e-5,
           'A complete slider drag is one undo step')
@@ -425,7 +425,7 @@ def tests():
     ui(action='property', key='object.location.0', value='2')
     yield 1.0
     check(bpy.data.objects['Cube'].location.x == 2, 'Native transform field moves Blender object')
-    engine.WM_apple_ios_ui_operator_enqueue(b'ED_OT_undo')
+    engine.WM_native_ui_operator_enqueue(b'ED_OT_undo')
     yield 1.0
     check(bpy.data.objects['Cube'].location.x == 0, 'Transform undo restores scene')
     bpy.data.objects['Cube'].location.y = 1
@@ -461,7 +461,7 @@ def tests():
           'Picker commits RGBA atomically with correct scene-linear conversion')
     ui(action='color_close')
     yield 0.5
-    engine.WM_apple_ios_ui_operator_enqueue(b'ED_OT_undo')
+    engine.WM_native_ui_operator_enqueue(b'ED_OT_undo')
     yield 1.0
     check(all(abs(a - b) < 1e-5 for a, b in zip(bpy.data.objects['Cube'].color, original_color)),
           'One undo restores the complete original color')
@@ -489,7 +489,7 @@ def tests():
           'Native RGB picker edits the real light color')
     ui(action='color_close')
     yield 0.5
-    engine.WM_apple_ios_ui_operator_enqueue(b'ED_OT_undo')
+    engine.WM_native_ui_operator_enqueue(b'ED_OT_undo')
     yield 1.0
     bpy.types.Scene.native_picker_gamma_test = bpy.props.FloatVectorProperty(
         name='Display Color', size=3, subtype='COLOR_GAMMA', default=(0.1, 0.2, 0.3), min=0, max=1)

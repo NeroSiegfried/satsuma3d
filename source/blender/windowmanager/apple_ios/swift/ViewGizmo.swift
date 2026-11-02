@@ -15,7 +15,7 @@ import UIKit
 struct ViewCommand {
   let title: String
   let symbol: String
-  /** `WMIOSUICommand`, or a viewport option to toggle instead. */
+  /** `WMNativeUICommand`, or a viewport option to toggle instead. */
   var command: Int32 = -1
   var toggle: String?
   /** Or an operator of Blender's to run in the viewport. */
@@ -57,7 +57,7 @@ struct ViewCommand {
       Engine.operatorCall(operatorName)
     }
     else {
-      WM_apple_ios_ui_command_enqueue(command)
+      WM_native_ui_command_enqueue(command)
     }
   }
 }

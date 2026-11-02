@@ -27,15 +27,11 @@
 
 #include "view3d_intern.hh" /* own include */
 
-namespace blender {
-
 #ifdef WITH_NATIVE_UI
-extern "C" int WM_apple_ios_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region);
-extern "C" int WM_apple_ios_ui_top_bar_ymax(const wmWindow *win, const ARegion *region);
-extern "C" bool WM_apple_ios_ui_desktop_mode();
-extern "C" bool WM_apple_ios_ui_navigation_top();
-extern "C" bool WM_apple_ios_ui_navigation_left();
+#  include "WM_native_ui.hh"
 #endif
+
+namespace blender {
 
 /* -------------------------------------------------------------------- */
 /** \name View3D Navigation Gizmo Group
@@ -310,12 +306,12 @@ static void WIDGETGROUP_navigate_draw_prepare(const bContext *C, wmGizmoGroup *g
   /* Keep the gizmo above the native bottom tray (the asset pane) while it is open, and below the
    * top bar. */
   rcti rect_visible_ios = *ED_region_visible_rect(region);
-  if (!WM_apple_ios_ui_desktop_mode()) {
+  if (!WM_native_ui_desktop_mode()) {
     rect_visible_ios.ymin = std::max(rect_visible_ios.ymin,
-                                     WM_apple_ios_ui_bottom_tray_ymin(CTX_wm_window(C), region));
+                                     WM_native_ui_bottom_tray_ymin(CTX_wm_window(C), region));
     /* And below the native top bar. */
     rect_visible_ios.ymax = std::min(rect_visible_ios.ymax,
-                                     WM_apple_ios_ui_top_bar_ymax(CTX_wm_window(C), region));
+                                     WM_native_ui_top_bar_ymax(CTX_wm_window(C), region));
   }
   const rcti *rect_visible = &rect_visible_ios;
 #else
@@ -326,7 +322,7 @@ static void WIDGETGROUP_navigate_draw_prepare(const bContext *C, wmGizmoGroup *g
   CHECK_TYPE_PAIR(navgroup->state.rv3d.viewlock, rv3d->viewlock);
 
 #ifdef WITH_NATIVE_UI
-  const int corner = (WM_apple_ios_ui_navigation_top() ? 1 : 0) | (WM_apple_ios_ui_navigation_left() ? 2 : 0);
+  const int corner = (WM_native_ui_navigation_top() ? 1 : 0) | (WM_native_ui_navigation_left() ? 2 : 0);
 #else
   const int corner = 0;
 #endif
@@ -352,7 +348,7 @@ static void WIDGETGROUP_navigate_draw_prepare(const bContext *C, wmGizmoGroup *g
 #ifdef WITH_NATIVE_UI
   /* The native iPad interface keeps a lone gizmo at the bottom right; Blender's own interface
    * places it as on a desktop computer. */
-  const bool native_interface = !WM_apple_ios_ui_desktop_mode();
+  const bool native_interface = !WM_native_ui_desktop_mode();
 #else
   const bool native_interface = false;
 #endif
