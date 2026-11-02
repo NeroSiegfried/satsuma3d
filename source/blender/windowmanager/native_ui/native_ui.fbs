@@ -1,0 +1,226 @@
+// SPDX-FileCopyrightText: 2026 Blender Authors
+//
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+// The contract between Blender and a platform's own interface, such as the iPad's: every snapshot
+// Blender sends and every command it takes, see `WM_native_ui.h`. In the FlatBuffers schema
+// language, so `flatc` can give a binary encoding from the same file; until then the bridge sends
+// JSON as FlatBuffers writes it. `native_ui_schema.py` generates each interface's types from here
+// and validates Blender's snapshots against it.
+//
+// A `[ubyte] (flexbuffer)` field takes any JSON: a part of a snapshot still to be described.
+// `nullable_elements`: a list that holds nulls between its items, such as separators.
+
+namespace Blender.NativeUI;
+
+attribute "nullable_elements";
+
+/// The 3D viewport's shading.
+enum Shading : byte {
+  wireframe,
+  solid,
+  material,
+  rendered,
+}
+
+/// An object's mode, as `Object.mode` names it.
+enum ObjectMode : byte {
+  OBJECT,
+  EDIT,
+  POSE,
+  SCULPT,
+  VERTEX_PAINT,
+  WEIGHT_PAINT,
+  TEXTURE_PAINT,
+  PARTICLE_EDIT,
+  EDIT_GPENCIL,
+  SCULPT_CURVES,
+  PAINT_GREASE_PENCIL,
+  SCULPT_GREASE_PENCIL,
+  WEIGHT_GREASE_PENCIL,
+  VERTEX_GREASE_PENCIL,
+}
+
+/// What edit mode selects on a mesh.
+enum MeshSelectMode : byte {
+  VERT,
+  EDGE,
+  FACE,
+}
+
+enum Orientation : byte {
+  global,
+  local,
+  normal,
+  gimbal,
+  view,
+  cursor,
+  parent,
+  custom,
+}
+
+enum Pivot : byte {
+  bounds,
+  cursor,
+  individual,
+  median,
+  active,
+}
+
+enum Snap : byte {
+  off,
+  increment,
+  grid,
+  vertex,
+  edge,
+  face,
+  volume,
+  /// Several elements snapped to at once.
+  mixed,
+}
+
+enum Proportional : byte {
+  off,
+  on,
+  connected,
+  projected,
+}
+
+enum Toggle : byte {
+  off,
+  on,
+}
+
+/// A mode the active object can switch to.
+table ModeItem {
+  id: string (required);
+  label: string;
+  icon: string;
+}
+
+/// A tool in the toolbar, or a group of them shown as its active member.
+table Tool {
+  id: string (required);
+  title: string;
+  /// Blender's icon for the tool.
+  icon: string;
+  /// A system symbol to show instead, when there is one.
+  symbol: string;
+  /// Blender's tooltip for it, for interfaces that name tools without hover.
+  description: string;
+  /// The group's first tool, which names the group.
+  group: string;
+  /// The group's members, with nulls between sets of them.
+  children: [Tool] (nullable_elements);
+}
+
+/// Transform settings in the top bar.
+table TransformSettings {
+  orientation: Orientation = global;
+  pivot: Pivot = median;
+  snap: Snap = off;
+  proportional: Proportional = off;
+  /// The axes the active object can mirror on, such as `XYZ`, when it can.
+  mirror_axes: string;
+  /// Those of them it mirrors on.
+  mirror: string;
+  mirror_topology: Toggle = null;
+}
+
+/// What a held + or - does to the brush: its direction.
+table BrushDirection {
+  /// The brush has no direction to show.
+  hidden: bool;
+  /// A brush is active at all.
+  brush: bool;
+  inverted: bool;
+  /// The names and symbols of the two directions.
+  add: string;
+  subtract: string;
+  addSymbol: string;
+  subtractSymbol: string;
+  /// Holding both smooths, as in Sculpt Mode.
+  smooth: bool;
+}
+
+/// A hint shown while dragging, such as how to snap.
+table DragHint {
+  text: string (required);
+  /// The drag ended.
+  done: bool;
+}
+
+/// A quick action for the mode, tool and selection.
+table Action {
+  title: string (required);
+  /// The action's own name, from `bl_ui.native_actions`.
+  action: string;
+  /// The operator it runs, with one property set from `property` and `value`.
+  operator: string;
+  property: string;
+  value: string;
+  icon: string;
+  symbol: string;
+  /// A key that runs it.
+  key: string;
+  /// It is on, for actions that toggle.
+  selected: bool;
+}
+
+/// The tools, modes, tool settings and active object: what the interface around the viewport
+/// shows. Sent with every change, see `WM_native_ui_toolbar_take_json`.
+table Toolbar {
+  /// Blender's context mode, such as `objectmode` or `edit_mesh`.
+  mode: string (required);
+  shading: Shading = solid;
+  /// Blender's own interface shows instead.
+  desktop: bool;
+  /// The name Rename Active starts from: the active bone in an armature's modes, otherwise the
+  /// active object's.
+  activeName: string;
+  objectMode: ObjectMode = OBJECT;
+  modes: [ModeItem];
+  /// In a mesh's Edit Mode, otherwise empty.
+  meshSelectMode: string;
+  /// The active tool.
+  active: string;
+  canUndo: bool;
+  canRedo: bool;
+  /// The active undo step: menus are asked for again when it changes, and only then.
+  menuState: string;
+  settings: TransformSettings;
+  /// The Tool tab of Properties, as the inspector describes it.
+  toolSettings: [ubyte] (flexbuffer);
+  /// The last panel of Properties the interface changed: its edits have arrived.
+  propertiesAck: int;
+  /// The last operator's properties, for Adjust Last Operation.
+  redo: [ubyte] (flexbuffer);
+  /// An operator's properties asked for before it runs, in place of Blender's dialog.
+  dialog: [ubyte] (flexbuffer);
+  /// The text object being edited, with its fonts and style.
+  textObject: [ubyte] (flexbuffer);
+  /// The navigation gizmo's center and radius, as fractions of the window from the top left.
+  navigationGizmo: [float];
+  /// The color the viewport is cleared to, in display space.
+  viewportBackground: [float];
+  /// The toolbar, with nulls between its sets of tools.
+  tools: [Tool] (nullable_elements);
+  /// The brushes the mode offers.
+  brushes: [ubyte] (flexbuffer);
+  /// The active brush's settings.
+  brush: [ubyte] (flexbuffer);
+  direction: BrushDirection;
+  /// Moving, turning or scaling: held buttons snap and slow down then.
+  transforming: bool;
+  dragHint: DragHint;
+  /// Always null: panels come in their own snapshot.
+  panels: [ubyte] (flexbuffer, deprecated);
+  /// A render in progress, or its result.
+  render: [ubyte] (flexbuffer);
+  /// The viewport's options.
+  viewport: [ubyte] (flexbuffer);
+  preferences: [ubyte] (flexbuffer);
+  actions: [Action];
+}
+
+root_type Toolbar;

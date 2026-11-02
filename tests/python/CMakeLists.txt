@@ -208,6 +208,13 @@ add_system_python_test(
   --root-dir ${CMAKE_SOURCE_DIR}
 )
 
+# The contract between Blender and a platform's own interface, see `native_ui.fbs`: its generated
+# types are up to date, and its validation works. Needs no Blender.
+add_python_test(
+  native_ui_schema
+  ${CMAKE_CURRENT_LIST_DIR}/native_ui_schema_test.py
+)
+
 # ------------------------------------------------------------------------------
 # GENERAL PYTHON CORRECTNESS TESTS
 # ------------------------------------------------------------------------------
