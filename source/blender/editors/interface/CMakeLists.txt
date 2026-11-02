@@ -139,7 +139,7 @@ set(LIB
   PRIVATE bf::windowmanager
 )
 
-if(WITH_APPLE_CROSSPLATFORM)
+if(WITH_NATIVE_UI)
   list(APPEND SRC interface_native_menu.cc interface_native_properties.cc)
 endif()
 

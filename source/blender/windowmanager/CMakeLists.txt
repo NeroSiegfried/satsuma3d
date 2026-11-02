@@ -34,9 +34,6 @@ set(SRC
   intern/wm_jobs.cc
   intern/wm_keymap.cc
   intern/wm_keymap_utils.cc
-  intern/wm_apple_ios_ui.cc
-  intern/wm_apple_ios_volume.cc
-  intern/wm_apple_ios_volume.h
   intern/wm_apple_ios_file.cc
   intern/wm_apple_ios_file.hh
   intern/wm_apple_ios_dialog.cc
@@ -182,6 +179,17 @@ endif()
 
 if(WITH_INPUT_IME)
   add_definitions(-DWITH_INPUT_IME)
+endif()
+
+if(WITH_NATIVE_UI)
+  # The bridge to a platform's own interface: the commands it sends Blender, and the snapshots of
+  # Blender it shows, as JSON.
+  list(APPEND SRC
+    intern/wm_apple_ios_ui.cc
+    intern/wm_apple_ios_volume.cc
+
+    intern/wm_apple_ios_volume.h
+  )
 endif()
 
 if(WITH_APPLE_CROSSPLATFORM)

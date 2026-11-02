@@ -54,7 +54,7 @@ namespace blender {
 /* distance within this from center is considered positive. */
 #define AXIS_DEPTH_BIAS 0.01f
 
-#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+#ifdef WITH_NATIVE_UI
 extern "C" bool WM_apple_ios_ui_navigation_hover_active();
 extern "C" void WM_apple_ios_ui_navigation_redraw_request();
 
@@ -114,7 +114,7 @@ static void gizmo_axis_draw(const bContext *C, wmGizmo *gz)
 
   /* When the cursor is over any of the gizmos (show circle backdrop). */
   const bool is_active = ((gz->state & WM_GIZMO_STATE_HIGHLIGHT) != 0);
-#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+#ifdef WITH_NATIVE_UI
   constexpr bool minimal = true;
   NavigateRotateGizmo *axis_gizmo = reinterpret_cast<NavigateRotateGizmo *>(gz);
   const int hover_part = is_active && WM_apple_ios_ui_navigation_hover_active() ?
@@ -222,7 +222,7 @@ static void gizmo_axis_draw(const bContext *C, wmGizmo *gz)
       is_highlight = true;
     }
     float hover = 0.0f;
-#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+#ifdef WITH_NATIVE_UI
     hover = axis_gizmo->hover[index];
     if (is_aligned_front) {
       hover = std::max(hover, axis_gizmo->hover[axis_order[axis_index].axis_opposite]);
@@ -447,7 +447,7 @@ void VIEW3D_GT_navigate_rotate(wmGizmoType *gzt)
   gzt->cursor_get = gizmo_axis_cursor_get;
   gzt->screen_bounds_get = gizmo_axis_screen_bounds_get;
 
-#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+#ifdef WITH_NATIVE_UI
   gzt->struct_size = sizeof(NavigateRotateGizmo);
 #else
   gzt->struct_size = sizeof(wmGizmo);

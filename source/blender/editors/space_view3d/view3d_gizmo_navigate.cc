@@ -29,7 +29,7 @@
 
 namespace blender {
 
-#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+#ifdef WITH_NATIVE_UI
 extern "C" int WM_apple_ios_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region);
 extern "C" int WM_apple_ios_ui_top_bar_ymax(const wmWindow *win, const ARegion *region);
 extern "C" bool WM_apple_ios_ui_desktop_mode();
@@ -306,7 +306,7 @@ static void WIDGETGROUP_navigate_draw_prepare(const bContext *C, wmGizmoGroup *g
     copy_v3_v3(navgroup->gz_array[GZ_INDEX_ROTATE]->matrix_offset[i], rv3d->viewmat[i]);
   }
 
-#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+#ifdef WITH_NATIVE_UI
   /* Keep the gizmo above the native bottom tray (the asset pane) while it is open, and below the
    * top bar. */
   rcti rect_visible_ios = *ED_region_visible_rect(region);
@@ -325,7 +325,7 @@ static void WIDGETGROUP_navigate_draw_prepare(const bContext *C, wmGizmoGroup *g
   /* Ensure types match so bits are never lost on assignment. */
   CHECK_TYPE_PAIR(navgroup->state.rv3d.viewlock, rv3d->viewlock);
 
-#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+#ifdef WITH_NATIVE_UI
   const int corner = (WM_apple_ios_ui_navigation_top() ? 1 : 0) | (WM_apple_ios_ui_navigation_left() ? 2 : 0);
 #else
   const int corner = 0;
@@ -349,7 +349,7 @@ static void WIDGETGROUP_navigate_draw_prepare(const bContext *C, wmGizmoGroup *g
   navgroup->state.rv3d.viewlock = RV3D_LOCK_FLAGS(rv3d);
   navgroup->state.rv3d.cameralock = v3d->flag2 & V3D_LOCK_CAMERA;
 
-#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+#ifdef WITH_NATIVE_UI
   /* The native iPad interface keeps a lone gizmo at the bottom right; Blender's own interface
    * places it as on a desktop computer. */
   const bool native_interface = !WM_apple_ios_ui_desktop_mode();

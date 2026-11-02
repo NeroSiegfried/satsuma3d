@@ -64,7 +64,7 @@
 
 namespace blender {
 
-#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+#ifdef WITH_NATIVE_UI
 extern "C" float WM_apple_ios_ui_viewport_cover();
 extern "C" float WM_apple_ios_ui_viewport_trailing_cover();
 #endif
@@ -1998,7 +1998,7 @@ static void area_calc_totrct(const bScreen *screen, ScrArea *area, const rcti *w
       area->totrct.ymax -= px_edge;
     }
   }
-#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+#ifdef WITH_NATIVE_UI
   /* A native panel over the bottom of the window, such as the node editor, shortens the 3D view
    * to the part left showing, so its renders, overlays and gizmos all fit what can be seen. The
    * Image Editor beside it narrows it the same way. */

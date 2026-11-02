@@ -50,7 +50,7 @@
 
 namespace blender {
 
-#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+#ifdef WITH_NATIVE_UI
 extern "C" bool WM_apple_ios_ui_undo_push_defer(bContext *C, const char *name);
 #endif
 
@@ -100,7 +100,7 @@ void ED_undo_group_end(bContext *C)
 
 void ED_undo_push(bContext *C, const char *str)
 {
-#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+#ifdef WITH_NATIVE_UI
   /* A native control used while a stroke or other operator runs: its step waits for it. */
   if (WM_apple_ios_ui_undo_push_defer(C, str)) {
     return;
