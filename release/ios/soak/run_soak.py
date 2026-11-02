@@ -38,7 +38,9 @@ def run(*args, check=True):
 
 
 def environment(args):
-    variables = {"BLENDER_SOAK": "1", "BLENDER_SOAK_MINUTES": str(args.minutes), "BLENDER_SOAK_SEED": str(args.seed)}
+    variables = {"BLENDER_SOAK": "1", "BLENDER_SOAK_MINUTES": str(args.minutes), "BLENDER_SOAK_SEED": str(args.seed),
+                 # Snapshots for the schema check, see `native_ui.fbs`.
+                 "BLENDER_NATIVE_UI_RECORD": "1"}
     if args.ui:
         variables["BLENDER_SOAK_UI"] = "1"
     return variables
@@ -64,6 +66,7 @@ class Simulator:
         self.container = run("xcrun", "simctl", "get_app_container", self.udid, self.bundle, "data").strip()
         soak = os.path.join(self.container, "tmp", "soak")
         shutil.rmtree(soak, ignore_errors=True)
+        shutil.rmtree(os.path.join(self.container, "tmp", "native_ui_record"), ignore_errors=True)
         os.makedirs(soak)
         shutil.copy(os.path.join(HERE, "soak.py"), soak)
         run("xcrun", "simctl", "terminate", self.udid, self.bundle, check=False)
@@ -77,6 +80,9 @@ class Simulator:
 
     def collect(self, destination):
         shutil.copytree(os.path.join(self.container, "tmp", "soak"), destination, dirs_exist_ok=True)
+        record = os.path.join(self.container, "tmp", "native_ui_record")
+        if os.path.isdir(record):
+            shutil.copytree(record, os.path.join(destination, "native_ui_record"), dirs_exist_ok=True)
 
     def crashes(self, since):
         reports = glob.glob(os.path.expanduser("~/Library/Logs/DiagnosticReports/Blender-*.ips"))
@@ -105,6 +111,9 @@ class Device:
     def collect(self, destination):
         self.devicectl("copy", "from", "--domain-type", "appDataContainer", "--domain-identifier", self.bundle,
                        "--source", "tmp/soak", "--destination", destination)
+        self.devicectl("copy", "from", "--domain-type", "appDataContainer", "--domain-identifier", self.bundle,
+                       "--source", "tmp/native_ui_record", "--destination",
+                       os.path.join(destination, "native_ui_record"), check=False)
 
     def crashes(self, since):
         folder = tempfile.mkdtemp()

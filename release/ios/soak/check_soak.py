@@ -10,14 +10,18 @@ Reads the records `soak.py` and the app's soak probe wrote, and reports:
 - Spans with no snapshots from Blender while Blender kept changing.
 - Blender's loop stalling, and errors from the session's actions.
 - The app's memory over the session.
+- Snapshots that break the contract with the interface, `native_ui.fbs`.
 
 Exits with 1 when anything went wrong, so it can gate a run.
 """
 
 import argparse
+import glob
 import json
 import os
 import sys
+
+ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
 
 # How long the interface may lag behind Blender before it counts as out of step, in seconds.
 LAG = 3.0
@@ -143,7 +147,34 @@ def check(directory):
         if len(tail) > 10 and tail[-1] - tail[0] > memory[0] * 0.25:
             problems.append("Memory kept growing over the last quarter of the session, %.0f to %.0f MB." %
                             (tail[0], tail[-1]))
+
+    problems += check_snapshots(os.path.join(directory, "native_ui_record"), lines)
     return problems, lines
+
+
+def check_snapshots(directory, lines):
+    """Snapshots the bridge sent that do not fit the schema, see `native_ui_schema.py`."""
+    if not os.path.isdir(directory):
+        return []
+    sys.path.insert(0, os.path.join(ROOT, "source", "blender", "windowmanager", "native_ui"))
+    import native_ui_schema
+    schema = native_ui_schema.load()
+    checked = 0
+    problems = []
+    for folder in sorted(glob.glob(os.path.join(directory, "*"))):
+        table = os.path.basename(folder)
+        if table not in schema.tables:
+            continue
+        for path in sorted(glob.glob(os.path.join(folder, "*.json"))):
+            with open(path) as file:
+                try:
+                    errors = native_ui_schema.validate(schema, table, json.load(file))
+                except ValueError as error:
+                    errors = ["not JSON: %s" % error]
+            checked += 1
+            problems += ["%s %s: %s" % (table, os.path.basename(path), error) for error in errors[:3]]
+    lines.append("Snapshots checked against the schema: %d." % checked)
+    return problems[:20]
 
 
 def main():
