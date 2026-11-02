@@ -58,6 +58,10 @@ if(WITH_HEADLESS)
   add_definitions(-DWITH_HEADLESS)
 endif()
 
+if(WITH_NATIVE_UI)
+  add_definitions(-DWITH_NATIVE_UI)
+endif()
+
 blender_add_lib(bf_editor_screen "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
 
 # RNA_prototypes.hh

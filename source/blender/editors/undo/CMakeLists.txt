@@ -31,4 +31,8 @@ set(LIB
   PRIVATE bf::windowmanager
 )
 
+if(WITH_NATIVE_UI)
+  add_definitions(-DWITH_NATIVE_UI)
+endif()
+
 blender_add_lib(bf_editor_undo "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")

@@ -640,9 +640,6 @@ mark_as_advanced(WITH_NATIVE_UI)
 if(WITH_APPLE_CROSSPLATFORM)
   set(WITH_NATIVE_UI ON CACHE BOOL "" FORCE)
 endif()
-if(WITH_NATIVE_UI)
-  add_definitions(-DWITH_NATIVE_UI)
-endif()
 # On Windows and for the Blender application on macOS, portable install
 # is the only supported installation type, so there is no option.
 if(UNIX AND (NOT APPLE OR WITH_PYTHON_MODULE))
