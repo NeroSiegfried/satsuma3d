@@ -18,6 +18,8 @@
 
 #include "BKE_context.hh"
 
+#include "CLG_log.h"
+
 #include "BLI_map.hh"
 
 #include "DNA_windowmanager_types.h"
@@ -37,6 +39,8 @@
 #include "WM_types.hh"
 
 #include "wm_native_ui_timing.hh"
+
+static CLG_LogRef LOG = {"wm.native.views"};
 
 namespace blender::wm::native_ui {
 
@@ -327,6 +331,12 @@ static void commands_execute(bContext *C,
     return;
   }
   for (const protocol::Command *command : *commands->commands()) {
+    CLOG_DEBUG(&LOG,
+               "Command %u to %s: %s %s",
+               command->id(),
+               command->target()->c_str(),
+               protocol::EnumNameOp(command->op()),
+               protocol::EnumNamePhase(command->phase()));
     std::string error;
     Subscription *subscription = subscriptions().lookup_ptr(command->subscription());
     if (subscription == nullptr) {
@@ -348,6 +358,9 @@ static void commands_execute(bContext *C,
         subscription->urgent = true;
       }
       any_dirty = true;
+    }
+    if (!error.empty()) {
+      CLOG_DEBUG(&LOG, "Command %u failed: %s", command->id(), error.c_str());
     }
     if (command->id() != 0) {
       acks.push_back(protocol::CreateAck(
