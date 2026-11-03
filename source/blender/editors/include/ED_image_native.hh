@@ -11,10 +11,16 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
+namespace blender {
 struct bContext;
+namespace io::serialize {
+class DictionaryValue;
+}
+}  // namespace blender
 
 namespace blender::ed::image {
 
@@ -31,10 +37,15 @@ struct NativeImagePixels {
   std::vector<uint8_t> rgba;
 };
 
-/** The images, the one shown and its details as JSON; or with \a execute, an edit to them. */
-std::string native_image_query(bContext *C, const std::string &request, bool execute);
+/** The images, and the one its view's \a state shows with its details. */
+std::shared_ptr<io::serialize::DictionaryValue> native_image_read(
+    bContext *C, const io::serialize::DictionaryValue &state);
+/** An edit of the images: why it failed, if it did. */
+std::string native_image_edit(bContext *C, const io::serialize::DictionaryValue &edit);
 /** The shown image's picture, when it changed since it was last asked for. */
-bool native_image_pixels(bContext *C, const std::string &state, NativeImagePixels &r_pixels);
+bool native_image_pixels(bContext *C,
+                         const io::serialize::DictionaryValue &state,
+                         NativeImagePixels &r_pixels);
 /** The active mesh's UV edges, two points each, in UV space. */
 std::vector<float> native_image_uvs(bContext *C);
 

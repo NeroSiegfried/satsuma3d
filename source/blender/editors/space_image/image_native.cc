@@ -13,7 +13,6 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -84,12 +83,6 @@ NativeImageChoice native_choice;
 
 /** The pictures are sent no larger than this along either side. */
 constexpr int native_image_max_side = 2048;
-
-std::unique_ptr<Value> parse(const std::string &json)
-{
-  std::istringstream stream(json);
-  return JsonFormatter().deserialize(stream);
-}
 
 /** The texture being painted on, as the Image Editor shows it in Texture Paint. */
 Image *paint_image(bContext *C)
@@ -261,12 +254,13 @@ std::vector<std::array<float, 3>> stroke_points(const DictionaryValue &query)
   return points;
 }
 
-std::string read_images(bContext *C, const DictionaryValue *state)
+std::shared_ptr<DictionaryValue> read_images(bContext *C, const DictionaryValue *state)
 {
   Main *bmain = CTX_data_main(C);
   Image *shown = shown_image(C, state);
   Image *slot = paint_image(C);
-  DictionaryValue result;
+  auto read = std::make_shared<DictionaryValue>();
+  DictionaryValue &result = *read;
   auto images = result.append_array("images");
   for (Image &ima : bmain->images) {
     auto item = images->append_dict();
@@ -315,9 +309,7 @@ std::string read_images(bContext *C, const DictionaryValue *state)
       color->append_double(rgb[i]);
     }
   }
-  std::ostringstream stream;
-  JsonFormatter().serialize(stream, result);
-  return stream.str();
+  return read;
 }
 
 std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
@@ -491,17 +483,14 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
 
 }  // namespace
 
-std::string native_image_query(bContext *C, const std::string &request, const bool execute)
+std::shared_ptr<DictionaryValue> native_image_read(bContext *C, const DictionaryValue &state)
 {
-  const std::unique_ptr<Value> value = parse(request);
-  const DictionaryValue *query = value ? value->as_dictionary_value() : nullptr;
-  if (!execute) {
-    return read_images(C, query);
-  }
-  if (!query) {
-    return "This image change could not be made.";
-  }
-  const std::optional<std::string> undo = apply_edit(C, *query);
+  return read_images(C, &state);
+}
+
+std::string native_image_edit(bContext *C, const DictionaryValue &edit)
+{
+  const std::optional<std::string> undo = apply_edit(C, edit);
   if (!undo) {
     return "This image change could not be made.";
   }
@@ -511,15 +500,14 @@ std::string native_image_query(bContext *C, const std::string &request, const bo
   return "";
 }
 
-bool native_image_pixels(bContext *C, const std::string &state, NativeImagePixels &r_pixels)
+bool native_image_pixels(bContext *C, const DictionaryValue &state, NativeImagePixels &r_pixels)
 {
   /* Changes since the last picture sent, as the Image Editor's drawing follows them. */
   static PartialUpdateUser *changes = nullptr;
   static uint32_t changes_image = 0;
   static bool sent_none = false;
 
-  const std::unique_ptr<Value> value = parse(state);
-  Image *ima = shown_image(C, value ? value->as_dictionary_value() : nullptr);
+  Image *ima = shown_image(C, &state);
   Scene *scene = CTX_data_scene(C);
   if (!ima || !scene) {
     if (changes) {

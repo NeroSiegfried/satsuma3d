@@ -16,7 +16,6 @@
 #include <chrono>
 #include <map>
 #include <optional>
-#include <sstream>
 #include <string>
 
 #include "MEM_guardedalloc.h"
@@ -132,13 +131,6 @@ struct SequencerSpaceContext {
     CTX_wm_region_set(C, previous_region);
   }
 };
-
-std::string encode(const Value &value)
-{
-  std::ostringstream stream;
-  JsonFormatter().serialize(stream, value);
-  return stream.str();
-}
 
 /** A picture of one frame of a shot's scene, and the version of the scene it shows. */
 struct Picture {
@@ -354,15 +346,18 @@ std::string render_picture(bContext *C, Scene *sequencer_scene, Strip *strip,
   return saved ? path : "";
 }
 
-std::string read_storyboard(bContext *C, const DictionaryValue *state, const bool draw)
+std::shared_ptr<DictionaryValue> read_storyboard(bContext *C,
+                                                 const DictionaryValue *state,
+                                                 const bool draw)
 {
-  DictionaryValue result;
+  auto read = std::make_shared<DictionaryValue>();
+  DictionaryValue &result = *read;
   Scene *scene = CTX_data_sequencer_scene(C);
   WorkSpace *workspace = CTX_wm_workspace(C);
   Editing *ed = scene ? seq::editing_get(scene) : nullptr;
   result.append_int("available", scene != nullptr);
   if (!scene) {
-    return encode(result);
+    return read;
   }
   result.append_str("scene", scene->id.name + 2);
   result.append_int("start", scene->r.sfra);
@@ -526,7 +521,7 @@ std::string read_storyboard(bContext *C, const DictionaryValue *state, const boo
     }
   }
   result.append_int("pending", !wanted.is_empty());
-  return encode(result);
+  return read;
 }
 
 Strip *find_strip(Scene *scene, const DictionaryValue &query)
@@ -1163,20 +1158,17 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
 
 }  // namespace
 
-std::string native_storyboard_query(bContext *C, const std::string &request, const bool execute)
+std::shared_ptr<DictionaryValue> native_storyboard_read(bContext *C, const DictionaryValue &state)
 {
-  std::istringstream stream(request);
-  std::unique_ptr<Value> value = JsonFormatter().deserialize(stream);
-  const DictionaryValue *query = value ? value->as_dictionary_value() : nullptr;
   SequencerSpaceContext space(C);
-  if (!execute) {
-    /* Pictures are drawn by #native_storyboard_draw, as the window draws. */
-    return read_storyboard(C, query, false);
-  }
-  if (!query) {
-    return "This storyboard change could not be made.";
-  }
-  const std::optional<std::string> undo = apply_edit(C, *query);
+  /* Pictures are drawn by #native_storyboard_draw, as the window draws. */
+  return read_storyboard(C, &state, false);
+}
+
+std::string native_storyboard_edit(bContext *C, const DictionaryValue &edit)
+{
+  SequencerSpaceContext space(C);
+  const std::optional<std::string> undo = apply_edit(C, edit);
   if (!undo) {
     return "This storyboard change could not be made.";
   }
@@ -1186,16 +1178,13 @@ std::string native_storyboard_query(bContext *C, const std::string &request, con
   return "";
 }
 
-bool native_storyboard_draw(bContext *C, const std::string &request)
+bool native_storyboard_draw(bContext *C, const DictionaryValue &state)
 {
   if (ED_screen_animation_playing(CTX_wm_manager(C))) {
     return false;
   }
-  std::istringstream stream(request);
-  std::unique_ptr<Value> value = JsonFormatter().deserialize(stream);
   SequencerSpaceContext space(C);
-  const std::string json = read_storyboard(C, value ? value->as_dictionary_value() : nullptr, true);
-  return json.find("\"pending\":1") != std::string::npos;
+  return read_storyboard(C, &state, true)->lookup_int("pending").value_or(0);
 }
 
 }  // namespace blender::ed::vse

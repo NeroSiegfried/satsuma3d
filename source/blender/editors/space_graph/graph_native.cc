@@ -13,7 +13,6 @@
 #include <cmath>
 #include <map>
 #include <set>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -92,6 +91,10 @@ struct GraphSpaceContext {
     }
     CTX_wm_area_set(C, area);
     CTX_wm_region_set(C, BKE_area_find_region_type(area, RGN_TYPE_WINDOW));
+    /* The curves' colors, as the Graph Editor sets them before drawing. */
+    if (area->type && area->type->refresh) {
+      area->type->refresh(C, area);
+    }
   }
 
   ~GraphSpaceContext()
@@ -184,14 +187,6 @@ bool needs_samples(const FCurve &fcu)
   return false;
 }
 
-std::string encode(const Value &value)
-{
-  std::ostringstream stream;
-  JsonFormatter().serialize(stream, value);
-  return stream.str();
-}
-
-/** The curves as the Graph Editor shows them, see #native_graph_query. */
 /** What a key asked of the native editor itself, such as framing the curves. */
 struct KeyRequest {
   int sequence = 0;
@@ -226,13 +221,15 @@ Drag drag;
 /** The last read, kept while the curves stay as they were. */
 struct LastRead {
   uint64_t fingerprint = 0;
-  std::string json;
+  std::shared_ptr<DictionaryValue> result;
 };
 LastRead last_read;
 
-std::string read_curves(bContext *C, const DictionaryValue &state)
+/** The curves as the Graph Editor shows them, see #native_graph_read. */
+std::shared_ptr<DictionaryValue> read_curves(bContext *C, const DictionaryValue &state)
 {
-  DictionaryValue result;
+  auto read = std::make_shared<DictionaryValue>();
+  DictionaryValue &result = *read;
   const Scene *scene = CTX_data_scene(C);
   if (scene) {
     result.append_int("frame", scene->r.cfra);
@@ -240,7 +237,7 @@ std::string read_curves(bContext *C, const DictionaryValue &state)
   Curves curves(C);
   if (!curves.valid) {
     result.append_array("curves");
-    return encode(result);
+    return read;
   }
   /* The range the native editor shows, where sampled curves are sampled. */
   float range[2] = {float(scene ? scene->r.sfra : 1), float(scene ? scene->r.efra : 250)};
@@ -285,10 +282,10 @@ std::string read_curves(bContext *C, const DictionaryValue &state)
     }
   }
   /* While a drag goes on, the native editor draws it from where it began. */
-  if (!last_read.json.empty() &&
+  if (last_read.result &&
       (!drag.interaction.empty() || (cacheable && fingerprint.value == last_read.fingerprint)))
   {
-    return last_read.json;
+    return last_read.result;
   }
   auto list = result.append_array("curves");
   for (bAnimListElem *ale : curves.items) {
@@ -352,9 +349,8 @@ std::string read_curves(bContext *C, const DictionaryValue &state)
     request->append_int("sequence", key_request.sequence);
     request->append_str("action", key_request.action);
   }
-  std::string json = encode(result);
-  last_read = {cacheable ? fingerprint.value : 0, json};
-  return json;
+  last_read = {cacheable ? fingerprint.value : 0, read};
+  return read;
 }
 
 
@@ -814,30 +810,22 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
 }  // namespace
 
 /**
- * The native Graph Editor's requests: with \a execute false, the curves as JSON; with it true,
- * an edit, returning an error message or an empty string.
- *
- * The state names what to show: `only_selected` (the selected objects' curves, as the Graph
- * Editor's default), `normalize`, and `range`, the frames shown, where curves that cannot be
- * drawn from their keys alone are sampled.
+ * The curves, for the state the native Graph Editor shows them in: `only_selected` (the selected
+ * objects' curves, as the Graph Editor's default), `normalize`, and `range`, the frames shown,
+ * where curves that cannot be drawn from their keys alone are sampled.
  */
-std::string native_graph_query(bContext *C, const std::string &request, const bool execute)
+std::shared_ptr<DictionaryValue> native_graph_read(bContext *C, const DictionaryValue &state)
 {
-  std::istringstream stream(request);
-  std::unique_ptr<Value> value = JsonFormatter().deserialize(stream);
-  const DictionaryValue *query = value ? value->as_dictionary_value() : nullptr;
-  if (!query) {
-    return execute ? "This curve change could not be made." : "{}";
-  }
-  GraphSpaceContext space(C, query->lookup_dict("state") ? query->lookup_dict("state") : query);
-  /* The curves' colors, as the Graph Editor sets them before drawing. */
-  if (ScrArea *area = CTX_wm_area(C); area && area->type && area->type->refresh) {
-    area->type->refresh(C, area);
-  }
-  if (!execute) {
-    return read_curves(C, *query);
-  }
-  const std::optional<std::string> undo = apply_edit(C, *query);
+  GraphSpaceContext space(C, &state);
+  return read_curves(C, state);
+}
+
+/** An edit of the curves, with the `state` they are shown in: why it failed, if it did. */
+std::string native_graph_edit(bContext *C, const DictionaryValue &edit)
+{
+  const DictionaryValue *state = edit.lookup_dict("state");
+  GraphSpaceContext space(C, state ? state : &edit);
+  const std::optional<std::string> undo = apply_edit(C, edit);
   if (!undo) {
     return "This curve change could not be made.";
   }

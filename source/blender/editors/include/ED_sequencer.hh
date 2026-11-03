@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <memory>
 #include <string>
 
 #include "BLI_vector_set.hh"
@@ -19,6 +20,9 @@ struct Strip;
 struct SpaceSeq;
 struct bContext;
 struct View2D;
+namespace io::serialize {
+class DictionaryValue;
+}
 
 namespace ed::vse {
 
@@ -92,13 +96,16 @@ bool is_scene_time_sync_needed(const bContext &C);
 const Strip *get_scene_strip_for_time_sync(const Scene *sequencer_scene);
 void sync_active_scene_and_time_with_scene_strip(bContext &C);
 
-/** The storyboard for a native interface, or an edit of it, see `sequencer_native.cc`. */
-std::string native_storyboard_query(bContext *C, const std::string &request, bool execute);
+/** The storyboard for a native interface, as its view's \a state asks, see `sequencer_native.cc`. */
+std::shared_ptr<io::serialize::DictionaryValue> native_storyboard_read(
+    bContext *C, const io::serialize::DictionaryValue &state);
+/** An edit of the storyboard: why it failed, if it did. */
+std::string native_storyboard_edit(bContext *C, const io::serialize::DictionaryValue &edit);
 /**
  * Draws a few of the shots' pictures the storyboard still needs, with the window's GPU context
  * current, as right after the window draws. Whether more are still to draw.
  */
-bool native_storyboard_draw(bContext *C, const std::string &request);
+bool native_storyboard_draw(bContext *C, const io::serialize::DictionaryValue &state);
 
 }  // namespace ed::vse
 }  // namespace blender
