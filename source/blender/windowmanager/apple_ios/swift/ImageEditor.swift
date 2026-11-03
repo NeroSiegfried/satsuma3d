@@ -89,7 +89,7 @@ final class ImageEditorModel {
     guard shown != self.shown else { return }
     self.shown = shown
     if shown { fitRequest += 1 }
-    Engine.setting("native_image_visible", shown ? "1" : "0")
+    canvas.setShown(shown)
     shownChanged(shown)
   }
 
@@ -97,13 +97,21 @@ final class ImageEditorModel {
   func choose(_ name: String) {
     /* Told apart from the last choice, of this or an earlier document. */
     let pick = Int(Date().timeIntervalSince1970 * 1000)
-    Engine.setting("native_image_state", json: ["image": name, "pick": pick])
+    canvas.setState(["image": name, "pick": pick])
+  }
+
+  /** Blender's images, from its `image` view while the editor shows; its picture comes apart. */
+  let canvas = NativeCanvas("image")
+
+  /** Take what Blender shows, if it changed. */
+  func pull() {
+    if shown, let snapshot = canvas.take() { update(snapshot) }
   }
 
   func send(_ action: String, _ extra: JSON = [:]) {
     var request: JSON = ["action": action]
     request.merge(extra) { $1 }
-    Engine.setting("native_image_edit", json: request)
+    canvas.edit(request)
   }
 
   /** A stroke's points, as x, y in the image's pixels and pressure; \a zoom is the screen's pixels

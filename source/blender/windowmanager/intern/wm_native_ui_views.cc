@@ -180,6 +180,16 @@ bool subscriptions_dirty()
   return any_dirty;
 }
 
+/** How many subscriptions there are to views of \a type. */
+int type_subscriptions(const ViewType &type)
+{
+  int count = 0;
+  for (const Subscription &subscription : subscriptions().values()) {
+    count += subscription.type == &type;
+  }
+  return count;
+}
+
 }  // namespace
 
 /** \} */
@@ -918,10 +928,18 @@ void WM_native_ui_views_flush(bContext *C)
       }
       subscription.request = std::move(subscribe->request);
       subscriptions().add_overwrite(subscribe->subscription, std::move(subscription));
+      if (type->shown && type_subscriptions(*type) == 1) {
+        type->shown(true);
+      }
       any_dirty = true;
     }
     else if (auto *unsubscribe = std::get_if<UnsubscribeMessage>(&message)) {
+      const Subscription *subscription = subscriptions().lookup_ptr(unsubscribe->subscription);
+      const ViewType *type = subscription ? subscription->type : nullptr;
       subscriptions().remove(unsubscribe->subscription);
+      if (type && type->shown && type_subscriptions(*type) == 0) {
+        type->shown(false);
+      }
     }
     else if (auto *commands = std::get_if<CommandsMessage>(&message)) {
       received.push_back(std::move(commands->commands));

@@ -70,6 +70,7 @@ final class ShellPanels {
     panels.updateOutliner()
     timeline.store.curves.pull()
     timeline.store.storyboard.pull()
+    panels.image.pull()
     if let snapshot = takeJSON("panels", WM_native_ui_panels_take_json()) {
       InterfaceTimings.measure("panels.apply") { panels.updateSnapshot(snapshot) }
     }

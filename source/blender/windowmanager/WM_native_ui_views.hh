@@ -81,6 +81,9 @@ struct ViewType {
    * the updates of a drag, which the interface shows itself.
    */
   double min_interval = 0.0;
+  /** Called as the first interface shows it, and as the last stops, for work done apart from
+   * building it, such as drawing pictures it names. */
+  void (*shown)(bool shown) = nullptr;
   /** Data of its own for each subscription, see #ViewData, or none. */
   std::unique_ptr<ViewData> (*create)() = nullptr;
   void (*build)(bContext *C, const Params &params, ViewData *data, ViewBuilder &builder) = nullptr;

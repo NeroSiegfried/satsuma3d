@@ -157,9 +157,6 @@ final class SwiftScenePanels {
     if let nodesSnapshot = snapshot.dict("nodes"), nodes.shown {
       nodes.update(nodesSnapshot, ack: ack)
     }
-    if let imageSnapshot = snapshot.dict("image"), image.shown {
-      image.update(imageSnapshot)
-    }
   }
 
   /** \} */

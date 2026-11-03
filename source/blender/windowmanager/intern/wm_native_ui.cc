@@ -234,9 +234,8 @@ std::chrono::steady_clock::time_point bridge_nodes_next_check;
 std::string bridge_nodes_add_for;
 /** The native image editor's state: the image chosen and whether UVs show over it. */
 std::string bridge_image_state = "{}";
-bool bridge_image_dirty = true;
-std::string bridge_image_json;
-std::chrono::steady_clock::time_point bridge_image_next_check;
+/* An interface shows the image editor, see #bridge_image_view_shown. */
+bool bridge_image_shown = false;
 /** Its picture and UVs, taken by the native editor when they change. */
 GHOST_Latest<ed::image::NativeImagePixels> bridge_image_pixels;
 GHOST_Latest<std::vector<float>> bridge_image_uvs;
@@ -1068,35 +1067,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
       bridge_panels_next_snapshot = {};
     }
     bridge_properties_error = ui::native_nodes_query(C, command.value, true);
-    return;
-  }
-  if (command.setting == "native_image_state") {
-    bridge_image_dirty = true;
-    bridge_image_pixels_pending = true;
-    bridge_image_uvs_pending = true;
-    bridge_image_state = command.value;
-    bridge_panels_next_snapshot = {};
-    return;
-  }
-  if (command.setting == "native_image_visible") {
-    bridge_image_dirty = true;
-    bridge_image_pixels_pending = true;
-    bridge_image_uvs_pending = true;
-    bridge_panels_visible = (bridge_panels_visible & ~128) | (command.value == "1" ? 128 : 0);
-    bridge_panels_next_snapshot = {};
-    bridge_panels_published.clear();
-    return;
-  }
-  if (command.setting == "native_image_edit") {
-    bridge_image_dirty = true;
-    bridge_image_pixels_pending = true;
-    std::istringstream stream(command.value);
-    auto value = io::serialize::JsonFormatter().deserialize(stream);
-    if (const auto *request = value ? value->as_dictionary_value() : nullptr) {
-      bridge_panels_sequence = request->lookup_int("sequence").value_or(bridge_panels_sequence);
-    }
-    bridge_panels_next_snapshot = {};
-    bridge_properties_error = ed::image::native_image_query(C, command.value, true);
     return;
   }
   if (command.setting == "native_nodes_create") {
@@ -2044,19 +2014,6 @@ void bridge_panels_build(bContext *C)
         }
         /* Spliced in as it is below, rather than read and written again: it is large. */
         merged.append_str("nodes", BRIDGE_PLACEHOLDER("nodes"));
-      }
-      if (bridge_panels_visible & 128) {
-        if (bridge_image_dirty || now >= bridge_image_next_check) {
-          bridge_image_dirty = false;
-          bridge_image_next_check = now + std::chrono::seconds(2);
-          bridge_image_json = bridge_timed("panels.image", [&] {
-            return ed::image::native_image_query(C, bridge_image_state, false);
-          });
-        }
-        std::istringstream image_stream(bridge_image_json);
-        if (auto image = JsonFormatter().deserialize(image_stream)) {
-          merged.append("image", std::move(image));
-        }
       }
       std::ostringstream merged_stream;
       JsonFormatter().serialize(merged_stream, merged);
@@ -3819,6 +3776,31 @@ void bridge_storyboard_view_build(bContext *C,
   bridge_canvas_records(builder, "storyboard", json, data);
 }
 
+/** The images to show and paint, as `native_image_query` reads them. Its picture and UV edges come
+ * apart, see #WM_native_ui_image_update, drawn while an interface shows it. */
+void bridge_image_view_build(bContext *C,
+                             const views::Params & /*params*/,
+                             views::ViewData *view_data,
+                             views::ViewBuilder &builder)
+{
+  const CanvasData &data = static_cast<const CanvasData &>(*view_data);
+  const std::string state = bridge_json_encode(*data.state);
+  if (state != bridge_image_state) {
+    /* Another image, or its UVs shown or not. */
+    bridge_image_state = state;
+    bridge_image_pixels_pending = true;
+    bridge_image_uvs_pending = true;
+  }
+  bridge_canvas_records(builder, "image", ed::image::native_image_query(C, state, false), data);
+}
+
+void bridge_image_view_shown(const bool shown)
+{
+  bridge_image_shown = shown;
+  bridge_image_pixels_pending = true;
+  bridge_image_uvs_pending = true;
+}
+
 /** \} */
 
 /* -------------------------------------------------------------------- */
@@ -4153,6 +4135,24 @@ void WM_native_ui_views_register()
   storyboard.command = bridge_canvas_command<ed::vse::native_storyboard_query>;
   view_type_add(std::move(storyboard));
 
+  ViewType image;
+  image.name = "image";
+  image.min_interval = 0.1;
+  image.notifiers = {NC_IMAGE, NC_SCENE, NC_OBJECT, NC_WM, NC_SPACE, NC_BRUSH, NC_GEOM};
+  image.create = bridge_canvas_create;
+  image.build = bridge_image_view_build;
+  image.shown = bridge_image_view_shown;
+  image.command = [](bContext *C,
+                     const Params &params,
+                     ViewData *data,
+                     const protocol::Command &command,
+                     std::string &r_error) {
+    /* What it changed shows in the picture too. */
+    bridge_image_pixels_pending = true;
+    return bridge_canvas_command<ed::image::native_image_query>(C, params, data, command, r_error);
+  };
+  view_type_add(std::move(image));
+
   ViewType render;
   render.name = "render";
   render.notifiers = {NC_SCENE, NC_WM, NC_IMAGE};
@@ -4353,7 +4353,6 @@ extern "C" void WM_native_ui_view_roll_enqueue(float angle)
 void WM_native_ui_tag_changed()
 {
   bridge_nodes_dirty = true;
-  bridge_image_dirty = true;
   bridge_image_pixels_pending = true;
   bridge_image_uvs_pending = true;
   bridge_changed = true;
@@ -4829,7 +4828,7 @@ void WM_native_ui_image_update(bContext *C)
   /* The image editor's picture follows painting closely, not at the panels' slower pace: each
    * time Blender changes something, though no closer together than the last one took to make. */
   static std::chrono::steady_clock::time_point next_pixels;
-  if (!(bridge_panels_visible & 128) || !(bridge_image_pixels_pending || bridge_image_uvs_pending)) {
+  if (!bridge_image_shown || !(bridge_image_pixels_pending || bridge_image_uvs_pending)) {
     return;
   }
   const auto now = std::chrono::steady_clock::now();
@@ -4917,7 +4916,7 @@ double WM_native_ui_engine_idle_seconds(bContext *C)
     /* The storyboard's pictures still to draw, a few each pass. */
     return 0.1;
   }
-  if ((bridge_panels_visible & 128) && (bridge_image_pixels_pending || bridge_image_uvs_pending)) {
+  if (bridge_image_shown && (bridge_image_pixels_pending || bridge_image_uvs_pending)) {
     /* The image editor's picture, held back while painting changes it quickly. */
     return 0.03;
   }
