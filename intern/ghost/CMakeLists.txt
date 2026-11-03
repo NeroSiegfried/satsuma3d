@@ -65,6 +65,11 @@ set(SRC
   intern/GHOST_utildefines_variadic.hh
 )
 
+if(NOT (WITH_APPLE_CROSSPLATFORM AND APPLE_TARGET_IOS))
+  # No native interface to tell of a message, see `GHOST_Mailbox.hh`.
+  list(APPEND SRC intern/GHOST_Mailbox.cc)
+endif()
+
 set(LIB
   PRIVATE bf::blenlib
   PRIVATE bf::dna
