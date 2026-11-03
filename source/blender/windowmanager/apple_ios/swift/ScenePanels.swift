@@ -188,8 +188,8 @@ final class SwiftScenePanels {
         .safeAreaInset(edge: .top, spacing: 0) {
           if shading.currentTab == "OVERLAYS" {
             Toggle("Show Overlays", isOn: Binding(
-              get: { model.viewport?.bool("overlays") == true },
-              set: { _ in Engine.setting("viewport_toggle", "overlays") }))
+              get: { model.viewportOption("overlays") },
+              set: { model.send("viewport:overlays", .set_, .bool($0)) }))
               .padding(.horizontal, 16)
               .padding(.vertical, 12)
               .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))

@@ -230,7 +230,7 @@ final class SqueezePalette {
   private(set) var brushes: [RailItem] = []
   private(set) var activeBrush = ""
   /** The brush's size, strength and color, where Blender paints with brushes. */
-  var brush: JSON?
+  var brush: BrushSettings?
   private(set) var direction: Direction?
   private(set) var canUndo = false
   private(set) var canRedo = false
@@ -531,9 +531,9 @@ final class SqueezePalette {
     /* Nearest, the brush's settings, each as long as it needs: the sliders the most, the color by
      * how many colors it holds. */
     var parts: [(part: Part, share: Double)] = []
-    if brush?.dict("size") != nil { parts.append((.size, 140)) }
-    if brush?.dict("strength") != nil { parts.append((.strength, 140)) }
-    if brush?.dict("weight") != nil { parts.append((.weight, 140)) }
+    if brush?["size"] != nil { parts.append((.size, 140)) }
+    if brush?["strength"] != nil { parts.append((.strength, 140)) }
+    if brush?["weight"] != nil { parts.append((.weight, 140)) }
     if direction != nil { parts.append((.direction, 84)) }
     if color != nil { parts.append((.color, 40)) }
     let commands = !contextCommands(BlenderMenus.contextRoute).isEmpty
@@ -1021,15 +1021,15 @@ final class SqueezePalette {
   /* Size and strength */
 
   private func range(_ key: String) -> (low: Double, high: Double, logarithmic: Bool) {
-    let json = brush?.dict(key)
-    let low = json?.double("min") ?? 0
-    let high = max(low + 1e-6, json?.double("max") ?? 1)
+    let setting = brush?[key]
+    let low = setting?.min ?? 0
+    let high = max(low + 1e-6, setting?.max ?? 1)
     /* Along a curve, so small sizes get as much of it as large ones. */
     return (low, high, key == "size" && low > 0)
   }
 
   func value(_ key: String) -> Double {
-    values[key] ?? brush?.dict(key)?.double("value") ?? range(key).low
+    values[key] ?? brush?[key]?.value ?? range(key).low
   }
 
   /** Where the value sits between its ends, from 0 to 1. */
@@ -1079,7 +1079,7 @@ final class SqueezePalette {
     let value = value(key)
     if key == "strength" { return "\(Int((value * 100).rounded()))%" }
     if key == "weight" { return String(format: "%.2f", value) }
-    return brush?.dict(key)?.bool("pixels") == true ? "\(Int(value.rounded())) px" : String(format: "%.3g m", value)
+    return brush?[key]?.pixels == true ? "\(Int(value.rounded())) px" : String(format: "%.3g m", value)
   }
 
   /* -------------------------------------------------------------------- */
@@ -1098,7 +1098,7 @@ final class SqueezePalette {
 
   /** The brush's color, where it paints with one. */
   var color: [Double]? {
-    localColor ?? (brush?["color"] as? [NSNumber]).map { $0.map(\.doubleValue) }
+    localColor ?? brush?.color
   }
 
   /** The two colors used before this one, shown beside the color wheel while it is open. */
@@ -1132,7 +1132,7 @@ final class SqueezePalette {
   private var colorBefore: [Double]?
 
   private func keepColorBefore() {
-    if colorBefore == nil { colorBefore = (brush?["color"] as? [NSNumber]).map { $0.map(\.doubleValue) } }
+    if colorBefore == nil { colorBefore = brush?.color }
   }
 
   private func commitColor() {
@@ -1638,11 +1638,10 @@ private struct BrushDab: View {
   @Environment(\.displayScale) private var displayScale
 
   var body: some View {
-    let size = palette.brush?.dict("size")
-    let pixels = size?.bool("pixels") == true
+    let pixels = palette.brush?["size"]?.pixels == true
     /* Blender's pixels are the screen's; a size in the scene shows by its place in its range. */
     let diameter = pixels ? CGFloat(palette.value("size")) / displayScale : 20 + 120 * CGFloat(palette.fraction("size"))
-    let strength = palette.brush?.dict("strength") != nil ? palette.value("strength") : 1
+    let strength = palette.brush?["strength"] != nil ? palette.value("strength") : 1
     let rgb = palette.color ?? [1, 1, 1]
     ZStack {
       Circle().fill(Color(red: rgb[0], green: rgb[1], blue: rgb[2]).opacity(0.1 + 0.85 * min(1, strength)))

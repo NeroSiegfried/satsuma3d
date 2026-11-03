@@ -100,6 +100,7 @@
 #include "WM_native_ui.h"
 #include "wm_native_ui_timing.hh"
 #include "WM_native_ui.hh"
+#include "WM_native_ui_views.hh"
 #include "WM_toolsystem.hh"
 #include "WM_types.hh"
 
@@ -240,7 +241,6 @@ struct BridgeMenuRequest {
   int retries = 0;
 };
 using BridgeMessage = std::variant<BridgeSettingCommand,
-                                  std::string,
                                   float,
                                   BridgeMenuRequest,
                                   BridgeBrushCommand,
@@ -325,16 +325,6 @@ GHOST_Latest<std::string> bridge_hover_snapshot;
 int2 bridge_asset_drag_xy(0);
 BridgePencilHoverRequest bridge_hover_request;
 
-struct BridgeActionItem {
-  const char *title;
-  const char *op_name;
-  const char *symbol;
-  const char *prop_name = "";
-  const char *prop_value = "";
-  const char *key = "";
-  bool selected = false;
-};
-
 GHOST_Latest<std::string> bridge_toolbar_snapshot;
 /** One of Blender's menus to show natively where the pointer is, see #bridge_menu_popup. */
 GHOST_Latest<std::string> bridge_menu_popup_snapshot;
@@ -363,14 +353,6 @@ std::string bridge_toolbar_json =
 std::string bridge_json_escape(const std::string &value);
 std::string bridge_json_number(double value);
 void bridge_brush_direction_set(bContext *C, bool add);
-
-void bridge_action_add_key(std::vector<BridgeActionItem> &items,
-                        const char *title,
-                        const char *symbol,
-                        const char *key)
-{
-  items.push_back({title, "", symbol, "", "", key});
-}
 
 wmOperator *bridge_constraint_operator(wmWindow *win)
 {
@@ -434,28 +416,6 @@ static const char *bridge_drag_hint(wmWindow *win, bool *r_done)
     }
   }
   return nullptr;
-}
-
-std::vector<BridgeActionItem> bridge_action_items_for_tool(bContext *C,
-                                                     const eContextObjectMode mode,
-                                                     const char *active_tool_id)
-{
-  std::vector<BridgeActionItem> items;
-
-  if (wmOperator *op = bridge_constraint_operator(CTX_wm_window(C))) {
-    int axes;
-    blender::ed::transform::modal_constraint_get(op, axes);
-    for (int axis = 0; axis < 3; axis++) {
-      const char *name = axis == 0 ? "X" : axis == 1 ? "Y" : "Z";
-      bridge_action_add_key(items, name, "", name);
-      items.back().selected = (axes & (1 << axis)) != 0;
-    }
-    return items;
-  }
-
-  /* Everything else comes from `bl_ui.native_actions`, queried with the toolbar snapshot. */
-  UNUSED_VARS(mode, active_tool_id);
-  return items;
 }
 
 ScrArea *bridge_find_view3d_area(bScreen *screen)
@@ -847,30 +807,6 @@ void bridge_mode_set(bContext *C, const char *mode)
   WM_operator_properties_free(&props);
 }
 
-/** Modes the active object supports, as listed by Blender's own header mode menu.
- * Filter directly: `OBJECT_OT_mode_set` items read through owner-less operator properties
- * are resolved without context, which lists every mode for every object type. */
-std::string bridge_object_modes_json(bContext *C)
-{
-  const Object *active = CTX_data_active_object(C);
-  std::string json = "[";
-  for (const EnumPropertyItem *item = rna_enum_object_mode_items; item->identifier; item++) {
-    if (!item->identifier[0] ||
-        !(active ? ed::object::mode_compat_test(active, eObjectMode(item->value)) :
-                   item->value == OB_MODE_OBJECT))
-    {
-      continue;
-    }
-    const char *icon = nullptr;
-    RNA_enum_identifier(rna_enum_icon_items, item->icon, &icon);
-    json += json.size() > 1 ? "," : "";
-    json += "{\"id\":\"" + bridge_json_escape(item->identifier) + "\",\"label\":\"" +
-            bridge_json_escape(item->name ? item->name : item->identifier) + "\",\"icon\":\"" +
-            bridge_json_escape(icon ? icon : "") + "\"}";
-  }
-  return json + "]";
-}
-
 void bridge_view_roll_angle(bContext *C, const float angle)
 {
   wmOperatorType *ot = WM_operatortype_find("VIEW3D_OT_view_roll", false);
@@ -1051,46 +987,6 @@ static std::optional<BridgeMirror> bridge_mirror(Object *ob, const eContextObjec
     default:
       return std::nullopt;
   }
-}
-
-std::string bridge_transform_settings_json(const Scene *scene,
-                                        Object *ob,
-                                        const eContextObjectMode mode)
-{
-  if (!scene || !scene->toolsettings) {
-    return "{}";
-  }
-  const ToolSettings *settings = scene->toolsettings;
-  const int orientation = BKE_scene_orientation_slot_get_index(
-      &scene->orientation_slots[SCE_ORIENT_DEFAULT]);
-  std::string json = "{\"orientation\":\"";
-  json += bridge_orientation_id(orientation);
-  json += "\",\"pivot\":\"";
-  json += bridge_pivot_id(settings->transform_pivot_point);
-  json += "\",\"snap\":\"";
-  json += bridge_snap_id(settings);
-  json += "\",\"proportional\":\"";
-  json += bridge_proportional_id(settings, mode);
-  json += "\"";
-  if (std::optional<BridgeMirror> mirror = bridge_mirror(ob, mode)) {
-    /* The axes there are, and which of them mirror. */
-    json += ",\"mirror_axes\":\"";
-    json += mirror->letters;
-    json += "\",\"mirror\":\"";
-    for (const char *axis = mirror->letters; *axis; axis++) {
-      if (RNA_boolean_get(&mirror->axes, (std::string(mirror->prefix) + *axis).c_str())) {
-        json += *axis;
-      }
-    }
-    json += "\"";
-    if (mirror->topology) {
-      json += ",\"mirror_topology\":\"";
-      json += RNA_boolean_get(&*mirror->topology, "use_mirror_topology") ? "on" : "off";
-      json += "\"";
-    }
-  }
-  json += "}";
-  return json;
 }
 
 std::string bridge_mesh_select_mode_string(const ToolSettings *tool_settings)
@@ -1758,19 +1654,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
   }
 }
 
-void bridge_tool_set_by_id(bContext *C, const std::string &tool_id)
-{
-  if (tool_id.empty()) {
-    return;
-  }
-
-  const BridgeContextStore context_store = bridge_context_push_view3d(C);
-  if (CTX_wm_window(C) != nullptr && CTX_wm_area(C) != nullptr && CTX_wm_region(C) != nullptr) {
-    WM_toolsystem_ref_set_by_id(C, tool_id.c_str());
-  }
-  bridge_context_pop(C, context_store);
-}
-
 /* -------------------------------------------------------------------- */
 /** \name Native Brush Rail
  *
@@ -2033,82 +1916,6 @@ static std::pair<const char *, const char *> bridge_brush_direction_symbols(cons
     }
   }
   return {"arrowshape.up", "arrowshape.down"};
-}
-
-/**
- * The + and - pill in modes that stroke brushes: which way strokes go, and for brushes with a
- * Direction, its two choices' names (such as Inflate and Deflate) and symbols. Painting colors
- * has no two ways to go, and hides it, as do drawing Grease Pencil strokes and tools that never
- * select. Null elsewhere, where the pill adds to or subtracts from the selection. In Sculpt
- * Mode, "smooth" adds a Smooth button to hold, as Shift is with a keyboard.
- */
-std::string bridge_direction_json(bContext *C, const eContextObjectMode mode)
-{
-  if (!bridge_mode_strokes(mode)) {
-    /* Drawing Grease Pencil strokes, and the tools that never select, such as the 3D Cursor,
-     * have nothing to add to or subtract from: no pill. */
-    const bToolRef *tref = WM_toolsystem_ref_from_context(C);
-    const StringRef tool = tref ? StringRef(tref->idname) : StringRef();
-    if (mode == CTX_MODE_PAINT_GREASE_PENCIL ||
-        ELEM(tool, "builtin.cursor", "builtin.measure") || tool.startswith("builtin.annotate") ||
-        tool.startswith("builtin.primitive_"))
-    {
-      return "{\"hidden\":true}";
-    }
-    return "null";
-  }
-  std::optional<PointerRNA> brush_ptr = bridge_brush_direction_ptr(C);
-  if (!brush_ptr) {
-    const bool colors = ELEM(mode,
-                             CTX_MODE_SCULPT,
-                             CTX_MODE_PAINT_TEXTURE,
-                             CTX_MODE_PAINT_VERTEX,
-                             CTX_MODE_VERTEX_GREASE_PENCIL);
-    if (mode == CTX_MODE_SCULPT) {
-      return "{\"hidden\":true,\"smooth\":true}";
-    }
-    return colors ? "{\"hidden\":true}" : "{\"brush\":false}";
-  }
-  PropertyRNA *prop = RNA_struct_find_property(&*brush_ptr, "direction");
-  const EnumPropertyItem *items = nullptr;
-  int count = 0;
-  bool free = false;
-  RNA_property_enum_items_gettexted(C, &*brush_ptr, prop, &items, &count, &free);
-  std::string names[2];
-  for (int i = 0, n = 0; i < count && n < 2; i++) {
-    if (items[i].identifier[0] != '\0') {
-      names[n++] = items[i].name;
-    }
-  }
-  if (free) {
-    MEM_delete(items);
-  }
-  /* Symbols go by the untranslated names. */
-  const char *untranslated[2] = {"", ""};
-  RNA_property_enum_items(C, &*brush_ptr, prop, &items, &count, &free);
-  for (int i = 0, n = 0; i < count && n < 2; i++) {
-    if (items[i].identifier[0] != '\0') {
-      untranslated[n++] = items[i].name;
-    }
-  }
-  auto [add_symbol, subtract_symbol] = bridge_brush_direction_symbols(untranslated[0],
-                                                                   untranslated[1]);
-  if (free) {
-    MEM_delete(items);
-  }
-  const Brush *brush = static_cast<const Brush *>(brush_ptr->data);
-  /* Sculpting adds to the surface or carves into it, drawn by the app as a bulge out or in. */
-  if (mode == CTX_MODE_SCULPT && brush->sculpt_brush_type != SCULPT_BRUSH_TYPE_MASK &&
-      STREQ(untranslated[0], "Add") && STREQ(untranslated[1], "Subtract"))
-  {
-    add_symbol = "bulge.out";
-    subtract_symbol = "bulge.in";
-  }
-  return "{\"brush\":true,\"inverted\":" +
-         std::string((brush->flag & BRUSH_DIR_IN) ? "true" : "false") + ",\"add\":\"" +
-         bridge_json_escape(names[0]) + "\",\"subtract\":\"" + bridge_json_escape(names[1]) +
-         "\",\"addSymbol\":\"" + add_symbol + "\",\"subtractSymbol\":\"" + subtract_symbol +
-         "\",\"smooth\":" + (mode == CTX_MODE_SCULPT ? "true" : "false") + "}";
 }
 
 /** Set the active brush's Direction to its first (\a add) or second choice. */
@@ -2468,82 +2275,15 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
   const BridgeContextStore context_store = bridge_context_push_view3d(C);
   const bool has_view3d_context = CTX_wm_window(C) != nullptr && CTX_wm_area(C) != nullptr &&
                                   CTX_wm_region(C) != nullptr;
-  Scene *scene = has_view3d_context ? CTX_data_scene(C) : nullptr;
-  ToolSettings *tool_settings = scene ? scene->toolsettings : nullptr;
   const eContextObjectMode mode = has_view3d_context ? CTX_data_mode_enum(C) : CTX_MODE_OBJECT;
   const char *mode_string = has_view3d_context ? CTX_data_mode_string(C) : "objectmode";
-  const View3D *view3d = has_view3d_context ? CTX_wm_view3d(C) : nullptr;
-  const char *shading = "solid";
-  if (view3d) {
-    switch (view3d->shading.type) {
-      case OB_WIRE:
-        shading = "wireframe";
-        break;
-      case OB_MATERIAL:
-        shading = "material";
-        break;
-      case OB_RENDER:
-        shading = "rendered";
-        break;
-      default:
-        break;
-    }
-  }
-  std::string object_modes_json = "[]";
-  const char *object_mode = "OBJECT";
-  /* What Rename Active renames, for the native field to start from: the active bone in an
-   * armature's modes, otherwise the active object. */
-  std::string active_name;
-  if (has_view3d_context) {
-    object_modes_json = bridge_object_modes_json(C);
-    if (const Object *active = CTX_data_active_object(C)) {
-      RNA_enum_identifier(rna_enum_object_mode_items, active->mode, &object_mode);
-      active_name = active->id.name + 2;
-    }
-    if (mode == CTX_MODE_POSE) {
-      if (const bPoseChannel *pchan = CTX_data_active_pose_bone(C)) {
-        active_name = pchan->name;
-      }
-    }
-    else if (mode == CTX_MODE_EDIT_ARMATURE) {
-      if (const EditBone *ebone = CTX_data_active_bone(C)) {
-        active_name = ebone->name;
-      }
-    }
-  }
-  const std::string mesh_select_mode = mode == CTX_MODE_EDIT_MESH ?
-                                           bridge_mesh_select_mode_string(tool_settings) :
-                                           "";
-  bToolRef *active_tool = has_view3d_context ? bridge_active_tool(C) : nullptr;
-  const char *active_tool_id = active_tool ? active_tool->idname : "builtin.select_box";
-  std::string tools_json = "[]";
-  std::string panels_json = "null";
   std::string render_json = "null";
-  std::string viewport_json = "null";
   std::string preferences_json = "null";
-  std::string brush_json = "null";
-  std::string quick_actions_json;
 #ifdef WITH_PYTHON
   if (has_view3d_context) {
-    const char *imports[] = {"bpy", "bl_ui", nullptr};
-    /* Dragging with Move and the like selects rather than tweaking, see the function. */
-    BPY_run_string_eval(
-        C, imports, "bl_ui.space_toolsystem_common.native_select_fallback_keep(bpy.context)");
-    bridge_python(C,
-                  "tools",
-                  "bl_ui.space_toolsystem_common.native_toolbar_json(bpy.context)",
-                  tools_json);
     bridge_python(C, "render", "bl_ui.native_render.status_json(bpy.context)", render_json);
-    bridge_python(C, "viewport", "bl_ui.native_render.viewport_json(bpy.context)", viewport_json);
     bridge_python(
         C, "preferences", "bl_ui.native_settings.preferences_json(bpy.context)", preferences_json);
-    bridge_python(C, "brush", "bl_ui.native_brush.brush_json(bpy.context)", brush_json);
-    if (!bridge_constraint_operator(CTX_wm_window(C))) {
-      /* Quick actions for the mode, tool and selection, chosen by `bl_ui.native_actions`. */
-      const std::string expression = "bl_ui.native_actions.actions_json(bpy.context, \"" +
-                                     bridge_json_escape(active_tool_id ? active_tool_id : "") + "\")";
-      bridge_python(C, "actions", expression.c_str(), quick_actions_json);
-    }
     const auto now = std::chrono::steady_clock::now();
     if (bridge_panels_visible && now >= bridge_panels_next_snapshot) {
       /* Scene projection follows the native refresh cadence, not the viewport frame rate. */
@@ -2714,39 +2454,6 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
     }
   }
 #endif
-  const std::vector<BridgeActionItem> actions = has_view3d_context ? bridge_action_items_for_tool(
-                                                                      C, mode, active_tool_id) :
-                                                                  std::vector<BridgeActionItem>();
-  const bool can_undo = has_view3d_context && bridge_undo_available(C);
-  const bool can_redo = has_view3d_context && bridge_undo_available(C, "ED_OT_redo");
-  const std::string settings_json = bridge_transform_settings_json(
-      scene, CTX_data_active_object(C), mode);
-  std::string navigation_json = "null";
-  if (has_view3d_context) {
-    const wmWindow *win = CTX_wm_window(C);
-    ARegion *region = CTX_wm_region(C);
-    rcti visible = *ED_region_visible_rect(region);
-    visible.ymin = std::max(visible.ymin, WM_native_ui_bottom_tray_ymin(win, region));
-    visible.ymax = std::min(visible.ymax, WM_native_ui_top_bar_ymax(win, region));
-    const float width = WM_window_native_pixel_x(win);
-    const float height = WM_window_native_pixel_y(win);
-    const float radius = U.gizmo_size_navigate_v3d * 0.5f * U.scale_factor;
-    const float inset = radius + 10.0f * U.scale_factor;
-    if (width > 0 && height > 0) {
-      /* Match view3d_gizmo_navigate.cc, in normalized window coordinates from the top left.
-       * The native shell can follow the last frame during asynchronous resizing. */
-      /* Over the part of the window a native panel leaves showing, as the native controls
-       * that follow the gizmo are laid out. */
-      const float cover = std::min(bridge_viewport_cover.load(), height * 0.9f);
-      /* In whichever corner Settings has it. */
-      const float x = bridge_navigation_left ? visible.xmin + inset : visible.xmax - inset;
-      const float y = bridge_navigation_top ? visible.ymax - inset : visible.ymin + inset;
-      navigation_json = "[" + bridge_json_number((region->winrct.xmin + x) / width) + "," +
-                        bridge_json_number(1.0f - (region->winrct.ymin + y - cover) /
-                                                      (height - cover)) +
-                        "," + bridge_json_number(radius / width) + "]";
-    }
-  }
   if (!has_view3d_context) {
     bridge_brushes_json = "null";
   }
@@ -2766,104 +2473,15 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
 
   std::string json = "{\"mode\":\"";
   json += bridge_json_escape(mode_string ? mode_string : "objectmode");
-  json += "\",\"shading\":\"";
-  json += shading;
-  json += "\",\"desktop\":";
-  json += bridge_desktop_ui ? "true" : "false";
-  json += ",\"activeName\":\"";
-  json += bridge_json_escape(active_name);
-  json += "\",\"objectMode\":\"";
-  json += bridge_json_escape(object_mode);
-  json += "\",\"modes\":";
-  json += object_modes_json;
-  json += ",\"meshSelectMode\":\"";
-  json += bridge_json_escape(mesh_select_mode);
-  json += "\",\"active\":\"";
-  json += bridge_json_escape(active_tool_id ? active_tool_id : "");
-  json += "\",\"canUndo\":";
-  json += can_undo ? "true" : "false";
-  json += ",\"canRedo\":";
-  json += can_redo ? "true" : "false";
-  /* Which undo step is active: it moves with every change an operator makes, and with undo and
-   * redo, once per action rather than during one. Menus are built from the scene, so the interface
-   * asks for them again when this changes, and only then. */
-  json += ",\"menuState\":\"";
-  if (const wmWindowManager *wm = CTX_wm_manager(C); wm && wm->runtime->undo_stack) {
-    const UndoStack *stack = wm->runtime->undo_stack;
-    json += std::to_string(uintptr_t(stack->step_active)) + ":" +
-            std::to_string(BLI_listbase_count(&stack->steps));
-  }
-  json += "\"";
-  json += ",\"settings\":";
-  json += settings_json;
-  json += ",\"textObject\":";
+  json += "\",\"textObject\":";
   json += has_view3d_context ? bridge_text_object_json(C) : "null";
-  json += ",\"navigationGizmo\":";
-  json += navigation_json;
-  if (view3d && scene) {
-    /* The color the viewport is cleared to, in display space, for chrome that should blend in
-     * with it, such as the Mac window's toolbar. */
-    float background[3];
-    ED_view3d_background_color_get(scene, view3d, background);
-    if (view3d->shading.background_type == V3D_SHADING_BACKGROUND_WORLD && scene->world) {
-      linearrgb_to_srgb_v3_v3(background, background);
-    }
-    json += ",\"viewportBackground\":[" + std::to_string(background[0]) + "," +
-            std::to_string(background[1]) + "," + std::to_string(background[2]) + "]";
-  }
-  json += ",\"tools\":";
-  json += tools_json;
   json += ",\"brushes\":";
   json += bridge_brushes_json;
-  json += ",\"brush\":";
-  json += brush_json;
-  json += ",\"direction\":";
-  json += has_view3d_context ? bridge_direction_json(C, mode) : "null";
-  /* Moving, turning or scaling: the held buttons are Snap and Precision then. */
-  json += ",\"transforming\":";
-  json += bridge_constraint_operator(CTX_wm_window(C)) ? "true" : "false";
-  bool drag_done = false;
-  if (const char *drag_hint = bridge_drag_hint(CTX_wm_window(C), &drag_done)) {
-    json += ",\"dragHint\":{\"text\":\"" + bridge_json_escape(IFACE_(drag_hint)) + "\",\"done\":" +
-            (drag_done ? "true" : "false") + "}";
-  }
-  json += ",\"panels\":";
-  json += panels_json;
   json += ",\"render\":";
   json += render_json;
-  json += ",\"viewport\":";
-  json += viewport_json;
   json += ",\"preferences\":";
   json += preferences_json;
-  if (actions.empty() && !quick_actions_json.empty()) {
-    json += ",\"actions\":" + quick_actions_json + "}";
-    return json;
-  }
-  json += ",\"actions\":[";
-
-  bool needs_comma = false;
-  for (const BridgeActionItem &action : actions) {
-    if (needs_comma) {
-      json += ",";
-    }
-    needs_comma = true;
-    json += "{\"title\":\"";
-    json += bridge_json_escape(action.title);
-    json += "\",\"operator\":\"";
-    json += bridge_json_escape(action.op_name);
-    json += "\",\"symbol\":\"";
-    json += bridge_json_escape(action.symbol);
-    json += "\",\"property\":\"";
-    json += bridge_json_escape(action.prop_name ? action.prop_name : "");
-    json += "\",\"value\":\"";
-    json += bridge_json_escape(action.prop_value ? action.prop_value : "");
-    json += "\",\"key\":\"";
-    json += bridge_json_escape(action.key ? action.key : "");
-    json += "\",\"selected\":";
-    json += action.selected ? "true" : "false";
-    json += "}";
-  }
-  json += "]}";
+  json += "}";
   return json;
 }
 
@@ -2993,7 +2611,792 @@ std::string bridge_json_number(const double value)
   return std::isfinite(value) ? fmt::format("{}", value) : "0";
 }
 
+/* -------------------------------------------------------------------- */
+/** \name The Toolbar View
+ *
+ * What the interface shows around the 3D viewport, see `WM_native_ui_views.hh`: the mode, tools,
+ * undo, transform settings, the brush's direction and values, quick actions, and where Blender
+ * draws what the interface keeps clear of. Nodes keyed as below; their commands run as the
+ * settings of the same names did.
+ * \{ */
+
+namespace views = wm::native_ui;
+using views::NodeFields;
+using views::NodeId;
+using ViewBuffer = flatbuffers::FlatBufferBuilder;
+using OptionOffsets = std::vector<flatbuffers::Offset<views::protocol::Option>>;
+/** Values of a choice and their labels. */
+using OptionLabels = Span<std::pair<const char *, const char *>>;
+
+/** A JSON value a Python expression gives, or null. */
+std::shared_ptr<io::serialize::Value> bridge_python_value(bContext *C,
+                                                         const char *part,
+                                                         const char *expression)
+{
+#ifdef WITH_PYTHON
+  std::string json;
+  if (!bridge_python(C, part, expression, json)) {
+    return nullptr;
+  }
+  std::istringstream stream(json);
+  return io::serialize::JsonFormatter().deserialize(stream);
+#else
+  UNUSED_VARS(C, part, expression);
+  return nullptr;
+#endif
+}
+
+double bridge_number(const io::serialize::DictionaryValue &dictionary,
+                     const StringRef key,
+                     const double fallback)
+{
+  if (const std::optional<double> value = dictionary.lookup_double(key)) {
+    return *value;
+  }
+  if (const std::optional<int64_t> value = dictionary.lookup_int(key)) {
+    return double(*value);
+  }
+  return fallback;
+}
+
+bool bridge_flag(const io::serialize::DictionaryValue &dictionary, const StringRef key)
+{
+  const std::shared_ptr<io::serialize::Value> *value = dictionary.lookup(key);
+  const io::serialize::BooleanValue *flag = value ? (*value)->as_boolean_value() : nullptr;
+  return flag && flag->value();
+}
+
+std::string_view bridge_text(const io::serialize::DictionaryValue &dictionary, const StringRef key)
+{
+  const std::optional<StringRefNull> value = dictionary.lookup_str(key);
+  return value ? std::string_view(*value) : std::string_view();
+}
+
+flatbuffers::Offset<views::protocol::Data> bridge_data(ViewBuffer &buffer, const bool value)
+{
+  return views::protocol::CreateData(buffer,
+                                     views::protocol::Value::BoolValue,
+                                     views::protocol::CreateBoolValue(buffer, value).Union());
+}
+
+flatbuffers::Offset<views::protocol::Data> bridge_data(ViewBuffer &buffer, const std::string_view value)
+{
+  return views::protocol::CreateData(
+      buffer,
+      views::protocol::Value::TextValue,
+      views::protocol::CreateTextValue(buffer, buffer.CreateString(value)).Union());
+}
+
+flatbuffers::Offset<views::protocol::Data> bridge_data(ViewBuffer &buffer, const Span<double> values)
+{
+  return views::protocol::CreateData(
+      buffer,
+      views::protocol::Value::FloatsValue,
+      views::protocol::CreateFloatsValue(buffer, buffer.CreateVector(values.data(), values.size()))
+          .Union());
+}
+
+/** Options of a choice from a table of values and labels. */
+OptionOffsets bridge_options(ViewBuffer &buffer, const OptionLabels items)
+{
+  OptionOffsets options;
+  for (const auto &[value, label] : items) {
+    options.push_back(views::protocol::CreateOptionDirect(buffer, value, IFACE_(label)));
+  }
+  return options;
+}
+
+/** The tools of the mode, as `native_toolbar_json` lists them: a choice for each, of the tools
+ * of its group, and lines between sets of them. */
+void bridge_tools_build(bContext *C, views::ViewBuilder &builder, const NodeId top)
+{
+  using namespace io::serialize;
+#ifdef WITH_PYTHON
+  const char *imports[] = {"bpy", "bl_ui", nullptr};
+  /* Dragging with Move and the like selects rather than tweaking, see the function. */
+  BPY_run_string_eval(
+      C, imports, "bl_ui.space_toolsystem_common.native_select_fallback_keep(bpy.context)");
+#endif
+  const std::shared_ptr<Value> tools = bridge_python_value(
+      C, "tools", "bl_ui.space_toolsystem_common.native_toolbar_json(bpy.context)");
+  const NodeId list = builder.add(top, "tools", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return views::protocol::CreateGroup(buffer);
+  });
+  const ArrayValue *array = tools ? tools->as_array_value() : nullptr;
+  if (array == nullptr) {
+    return;
+  }
+  int separators = 0;
+  for (const std::shared_ptr<Value> &item : array->elements()) {
+    const DictionaryValue *tool = item->as_dictionary_value();
+    if (tool == nullptr) {
+      builder.add(list,
+                  "separator:" + std::to_string(separators++),
+                  [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+                    return views::protocol::CreateSeparator(buffer);
+                  });
+      continue;
+    }
+    const std::string_view group = bridge_text(*tool, "group");
+    const std::string key = group.empty() ? "tool:" + std::string(bridge_text(*tool, "id")) :
+                                            "group:" + std::string(group);
+    builder.add(list, key, [&](ViewBuffer &buffer, NodeFields &fields) {
+      fields.label = bridge_text(*tool, "title");
+      fields.icon = bridge_text(*tool, "icon");
+      fields.description = bridge_text(*tool, "description");
+      /* A group's tools, with headings without a value between sets of them; a tool alone is a
+       * group of one. */
+      OptionOffsets options;
+      const ArrayValue *children = tool->lookup_array("children");
+      if (children == nullptr) {
+        options.push_back(views::protocol::CreateOptionDirect(buffer,
+                                                              bridge_text(*tool, "id").data(),
+                                                              fields.label.data(),
+                                                              fields.icon.data(),
+                                                              nullptr,
+                                                              fields.description.data()));
+      }
+      else {
+        for (const std::shared_ptr<Value> &child : children->elements()) {
+          const DictionaryValue *member = child->as_dictionary_value();
+          options.push_back(
+              member ? views::protocol::CreateOptionDirect(buffer,
+                                                           bridge_text(*member, "id").data(),
+                                                           bridge_text(*member, "title").data(),
+                                                           bridge_text(*member, "icon").data(),
+                                                           nullptr,
+                                                           bridge_text(*member, "description").data()) :
+                       views::protocol::CreateOptionDirect(buffer));
+        }
+      }
+      return views::protocol::CreateChoiceDirect(buffer, bridge_text(*tool, "id").data(), &options);
+    });
+  }
+}
+
+/** The active brush's values, as `bl_ui.native_brush` reads them: `brush:size` and so on. */
+void bridge_brush_build(bContext *C, views::ViewBuilder &builder, const NodeId top)
+{
+  using namespace io::serialize;
+  const std::shared_ptr<Value> value = bridge_python_value(
+      C, "brush", "bl_ui.native_brush.brush_json(bpy.context)");
+  const DictionaryValue *brush = value ? value->as_dictionary_value() : nullptr;
+  if (brush == nullptr) {
+    return;
+  }
+  for (const char *name : {"size", "strength", "weight"}) {
+    const DictionaryValue *setting = brush->lookup_dict(name);
+    if (setting == nullptr) {
+      continue;
+    }
+    builder.add(top, std::string("brush:") + name, [&](ViewBuffer &buffer, NodeFields &fields) {
+      const bool pixels = bridge_flag(*setting, "pixels");
+      fields.label = bridge_text(*setting, "label");
+      return views::protocol::CreateNumberDirect(
+          buffer,
+          bridge_number(*setting, "value", 0.0),
+          pixels,
+          STREQ(name, "size") ? views::protocol::NumberKind::Distance :
+                                views::protocol::NumberKind::Factor,
+          -std::numeric_limits<double>::infinity(),
+          std::numeric_limits<double>::infinity(),
+          bridge_number(*setting, "min", 0.0),
+          bridge_number(*setting, "max", 1.0),
+          0.0,
+          3,
+          true,
+          views::protocol::Scale::Linear,
+          pixels ? "px" : nullptr,
+          bridge_number(*setting, "default", 0.0));
+    });
+  }
+  if (const ArrayValue *color = brush->lookup_array("color")) {
+    builder.add(top, "brush:color", [&](ViewBuffer &buffer, NodeFields &fields) {
+      fields.label = IFACE_("Color");
+      std::vector<double> values;
+      for (const std::shared_ptr<Value> &component : color->elements()) {
+        values.push_back(component->as_double_value() ? component->as_double_value()->value() :
+                         component->as_int_value()     ? double(component->as_int_value()->value()) :
+                                                         0.0);
+      }
+      return views::protocol::CreateColorDirect(buffer, &values);
+    });
+  }
+}
+
+/** Which way brushes stroke, in modes that stroke them: `direction`, a choice of the brush's
+ * Direction, its options' icons symbols for them; without options for a brush that has none, and
+ * not enabled where there is nothing to choose, as painting colors. `smooth`: holding both
+ * directions smooths, in Sculpt Mode. None where the selection is added to or subtracted from
+ * instead. */
+void bridge_direction_build(bContext *C,
+                            const eContextObjectMode mode,
+                            views::ViewBuilder &builder,
+                            const NodeId top)
+{
+  const auto hidden = [&](const bool smooth) {
+    builder.add(top, "direction", [](ViewBuffer &buffer, NodeFields &fields) {
+      fields.enabled = false;
+      return views::protocol::CreateChoiceDirect(buffer);
+    });
+    if (smooth) {
+      builder.add(top, "smooth", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+        return bridge_data(buffer, true);
+      });
+    }
+  };
+  if (!bridge_mode_strokes(mode)) {
+    /* Drawing Grease Pencil strokes, and the tools that never select, such as the 3D Cursor,
+     * have nothing to add to or subtract from. */
+    const bToolRef *tref = WM_toolsystem_ref_from_context(C);
+    const StringRef tool = tref ? StringRef(tref->idname) : StringRef();
+    if (mode == CTX_MODE_PAINT_GREASE_PENCIL ||
+        ELEM(tool, "builtin.cursor", "builtin.measure") || tool.startswith("builtin.annotate") ||
+        tool.startswith("builtin.primitive_"))
+    {
+      hidden(false);
+    }
+    return;
+  }
+  std::optional<PointerRNA> brush_ptr = bridge_brush_direction_ptr(C);
+  if (!brush_ptr) {
+    const bool colors = ELEM(mode,
+                             CTX_MODE_SCULPT,
+                             CTX_MODE_PAINT_TEXTURE,
+                             CTX_MODE_PAINT_VERTEX,
+                             CTX_MODE_VERTEX_GREASE_PENCIL);
+    if (colors) {
+      hidden(mode == CTX_MODE_SCULPT);
+    }
+    else {
+      /* No brush to stroke with. */
+      builder.add(top, "direction", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+        return views::protocol::CreateChoiceDirect(buffer);
+      });
+    }
+    return;
+  }
+  const Brush *brush = static_cast<const Brush *>(brush_ptr->data);
+  builder.add(top, "direction", [&](ViewBuffer &buffer, NodeFields &fields) {
+    PropertyRNA *prop = RNA_struct_find_property(&*brush_ptr, "direction");
+    fields.label = IFACE_("Direction");
+    /* Its two choices, named as the brush names them (such as Inflate and Deflate), with symbols
+     * by their untranslated names, one mirroring the other. */
+    const EnumPropertyItem *items = nullptr;
+    int count = 0;
+    bool free = false;
+    std::vector<std::pair<std::string, std::string>> choices;
+    RNA_property_enum_items_gettexted(C, &*brush_ptr, prop, &items, &count, &free);
+    for (int i = 0; i < count && choices.size() < 2; i++) {
+      if (items[i].identifier[0] != '\0') {
+        choices.emplace_back(items[i].identifier, items[i].name);
+      }
+    }
+    if (free) {
+      MEM_delete(items);
+    }
+    const char *untranslated[2] = {"", ""};
+    RNA_property_enum_items(C, &*brush_ptr, prop, &items, &count, &free);
+    for (int i = 0, n = 0; i < count && n < 2; i++) {
+      if (items[i].identifier[0] != '\0') {
+        untranslated[n++] = items[i].name;
+      }
+    }
+    auto [add_symbol, subtract_symbol] = bridge_brush_direction_symbols(untranslated[0],
+                                                                        untranslated[1]);
+    if (free) {
+      MEM_delete(items);
+    }
+    /* Sculpting adds to the surface or carves into it, drawn as a bulge out or in. */
+    if (mode == CTX_MODE_SCULPT && brush->sculpt_brush_type != SCULPT_BRUSH_TYPE_MASK &&
+        STREQ(untranslated[0], "Add") && STREQ(untranslated[1], "Subtract"))
+    {
+      add_symbol = "bulge.out";
+      subtract_symbol = "bulge.in";
+    }
+    OptionOffsets options;
+    for (size_t i = 0; i < choices.size(); i++) {
+      options.push_back(views::protocol::CreateOptionDirect(buffer,
+                                                            choices[i].first.c_str(),
+                                                            choices[i].second.c_str(),
+                                                            i == 0 ? add_symbol : subtract_symbol));
+    }
+    const char *value = nullptr;
+    RNA_property_enum_identifier(
+        C, &*brush_ptr, prop, RNA_property_enum_get(&*brush_ptr, prop), &value);
+    return views::protocol::CreateChoiceDirect(buffer, value, &options);
+  });
+  if (mode == CTX_MODE_SCULPT) {
+    builder.add(top, "smooth", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      return bridge_data(buffer, true);
+    });
+  }
+}
+
+/** Transform orientation, pivot, snapping, proportional editing and the mode's mirror axes. */
+void bridge_transform_build(const Scene *scene,
+                            Object *ob,
+                            const eContextObjectMode mode,
+                            views::ViewBuilder &builder,
+                            const NodeId top)
+{
+  if (!scene || !scene->toolsettings) {
+    return;
+  }
+  const ToolSettings *settings = scene->toolsettings;
+  const auto choice = [&](const char *key,
+                          const char *label,
+                          const char *value,
+                          const OptionLabels items) {
+    builder.add(top, key, [&](ViewBuffer &buffer, NodeFields &fields) {
+      fields.label = IFACE_(label);
+      OptionOffsets options = bridge_options(buffer, items);
+      return views::protocol::CreateChoiceDirect(buffer, value, &options);
+    });
+  };
+  static const std::pair<const char *, const char *> orientations[] = {
+      {"global", "Global"},
+      {"local", "Local"},
+      {"normal", "Normal"},
+      {"gimbal", "Gimbal"},
+      {"view", "View"},
+      {"cursor", "Cursor"},
+      {"parent", "Parent"},
+      {"custom", "Custom"}};
+  static const std::pair<const char *, const char *> pivots[] = {
+      {"bounds", "Bounding Box Center"},
+      {"cursor", "3D Cursor"},
+      {"individual", "Individual Origins"},
+      {"median", "Median Point"},
+      {"active", "Active Element"}};
+  static const std::pair<const char *, const char *> snaps[] = {{"off", "Off"},
+                                                                {"increment", "Increment"},
+                                                                {"grid", "Grid"},
+                                                                {"vertex", "Vertex"},
+                                                                {"edge", "Edge"},
+                                                                {"face", "Face"},
+                                                                {"volume", "Volume"},
+                                                                {"mixed", "Mixed"}};
+  static const std::pair<const char *, const char *> proportionals[] = {
+      {"off", "Off"}, {"on", "On"}, {"connected", "Connected"}, {"projected", "Projected"}};
+  choice("orientation",
+         "Transform Orientation",
+         bridge_orientation_id(BKE_scene_orientation_slot_get_index(
+             &scene->orientation_slots[SCE_ORIENT_DEFAULT])),
+         OptionLabels(orientations, std::size(orientations)));
+  choice("pivot", "Pivot Point", bridge_pivot_id(settings->transform_pivot_point), OptionLabels(pivots, std::size(pivots)));
+  choice("snap", "Snapping", bridge_snap_id(settings), OptionLabels(snaps, std::size(snaps)));
+  choice("proportional",
+         "Proportional Editing",
+         bridge_proportional_id(settings, mode),
+         OptionLabels(proportionals, std::size(proportionals)));
+  std::optional<BridgeMirror> mirror = bridge_mirror(ob, mode);
+  if (!mirror) {
+    return;
+  }
+  /* The axes there are, and which of them mirror, separated by commas. */
+  builder.add(top, "mirror", [&](ViewBuffer &buffer, NodeFields &fields) {
+    fields.label = IFACE_("Mirror");
+    OptionOffsets options;
+    std::string value;
+    for (const char *axis = mirror->letters; *axis; axis++) {
+      const char name[2] = {*axis, '\0'};
+      const char label[2] = {char(toupper(*axis)), '\0'};
+      options.push_back(views::protocol::CreateOptionDirect(buffer, name, label));
+      if (RNA_boolean_get(&mirror->axes, (std::string(mirror->prefix) + *axis).c_str())) {
+        value += value.empty() ? "" : ",";
+        value += *axis;
+      }
+    }
+    return views::protocol::CreateChoiceDirect(
+        buffer, value.c_str(), &options, views::protocol::ChoiceStyle::Expanded, true);
+  });
+  if (mirror->topology) {
+    builder.add(top, "mirror_topology", [&](ViewBuffer &buffer, NodeFields &fields) {
+      fields.label = IFACE_("Topology Mirror");
+      return views::protocol::CreateToggle(
+          buffer, RNA_boolean_get(&*mirror->topology, "use_mirror_topology"));
+    });
+  }
+}
+
+/** Quick actions for the mode, tool and selection, as `bl_ui.native_actions` chooses them; or
+ * the axes a move, turn or scale running is constrained to. */
+void bridge_actions_build(bContext *C, const char *tool, views::ViewBuilder &builder, const NodeId top)
+{
+  using namespace io::serialize;
+  const NodeId row = builder.add(top, "actions", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return views::protocol::CreateGroup(buffer, views::protocol::Layout::Row);
+  });
+  if (wmOperator *op = bridge_constraint_operator(CTX_wm_window(C))) {
+    int axes;
+    blender::ed::transform::modal_constraint_get(op, axes);
+    for (int axis = 0; axis < 3; axis++) {
+      const char *name = axis == 0 ? "X" : axis == 1 ? "Y" : "Z";
+      builder.add(row, std::string("axis:") + name, [&](ViewBuffer &buffer, NodeFields &fields) {
+        fields.label = name;
+        return views::protocol::CreateButtonDirect(buffer,
+                                                   views::protocol::ButtonStyle::Normal,
+                                                   nullptr,
+                                                   nullptr,
+                                                   name,
+                                                   (axes & (1 << axis)) != 0);
+      });
+    }
+    return;
+  }
+  const std::string expression = "bl_ui.native_actions.actions_json(bpy.context, \"" +
+                                 bridge_json_escape(tool ? tool : "") + "\")";
+  const std::shared_ptr<Value> actions = bridge_python_value(C, "actions", expression.c_str());
+  const ArrayValue *array = actions ? actions->as_array_value() : nullptr;
+  if (array == nullptr) {
+    return;
+  }
+  for (const std::shared_ptr<Value> &item : array->elements()) {
+    const DictionaryValue *action = item->as_dictionary_value();
+    if (action == nullptr) {
+      continue;
+    }
+    builder.add(row,
+                "action:" + std::string(bridge_text(*action, "action")),
+                [&](ViewBuffer &buffer, NodeFields &fields) {
+                  fields.label = bridge_text(*action, "title");
+                  fields.icon = bridge_text(*action, "icon");
+                  return views::protocol::CreateButtonDirect(
+                      buffer,
+                      views::protocol::ButtonStyle::Normal,
+                      bridge_text(*action, "operator").data(),
+                      nullptr,
+                      nullptr,
+                      bridge_flag(*action, "selected"));
+                });
+  }
+}
+
+void bridge_toolbar_view_build(bContext *C,
+                               const views::Params & /*params*/,
+                               views::ViewData * /*data*/,
+                               views::ViewBuilder &builder)
+{
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  WM_apple_ios_finger_tweak_mode_update(C);
+#endif
+  const bool has_view3d = CTX_wm_window(C) && CTX_wm_area(C) && CTX_wm_region(C);
+  Scene *scene = has_view3d ? CTX_data_scene(C) : nullptr;
+  ToolSettings *tool_settings = scene ? scene->toolsettings : nullptr;
+  const eContextObjectMode mode = has_view3d ? CTX_data_mode_enum(C) : CTX_MODE_OBJECT;
+  const char *mode_string = has_view3d ? CTX_data_mode_string(C) : nullptr;
+  const View3D *view3d = has_view3d ? CTX_wm_view3d(C) : nullptr;
+  Object *active = has_view3d ? CTX_data_active_object(C) : nullptr;
+
+  const NodeId top = builder.top("toolbar", [&](ViewBuffer &buffer, NodeFields &fields) {
+    /* Blender's context mode, such as `objectmode` or `edit_mesh`. */
+    fields.label = mode_string ? mode_string : "objectmode";
+    return views::protocol::CreateGroup(buffer);
+  });
+  const auto data = [&](const char *key, const auto &value) {
+    builder.add(top, key, [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      return bridge_data(buffer, value);
+    });
+  };
+  data("desktop", bridge_desktop_ui.load());
+
+  if (has_view3d) {
+    /* The modes the active object has, as Blender's header lists them. */
+    builder.add(top, "mode", [&](ViewBuffer &buffer, NodeFields &fields) {
+      fields.label = IFACE_("Mode");
+      const char *current = "OBJECT";
+      if (active) {
+        RNA_enum_identifier(rna_enum_object_mode_items, active->mode, &current);
+      }
+      OptionOffsets options;
+      for (const EnumPropertyItem *item = rna_enum_object_mode_items; item->identifier; item++) {
+        if (!item->identifier[0] ||
+            !(active ? ed::object::mode_compat_test(active, eObjectMode(item->value)) :
+                       item->value == OB_MODE_OBJECT))
+        {
+          continue;
+        }
+        const char *icon = nullptr;
+        RNA_enum_identifier(rna_enum_icon_items, item->icon, &icon);
+        options.push_back(views::protocol::CreateOptionDirect(
+            buffer, item->identifier, IFACE_(item->name), icon));
+      }
+      return views::protocol::CreateChoiceDirect(buffer, current, &options);
+    });
+    if (mode == CTX_MODE_EDIT_MESH) {
+      builder.add(top, "select_mode", [&](ViewBuffer &buffer, NodeFields &fields) {
+        fields.label = IFACE_("Select Mode");
+        static const std::pair<const char *, const char *> items[] = {
+            {"VERT", "Vertex"}, {"EDGE", "Edge"}, {"FACE", "Face"}};
+        OptionOffsets options = bridge_options(buffer, OptionLabels(items, std::size(items)));
+        return views::protocol::CreateChoiceDirect(
+            buffer,
+            bridge_mesh_select_mode_string(tool_settings).c_str(),
+            &options,
+            views::protocol::ChoiceStyle::Expanded);
+      });
+    }
+    /* What Rename Active renames: the active bone in an armature's modes, otherwise the active
+     * object. */
+    std::string active_name = active ? active->id.name + 2 : "";
+    if (mode == CTX_MODE_POSE) {
+      if (const bPoseChannel *pchan = CTX_data_active_pose_bone(C)) {
+        active_name = pchan->name;
+      }
+    }
+    else if (mode == CTX_MODE_EDIT_ARMATURE) {
+      if (const EditBone *ebone = CTX_data_active_bone(C)) {
+        active_name = ebone->name;
+      }
+    }
+    builder.add(top, "active_name", [&](ViewBuffer &buffer, NodeFields &fields) {
+      fields.label = IFACE_("Name");
+      fields.enabled = active != nullptr;
+      return views::protocol::CreateTextFieldDirect(buffer, active_name.c_str());
+    });
+  }
+  if (view3d) {
+    static const char *shadings[] = {"wireframe", "solid", "material", "rendered"};
+    const int shading = ELEM(view3d->shading.type, OB_WIRE, OB_MATERIAL, OB_RENDER) ?
+                            (view3d->shading.type == OB_WIRE     ? 0 :
+                             view3d->shading.type == OB_MATERIAL ? 2 :
+                                                                   3) :
+                            1;
+    data("shading", std::string_view(shadings[shading]));
+  }
+
+  bToolRef *active_tool = has_view3d ? bridge_active_tool(C) : nullptr;
+  const char *active_tool_id = active_tool ? active_tool->idname : "builtin.select_box";
+  if (has_view3d) {
+    bridge_tools_build(C, builder, top);
+  }
+  data("active_tool", std::string_view(active_tool_id));
+
+  for (const char *name : {"undo", "redo"}) {
+    builder.add(top, name, [&](ViewBuffer &buffer, NodeFields &fields) {
+      const char *op_name = STREQ(name, "undo") ? "ED_OT_undo" : "ED_OT_redo";
+      fields.label = STREQ(name, "undo") ? IFACE_("Undo") : IFACE_("Redo");
+      fields.enabled = has_view3d && bridge_undo_available(C, op_name);
+      return views::protocol::CreateButtonDirect(
+          buffer, views::protocol::ButtonStyle::Normal, op_name);
+    });
+  }
+  /* Which undo step is active: it moves with every change an operator makes, and with undo and
+   * redo, once per action rather than during one. Menus are built from the scene, so the
+   * interface asks for them again when this changes, and only then. */
+  std::string menu_state;
+  if (const wmWindowManager *wm = CTX_wm_manager(C); wm && wm->runtime->undo_stack) {
+    const UndoStack *stack = wm->runtime->undo_stack;
+    menu_state = std::to_string(uintptr_t(stack->step_active)) + ":" +
+                 std::to_string(BLI_listbase_count(&stack->steps));
+  }
+  data("menu_state", std::string_view(menu_state));
+
+  bridge_transform_build(scene, active, mode, builder, top);
+  if (has_view3d) {
+    bridge_direction_build(C, mode, builder, top);
+    bridge_brush_build(C, builder, top);
+  }
+  /* Moving, turning or scaling: the held buttons are Snap and Precision then. */
+  data("transforming", bridge_constraint_operator(CTX_wm_window(C)) != nullptr);
+  bool drag_done = false;
+  if (const char *drag_hint = bridge_drag_hint(CTX_wm_window(C), &drag_done)) {
+    /* A command waiting for a drag in the view, and whether it ends with Done. */
+    builder.add(top, "drag_hint", [&](ViewBuffer &buffer, NodeFields &fields) {
+      fields.label = IFACE_(drag_hint);
+      return bridge_data(buffer, drag_done);
+    });
+  }
+  if (has_view3d) {
+    bridge_actions_build(C, active_tool_id, builder, top);
+  }
+
+  if (has_view3d) {
+    const wmWindow *win = CTX_wm_window(C);
+    ARegion *region = CTX_wm_region(C);
+    rcti visible = *ED_region_visible_rect(region);
+    visible.ymin = std::max(visible.ymin, WM_native_ui_bottom_tray_ymin(win, region));
+    visible.ymax = std::min(visible.ymax, WM_native_ui_top_bar_ymax(win, region));
+    const float width = WM_window_native_pixel_x(win);
+    const float height = WM_window_native_pixel_y(win);
+    const float radius = U.gizmo_size_navigate_v3d * 0.5f * U.scale_factor;
+    const float inset = radius + 10.0f * U.scale_factor;
+    if (width > 0 && height > 0) {
+      /* As `view3d_gizmo_navigate.cc` places it, over the part of the window a panel leaves
+       * showing, in whichever corner Settings has it: its center and radius as fractions of the
+       * window's width and height from the top left. */
+      const float cover = std::min(bridge_viewport_cover.load(), height * 0.9f);
+      const float x = bridge_navigation_left ? visible.xmin + inset : visible.xmax - inset;
+      const float y = bridge_navigation_top ? visible.ymax - inset : visible.ymin + inset;
+      const double gizmo[3] = {(region->winrct.xmin + x) / width,
+                               1.0 - (region->winrct.ymin + y - cover) / (height - cover),
+                               radius / width};
+      data("navigation_gizmo", Span<double>(gizmo, 3));
+    }
+  }
+  if (view3d && scene) {
+    /* The color the viewport is cleared to, in display space, for chrome that should blend in
+     * with it, such as the Mac window's toolbar. */
+    float background[3];
+    ED_view3d_background_color_get(scene, view3d, background);
+    if (view3d->shading.background_type == V3D_SHADING_BACKGROUND_WORLD && scene->world) {
+      linearrgb_to_srgb_v3_v3(background, background);
+    }
+    const double color[3] = {background[0], background[1], background[2]};
+    data("viewport_background", Span<double>(color, 3));
+  }
+  if (has_view3d) {
+    /* The viewport's options, see `bl_ui.native_render.viewport_json`. */
+    using namespace io::serialize;
+    const std::shared_ptr<Value> viewport = bridge_python_value(
+        C, "viewport", "bl_ui.native_render.viewport_json(bpy.context)");
+    if (const DictionaryValue *options = viewport ? viewport->as_dictionary_value() : nullptr) {
+      for (const DictionaryValue::Item &item : options->elements()) {
+        const BooleanValue *value = item.second->as_boolean_value();
+        if (value == nullptr) {
+          continue;
+        }
+        builder.add(top, "viewport:" + item.first, [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+          return views::protocol::CreateToggle(buffer, value->value());
+        });
+      }
+    }
+  }
+}
+
+/** Commands to the toolbar's nodes, as the settings of the same names did. */
+views::CommandResult bridge_toolbar_view_command(bContext *C,
+                                                 const views::Params & /*params*/,
+                                                 views::ViewData * /*data*/,
+                                                 const views::protocol::Command &command,
+                                                 std::string &r_error)
+{
+  const std::string_view target = command.target()->string_view();
+  const views::protocol::TextValue *text_value = command.value_as_TextValue();
+  const std::string text = text_value && text_value->value() ? text_value->value()->str() : "";
+  const auto setting = [&](const char *name, const std::string &value) {
+    bridge_setting_execute(C, BridgeSettingCommand{name, value});
+    return views::CommandResult::Done;
+  };
+  const bool set = command.op() == views::protocol::Op::Set;
+  const bool invoke = command.op() == views::protocol::Op::Invoke;
+  if (set && target == "mode") {
+    bridge_mode_set(C, text.c_str());
+    return views::CommandResult::Done;
+  }
+  if (set && target == "tools") {
+    /* A tool, by its id. */
+    WM_toolsystem_ref_set_by_id(C, text.c_str());
+    return views::CommandResult::Done;
+  }
+  if (set && target == "select_mode") {
+    bridge_mesh_select_mode_set(C, text);
+    return views::CommandResult::Done;
+  }
+  if (set && target == "active_name") {
+    return setting("rename_active", "\"" + bridge_json_escape(text) + "\"");
+  }
+  if (set && ELEM(target, "orientation", "pivot", "snap", "proportional")) {
+    return setting(std::string(target).c_str(), text);
+  }
+  if (set && target == "mirror") {
+    /* The axes to mirror on, each toggled that is not as asked. */
+    std::optional<BridgeMirror> mirror = bridge_mirror(CTX_data_active_object(C),
+                                                       CTX_data_mode_enum(C));
+    if (!mirror) {
+      r_error = "Nothing to mirror";
+      return views::CommandResult::Failed;
+    }
+    for (const char *axis = mirror->letters; *axis; axis++) {
+      const std::string name = mirror->prefix + std::string(1, *axis);
+      const bool wanted = text.find(*axis) != std::string::npos;
+      if (RNA_boolean_get(&mirror->axes, name.c_str()) != wanted) {
+        bridge_rna_undo_push(C, bridge_rna_boolean_set(C, mirror->axes, name.c_str(), wanted));
+      }
+    }
+    return views::CommandResult::Done;
+  }
+  if (set && target == "mirror_topology") {
+    return setting("mirror_topology", "");
+  }
+  if (set && target == "direction") {
+    std::optional<PointerRNA> brush_ptr = bridge_brush_direction_ptr(C);
+    PropertyRNA *prop = brush_ptr ? RNA_struct_find_property(&*brush_ptr, "direction") : nullptr;
+    int value = 0;
+    if (prop == nullptr || !RNA_property_enum_value(C, &*brush_ptr, prop, text.c_str(), &value)) {
+      r_error = "No such direction";
+      return views::CommandResult::Failed;
+    }
+    RNA_property_enum_set(&*brush_ptr, prop, value);
+    RNA_property_update(C, &*brush_ptr, prop);
+    return views::CommandResult::Done;
+  }
+  if (set && StringRef(target).startswith("brush:")) {
+    /* A drag sends many values, and one undo step as it ends. */
+    std::string value;
+    if (const views::protocol::FloatsValue *floats = command.value_as_FloatsValue()) {
+      value = "[";
+      for (const double component : *floats->value()) {
+        value += (value.size() > 1 ? "," : "") + bridge_json_number(component);
+      }
+      value += "]";
+    }
+    else if (const views::protocol::FloatValue *number = command.value_as_FloatValue()) {
+      value = bridge_json_number(number->value());
+    }
+    const bool commit = ELEM(command.phase(), views::protocol::Phase::Once, views::protocol::Phase::End);
+    return setting("native_brush",
+                   "{\"key\":\"" + std::string(target.substr(6)) + "\",\"value\":" + value +
+                       ",\"commit\":" + (commit ? "true" : "false") + "}");
+  }
+  if (set && StringRef(target).startswith("viewport:")) {
+    return setting("viewport_toggle", std::string(target.substr(9)));
+  }
+  if (invoke && ELEM(target, "undo", "redo")) {
+    const char *op_name = target == "undo" ? "ED_OT_undo" : "ED_OT_redo";
+    if (!bridge_undo_available(C, op_name)) {
+      r_error = "Nothing to " + std::string(target);
+      return views::CommandResult::Failed;
+    }
+    return views::operator_run(C, op_name, nullptr, r_error) ? views::CommandResult::Done :
+                                                               views::CommandResult::Failed;
+  }
+  if (invoke && StringRef(target).startswith("action:")) {
+    return setting("native_action", std::string(target.substr(7)));
+  }
+  if (invoke && StringRef(target).startswith("axis:")) {
+    return setting("constraint_axis", std::string(target.substr(5)));
+  }
+  r_error = "Not something the toolbar does";
+  return views::CommandResult::Failed;
+}
+
+/** Commands that change no data an operator running holds, which go ahead of it. */
+bool bridge_toolbar_view_live(const views::protocol::Command &command)
+{
+  const StringRef target = command.target()->string_view();
+  return ELEM(target, "orientation", "pivot", "snap", "proportional", "mirror", "mirror_topology") ||
+         target == "direction" || target.startswith("brush:") || target.startswith("axis:");
+}
+
+/** \} */
+
 }  // namespace
+
+void WM_native_ui_views_register()
+{
+  using namespace wm::native_ui;
+  ViewType toolbar;
+  toolbar.name = "toolbar";
+  /* Describing the tools and quick actions runs Python: on any change, but ten times a second at
+   * most, as during playback. */
+  toolbar.min_interval = 0.1;
+  toolbar.build = bridge_toolbar_view_build;
+  toolbar.command = bridge_toolbar_view_command;
+  toolbar.live = bridge_toolbar_view_live;
+  view_type_add(std::move(toolbar));
+}
 
 void WM_native_ui_starter_library_ensure()
 {
@@ -3068,15 +3471,6 @@ extern "C" void WM_native_ui_setting_enqueue(const char *setting, const char *va
   }
 
   bridge_messages.push(BridgeSettingCommand{setting, value});
-}
-
-extern "C" void WM_native_ui_tool_set_by_id(const char *tool_id)
-{
-  if (tool_id == nullptr || tool_id[0] == '\0') {
-    return;
-  }
-
-  bridge_messages.push(std::string(tool_id));
 }
 
 extern "C" void WM_native_ui_brush_activate(const char *brush_id)
@@ -3812,10 +4206,7 @@ static void bridge_dispatch(bContext *C, BridgeMessage &message)
   std::visit(
       [&](auto &command) {
         using T = std::decay_t<decltype(command)>;
-        if constexpr (std::is_same_v<T, std::string>) {
-          bridge_tool_set_by_id(C, command);
-        }
-        else if constexpr (std::is_same_v<T, BridgeMenuRequest>) {
+        if constexpr (std::is_same_v<T, BridgeMenuRequest>) {
           bridge_dispatch_menu(C, command);
         }
         else if constexpr (std::is_same_v<T, BridgeBrushCommand>) {
@@ -4151,6 +4542,8 @@ void WM_native_ui_flush_commands(bContext *C)
     bridge_navigation_redraw_pending.store(true);
   }
   if (bridge_navigation_redraw_pending.exchange(false)) {
+    /* The navigation gizmo moved, which the toolbar says where it is. */
+    wm::native_ui::view_type_dirty("toolbar");
     const BridgeContextStore context_store = bridge_context_push_view3d(C);
     if (ARegion *region = CTX_wm_region(C)) {
       ED_region_tag_redraw_editor_overlays(region);

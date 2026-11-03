@@ -37,53 +37,38 @@ enum ShellMetrics {
 /** \name Quick actions
  * \{ */
 
-/** A quick action from Blender's toolbar snapshot. */
+/** A quick action, a button of the toolbar's `actions`. */
 struct QuickAction: Identifiable, Equatable {
-  let id: Int
+  /** Its node's key, which runs it. */
+  let id: String
   let title: String
+  /** The operator it runs, for its icon. */
   let operatorName: String
-  let property: String
-  let value: String
   /** An X, Y or Z key while a transform runs, to constrain it to that axis. */
   let key: String
-  /** Chosen and run by `bl_ui.native_actions`, by this identifier. */
-  let action: String
   let icon: String
   let selected: Bool
 
   var axis: Bool { ["X", "Y", "Z"].contains(key) }
 
-  static func list(_ snapshot: [NativeUI.Action]) -> [QuickAction] {
-    snapshot.enumerated().compactMap { index, item in
-      guard !item.title.isEmpty, item.symbol != nil else { return nil }
-      let action = QuickAction(id: index, title: item.title, operatorName: item.`operator` ?? "",
-                               property: item.property ?? "", value: item.value ?? "",
-                               key: item.key ?? "", action: item.action ?? "",
-                               icon: item.icon ?? "", selected: item.selected)
-      return action.operatorName.isEmpty && action.key.isEmpty ? nil : action
+  @MainActor
+  static func list(_ nodes: [NativeNode]) -> [QuickAction] {
+    nodes.compactMap { node in
+      guard let button = node.content(Blender_NativeUI_Button.self), !node.label.isEmpty else { return nil }
+      return QuickAction(id: node.key, title: node.label, operatorName: button.operator_ ?? "",
+                         key: button.key ?? "", icon: node.icon ?? "", selected: button.pressed)
     }
   }
 
   var image: UIImage? {
     if !key.isEmpty { return nil }
-    if !action.isEmpty && !icon.isEmpty { return BlenderIcon.image(icon) }
-    return wm_apple_ios_action_icon(operatorName, property, value)
+    if !icon.isEmpty, let image = BlenderIcon.image(icon) { return image }
+    return wm_apple_ios_action_icon(operatorName, "", "")
   }
 
   @MainActor
   func run(in model: ShellModel) {
-    if !action.isEmpty {
-      Engine.setting("native_action", action)
-    }
-    else if axis {
-      Engine.setting("constraint_axis", key)
-    }
-    else if !key.isEmpty {
-      wm_apple_ios_window_send_key(model.window, key)
-    }
-    else {
-      Operators.run(operatorName, property.isEmpty || value.isEmpty ? [:] : [property: .text(value)])
-    }
+    model.send(id, .invoke)
   }
 
   var axisColor: Color {
@@ -115,7 +100,8 @@ struct QuickActionButton: View {
     .accessibilityLabel(action.axis ? "\(action.key) axis constraint" : action.title)
     .accessibilityValue(action.axis ? (action.selected ? "On" : "Off") : "")
     .accessibilityAddTraits(action.selected ? .isSelected : [])
-    .accessibilityIdentifier(action.action.isEmpty ? action.operatorName : "blender.action.\(action.action)")
+    .accessibilityIdentifier(action.id.hasPrefix("action:") ? "blender.action.\(action.id.dropFirst("action:".count))" :
+                               action.operatorName)
   }
 
   private var glass: PanelGlass {
@@ -183,7 +169,8 @@ struct QuickActionBarItem: View {
     .accessibilityLabel(action.axis ? "\(action.key) axis constraint" : action.title)
     .accessibilityValue(action.axis ? (action.selected ? "On" : "Off") : "")
     .accessibilityAddTraits(action.selected ? .isSelected : [])
-    .accessibilityIdentifier(action.action.isEmpty ? action.operatorName : "blender.action.\(action.action)")
+    .accessibilityIdentifier(action.id.hasPrefix("action:") ? "blender.action.\(action.id.dropFirst("action:".count))" :
+                               action.operatorName)
   }
 
   @ViewBuilder

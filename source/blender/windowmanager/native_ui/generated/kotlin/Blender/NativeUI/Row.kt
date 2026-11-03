@@ -63,6 +63,20 @@ class Row : Table() {
         }
     val previewAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(10, 1)
     fun previewInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 10, 1)
+    /**
+     * The heading it is listed under, such as a brush's catalog.
+     */
+    val section : String?
+        get() {
+            val o = __offset(12)
+            return if (o != 0) {
+                __string(o + bb_pos)
+            } else {
+                null
+            }
+        }
+    val sectionAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(12, 1)
+    fun sectionInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 12, 1)
     companion object {
         fun validateVersion() = Constants.FLATBUFFERS_25_2_10()
         fun getRootAsRow(_bb: ByteBuffer): Row = getRootAsRow(_bb, Row())
@@ -70,19 +84,21 @@ class Row : Table() {
             _bb.order(ByteOrder.LITTLE_ENDIAN)
             return (obj.__assign(_bb.getInt(_bb.position()) + _bb.position(), _bb))
         }
-        fun createRow(builder: FlatBufferBuilder, depth: Int, selected: Boolean, renamable: Boolean, previewOffset: Int) : Int {
-            builder.startTable(4)
+        fun createRow(builder: FlatBufferBuilder, depth: Int, selected: Boolean, renamable: Boolean, previewOffset: Int, sectionOffset: Int) : Int {
+            builder.startTable(5)
+            addSection(builder, sectionOffset)
             addPreview(builder, previewOffset)
             addDepth(builder, depth)
             addRenamable(builder, renamable)
             addSelected(builder, selected)
             return endRow(builder)
         }
-        fun startRow(builder: FlatBufferBuilder) = builder.startTable(4)
+        fun startRow(builder: FlatBufferBuilder) = builder.startTable(5)
         fun addDepth(builder: FlatBufferBuilder, depth: Int) = builder.addInt(0, depth, 0)
         fun addSelected(builder: FlatBufferBuilder, selected: Boolean) = builder.addBoolean(1, selected, false)
         fun addRenamable(builder: FlatBufferBuilder, renamable: Boolean) = builder.addBoolean(2, renamable, false)
         fun addPreview(builder: FlatBufferBuilder, preview: Int) = builder.addOffset(3, preview, 0)
+        fun addSection(builder: FlatBufferBuilder, section: Int) = builder.addOffset(4, section, 0)
         fun endRow(builder: FlatBufferBuilder) : Int {
             val o = builder.endTable()
             return o

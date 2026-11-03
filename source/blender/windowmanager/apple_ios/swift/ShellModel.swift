@@ -3,25 +3,74 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 /** \file
- * The document window's state, from the toolbar snapshot Blender publishes: its mode, tools,
- * quick actions, brushes and undo. Each part changes on its own, so the views showing one part
- * do not redraw when another changes. Edits go to Blender's inbox; the next snapshot confirms
- * them.
+ * The document window's state: around the viewport, from the `toolbar` view Blender sends (see
+ * `bridge_toolbar_view_build`), its mode, tools, quick actions, brush and undo, each read from its
+ * own node, so the views showing one part do not redraw when another changes; and the window's
+ * own layout. Edits are commands to the view's nodes.
  */
 
 import SwiftUI
 import UIKit
 
-extension NativeUI.TransformSettings {
-  /** By the names the top bar's menus look them up by, which are the snapshot's. */
-  var byName: [String: String] {
-    var names = ["orientation": orientation.rawValue, "pivot": pivot.rawValue, "snap": snap.rawValue,
-                 "proportional": proportional.rawValue]
-    if let mirrorAxes { names["mirror_axes"] = mirrorAxes }
-    if let mirror { names["mirror"] = mirror }
-    if let mirrorTopology { names["mirror_topology"] = mirrorTopology.rawValue }
-    return names
-  }
+/** A tool of the toolbar, or a group of them shown as the one used last. */
+struct ToolItem: Equatable {
+  var id: String
+  var title: String?
+  var icon: String?
+  var symbol: String? = ""
+  var description: String?
+  /** The group's first tool, which names the group. */
+  var group: String?
+  /** The group's tools, with nils between sets of them. */
+  var children: [ToolItem?] = []
+}
+
+/** A mode the active object can switch to. */
+struct ModeItem: Equatable {
+  let id: String
+  let label: String?
+  let icon: String?
+}
+
+/** Which way brushes stroke: their two directions, or none to choose. */
+struct BrushDirection: Equatable {
+  /** No direction to show. */
+  var hidden = false
+  /** A brush is active at all. */
+  var brush = false
+  var inverted = false
+  var add: String?
+  var subtract: String?
+  var addSymbol: String?
+  var subtractSymbol: String?
+  /** Holding both smooths, as in Sculpt Mode. */
+  var smooth = false
+}
+
+/** A command waiting for a drag in the view, as Box Select chosen from the menu bar. */
+struct DragHint: Equatable {
+  let text: String
+  /** It ends with Done rather than after one drag. */
+  let done: Bool
+}
+
+/** One of the brush's values, such as its size. */
+struct BrushValue: Equatable {
+  var value: Double
+  var min: Double
+  var max: Double
+  var defaultValue: Double
+  /** Pixels on screen, rather than a distance in the scene. */
+  var pixels: Bool
+  var label: String
+}
+
+/** The brush's size, strength, weight and color, where it has them. */
+struct BrushSettings: Equatable {
+  var values: [String: BrushValue] = [:]
+  var color: [Double]?
+
+  subscript(_ key: String) -> BrushValue? { values[key] }
 }
 
 @MainActor
@@ -29,31 +78,109 @@ extension NativeUI.TransformSettings {
 final class ShellModel {
   /** Blender's window, `GHOST_WindowIOS *`, until Blender closes it. */
   @ObservationIgnored var window: UnsafeMutableRawPointer?
+  /** Blender's state around the viewport. */
+  @ObservationIgnored let toolbar = NativeViews.shared.subscribe("toolbar")
 
-  /** The editing mode, such as `object`, `mesh_edit` or `sculpt`. */
-  private(set) var mode = ""
+  /** A node of the toolbar, observed as it comes and goes. */
+  private func node(_ key: String) -> NativeNode? {
+    guard let top = toolbar.top else { return nil }
+    _ = top.children
+    return toolbar.node(key)
+  }
+
+  private func data(_ key: String) -> Blender_NativeUI_Data? { node(key)?.content(Blender_NativeUI_Data.self) }
+  private func flag(_ key: String) -> Bool { data(key)?.value(type: Blender_NativeUI_BoolValue.self)?.value ?? false }
+  private func text(_ key: String) -> String? { data(key)?.value(type: Blender_NativeUI_TextValue.self)?.value }
+  private func floats(_ key: String) -> [Double] {
+    guard let value = data(key)?.value(type: Blender_NativeUI_FloatsValue.self) else { return [] }
+    return (0..<value.valueCount).map { value.value(at: $0) }
+  }
+
+  /** Send a command to one of the toolbar's nodes. */
+  func send(_ key: String, _ op: Blender_NativeUI_Op, _ value: NativeValue? = nil, phase: NativePhase = .once) {
+    NativeViews.shared.send(toolbar, target: key, op: op, value: value, phase: phase)
+  }
+
+  /** The editing mode, such as `objectmode`, `edit_mesh` or `sculpt`. */
+  var mode: String { toolbar.top?.label ?? "" }
   /** Blender's tools for the mode, in groups: `nil` separates two groups. */
-  private(set) var tools: [NativeUI.Tool?] = []
-  private(set) var activeTool = ""
+  var tools: [ToolItem?] {
+    guard let list = node("tools") else { return [] }
+    return toolbar.children(of: list).map { node in
+      guard let choice = node.choice else { return nil }
+      let options = choice.allOptions
+      let item = ToolItem(id: choice.value ?? "", title: node.label, icon: node.icon,
+                          description: node.node.description)
+      guard node.key.hasPrefix("group:") else { return item }
+      var group = item
+      group.group = String(node.key.dropFirst("group:".count))
+      group.children = options.map { option in
+        option.value.map { ToolItem(id: $0, title: option.label, icon: option.icon, description: option.description) }
+      }
+      return group
+    }
+  }
+  var activeTool: String { text("active_tool") ?? "" }
+  /** Use another tool, by its id. */
+  func setTool(_ id: String) { send("tools", .set_, .text(id)) }
   /** The active object's name, or the active bone's in an armature's modes, as Rename Active has
    * it. */
-  private(set) var activeName = ""
-  private(set) var actions: [NativeUI.Action] = []
+  var activeName: String { node("active_name").map { $0.content(Blender_NativeUI_TextField.self)?.value ?? "" } ?? "" }
+  /** Quick actions for the mode, tool and selection. */
+  var actions: [NativeNode] { node("actions").map { toolbar.children(of: $0) } ?? [] }
   /** Changes when what Blender's menus show may have: the active undo step moves with every
    * change an operator makes, once per action. */
-  private(set) var menuContext = ""
+  var menuContext: String { "\(objectMode)|\(text("menu_state") ?? "")" }
   private(set) var brushes: JSON?
-  /** The brush's size, strength and color, and Dyntopo's detail, see `bl_ui.native_brush`. */
-  private(set) var brush: JSON?
+  /** The brush's size, strength, weight and color, see `bl_ui.native_brush`. */
+  var brush: BrushSettings? {
+    var settings = BrushSettings()
+    for name in ["size", "strength", "weight"] {
+      guard let number = node("brush:" + name)?.number else { continue }
+      settings.values[name] = BrushValue(value: number.value, min: number.softMin, max: number.softMax,
+                                         defaultValue: number.defaultValue, pixels: number.unit == "px",
+                                         label: node("brush:" + name)?.label ?? "")
+    }
+    if let color = node("brush:color")?.content(Blender_NativeUI_Color.self) {
+      settings.color = (0..<color.valueCount).map { color.value(at: $0) }
+    }
+    return settings.values.isEmpty && settings.color == nil ? nil : settings
+  }
+  /** Set one of the brush's values: a drag's updates, then its end. */
+  func setBrush(_ key: String, _ value: NativeValue, phase: NativePhase = .once) {
+    send("brush:" + key, .set_, value, phase: phase)
+  }
   /** Which way brushes stroke, in modes that paint with them; none where Blender selects. */
-  private(set) var direction: NativeUI.BrushDirection?
+  var direction: BrushDirection? {
+    guard let node = node("direction") else { return nil }
+    let options = node.choice?.allOptions ?? []
+    var direction = BrushDirection(hidden: !node.enabled, brush: options.count == 2, smooth: flag("smooth"))
+    if options.count == 2 {
+      direction.inverted = node.choice?.value == options[1].value
+      direction.add = options[0].label
+      direction.subtract = options[1].label
+      direction.addSymbol = options[0].icon
+      direction.subtractSymbol = options[1].icon
+    }
+    return direction
+  }
+  /** Stroke the other way, or back: the brush's first or second direction. */
+  func setDirection(add: Bool) {
+    guard let options = node("direction")?.choice?.allOptions, options.count == 2,
+          let value = options[add ? 0 : 1].value else { return }
+    send("direction", .set_, .text(value))
+  }
   /** Moving, turning or scaling: the sidebar's + and - hold Snap and Precision. */
-  private(set) var transforming = false
+  var transforming: Bool { flag("transforming") }
   /** A command waiting for a drag in the view, as Box Select chosen from the menu bar: what to
    * do, and whether it ends with Done. */
-  private(set) var dragHint: NativeUI.DragHint?
-  private(set) var canUndo = false
-  private(set) var canRedo = false
+  var dragHint: DragHint? {
+    guard let node = node("drag_hint") else { return nil }
+    return DragHint(text: node.label, done: node.content(Blender_NativeUI_Data.self)?
+      .value(type: Blender_NativeUI_BoolValue.self)?.value ?? false)
+  }
+  var canUndo: Bool { node("undo")?.enabled ?? false }
+  var canRedo: Bool { node("redo")?.enabled ?? false }
   /** The text object being typed into: its style where the cursor is, alignment and font file. */
   private(set) var textObject: JSON?
   /** The native node editor shows over the bottom of the viewport. */
@@ -68,22 +195,42 @@ final class ShellModel {
   var imageShown = false
   /** Blender's navigation gizmo: its center and radius, in fractions of the window's width and
    * height (center) and width (radius). */
-  private(set) var navigationGizmo: [Double] = []
+  var navigationGizmo: [Double] { floats("navigation_gizmo") }
   /** The color the viewport is cleared to, as red, green and blue in display space. */
-  private(set) var viewportBackground: [Double] = []
+  var viewportBackground: [Double] { floats("viewport_background") }
   /** The modes the active object has, as Blender's header lists them, and the current one. */
-  private(set) var modes: [NativeUI.ModeItem] = []
-  private(set) var objectMode = "OBJECT"
+  var modes: [ModeItem] {
+    node("mode")?.choice?.allOptions.compactMap { option in
+      option.value.map { ModeItem(id: $0, label: option.label, icon: option.icon) }
+    } ?? []
+  }
+  var objectMode: String { node("mode")?.choice?.value ?? "OBJECT" }
   /** The viewport's shading: `wireframe`, `solid`, `material` or `rendered`. */
-  private(set) var shading = "solid"
+  var shading: String { text("shading") ?? "solid" }
   /** In mesh edit mode: `VERT`, `EDGE` or `FACE`. */
-  private(set) var meshSelectMode = "VERT"
-  /** Transform orientation, pivot, snapping and proportional editing. */
-  private(set) var transformSettings: [String: String] = [:]
-  /** The viewport's overlays, X-Ray, gizmos, statistics and wireframe toggles. */
-  private(set) var viewport: JSON?
+  var meshSelectMode: String { node("select_mode")?.choice?.value ?? "VERT" }
+  /** Transform orientation, pivot, snapping and proportional editing, and the mode's mirror axes,
+   * by name: `mirror_axes` the axes there are and `mirror` those on, as letters. */
+  var transformSettings: [String: String] {
+    var settings: [String: String] = [:]
+    for name in ["orientation", "pivot", "snap", "proportional"] {
+      if let value = node(name)?.choice?.value { settings[name] = value }
+    }
+    if let mirror = node("mirror")?.choice {
+      settings["mirror_axes"] = mirror.allOptions.compactMap(\.value).joined()
+      settings["mirror"] = (mirror.value ?? "").replacingOccurrences(of: ",", with: "")
+    }
+    if let topology = node("mirror_topology")?.toggle {
+      settings["mirror_topology"] = topology.value ? "on" : "off"
+    }
+    return settings
+  }
+  /** The viewport's overlays, X-Ray, gizmos, statistics and wireframe toggles, and whether it
+   * looks through the camera, by name. */
+  func viewportOption(_ name: String) -> Bool { node("viewport:" + name)?.toggle?.value ?? false }
+  var viewportOptionsShown: Bool { node("viewport:overlays") != nil }
   /** Blender's own interface is showing, as on a desktop computer. */
-  private(set) var desktop = false
+  var desktop: Bool { flag("desktop") }
   /** Blender's viewport has shown its first frame. */
   private(set) var viewportReady = false
   private(set) var documentsAvailable = false
@@ -129,8 +276,12 @@ final class ShellModel {
   @ObservationIgnored var onRender: ((Any?) -> Void)?
   @ObservationIgnored var onPreferences: ((Any?) -> Void)?
 
+  /** The latest window's model, for commands sent from where no window is at hand. */
+  static weak var current: ShellModel?
+
   init(window: UnsafeMutableRawPointer?) {
     self.window = window
+    Self.current = self
   }
 
   /** Assign only a changed value: observers redraw on every assignment. */
@@ -146,35 +297,13 @@ final class ShellModel {
     set(keyPath, value, equal: ==)
   }
 
-  /** The toolbar snapshot, Blender's latest or a copy of it. */
+  /** The parts of the toolbar snapshot still sent as JSON: brushes, the text object, rendering
+   * and preferences. */
   func update(toolbar: NativeUI.Toolbar) {
-    set(\.mode, toolbar.mode)
-    set(\.activeName, toolbar.activeName ?? "")
-    set(\.tools, toolbar.tools)
-    set(\.activeTool, toolbar.active ?? "")
-    set(\.actions, toolbar.actions)
     set(\.brushes, toolbar.brushes.dictionary, equal: { jsonEqual($0, $1) })
-    set(\.direction, toolbar.direction)
-    set(\.transforming, toolbar.transforming)
-    set(\.dragHint, toolbar.dragHint)
-    set(\.brush, toolbar.brush.dictionary, equal: { jsonEqual($0, $1) })
-    set(\.canUndo, toolbar.canUndo)
-    set(\.canRedo, toolbar.canRedo)
-    set(\.menuContext, "\(toolbar.objectMode.rawValue)|\(toolbar.menuState ?? "")")
     set(\.textObject, toolbar.textObject.dictionary, equal: { jsonEqual($0, $1) })
-    if toolbar.navigationGizmo.count == 3 { set(\.navigationGizmo, toolbar.navigationGizmo.map(Double.init)) }
-    if toolbar.viewportBackground.count == 3 {
-      set(\.viewportBackground, toolbar.viewportBackground.map(Double.init))
-    }
-    if !toolbar.modes.isEmpty { set(\.modes, toolbar.modes) }
-    set(\.objectMode, toolbar.objectMode.rawValue)
-    set(\.shading, toolbar.shading.rawValue)
-    if let select = toolbar.meshSelectMode { set(\.meshSelectMode, select) }
-    if let settings = toolbar.settings { set(\.transformSettings, settings.byName) }
-    set(\.viewport, toolbar.viewport.dictionary, equal: { jsonEqual($0, $1) })
     onRender?(toolbar.render.value)
     onPreferences?(toolbar.preferences.value)
-    set(\.desktop, toolbar.desktop)
   }
 
   /** Take Blender's toolbar snapshot when it changed, or copy it when `copy`. */
@@ -306,8 +435,8 @@ final class SoakProbe {
       "snapshotAge": Date().timeIntervalSince(lastSnapshot),
       "memory": Self.footprint,
     ]
-    if let size = model.brush?.dict("size")?.double("value") { line["brushSize"] = size }
-    if let strength = model.brush?.dict("strength")?.double("value") { line["brushStrength"] = strength }
+    if let size = model.brush?["size"]?.value { line["brushSize"] = size }
+    if let strength = model.brush?["strength"]?.value { line["brushStrength"] = strength }
     Self.write(line, to: samples)
     tick += 1
     if drives, tick % 3 == 0 { drive() }
@@ -321,11 +450,12 @@ final class SoakProbe {
         let tools = model.tools.compactMap { $0?.id }
         guard !tools.isEmpty else { return }
         let tool = tools[next(tools.count)]
-        WM_native_ui_tool_set_by_id(tool)
+        model.setTool(tool)
         action["tool"] = tool
       case 2:
         let key = next(2) == 0 ? "size" : "strength"
-        guard let json = model.brush?.dict(key), let low = json.double("min"), let high = json.double("max") else { return }
+        guard let setting = model.brush?[key] else { return }
+        let low = setting.min, high = setting.max
         /* Within the slider's range, as dragging it gives. */
         let top = key == "size" ? min(high, max(low * 4, 200)) : high
         let value = low + (top - low) * Double(next(1000)) / 1000
@@ -336,7 +466,7 @@ final class SoakProbe {
         let modes = model.modes.map(\.id)
         guard !modes.isEmpty else { return }
         let mode = modes[next(modes.count)]
-        Engine.setting("object_mode", mode)
+        model.send("mode", .set_, .text(mode))
         action["mode"] = mode
     }
     Self.write(action, to: actions)

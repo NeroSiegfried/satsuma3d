@@ -60,7 +60,7 @@ struct ViewCommand {
   @MainActor
   func run() {
     if let toggle {
-      Engine.setting("viewport_toggle", toggle)
+      ShellModel.current?.send("viewport:" + toggle, .set_, .bool(!(ShellModel.current?.viewportOption(toggle) ?? false)))
     }
     else if let operatorName {
       Operators.run(operatorName, properties)
@@ -345,9 +345,9 @@ struct ViewGizmoLayer: View {
       let insets = model.safeAreaInsets
       let safe = CGRect(origin: .zero, size: proxy.size).inset(by: UIEdgeInsets(
         top: insets.top, left: model.sideInsets.left, bottom: insets.bottom, right: model.sideInsets.right))
-      let locked = model.viewport?.bool("lock_camera") == true
-      let kept = model.viewport?.bool("keep_camera_view") == true
-      let camera = model.viewport?.bool("camera_view") == true
+      let locked = model.viewportOption("lock_camera")
+      let kept = model.viewportOption("keep_camera_view")
+      let camera = model.viewportOption("camera_view")
       let pie = ViewCommand.pie(locked: locked, kept: kept, camera: camera)
       let geometry = ViewGizmoGeometry(gizmo: model.navigationGizmo, window: proxy.size, safe: safe, pie: pie)
       ZStack(alignment: .topLeading) {

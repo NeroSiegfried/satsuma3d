@@ -34,6 +34,8 @@ void WM_native_ui_views_notify(const wmNotifier &note);
 void WM_native_ui_views_flush(bContext *C);
 /** How long Blender's loop may sleep before a view waiting to be built is due. */
 double WM_native_ui_views_idle_seconds();
+/** Add the views of the interface around the viewport, at startup. */
+void WM_native_ui_views_register();
 
 /** Run the commands the interface queued, on each pass of Blender's loop. */
 void WM_native_ui_flush_commands(bContext *C);

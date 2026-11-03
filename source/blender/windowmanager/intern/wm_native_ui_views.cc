@@ -354,6 +354,16 @@ static bool command_live(const Subscription *subscription, const protocol::Comma
 /** Answers to commands, sent with the views showing what they did. */
 static std::vector<std::pair<uint32_t, std::string>> answers;
 
+void view_type_dirty(const std::string_view name)
+{
+  for (Subscription &subscription : subscriptions().values()) {
+    if (subscription.type->name == name) {
+      subscription.dirty = true;
+      any_dirty = true;
+    }
+  }
+}
+
 static void command_execute(bContext *C, const protocol::Command &command)
 {
   CLOG_DEBUG(&LOG,

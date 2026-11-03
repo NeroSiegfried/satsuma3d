@@ -158,6 +158,8 @@ table Number {
   scale: Scale;
   /// Shown after the value, such as "px".
   unit: string;
+  /// What it is reset to.
+  default_value: double;
 }
 
 /// Text.
@@ -256,6 +258,15 @@ enum ButtonStyle : ubyte {
 /// A button, which runs something when invoked.
 table Button {
   style: ButtonStyle;
+  /// The operator it runs, with these properties, for interfaces that show the operator's icon or
+  /// shortcut.
+  operator: string;
+  params: [Param];
+  /// The key that does the same in Blender's own interface, which an interface may send instead,
+  /// such as X to constrain a move to the X axis while it runs.
+  key: string;
+  /// It shows as pressed, as one that turns something on, such as X-Ray, while it is on.
+  pressed: bool;
 }
 
 /// A button that opens a menu, a view of its own named here.
@@ -274,6 +285,12 @@ table Label {
 table Separator {
 }
 
+/// A value an interface uses as it sees fit, rather than a control: such as where Blender draws
+/// the navigation gizmo, for an interface to keep clear of it.
+table Data {
+  value: Value;
+}
+
 /// A list of items, such as material slots or shape keys: its rows are its children, each with
 /// controls of its own.
 table List {
@@ -286,6 +303,8 @@ table List {
   tree: bool;
   /// A menu of more it can do, as a `MenuButton` names it.
   menu: string;
+  /// Still filling in, such as while previews are drawn.
+  loading: bool;
 }
 
 /// A row of a list.
@@ -296,6 +315,8 @@ table Row {
   renamable: bool;
   /// An image to show instead of the icon.
   preview: string;
+  /// The heading it is listed under, such as a brush's catalog.
+  section: string;
 }
 
 /// A picture, such as a material's rendered preview.
@@ -342,6 +363,7 @@ union Content {
   Picture,
   Menu,
   Operator,
+  Data,
 }
 
 /* -------------------------------------------------------------------- */

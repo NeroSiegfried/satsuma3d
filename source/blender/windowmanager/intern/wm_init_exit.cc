@@ -77,6 +77,10 @@
 #include "WM_message.hh"
 #include "WM_types.hh"
 
+#ifdef WITH_NATIVE_UI
+#  include "WM_native_ui.hh"
+#endif
+
 #include "wm.hh"
 #include "wm_cursors.hh"
 #include "wm_event_system.hh"
@@ -229,6 +233,7 @@ void WM_init(bContext *C, int argc, const char **argv)
   ED_spacetypes_init();
 #ifdef WITH_NATIVE_UI
   ui::native_views_register();
+  WM_native_ui_views_register();
 #endif
 
   ED_node_init_butfuncs();

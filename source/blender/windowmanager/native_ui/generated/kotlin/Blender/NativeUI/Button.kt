@@ -36,6 +36,57 @@ class Button : Table() {
             val o = __offset(4)
             return if(o != 0) bb.get(o + bb_pos).toUByte() else 0u
         }
+    /**
+     * The operator it runs, with these properties, for interfaces that show the operator's icon or
+     * shortcut.
+     */
+    val operator : String?
+        get() {
+            val o = __offset(6)
+            return if (o != 0) {
+                __string(o + bb_pos)
+            } else {
+                null
+            }
+        }
+    val operatorAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(6, 1)
+    fun operatorInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 6, 1)
+    fun params(j: Int) : Blender.NativeUI.Param? = params(Blender.NativeUI.Param(), j)
+    fun params(obj: Blender.NativeUI.Param, j: Int) : Blender.NativeUI.Param? {
+        val o = __offset(8)
+        return if (o != 0) {
+            obj.__assign(__indirect(__vector(o) + j * 4), bb)
+        } else {
+            null
+        }
+    }
+    val paramsLength : Int
+        get() {
+            val o = __offset(8); return if (o != 0) __vector_len(o) else 0
+        }
+    /**
+     * The key that does the same in Blender's own interface, which an interface may send instead,
+     * such as X to constrain a move to the X axis while it runs.
+     */
+    val key : String?
+        get() {
+            val o = __offset(10)
+            return if (o != 0) {
+                __string(o + bb_pos)
+            } else {
+                null
+            }
+        }
+    val keyAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(10, 1)
+    fun keyInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 10, 1)
+    /**
+     * It shows as pressed, as one that turns something on, such as X-Ray, while it is on.
+     */
+    val pressed : Boolean
+        get() {
+            val o = __offset(12)
+            return if(o != 0) 0.toByte() != bb.get(o + bb_pos) else false
+        }
     companion object {
         fun validateVersion() = Constants.FLATBUFFERS_25_2_10()
         fun getRootAsButton(_bb: ByteBuffer): Button = getRootAsButton(_bb, Button())
@@ -43,13 +94,29 @@ class Button : Table() {
             _bb.order(ByteOrder.LITTLE_ENDIAN)
             return (obj.__assign(_bb.getInt(_bb.position()) + _bb.position(), _bb))
         }
-        fun createButton(builder: FlatBufferBuilder, style: UByte) : Int {
-            builder.startTable(1)
+        fun createButton(builder: FlatBufferBuilder, style: UByte, operatorOffset: Int, paramsOffset: Int, keyOffset: Int, pressed: Boolean) : Int {
+            builder.startTable(5)
+            addKey(builder, keyOffset)
+            addParams(builder, paramsOffset)
+            addOperator(builder, operatorOffset)
+            addPressed(builder, pressed)
             addStyle(builder, style)
             return endButton(builder)
         }
-        fun startButton(builder: FlatBufferBuilder) = builder.startTable(1)
+        fun startButton(builder: FlatBufferBuilder) = builder.startTable(5)
         fun addStyle(builder: FlatBufferBuilder, style: UByte) = builder.addByte(0, style.toByte(), 0)
+        fun addOperator(builder: FlatBufferBuilder, operator: Int) = builder.addOffset(1, operator, 0)
+        fun addParams(builder: FlatBufferBuilder, params: Int) = builder.addOffset(2, params, 0)
+        fun createParamsVector(builder: FlatBufferBuilder, data: IntArray) : Int {
+            builder.startVector(4, data.size, 4)
+            for (i in data.size - 1 downTo 0) {
+                builder.addOffset(data[i])
+            }
+            return builder.endVector()
+        }
+        fun startParamsVector(builder: FlatBufferBuilder, numElems: Int) = builder.startVector(4, numElems, 4)
+        fun addKey(builder: FlatBufferBuilder, key: Int) = builder.addOffset(3, key, 0)
+        fun addPressed(builder: FlatBufferBuilder, pressed: Boolean) = builder.addBoolean(4, pressed, false)
         fun endButton(builder: FlatBufferBuilder) : Int {
             val o = builder.endTable()
             return o

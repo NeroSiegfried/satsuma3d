@@ -79,6 +79,9 @@ struct LabelBuilder;
 struct Separator;
 struct SeparatorBuilder;
 
+struct Data;
+struct DataBuilder;
+
 struct List;
 struct ListBuilder;
 
@@ -440,11 +443,12 @@ enum class Content : uint8_t {
   Picture = 15,
   Menu = 16,
   Operator = 17,
+  Data = 18,
   MIN = NONE,
-  MAX = Operator
+  MAX = Data
 };
 
-inline const Content (&EnumValuesContent())[18] {
+inline const Content (&EnumValuesContent())[19] {
   static const Content values[] = {
     Content::NONE,
     Content::Group,
@@ -463,13 +467,14 @@ inline const Content (&EnumValuesContent())[18] {
     Content::Row,
     Content::Picture,
     Content::Menu,
-    Content::Operator
+    Content::Operator,
+    Content::Data
   };
   return values;
 }
 
 inline const char * const *EnumNamesContent() {
-  static const char * const names[19] = {
+  static const char * const names[20] = {
     "NONE",
     "Group",
     "Panel",
@@ -488,13 +493,14 @@ inline const char * const *EnumNamesContent() {
     "Picture",
     "Menu",
     "Operator",
+    "Data",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameContent(Content e) {
-  if (::flatbuffers::IsOutRange(e, Content::NONE, Content::Operator)) return "";
+  if (::flatbuffers::IsOutRange(e, Content::NONE, Content::Data)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesContent()[index];
 }
@@ -569,6 +575,10 @@ template<> struct ContentTraits<Blender::NativeUI::Menu> {
 
 template<> struct ContentTraits<Blender::NativeUI::Operator> {
   static const Content enum_value = Content::Operator;
+};
+
+template<> struct ContentTraits<Blender::NativeUI::Data> {
+  static const Content enum_value = Content::Data;
 };
 
 bool VerifyContent(::flatbuffers::Verifier &verifier, const void *obj, Content type);
@@ -1531,7 +1541,8 @@ struct Number FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_PRECISION = 20,
     VT_SLIDER = 22,
     VT_SCALE = 24,
-    VT_UNIT = 26
+    VT_UNIT = 26,
+    VT_DEFAULT_VALUE = 28
   };
   double value() const {
     return GetField<double>(VT_VALUE, 0.0);
@@ -1575,6 +1586,10 @@ struct Number FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::String *unit() const {
     return GetPointer<const ::flatbuffers::String *>(VT_UNIT);
   }
+  /// What it is reset to.
+  double default_value() const {
+    return GetField<double>(VT_DEFAULT_VALUE, 0.0);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<double>(verifier, VT_VALUE, 8) &&
@@ -1590,6 +1605,7 @@ struct Number FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_SCALE, 1) &&
            VerifyOffset(verifier, VT_UNIT) &&
            verifier.VerifyString(unit()) &&
+           VerifyField<double>(verifier, VT_DEFAULT_VALUE, 8) &&
            verifier.EndTable();
   }
 };
@@ -1634,6 +1650,9 @@ struct NumberBuilder {
   void add_unit(::flatbuffers::Offset<::flatbuffers::String> unit) {
     fbb_.AddOffset(Number::VT_UNIT, unit);
   }
+  void add_default_value(double default_value) {
+    fbb_.AddElement<double>(Number::VT_DEFAULT_VALUE, default_value, 0.0);
+  }
   explicit NumberBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1658,8 +1677,10 @@ inline ::flatbuffers::Offset<Number> CreateNumber(
     uint8_t precision = 3,
     bool slider = false,
     Blender::NativeUI::Scale scale = Blender::NativeUI::Scale::Linear,
-    ::flatbuffers::Offset<::flatbuffers::String> unit = 0) {
+    ::flatbuffers::Offset<::flatbuffers::String> unit = 0,
+    double default_value = 0.0) {
   NumberBuilder builder_(_fbb);
+  builder_.add_default_value(default_value);
   builder_.add_step(step);
   builder_.add_soft_max(soft_max);
   builder_.add_soft_min(soft_min);
@@ -1693,7 +1714,8 @@ inline ::flatbuffers::Offset<Number> CreateNumberDirect(
     uint8_t precision = 3,
     bool slider = false,
     Blender::NativeUI::Scale scale = Blender::NativeUI::Scale::Linear,
-    const char *unit = nullptr) {
+    const char *unit = nullptr,
+    double default_value = 0.0) {
   auto unit__ = unit ? _fbb.CreateString(unit) : 0;
   return Blender::NativeUI::CreateNumber(
       _fbb,
@@ -1708,7 +1730,8 @@ inline ::flatbuffers::Offset<Number> CreateNumberDirect(
       precision,
       slider,
       scale,
-      unit__);
+      unit__,
+      default_value);
 }
 
 /// Text.
@@ -2350,14 +2373,43 @@ struct Button FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef ButtonBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
-    VT_STYLE = 4
+    VT_STYLE = 4,
+    VT_OPERATOR_ = 6,
+    VT_PARAMS = 8,
+    VT_KEY = 10,
+    VT_PRESSED = 12
   };
   Blender::NativeUI::ButtonStyle style() const {
     return static_cast<Blender::NativeUI::ButtonStyle>(GetField<uint8_t>(VT_STYLE, 0));
   }
+  /// The operator it runs, with these properties, for interfaces that show the operator's icon or
+  /// shortcut.
+  const ::flatbuffers::String *operator_() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_OPERATOR_);
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Param>> *params() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Param>> *>(VT_PARAMS);
+  }
+  /// The key that does the same in Blender's own interface, which an interface may send instead,
+  /// such as X to constrain a move to the X axis while it runs.
+  const ::flatbuffers::String *key() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_KEY);
+  }
+  /// It shows as pressed, as one that turns something on, such as X-Ray, while it is on.
+  bool pressed() const {
+    return GetField<uint8_t>(VT_PRESSED, 0) != 0;
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint8_t>(verifier, VT_STYLE, 1) &&
+           VerifyOffset(verifier, VT_OPERATOR_) &&
+           verifier.VerifyString(operator_()) &&
+           VerifyOffset(verifier, VT_PARAMS) &&
+           verifier.VerifyVector(params()) &&
+           verifier.VerifyVectorOfTables(params()) &&
+           VerifyOffset(verifier, VT_KEY) &&
+           verifier.VerifyString(key()) &&
+           VerifyField<uint8_t>(verifier, VT_PRESSED, 1) &&
            verifier.EndTable();
   }
 };
@@ -2368,6 +2420,18 @@ struct ButtonBuilder {
   ::flatbuffers::uoffset_t start_;
   void add_style(Blender::NativeUI::ButtonStyle style) {
     fbb_.AddElement<uint8_t>(Button::VT_STYLE, static_cast<uint8_t>(style), 0);
+  }
+  void add_operator_(::flatbuffers::Offset<::flatbuffers::String> operator_) {
+    fbb_.AddOffset(Button::VT_OPERATOR_, operator_);
+  }
+  void add_params(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Param>>> params) {
+    fbb_.AddOffset(Button::VT_PARAMS, params);
+  }
+  void add_key(::flatbuffers::Offset<::flatbuffers::String> key) {
+    fbb_.AddOffset(Button::VT_KEY, key);
+  }
+  void add_pressed(bool pressed) {
+    fbb_.AddElement<uint8_t>(Button::VT_PRESSED, static_cast<uint8_t>(pressed), 0);
   }
   explicit ButtonBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
@@ -2382,8 +2446,16 @@ struct ButtonBuilder {
 
 inline ::flatbuffers::Offset<Button> CreateButton(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    Blender::NativeUI::ButtonStyle style = Blender::NativeUI::ButtonStyle::Normal) {
+    Blender::NativeUI::ButtonStyle style = Blender::NativeUI::ButtonStyle::Normal,
+    ::flatbuffers::Offset<::flatbuffers::String> operator_ = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Param>>> params = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> key = 0,
+    bool pressed = false) {
   ButtonBuilder builder_(_fbb);
+  builder_.add_key(key);
+  builder_.add_params(params);
+  builder_.add_operator_(operator_);
+  builder_.add_pressed(pressed);
   builder_.add_style(style);
   return builder_.Finish();
 }
@@ -2392,6 +2464,25 @@ struct Button::Traits {
   using type = Button;
   static auto constexpr Create = CreateButton;
 };
+
+inline ::flatbuffers::Offset<Button> CreateButtonDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    Blender::NativeUI::ButtonStyle style = Blender::NativeUI::ButtonStyle::Normal,
+    const char *operator_ = nullptr,
+    const std::vector<::flatbuffers::Offset<Blender::NativeUI::Param>> *params = nullptr,
+    const char *key = nullptr,
+    bool pressed = false) {
+  auto operator___ = operator_ ? _fbb.CreateString(operator_) : 0;
+  auto params__ = params ? _fbb.CreateVector<::flatbuffers::Offset<Blender::NativeUI::Param>>(*params) : 0;
+  auto key__ = key ? _fbb.CreateString(key) : 0;
+  return Blender::NativeUI::CreateButton(
+      _fbb,
+      style,
+      operator___,
+      params__,
+      key__,
+      pressed);
+}
 
 /// A button that opens a menu, a view of its own named here.
 struct MenuButton FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -2561,6 +2652,116 @@ struct Separator::Traits {
   static auto constexpr Create = CreateSeparator;
 };
 
+/// A value an interface uses as it sees fit, rather than a control: such as where Blender draws
+/// the navigation gizmo, for an interface to keep clear of it.
+struct Data FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef DataBuilder Builder;
+  struct Traits;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_VALUE_TYPE = 4,
+    VT_VALUE = 6
+  };
+  Blender::NativeUI::Value value_type() const {
+    return static_cast<Blender::NativeUI::Value>(GetField<uint8_t>(VT_VALUE_TYPE, 0));
+  }
+  const void *value() const {
+    return GetPointer<const void *>(VT_VALUE);
+  }
+  template<typename T> const T *value_as() const;
+  const Blender::NativeUI::BoolValue *value_as_BoolValue() const {
+    return value_type() == Blender::NativeUI::Value::BoolValue ? static_cast<const Blender::NativeUI::BoolValue *>(value()) : nullptr;
+  }
+  const Blender::NativeUI::IntValue *value_as_IntValue() const {
+    return value_type() == Blender::NativeUI::Value::IntValue ? static_cast<const Blender::NativeUI::IntValue *>(value()) : nullptr;
+  }
+  const Blender::NativeUI::FloatValue *value_as_FloatValue() const {
+    return value_type() == Blender::NativeUI::Value::FloatValue ? static_cast<const Blender::NativeUI::FloatValue *>(value()) : nullptr;
+  }
+  const Blender::NativeUI::TextValue *value_as_TextValue() const {
+    return value_type() == Blender::NativeUI::Value::TextValue ? static_cast<const Blender::NativeUI::TextValue *>(value()) : nullptr;
+  }
+  const Blender::NativeUI::FloatsValue *value_as_FloatsValue() const {
+    return value_type() == Blender::NativeUI::Value::FloatsValue ? static_cast<const Blender::NativeUI::FloatsValue *>(value()) : nullptr;
+  }
+  const Blender::NativeUI::IntsValue *value_as_IntsValue() const {
+    return value_type() == Blender::NativeUI::Value::IntsValue ? static_cast<const Blender::NativeUI::IntsValue *>(value()) : nullptr;
+  }
+  const Blender::NativeUI::TextsValue *value_as_TextsValue() const {
+    return value_type() == Blender::NativeUI::Value::TextsValue ? static_cast<const Blender::NativeUI::TextsValue *>(value()) : nullptr;
+  }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint8_t>(verifier, VT_VALUE_TYPE, 1) &&
+           VerifyOffset(verifier, VT_VALUE) &&
+           VerifyValue(verifier, value(), value_type()) &&
+           verifier.EndTable();
+  }
+};
+
+template<> inline const Blender::NativeUI::BoolValue *Data::value_as<Blender::NativeUI::BoolValue>() const {
+  return value_as_BoolValue();
+}
+
+template<> inline const Blender::NativeUI::IntValue *Data::value_as<Blender::NativeUI::IntValue>() const {
+  return value_as_IntValue();
+}
+
+template<> inline const Blender::NativeUI::FloatValue *Data::value_as<Blender::NativeUI::FloatValue>() const {
+  return value_as_FloatValue();
+}
+
+template<> inline const Blender::NativeUI::TextValue *Data::value_as<Blender::NativeUI::TextValue>() const {
+  return value_as_TextValue();
+}
+
+template<> inline const Blender::NativeUI::FloatsValue *Data::value_as<Blender::NativeUI::FloatsValue>() const {
+  return value_as_FloatsValue();
+}
+
+template<> inline const Blender::NativeUI::IntsValue *Data::value_as<Blender::NativeUI::IntsValue>() const {
+  return value_as_IntsValue();
+}
+
+template<> inline const Blender::NativeUI::TextsValue *Data::value_as<Blender::NativeUI::TextsValue>() const {
+  return value_as_TextsValue();
+}
+
+struct DataBuilder {
+  typedef Data Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_value_type(Blender::NativeUI::Value value_type) {
+    fbb_.AddElement<uint8_t>(Data::VT_VALUE_TYPE, static_cast<uint8_t>(value_type), 0);
+  }
+  void add_value(::flatbuffers::Offset<void> value) {
+    fbb_.AddOffset(Data::VT_VALUE, value);
+  }
+  explicit DataBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<Data> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<Data>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<Data> CreateData(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    Blender::NativeUI::Value value_type = Blender::NativeUI::Value::NONE,
+    ::flatbuffers::Offset<void> value = 0) {
+  DataBuilder builder_(_fbb);
+  builder_.add_value(value);
+  builder_.add_value_type(value_type);
+  return builder_.Finish();
+}
+
+struct Data::Traits {
+  using type = Data;
+  static auto constexpr Create = CreateData;
+};
+
 /// A list of items, such as material slots or shape keys: its rows are its children, each with
 /// controls of its own.
 struct List FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -2572,7 +2773,8 @@ struct List FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_CAN_REMOVE = 8,
     VT_CAN_REORDER = 10,
     VT_TREE = 12,
-    VT_MENU = 14
+    VT_MENU = 14,
+    VT_LOADING = 16
   };
   /// The active row's key.
   const ::flatbuffers::String *active() const {
@@ -2595,6 +2797,10 @@ struct List FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::String *menu() const {
     return GetPointer<const ::flatbuffers::String *>(VT_MENU);
   }
+  /// Still filling in, such as while previews are drawn.
+  bool loading() const {
+    return GetField<uint8_t>(VT_LOADING, 0) != 0;
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_ACTIVE) &&
@@ -2605,6 +2811,7 @@ struct List FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_TREE, 1) &&
            VerifyOffset(verifier, VT_MENU) &&
            verifier.VerifyString(menu()) &&
+           VerifyField<uint8_t>(verifier, VT_LOADING, 1) &&
            verifier.EndTable();
   }
 };
@@ -2631,6 +2838,9 @@ struct ListBuilder {
   void add_menu(::flatbuffers::Offset<::flatbuffers::String> menu) {
     fbb_.AddOffset(List::VT_MENU, menu);
   }
+  void add_loading(bool loading) {
+    fbb_.AddElement<uint8_t>(List::VT_LOADING, static_cast<uint8_t>(loading), 0);
+  }
   explicit ListBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -2649,10 +2859,12 @@ inline ::flatbuffers::Offset<List> CreateList(
     bool can_remove = false,
     bool can_reorder = false,
     bool tree = false,
-    ::flatbuffers::Offset<::flatbuffers::String> menu = 0) {
+    ::flatbuffers::Offset<::flatbuffers::String> menu = 0,
+    bool loading = false) {
   ListBuilder builder_(_fbb);
   builder_.add_menu(menu);
   builder_.add_active(active);
+  builder_.add_loading(loading);
   builder_.add_tree(tree);
   builder_.add_can_reorder(can_reorder);
   builder_.add_can_remove(can_remove);
@@ -2672,7 +2884,8 @@ inline ::flatbuffers::Offset<List> CreateListDirect(
     bool can_remove = false,
     bool can_reorder = false,
     bool tree = false,
-    const char *menu = nullptr) {
+    const char *menu = nullptr,
+    bool loading = false) {
   auto active__ = active ? _fbb.CreateString(active) : 0;
   auto menu__ = menu ? _fbb.CreateString(menu) : 0;
   return Blender::NativeUI::CreateList(
@@ -2682,7 +2895,8 @@ inline ::flatbuffers::Offset<List> CreateListDirect(
       can_remove,
       can_reorder,
       tree,
-      menu__);
+      menu__,
+      loading);
 }
 
 /// A row of a list.
@@ -2693,7 +2907,8 @@ struct Row FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_DEPTH = 4,
     VT_SELECTED = 6,
     VT_RENAMABLE = 8,
-    VT_PREVIEW = 10
+    VT_PREVIEW = 10,
+    VT_SECTION = 12
   };
   int32_t depth() const {
     return GetField<int32_t>(VT_DEPTH, 0);
@@ -2709,6 +2924,10 @@ struct Row FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::String *preview() const {
     return GetPointer<const ::flatbuffers::String *>(VT_PREVIEW);
   }
+  /// The heading it is listed under, such as a brush's catalog.
+  const ::flatbuffers::String *section() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_SECTION);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<int32_t>(verifier, VT_DEPTH, 4) &&
@@ -2716,6 +2935,8 @@ struct Row FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_RENAMABLE, 1) &&
            VerifyOffset(verifier, VT_PREVIEW) &&
            verifier.VerifyString(preview()) &&
+           VerifyOffset(verifier, VT_SECTION) &&
+           verifier.VerifyString(section()) &&
            verifier.EndTable();
   }
 };
@@ -2736,6 +2957,9 @@ struct RowBuilder {
   void add_preview(::flatbuffers::Offset<::flatbuffers::String> preview) {
     fbb_.AddOffset(Row::VT_PREVIEW, preview);
   }
+  void add_section(::flatbuffers::Offset<::flatbuffers::String> section) {
+    fbb_.AddOffset(Row::VT_SECTION, section);
+  }
   explicit RowBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -2752,8 +2976,10 @@ inline ::flatbuffers::Offset<Row> CreateRow(
     int32_t depth = 0,
     bool selected = false,
     bool renamable = false,
-    ::flatbuffers::Offset<::flatbuffers::String> preview = 0) {
+    ::flatbuffers::Offset<::flatbuffers::String> preview = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> section = 0) {
   RowBuilder builder_(_fbb);
+  builder_.add_section(section);
   builder_.add_preview(preview);
   builder_.add_depth(depth);
   builder_.add_renamable(renamable);
@@ -2771,14 +2997,17 @@ inline ::flatbuffers::Offset<Row> CreateRowDirect(
     int32_t depth = 0,
     bool selected = false,
     bool renamable = false,
-    const char *preview = nullptr) {
+    const char *preview = nullptr,
+    const char *section = nullptr) {
   auto preview__ = preview ? _fbb.CreateString(preview) : 0;
+  auto section__ = section ? _fbb.CreateString(section) : 0;
   return Blender::NativeUI::CreateRow(
       _fbb,
       depth,
       selected,
       renamable,
-      preview__);
+      preview__,
+      section__);
 }
 
 /// A picture, such as a material's rendered preview.
@@ -3078,6 +3307,9 @@ struct Node FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const Blender::NativeUI::Operator *content_as_Operator() const {
     return content_type() == Blender::NativeUI::Content::Operator ? static_cast<const Blender::NativeUI::Operator *>(content()) : nullptr;
   }
+  const Blender::NativeUI::Data *content_as_Data() const {
+    return content_type() == Blender::NativeUI::Content::Data ? static_cast<const Blender::NativeUI::Data *>(content()) : nullptr;
+  }
   const ::flatbuffers::String *label() const {
     return GetPointer<const ::flatbuffers::String *>(VT_LABEL);
   }
@@ -3213,6 +3445,10 @@ template<> inline const Blender::NativeUI::Menu *Node::content_as<Blender::Nativ
 
 template<> inline const Blender::NativeUI::Operator *Node::content_as<Blender::NativeUI::Operator>() const {
   return content_as_Operator();
+}
+
+template<> inline const Blender::NativeUI::Data *Node::content_as<Blender::NativeUI::Data>() const {
+  return content_as_Data();
 }
 
 struct NodeBuilder {
@@ -4237,6 +4473,10 @@ inline bool VerifyContent(::flatbuffers::Verifier &verifier, const void *obj, Co
     }
     case Content::Operator: {
       auto ptr = reinterpret_cast<const Blender::NativeUI::Operator *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case Content::Data: {
+      auto ptr = reinterpret_cast<const Blender::NativeUI::Data *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;

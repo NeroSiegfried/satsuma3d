@@ -114,7 +114,7 @@ extension View {
                     contentAlignment: .trailing)
     {
       RailOrnament(items: RailItem.tools(model.tools, mode: model.mode), active: model.activeTool, brush: false,
-                   title: "Tools") { WM_native_ui_tool_set_by_id($0.id) }
+                   title: "Tools") { model.setTool($0.id) }
     }
     .ornament(visibility: shown && !brushes.isEmpty ? .visible : .hidden, attachmentAnchor: .scene(.trailing),
               contentAlignment: .leading)

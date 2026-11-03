@@ -45,7 +45,7 @@ struct RailItem: Identifiable {
   var grouped: Bool { group.count > 1 }
 
   @MainActor
-  static func tools(_ tools: [NativeUI.Tool?], mode: String) -> [RailItem] {
+  static func tools(_ tools: [ToolItem?], mode: String) -> [RailItem] {
     var items: [RailItem] = []
     var gap = false
     for tool in tools {
@@ -61,7 +61,7 @@ struct RailItem: Identifiable {
   }
 
   @MainActor
-  private static func makeTool(_ tool: NativeUI.Tool, mode: String, gapBefore: Bool) -> RailItem? {
+  private static func makeTool(_ tool: ToolItem, mode: String, gapBefore: Bool) -> RailItem? {
     guard !tool.id.isEmpty, let title = tool.title, !title.isEmpty, tool.symbol != nil else { return nil }
     var group: [RailItem] = []
     var breaks: Set<Int> = []
@@ -79,7 +79,7 @@ struct RailItem: Identifiable {
 
   /** Blender's colored tool artwork, or its monochrome icon, or a symbol. */
   @MainActor
-  static func toolImage(_ tool: NativeUI.Tool, mode: String, selected: Bool) -> UIImage? {
+  static func toolImage(_ tool: ToolItem, mode: String, selected: Bool) -> UIImage? {
     if let icon = tool.icon {
       if let colored = UIImage(named: (selected ? "blender.tool.selected." : "blender.tool.color.") + icon) {
         return colored.withRenderingMode(.alwaysOriginal)
@@ -950,7 +950,7 @@ struct ToolRails: View {
                carry(move, .tools, center: layout.toolCenter, edge: layout.toolEdge, safe: safe,
                      local: local) { toolEdge = $0 }
              }) { item in
-          WM_native_ui_tool_set_by_id(item.id)
+          ShellModel.current?.setTool(item.id)
         }
         .position(carriedCenter(.tools, size: CGSize(width: layout.toolWidth, height: layout.toolHeight)) ??
                   layout.toolCenter)
@@ -1050,9 +1050,9 @@ struct ToolRails: View {
         updateSqueezePalette(toolItems: toolItems, brushItems: brushItems)
       }
 #if !os(visionOS)
-      .onChange(of: model.brush.map { $0 as NSDictionary }, initial: true) { _, brush in
-        FaceControl.shared.brush = brush as? JSON
-        SqueezePalette.shared.brush = brush as? JSON
+      .onChange(of: model.brush, initial: true) { _, brush in
+        FaceControl.shared.brush = brush
+        SqueezePalette.shared.brush = brush
       }
 #endif
       /* Following the finger at once while the sidebar is moved. */
@@ -1099,7 +1099,7 @@ struct ToolRails: View {
     /* The rails show what is chosen there at once, as if chosen on them. */
     palette.chooseTool = { [tools] item in
       tools.choose(item.id)
-      WM_native_ui_tool_set_by_id(item.id)
+      ShellModel.current?.setTool(item.id)
     }
     palette.chooseBrush = { [brushes] item in
       brushes.choose(item.id)
@@ -1270,7 +1270,7 @@ final class SelectIntentState {
   /** A direction just tapped, shown until Blender's brush follows. */
   @ObservationIgnored private var pendingInverted: (value: Bool, until: Date)?
 
-  func update(strokes direction: NativeUI.BrushDirection?) {
+  func update(strokes direction: BrushDirection?) {
     let next = direction.map {
       Strokes(brush: $0.brush, inverted: $0.inverted, addName: $0.add ?? "Add",
               subtractName: $0.subtract ?? "Subtract", addSymbol: $0.addSymbol ?? "arrowshape.up",
@@ -1312,7 +1312,7 @@ final class SelectIntentState {
       let inverted = intent == .subtract
       if strokes.brush {
         pendingInverted = (inverted, Date().addingTimeInterval(1))
-        Engine.setting("brush_direction", inverted ? "subtract" : "add")
+        ShellModel.current?.setDirection(add: !inverted)
       }
       else {
         strokesInverted = inverted
@@ -1581,7 +1581,7 @@ final class RollDial {
   /** The tools around a Pencil holding the tool settings. */
   func beginTools(at point: CGPoint) {
     begin(items: tools, active: activeTool, at: point) { item in
-      WM_native_ui_tool_set_by_id(item.id)
+      ShellModel.current?.setTool(item.id)
     }
   }
 
@@ -1799,11 +1799,11 @@ struct SidebarContent: Equatable {
   /** Size and strength as rings, where the edge has no room for sliders or they were pinched in. */
   var dial = false
 
-  init(brush: JSON?, buttons: Bool, smooth: Bool = false, dial: Bool = false, face: Bool = false) {
+  init(brush: BrushSettings?, buttons: Bool, smooth: Bool = false, dial: Bool = false, face: Bool = false) {
     self.dial = dial
-    size = brush?.dict("size") != nil
-    strength = brush?.dict("strength") != nil
-    color = brush?["color"] is [NSNumber]
+    size = brush?["size"] != nil
+    strength = brush?["strength"] != nil
+    color = brush?.color != nil
     self.buttons = buttons
     self.smooth = smooth
 #if !os(visionOS)
@@ -1836,8 +1836,8 @@ struct SidebarContent: Equatable {
  * below them, nearest the hand. */
 struct PaintSidebar: View {
   let state: SelectIntentState
-  let direction: NativeUI.BrushDirection?
-  let brush: JSON?
+  let direction: BrushDirection?
+  let brush: BrushSettings?
   let content: SidebarContent
   /** On the leading edge: value labels open towards the viewport, on the other side. */
   let leading: Bool
@@ -1873,21 +1873,21 @@ struct PaintSidebar: View {
     let stack = horizontal ? AnyLayout(HStackLayout(spacing: 8)) : AnyLayout(VStackLayout(spacing: 8))
     let buttons = horizontal ? AnyLayout(HStackLayout(spacing: 4)) : AnyLayout(VStackLayout(spacing: 4))
     stack {
-      if content.size, let size = brush?.dict("size") {
-        let pixels = size.bool("pixels")
-        turned(SidebarSlider(key: "size", title: size.string("label") ?? "Radius", symbol: "circle.dashed",
-                             json: size, logarithmic: true, height: content.sliderHeight, dial: content.dial,
+      if content.size, let size = brush?["size"] {
+        let pixels = size.pixels
+        turned(SidebarSlider(key: "size", title: size.label.isEmpty ? "Radius" : size.label, symbol: "circle.dashed",
+                             setting: size, logarithmic: true, height: content.sliderHeight, dial: content.dial,
                              leading: leading, horizontal: horizontal,
                              unit: pixels ? "px" : "m", preview: .size(pixels: pixels),
                              format: { pixels ? String(Int($0.rounded())) : String(format: "%.3g", $0) }))
       }
-      if content.strength, let strength = brush?.dict("strength") {
-        turned(SidebarSlider(key: "strength", title: "Strength", symbol: "drop.fill", json: strength,
+      if content.strength, let strength = brush?["strength"] {
+        turned(SidebarSlider(key: "strength", title: "Strength", symbol: "drop.fill", setting: strength,
                              logarithmic: false, height: content.sliderHeight, dial: content.dial, leading: leading,
                              horizontal: horizontal, unit: "%",
                              preview: .strength, format: { String(Int(($0 * 100).rounded())) }))
       }
-      if content.color, let color = (brush?["color"] as? [NSNumber])?.map(\.doubleValue) {
+      if content.color, let color = brush?.color {
         BrushColorWell(color: color)
       }
       if content.buttons || content.smooth || content.face {
@@ -2080,18 +2080,12 @@ struct PaintSidebar: View {
   }
 }
 
-/** Send one of the brush's values to Blender; \a commit ends a drag with an undo step. */
+/** Send one of the brush's values to Blender, as a drag's update; \a commit ends the drag with an
+ * undo step. */
 @MainActor
 func sendBrushValue(_ key: String, _ value: Any, commit: Bool = false) {
-  let encoded: String
-  if let color = value as? [Double] {
-    encoded = "[" + color.map { String($0) }.joined(separator: ",") + "]"
-  }
-  else {
-    encoded = String(value as? Double ?? 0)
-  }
-  /* The key first: Blender keeps only the newest of a drag's values for each key. */
-  Engine.setting("native_brush", "{\"key\":\"\(key)\",\"value\":\(encoded),\"commit\":\(commit)}")
+  let sent: NativeValue = (value as? [Double]).map { .floats($0) } ?? .float(value as? Double ?? 0)
+  ShellModel.current?.setBrush(key, sent, phase: commit ? .end : .update)
 }
 
 /**
@@ -2102,7 +2096,7 @@ struct SidebarSlider: View {
   let key: String
   let title: String
   let symbol: String
-  let json: JSON
+  let setting: BrushValue
   /** Along a curve, so small sizes get as much of the slider as large ones. */
   let logarithmic: Bool
   let height: CGFloat
@@ -2149,11 +2143,11 @@ struct SidebarSlider: View {
   private var travel: CGFloat { (dial ? Self.trackHeight : height) - 52 }
   private var trackShown: Bool { dial && (held || drag?.moved == true) }
 
-  private var low: Double { json.double("min") ?? 0 }
-  private var high: Double { max(low + 1e-6, json.double("max") ?? 1) }
+  private var low: Double { setting.min }
+  private var high: Double { max(low + 1e-6, setting.max) }
 
   private var value: Double {
-    let blender = json.double("value") ?? low
+    let blender = setting.value
     if let local, drag != nil || (Date() < local.until && abs(local.value - blender) > 1e-6) {
       return local.value
     }
@@ -2435,7 +2429,7 @@ struct SidebarSlider: View {
 
   /** A tick at either end and passing the default. */
   private func tick(from before: Double, to after: Double) {
-    let marks = [0, 1, json.double("default").map(position)].compactMap { $0 }
+    let marks = [0, 1, position(setting.defaultValue)].compactMap { $0 }
     if marks.contains(where: { ($0 - before) * ($0 - after) < 0 || ($0 == after && before != after) }) {
       Haptics.selection()
     }
@@ -2444,7 +2438,7 @@ struct SidebarSlider: View {
   private func setTyped() {
     guard var typed = Double(entry.replacingOccurrences(of: ",", with: ".")) else { return }
     if unit == "%" { typed /= 100 }
-    let hard = json.double("max").map { max($0, typed) } ?? typed
+    let hard = max(setting.max, typed)
     typed = max(low, min(hard, typed))
     local = (typed, Date().addingTimeInterval(1))
     sendBrushValue(key, typed, commit: true)
@@ -3016,7 +3010,7 @@ struct RailLayout: Equatable {
 /** What a command waiting for a drag wants, as Box Select chosen from the menu bar, with the way
  * out: Done for one that goes on until then, as Circle Select, Cancel for the others. */
 struct DragHintBadge: View {
-  let hint: NativeUI.DragHint
+  let hint: DragHint
   let finish: () -> Void
 
   var body: some View {

@@ -193,11 +193,8 @@ final class BlenderMenus {
     }
     alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
     alert.addAction(UIAlertAction(title: "Rename", style: .default) { [weak alert] _ in
-      guard let name = alert?.textFields?.first?.text, !name.isEmpty,
-            let data = try? JSONSerialization.data(withJSONObject: name, options: .fragmentsAllowed),
-            let json = String(data: data, encoding: .utf8)
-      else { return }
-      Engine.setting("rename_active", json)
+      guard let name = alert?.textFields?.first?.text, !name.isEmpty else { return }
+      ShellModel.current?.send("active_name", .set_, .text(name))
     })
     top.present(alert, animated: true)
   }

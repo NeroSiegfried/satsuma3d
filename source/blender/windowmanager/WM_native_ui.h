@@ -91,7 +91,6 @@ enum WMNativeUIAssetDragPhase {
 
 /** Change one of the interface's settings in Blender, see `bridge_setting_execute`. */
 void WM_native_ui_setting_enqueue(const char *setting, const char *value);
-void WM_native_ui_tool_set_by_id(const char *tool_id);
 void WM_native_ui_brush_activate(const char *brush_id);
 /** A #WMNativeUISelectIntent, while the buttons are held. */
 void WM_native_ui_select_intent_set(int intent);

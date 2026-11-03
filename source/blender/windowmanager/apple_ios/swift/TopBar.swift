@@ -431,9 +431,9 @@ struct DocumentToolbar: ToolbarContent {
         Label { Text("Overlays") } icon: { iconImage(BlenderIcon.image("OVERLAY")) }
       }
       Menu {
-        ForEach(ViewCommand.pie(locked: model.viewport?.bool("lock_camera") == true,
-                                kept: model.viewport?.bool("keep_camera_view") == true,
-                                camera: model.viewport?.bool("camera_view") == true), id: \.title) { command in
+        ForEach(ViewCommand.pie(locked: model.viewportOption("lock_camera"),
+                                kept: model.viewportOption("keep_camera_view"),
+                                camera: model.viewportOption("camera_view")), id: \.title) { command in
           Button { command.run() } label: { Label { Text(command.title) } icon: { iconImage(command.image) } }
         }
       } label: {
@@ -454,7 +454,7 @@ struct DocumentToolbar: ToolbarContent {
           ForEach([("VERT", "Vertex Select", "circle.fill"), ("EDGE", "Edge Select", "line.diagonal"),
                    ("FACE", "Face Select", "square.fill")], id: \.0) { value, title, symbol in
             sidebarToggle(title, icon: wm_apple_ios_icon("mesh.\(value)", symbol),
-                          isOn: model.meshSelectMode == value) { Engine.setting("mesh_select_mode", value) }
+                          isOn: model.meshSelectMode == value) { model.send("select_mode", .set_, .text(value)) }
           }
         } label: {
           Label { Text("Select Mode") } icon: { iconImage(wm_apple_ios_icon("mesh.VERT", "circle.fill")) }
@@ -466,7 +466,7 @@ struct DocumentToolbar: ToolbarContent {
             ForEach(setting.options, id: \.value) { option in
               sidebarToggle(option.title, icon: setting.image(option),
                             isOn: model.transformSettings[setting.key] == option.value) {
-                Engine.setting(setting.key, option.value)
+                model.send(setting.key, .set_, .text(option.value))
               }
             }
           } label: {
@@ -496,7 +496,7 @@ struct DocumentToolbar: ToolbarContent {
       if let presenter = commands.presenter { wm_apple_ios_new_document(presenter) }
     }
 #if !os(visionOS)
-    if faceControlShown, model.brush?.dict("size") != nil || model.brush?.dict("strength") != nil {
+    if faceControlShown, model.brush?["size"] != nil || model.brush?["strength"] != nil {
       Section {
         /* The face plays the brush: the mouth its strength, the eyebrows its size. */
         sidebarToggle("Face Control", icon: UIImage(systemName: "face.smiling"),
@@ -516,10 +516,10 @@ struct DocumentToolbar: ToolbarContent {
     Section {
       ForEach(ViewportToggle.all, id: \.name) { toggle in
         sidebarToggle(toggle.title, icon: BlenderIcon.image(toggle.icon) ?? UIImage(systemName: toggle.symbol),
-                      isOn: model.viewport?.bool(toggle.name) == true) {
-          Engine.setting("viewport_toggle", toggle.name)
+                      isOn: model.viewportOption(toggle.name)) {
+          model.send("viewport:" + toggle.name, .set_, .bool(!model.viewportOption(toggle.name)))
         }
-        .disabled(model.viewport == nil)
+        .disabled(!model.viewportOptionsShown)
       }
     }
     Section {
@@ -541,7 +541,7 @@ struct DocumentToolbar: ToolbarContent {
     return Menu {
       Picker("Mode", selection: Binding(
         get: { model.objectMode },
-        set: { Engine.setting("object_mode", $0) })) {
+        set: { model.send("mode", .set_, .text($0)) })) {
         ForEach(Array(model.modes.enumerated()), id: \.offset) { _, mode in
           Label {
             Text(mode.label.flatMap { $0.isEmpty ? nil : $0 } ?? mode.id)
@@ -574,7 +574,7 @@ struct DocumentToolbar: ToolbarContent {
         SegmentedControl.Segment(value: value, title: title, image: wm_apple_ios_icon("mesh.\(value)", symbol))
       },
       selection: model.meshSelectMode, accessibilityLabel: "Mesh Selection Mode")
-    { Engine.setting("mesh_select_mode", $0) }
+    { model.send("select_mode", .set_, .text($0)) }
       .frame(width: 144, height: 36)
       .accessibilityIdentifier("blender.mesh-selection")
   }
@@ -596,7 +596,7 @@ struct DocumentToolbar: ToolbarContent {
         Menu {
           Picker(setting.title, selection: Binding(
             get: { value ?? "" },
-            set: { Engine.setting(setting.key, $0) })) {
+            set: { model.send(setting.key, .set_, .text($0)) })) {
             ForEach(setting.options, id: \.value) { option in
               Label { Text(option.title) } icon: { iconImage(setting.image(option)) }
                 .tag(option.value)
@@ -656,13 +656,16 @@ struct DocumentToolbar: ToolbarContent {
   private var mirrorToggles: some View {
     let on = model.transformSettings["mirror"] ?? ""
     ForEach(Array(model.transformSettings["mirror_axes"] ?? ""), id: \.self) { axis in
-      Toggle(axis.uppercased(), isOn: Binding(get: { on.contains(axis) },
-                                             set: { _ in Engine.setting("mirror", String(axis)) }))
+      Toggle(axis.uppercased(), isOn: Binding(get: { on.contains(axis) }, set: { mirrored in
+        /* The axes on, with this one turned on or off. */
+        let axes = (model.transformSettings["mirror_axes"] ?? "").filter { $0 == axis ? mirrored : on.contains($0) }
+        model.send("mirror", .set_, .text(axes.map(String.init).joined(separator: ",")))
+      }))
     }
     if let topology = model.transformSettings["mirror_topology"] {
       Section {
         Toggle("Topology Mirror", isOn: Binding(get: { topology == "on" },
-                                               set: { _ in Engine.setting("mirror_topology", "") }))
+                                               set: { model.send("mirror_topology", .set_, .bool($0)) }))
       }
     }
   }
@@ -678,7 +681,7 @@ struct DocumentToolbar: ToolbarContent {
         Menu {
           Picker(setting.title, selection: Binding(
             get: { value ?? "" },
-            set: { Engine.setting(setting.key, $0) })) {
+            set: { model.send(setting.key, .set_, .text($0)) })) {
             ForEach(setting.options, id: \.value) { option in
               Label { Text(option.title) } icon: { iconImage(setting.image(option)) }
                 .tag(option.value)

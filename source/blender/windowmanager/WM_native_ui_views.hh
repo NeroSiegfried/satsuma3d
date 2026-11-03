@@ -99,6 +99,8 @@ struct ViewType {
 
 /** Make a view type available to interfaces, at startup. */
 void view_type_add(ViewType type);
+/** Build the views of a type again, for a change no notifier tells of. */
+void view_type_dirty(std::string_view name);
 
 /**
  * Run an operator by its name, in Python's or C's form, with properties set from \a params,

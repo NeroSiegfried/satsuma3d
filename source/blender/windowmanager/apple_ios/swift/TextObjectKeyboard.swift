@@ -168,7 +168,7 @@ final class TextObjectInputView: UIView, UIKeyInput, UITextFormattingViewControl
       .flexibleSpace(),
       UIBarButtonItem(systemItem: .done, primaryAction: UIAction { _ in
         /* Leaves Edit Mode, as Tab does. */
-        Engine.setting("object_mode", "OBJECT")
+        ShellModel.current?.send("mode", .set_, .text("OBJECT"))
       }),
     ]
     toolbar.sizeToFit()

@@ -31,8 +31,8 @@ final class FaceControl: NSObject, ARSessionDelegate {
   private(set) var brows: Double = 0
 
   /** The brush's values from Blender, for their ranges and the size to grow from. */
-  @ObservationIgnored var brush: JSON? {
-    didSet { if running && brush?.dict("size") == nil && brush?.dict("strength") == nil { stop() } }
+  @ObservationIgnored var brush: BrushSettings? {
+    didSet { if running && brush?["size"] == nil && brush?["strength"] == nil { stop() } }
   }
   @ObservationIgnored private var session: ARSession?
   @ObservationIgnored private var baseSize: Double?
@@ -51,7 +51,7 @@ final class FaceControl: NSObject, ARSessionDelegate {
     configuration.maximumNumberOfTrackedFaces = 1
     session.run(configuration, options: [.resetTracking])
     self.session = session
-    baseSize = brush?.dict("size")?.double("value")
+    baseSize = brush?["size"]?.value
     mouth = 0
     brows = 0
     running = true
@@ -97,14 +97,14 @@ final class FaceControl: NSObject, ARSessionDelegate {
   }
 
   private func send(commit: Bool) {
-    if let strength = brush?.dict("strength") {
-      let low = strength.double("min") ?? 0
-      let high = min(1, strength.double("max") ?? 1)
+    if let strength = brush?["strength"] {
+      let low = strength.min
+      let high = min(1, strength.max)
       /* Never quite nothing, so a closed mouth still paints faintly. */
       sendBrushValue("strength", low + (high - low) * (0.1 + 0.9 * mouth), commit: commit)
     }
-    if let size = brush?.dict("size"), let baseSize {
-      let high = size.double("max") ?? baseSize * 2
+    if let size = brush?["size"], let baseSize {
+      let high = size.max
       sendBrushValue("size", min(high, baseSize * (1 + brows)), commit: commit)
     }
   }
