@@ -19,7 +19,9 @@ import java.nio.ByteOrder
 import kotlin.math.sign
 
 /**
- * A data-block chosen for a property, such as an object's material.
+ * A data-block chosen for a property, such as an object's material. Commands: `Set` chooses
+ * another by its `value`, `Add` makes a new one, `Remove` takes it away, `Rename` renames it, and
+ * `Invoke` with `fake_user` or `single_user` toggles its fake user or makes it single-user.
  */
 @Suppress("unused")
 class Reference : Table() {

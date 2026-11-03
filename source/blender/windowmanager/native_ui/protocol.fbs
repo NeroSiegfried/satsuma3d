@@ -85,7 +85,7 @@ table Group {
 /// A panel, which can be opened and closed. Its controls are its children; those of its header
 /// are listed in `header`.
 table Panel {
-  open: bool = true;
+  expanded: bool = true;
   /// It cannot be closed.
   fixed: bool;
   /// Keys of its children drawn in its header, such as a modifier's switches.
@@ -192,7 +192,9 @@ table Color {
   alpha: bool;
 }
 
-/// A data-block chosen for a property, such as an object's material.
+/// A data-block chosen for a property, such as an object's material. Commands: `Set` chooses
+/// another by its `value`, `Add` makes a new one, `Remove` takes it away, `Rename` renames it, and
+/// `Invoke` with `fake_user` or `single_user` toggles its fake user or makes it single-user.
 table Reference {
   /// The data-block's type, such as "Material".
   type: string;
@@ -413,6 +415,8 @@ enum Phase : ubyte {
   Begin,
   Update,
   End,
+  /// The change is taken back, as a drag let go where it started.
+  Cancel,
 }
 
 /// Something done to a node of a view.

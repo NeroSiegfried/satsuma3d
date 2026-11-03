@@ -32,7 +32,7 @@ class Panel : Table() {
         __init(_i, _bb)
         return this
     }
-    val open : Boolean
+    val expanded : Boolean
         get() {
             val o = __offset(4)
             return if(o != 0) 0.toByte() != bb.get(o + bb_pos) else true
@@ -67,15 +67,15 @@ class Panel : Table() {
             _bb.order(ByteOrder.LITTLE_ENDIAN)
             return (obj.__assign(_bb.getInt(_bb.position()) + _bb.position(), _bb))
         }
-        fun createPanel(builder: FlatBufferBuilder, open: Boolean, fixed: Boolean, headerOffset: Int) : Int {
+        fun createPanel(builder: FlatBufferBuilder, expanded: Boolean, fixed: Boolean, headerOffset: Int) : Int {
             builder.startTable(3)
             addHeader(builder, headerOffset)
             addFixed(builder, fixed)
-            addOpen(builder, open)
+            addExpanded(builder, expanded)
             return endPanel(builder)
         }
         fun startPanel(builder: FlatBufferBuilder) = builder.startTable(3)
-        fun addOpen(builder: FlatBufferBuilder, open: Boolean) = builder.addBoolean(0, open, true)
+        fun addExpanded(builder: FlatBufferBuilder, expanded: Boolean) = builder.addBoolean(0, expanded, true)
         fun addFixed(builder: FlatBufferBuilder, fixed: Boolean) = builder.addBoolean(1, fixed, false)
         fun addHeader(builder: FlatBufferBuilder, header: Int) = builder.addOffset(2, header, 0)
         fun createHeaderVector(builder: FlatBufferBuilder, data: IntArray) : Int {

@@ -208,8 +208,10 @@ public enum Blender_NativeUI_Phase: UInt8, Enum, Verifiable {
   case begin = 1
   case update = 2
   case end = 3
+  ///  The change is taken back, as a drag let go where it started.
+  case cancel = 4
 
-  public static var max: Blender_NativeUI_Phase { return .end }
+  public static var max: Blender_NativeUI_Phase { return .cancel }
   public static var min: Blender_NativeUI_Phase { return .once }
 }
 
@@ -545,14 +547,14 @@ public struct Blender_NativeUI_Panel: FlatBufferObject, Verifiable {
   public init(_ bb: ByteBuffer, o: Int32) { _accessor = Table(bb: bb, position: o) }
 
   private enum VTOFFSET: VOffset {
-    case open_ = 4
+    case expanded = 4
     case fixed = 6
     case header = 8
     var v: Int32 { Int32(self.rawValue) }
     var p: VOffset { self.rawValue }
   }
 
-  public var open_: Bool { let o = _accessor.offset(VTOFFSET.open_.v); return o == 0 ? true : _accessor.readBuffer(of: Bool.self, at: o) }
+  public var expanded: Bool { let o = _accessor.offset(VTOFFSET.expanded.v); return o == 0 ? true : _accessor.readBuffer(of: Bool.self, at: o) }
   ///  It cannot be closed.
   public var fixed: Bool { let o = _accessor.offset(VTOFFSET.fixed.v); return o == 0 ? false : _accessor.readBuffer(of: Bool.self, at: o) }
   ///  Keys of its children drawn in its header, such as a modifier's switches.
@@ -560,20 +562,20 @@ public struct Blender_NativeUI_Panel: FlatBufferObject, Verifiable {
   public var headerCount: Int32 { let o = _accessor.offset(VTOFFSET.header.v); return o == 0 ? 0 : _accessor.vector(count: o) }
   public func header(at index: Int32) -> String? { let o = _accessor.offset(VTOFFSET.header.v); return o == 0 ? nil : _accessor.directString(at: _accessor.vector(at: o) + index * 4) }
   public static func startPanel(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 3) }
-  public static func add(open_: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: open_, def: true,
-   at: VTOFFSET.open_.p) }
+  public static func add(expanded: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: expanded, def: true,
+   at: VTOFFSET.expanded.p) }
   public static func add(fixed: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: fixed, def: false,
    at: VTOFFSET.fixed.p) }
   public static func addVectorOf(header: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: header, at: VTOFFSET.header.p) }
   public static func endPanel(_ fbb: inout FlatBufferBuilder, start: UOffset) -> Offset { let end = Offset(offset: fbb.endTable(at: start)); return end }
   public static func createPanel(
     _ fbb: inout FlatBufferBuilder,
-    open_: Bool = true,
+    expanded: Bool = true,
     fixed: Bool = false,
     headerVectorOffset header: Offset = Offset()
   ) -> Offset {
     let __start = Blender_NativeUI_Panel.startPanel(&fbb)
-    Blender_NativeUI_Panel.add(open_: open_, &fbb)
+    Blender_NativeUI_Panel.add(expanded: expanded, &fbb)
     Blender_NativeUI_Panel.add(fixed: fixed, &fbb)
     Blender_NativeUI_Panel.addVectorOf(header: header, &fbb)
     return Blender_NativeUI_Panel.endPanel(&fbb, start: __start)
@@ -581,7 +583,7 @@ public struct Blender_NativeUI_Panel: FlatBufferObject, Verifiable {
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
-    try _v.visit(field: VTOFFSET.open_.p, fieldName: "open_", required: false, type: Bool.self)
+    try _v.visit(field: VTOFFSET.expanded.p, fieldName: "expanded", required: false, type: Bool.self)
     try _v.visit(field: VTOFFSET.fixed.p, fieldName: "fixed", required: false, type: Bool.self)
     try _v.visit(field: VTOFFSET.header.p, fieldName: "header", required: false, type: ForwardOffset<Vector<ForwardOffset<String>, String>>.self)
     _v.finish()
@@ -962,7 +964,9 @@ public struct Blender_NativeUI_Color: FlatBufferObject, Verifiable {
   }
 }
 
-///  A data-block chosen for a property, such as an object's material.
+///  A data-block chosen for a property, such as an object's material. Commands: `Set` chooses
+///  another by its `value`, `Add` makes a new one, `Remove` takes it away, `Rename` renames it, and
+///  `Invoke` with `fake_user` or `single_user` toggles its fake user or makes it single-user.
 public struct Blender_NativeUI_Reference: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }

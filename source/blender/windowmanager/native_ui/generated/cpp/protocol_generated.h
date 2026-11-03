@@ -667,33 +667,37 @@ enum class Phase : uint8_t {
   Begin = 1,
   Update = 2,
   End = 3,
+  /// The change is taken back, as a drag let go where it started.
+  Cancel = 4,
   MIN = Once,
-  MAX = End
+  MAX = Cancel
 };
 
-inline const Phase (&EnumValuesPhase())[4] {
+inline const Phase (&EnumValuesPhase())[5] {
   static const Phase values[] = {
     Phase::Once,
     Phase::Begin,
     Phase::Update,
-    Phase::End
+    Phase::End,
+    Phase::Cancel
   };
   return values;
 }
 
 inline const char * const *EnumNamesPhase() {
-  static const char * const names[5] = {
+  static const char * const names[6] = {
     "Once",
     "Begin",
     "Update",
     "End",
+    "Cancel",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNamePhase(Phase e) {
-  if (::flatbuffers::IsOutRange(e, Phase::Once, Phase::End)) return "";
+  if (::flatbuffers::IsOutRange(e, Phase::Once, Phase::Cancel)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesPhase()[index];
 }
@@ -1191,12 +1195,12 @@ struct Panel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef PanelBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
-    VT_OPEN = 4,
+    VT_EXPANDED = 4,
     VT_FIXED = 6,
     VT_HEADER = 8
   };
-  bool open() const {
-    return GetField<uint8_t>(VT_OPEN, 1) != 0;
+  bool expanded() const {
+    return GetField<uint8_t>(VT_EXPANDED, 1) != 0;
   }
   /// It cannot be closed.
   bool fixed() const {
@@ -1208,7 +1212,7 @@ struct Panel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
-           VerifyField<uint8_t>(verifier, VT_OPEN, 1) &&
+           VerifyField<uint8_t>(verifier, VT_EXPANDED, 1) &&
            VerifyField<uint8_t>(verifier, VT_FIXED, 1) &&
            VerifyOffset(verifier, VT_HEADER) &&
            verifier.VerifyVector(header()) &&
@@ -1221,8 +1225,8 @@ struct PanelBuilder {
   typedef Panel Table;
   ::flatbuffers::FlatBufferBuilder &fbb_;
   ::flatbuffers::uoffset_t start_;
-  void add_open(bool open) {
-    fbb_.AddElement<uint8_t>(Panel::VT_OPEN, static_cast<uint8_t>(open), 1);
+  void add_expanded(bool expanded) {
+    fbb_.AddElement<uint8_t>(Panel::VT_EXPANDED, static_cast<uint8_t>(expanded), 1);
   }
   void add_fixed(bool fixed) {
     fbb_.AddElement<uint8_t>(Panel::VT_FIXED, static_cast<uint8_t>(fixed), 0);
@@ -1243,13 +1247,13 @@ struct PanelBuilder {
 
 inline ::flatbuffers::Offset<Panel> CreatePanel(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    bool open = true,
+    bool expanded = true,
     bool fixed = false,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> header = 0) {
   PanelBuilder builder_(_fbb);
   builder_.add_header(header);
   builder_.add_fixed(fixed);
-  builder_.add_open(open);
+  builder_.add_expanded(expanded);
   return builder_.Finish();
 }
 
@@ -1260,13 +1264,13 @@ struct Panel::Traits {
 
 inline ::flatbuffers::Offset<Panel> CreatePanelDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    bool open = true,
+    bool expanded = true,
     bool fixed = false,
     const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *header = nullptr) {
   auto header__ = header ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*header) : 0;
   return Blender::NativeUI::CreatePanel(
       _fbb,
-      open,
+      expanded,
       fixed,
       header__);
 }
@@ -1852,7 +1856,9 @@ inline ::flatbuffers::Offset<Color> CreateColorDirect(
       alpha);
 }
 
-/// A data-block chosen for a property, such as an object's material.
+/// A data-block chosen for a property, such as an object's material. Commands: `Set` chooses
+/// another by its `value`, `Add` makes a new one, `Remove` takes it away, `Rename` renames it, and
+/// `Invoke` with `fake_user` or `single_user` toggles its fake user or makes it single-user.
 struct Reference FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef ReferenceBuilder Builder;
   struct Traits;

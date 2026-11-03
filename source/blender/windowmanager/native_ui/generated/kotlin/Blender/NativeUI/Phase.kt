@@ -15,5 +15,9 @@ class Phase private constructor() {
         const val Begin: UByte = 1u
         const val Update: UByte = 2u
         const val End: UByte = 3u
+        /**
+         * The change is taken back, as a drag let go where it started.
+         */
+        const val Cancel: UByte = 4u
     }
 }
