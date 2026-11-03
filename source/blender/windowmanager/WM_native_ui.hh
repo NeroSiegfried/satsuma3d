@@ -18,11 +18,20 @@ struct ARegion;
 struct bContext;
 struct wmOperator;
 struct wmOperatorType;
+struct wmNotifier;
 struct wmWindow;
 
 /* -------------------------------------------------------------------- */
 /** \name Blender's Loop
  * \{ */
+
+/** Views whose data a notifier says changed are built again, see `WM_native_ui_views.hh`. */
+void WM_native_ui_views_notify(const wmNotifier &note);
+/**
+ * Take subscriptions and commands, and send updates of views that changed, on each pass of
+ * Blender's loop.
+ */
+void WM_native_ui_views_flush(bContext *C);
 
 /** Run the commands the interface queued, on each pass of Blender's loop. */
 void WM_native_ui_flush_commands(bContext *C);

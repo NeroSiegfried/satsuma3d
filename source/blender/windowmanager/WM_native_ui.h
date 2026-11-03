@@ -20,6 +20,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -34,6 +35,35 @@ extern "C" {
 #  define WM_NATIVE_UI_NULLABLE
 #  define WM_NATIVE_UI_NONNULL
 #endif
+
+/* -------------------------------------------------------------------- */
+/** \name Views
+ *
+ * What an interface shows, as views it subscribes to: Blender sends each whole once, then only
+ * what changed, as FlatBuffers of `protocol.fbs` in `native_ui/`. The interface sends commands
+ * aimed at a view's nodes back.
+ * \{ */
+
+/** A batch of updates taken by the interface, read in place until freed. */
+typedef struct WMNativeUIBuffer WMNativeUIBuffer;
+
+/**
+ * Show a view, from a `Subscribe` buffer: its updates carry the number returned, 0 when the
+ * buffer is not a `Subscribe`. The buffer is copied.
+ */
+uint32_t WM_native_ui_subscribe(const uint8_t *request, size_t size);
+void WM_native_ui_unsubscribe(uint32_t subscription);
+/** Send a `Commands` buffer, which is copied. */
+void WM_native_ui_send(const uint8_t *commands, size_t size);
+/**
+ * The next batch of updates, an `Updates` buffer, or null when none waits. Batches are taken in
+ * order, each built on the ones before, by one thread only.
+ */
+WMNativeUIBuffer *WM_NATIVE_UI_NULLABLE WM_native_ui_take_updates(void);
+const uint8_t *WM_native_ui_buffer_data(const WMNativeUIBuffer *buffer, size_t *r_size);
+void WM_native_ui_buffer_free(WMNativeUIBuffer *buffer);
+
+/** \} */
 
 /* -------------------------------------------------------------------- */
 /** \name Commands

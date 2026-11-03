@@ -77,6 +77,7 @@ set(SRC
   WM_native_interface.hh
   WM_native_ui.h
   WM_native_ui.hh
+  WM_native_ui_views.hh
   WM_message.hh
   WM_toolsystem.hh
   WM_types.hh
@@ -188,20 +189,22 @@ if(WITH_NATIVE_UI)
   # Blender it shows, as JSON.
   add_definitions(-DWITH_NATIVE_UI)
   list(APPEND INC
-    native_ui
-    native_ui/generated/cpp
+    PUBLIC native_ui
+    PUBLIC native_ui/generated/cpp
   )
   list(APPEND SRC
     intern/wm_native_ui.cc
+    intern/wm_native_ui_views.cc
     intern/wm_apple_ios_volume.cc
     native_ui/view_tree.cc
 
     intern/wm_apple_ios_volume.h
+    intern/wm_native_ui_timing.hh
     native_ui/generated/cpp/protocol_generated.h
     native_ui/view_tree.hh
   )
   list(APPEND LIB
-    PRIVATE bf::extern::flatbuffers
+    PUBLIC bf::extern::flatbuffers
     PRIVATE bf::extern::xxhash
   )
 endif()

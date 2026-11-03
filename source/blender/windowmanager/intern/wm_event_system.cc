@@ -75,6 +75,9 @@
 #include "WM_keymap.hh"
 #include "WM_message.hh"
 #include "WM_native_interface.hh"
+#ifdef WITH_NATIVE_UI
+#  include "WM_native_ui.hh"
+#endif
 #include "WM_toolsystem.hh"
 #include "WM_types.hh"
 
@@ -603,6 +606,11 @@ void wm_event_do_notifiers(bContext *C)
   {
     native->state_changed();
   }
+#ifdef WITH_NATIVE_UI
+  for (const wmNotifier &note : wm->runtime->notifier_queue) {
+    WM_native_ui_views_notify(note);
+  }
+#endif
 
   /* Disable? - Keep for now since its used for window level notifiers. */
 #if 1
@@ -828,6 +836,11 @@ void wm_event_do_notifiers(bContext *C)
   }
 
   wm_event_do_refresh_wm_and_depsgraph(C);
+
+#ifdef WITH_NATIVE_UI
+  /* Once the depsgraph is evaluated, so views show its results. */
+  WM_native_ui_views_flush(C);
+#endif
 
   RE_FreeUnusedGPUResources();
 
