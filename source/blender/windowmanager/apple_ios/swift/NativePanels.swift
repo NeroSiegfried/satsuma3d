@@ -40,11 +40,8 @@ extension NativeNode {
   var row: Blender_NativeUI_Row? { kind == .row ? content(Blender_NativeUI_Row.self) : nil }
   var group: Blender_NativeUI_Group? { kind == .group ? content(Blender_NativeUI_Group.self) : nil }
 
-  /** Keys of the children a panel draws in its header. */
-  var headerKeys: [String] {
-    guard let panel else { return [] }
-    return (0..<panel.headerCount).compactMap { panel.header(at: $0) }
-  }
+  /** Drawn in the header of the panel it is in. */
+  var inHeader: Bool { role == .name || role == .visibility || role == .header }
 }
 
 extension Blender_NativeUI_Choice {
@@ -189,11 +186,10 @@ final class PanelsModel {
 
   /** A panel's children drawn in its body, rather than its header. */
   func body(of node: NativeNode) -> [NativeNode] {
-    let header = Set(node.headerKeys)
-    return view.children(of: node).filter { !header.contains($0.key) }
+    view.children(of: node).filter { node.kind != .panel || !$0.inHeader }
   }
 
-  func header(of panel: NativeNode) -> [NativeNode] { panel.headerKeys.compactMap { view.node($0) } }
+  func header(of panel: NativeNode) -> [NativeNode] { view.children(of: panel).filter(\.inHeader) }
 
   func children(of node: NativeNode) -> [NativeNode] { view.children(of: node) }
 

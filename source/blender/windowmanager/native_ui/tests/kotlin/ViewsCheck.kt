@@ -33,7 +33,7 @@ fun update(): ByteBuffer {
     val panel = nodeBuffer(builder) { b ->
         val key = b.createString("panel:transform")
         val label = b.createString("Transform")
-        val content = Panel.createPanel(b, true, false, 0, false, -1, true)
+        val content = Panel.createPanel(b, true, false, false, -1, true)
         Node.startNode(b)
         Node.addKey(b, key)
         Node.addContentType(b, Content.Panel)

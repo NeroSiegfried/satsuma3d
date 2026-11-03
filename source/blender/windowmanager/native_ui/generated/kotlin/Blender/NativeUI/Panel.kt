@@ -19,8 +19,8 @@ import java.nio.ByteOrder
 import kotlin.math.sign
 
 /**
- * A panel, which can be opened and closed. Its controls are its children; those of its header
- * are listed in `header`.
+ * A panel, which can be opened and closed. Its controls are its children, some drawn in its
+ * header, see `Role`.
  */
 @Suppress("unused")
 class Panel : Table() {
@@ -46,26 +46,11 @@ class Panel : Table() {
             return if(o != 0) 0.toByte() != bb.get(o + bb_pos) else false
         }
     /**
-     * Keys of its children drawn in its header, such as a modifier's switches.
-     */
-    fun header(j: Int) : String? {
-        val o = __offset(8)
-        return if (o != 0) {
-            __string(__vector(o) + j * 4)
-        } else {
-            null
-        }
-    }
-    val headerLength : Int
-        get() {
-            val o = __offset(8); return if (o != 0) __vector_len(o) else 0
-        }
-    /**
      * The active one of a stack of panels, such as the active modifier.
      */
     val active : Boolean
         get() {
-            val o = __offset(10)
+            val o = __offset(8)
             return if(o != 0) 0.toByte() != bb.get(o + bb_pos) else false
         }
     /**
@@ -74,7 +59,7 @@ class Panel : Table() {
      */
     val position : Int
         get() {
-            val o = __offset(12)
+            val o = __offset(10)
             return if(o != 0) bb.getInt(o + bb_pos) else -1
         }
     /**
@@ -82,7 +67,7 @@ class Panel : Table() {
      */
     val openable : Boolean
         get() {
-            val o = __offset(14)
+            val o = __offset(12)
             return if(o != 0) 0.toByte() != bb.get(o + bb_pos) else true
         }
     companion object {
@@ -92,31 +77,21 @@ class Panel : Table() {
             _bb.order(ByteOrder.LITTLE_ENDIAN)
             return (obj.__assign(_bb.getInt(_bb.position()) + _bb.position(), _bb))
         }
-        fun createPanel(builder: FlatBufferBuilder, expanded: Boolean, fixed: Boolean, headerOffset: Int, active: Boolean, position: Int, openable: Boolean) : Int {
-            builder.startTable(6)
+        fun createPanel(builder: FlatBufferBuilder, expanded: Boolean, fixed: Boolean, active: Boolean, position: Int, openable: Boolean) : Int {
+            builder.startTable(5)
             addPosition(builder, position)
-            addHeader(builder, headerOffset)
             addOpenable(builder, openable)
             addActive(builder, active)
             addFixed(builder, fixed)
             addExpanded(builder, expanded)
             return endPanel(builder)
         }
-        fun startPanel(builder: FlatBufferBuilder) = builder.startTable(6)
+        fun startPanel(builder: FlatBufferBuilder) = builder.startTable(5)
         fun addExpanded(builder: FlatBufferBuilder, expanded: Boolean) = builder.addBoolean(0, expanded, true)
         fun addFixed(builder: FlatBufferBuilder, fixed: Boolean) = builder.addBoolean(1, fixed, false)
-        fun addHeader(builder: FlatBufferBuilder, header: Int) = builder.addOffset(2, header, 0)
-        fun createHeaderVector(builder: FlatBufferBuilder, data: IntArray) : Int {
-            builder.startVector(4, data.size, 4)
-            for (i in data.size - 1 downTo 0) {
-                builder.addOffset(data[i])
-            }
-            return builder.endVector()
-        }
-        fun startHeaderVector(builder: FlatBufferBuilder, numElems: Int) = builder.startVector(4, numElems, 4)
-        fun addActive(builder: FlatBufferBuilder, active: Boolean) = builder.addBoolean(3, active, false)
-        fun addPosition(builder: FlatBufferBuilder, position: Int) = builder.addInt(4, position, -1)
-        fun addOpenable(builder: FlatBufferBuilder, openable: Boolean) = builder.addBoolean(5, openable, true)
+        fun addActive(builder: FlatBufferBuilder, active: Boolean) = builder.addBoolean(2, active, false)
+        fun addPosition(builder: FlatBufferBuilder, position: Int) = builder.addInt(3, position, -1)
+        fun addOpenable(builder: FlatBufferBuilder, openable: Boolean) = builder.addBoolean(4, openable, true)
         fun endPanel(builder: FlatBufferBuilder) : Int {
             val o = builder.endTable()
             return o

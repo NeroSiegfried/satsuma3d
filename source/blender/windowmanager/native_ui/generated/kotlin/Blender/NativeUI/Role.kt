@@ -33,5 +33,9 @@ class Role private constructor() {
          * Duplicates the active row of the list it is a child of.
          */
         const val Duplicate: UByte = 6u
+        /**
+         * Drawn in the header of the panel it is a child of, such as a modifier's Remove.
+         */
+        const val Header: UByte = 7u
     }
 }

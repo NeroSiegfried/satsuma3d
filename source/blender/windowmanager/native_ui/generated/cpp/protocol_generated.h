@@ -619,11 +619,13 @@ enum class Role : uint8_t {
   Visibility = 5,
   /// Duplicates the active row of the list it is a child of.
   Duplicate = 6,
+  /// Drawn in the header of the panel it is a child of, such as a modifier's Remove.
+  Header = 7,
   MIN = None,
-  MAX = Duplicate
+  MAX = Header
 };
 
-inline const Role (&EnumValuesRole())[7] {
+inline const Role (&EnumValuesRole())[8] {
   static const Role values[] = {
     Role::None,
     Role::Lock,
@@ -631,13 +633,14 @@ inline const Role (&EnumValuesRole())[7] {
     Role::Shape,
     Role::Name,
     Role::Visibility,
-    Role::Duplicate
+    Role::Duplicate,
+    Role::Header
   };
   return values;
 }
 
 inline const char * const *EnumNamesRole() {
-  static const char * const names[8] = {
+  static const char * const names[9] = {
     "None",
     "Lock",
     "Mode",
@@ -645,13 +648,14 @@ inline const char * const *EnumNamesRole() {
     "Name",
     "Visibility",
     "Duplicate",
+    "Header",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameRole(Role e) {
-  if (::flatbuffers::IsOutRange(e, Role::None, Role::Duplicate)) return "";
+  if (::flatbuffers::IsOutRange(e, Role::None, Role::Header)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesRole()[index];
 }
@@ -1360,18 +1364,17 @@ struct Group::Traits {
   static auto constexpr Create = CreateGroup;
 };
 
-/// A panel, which can be opened and closed. Its controls are its children; those of its header
-/// are listed in `header`.
+/// A panel, which can be opened and closed. Its controls are its children, some drawn in its
+/// header, see `Role`.
 struct Panel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef PanelBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_EXPANDED = 4,
     VT_FIXED = 6,
-    VT_HEADER = 8,
-    VT_ACTIVE = 10,
-    VT_POSITION = 12,
-    VT_OPENABLE = 14
+    VT_ACTIVE = 8,
+    VT_POSITION = 10,
+    VT_OPENABLE = 12
   };
   bool expanded() const {
     return GetField<uint8_t>(VT_EXPANDED, 1) != 0;
@@ -1379,10 +1382,6 @@ struct Panel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   /// It cannot be closed.
   bool fixed() const {
     return GetField<uint8_t>(VT_FIXED, 0) != 0;
-  }
-  /// Keys of its children drawn in its header, such as a modifier's switches.
-  const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *header() const {
-    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_HEADER);
   }
   /// The active one of a stack of panels, such as the active modifier.
   bool active() const {
@@ -1401,9 +1400,6 @@ struct Panel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     return VerifyTableStart(verifier) &&
            VerifyField<uint8_t>(verifier, VT_EXPANDED, 1) &&
            VerifyField<uint8_t>(verifier, VT_FIXED, 1) &&
-           VerifyOffset(verifier, VT_HEADER) &&
-           verifier.VerifyVector(header()) &&
-           verifier.VerifyVectorOfStrings(header()) &&
            VerifyField<uint8_t>(verifier, VT_ACTIVE, 1) &&
            VerifyField<int32_t>(verifier, VT_POSITION, 4) &&
            VerifyField<uint8_t>(verifier, VT_OPENABLE, 1) &&
@@ -1420,9 +1416,6 @@ struct PanelBuilder {
   }
   void add_fixed(bool fixed) {
     fbb_.AddElement<uint8_t>(Panel::VT_FIXED, static_cast<uint8_t>(fixed), 0);
-  }
-  void add_header(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> header) {
-    fbb_.AddOffset(Panel::VT_HEADER, header);
   }
   void add_active(bool active) {
     fbb_.AddElement<uint8_t>(Panel::VT_ACTIVE, static_cast<uint8_t>(active), 0);
@@ -1448,13 +1441,11 @@ inline ::flatbuffers::Offset<Panel> CreatePanel(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     bool expanded = true,
     bool fixed = false,
-    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> header = 0,
     bool active = false,
     int32_t position = -1,
     bool openable = true) {
   PanelBuilder builder_(_fbb);
   builder_.add_position(position);
-  builder_.add_header(header);
   builder_.add_openable(openable);
   builder_.add_active(active);
   builder_.add_fixed(fixed);
@@ -1466,25 +1457,6 @@ struct Panel::Traits {
   using type = Panel;
   static auto constexpr Create = CreatePanel;
 };
-
-inline ::flatbuffers::Offset<Panel> CreatePanelDirect(
-    ::flatbuffers::FlatBufferBuilder &_fbb,
-    bool expanded = true,
-    bool fixed = false,
-    const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *header = nullptr,
-    bool active = false,
-    int32_t position = -1,
-    bool openable = true) {
-  auto header__ = header ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*header) : 0;
-  return Blender::NativeUI::CreatePanel(
-      _fbb,
-      expanded,
-      fixed,
-      header__,
-      active,
-      position,
-      openable);
-}
 
 /// A switch.
 struct Toggle FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {

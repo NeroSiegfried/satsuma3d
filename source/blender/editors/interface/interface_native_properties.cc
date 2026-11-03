@@ -2,7 +2,12 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-/** Native Properties projects the registered Blender panels and their RNA controls. */
+/** \file
+ * \ingroup edinterface
+ *
+ * Blender's panels as the controls of views for a platform's own interface, see
+ * `interface_native.hh`: written from the buttons Blender draws, and edited as they are.
+ */
 #include "BKE_animsys.h"
 #include "BKE_appdir.hh"
 #include "BKE_context.hh"
@@ -70,6 +75,7 @@
 #include "WM_toolsystem.hh"
 #include "WM_keymap.hh"
 #include "interface_intern.hh"
+#include "interface_native.hh"
 #include "wm_event_system.hh"
 
 #include <algorithm>
@@ -84,6 +90,7 @@ namespace blender::ui {
 std::string native_menu_query(bContext *C, const std::string &request, bool execute);
 namespace {
 using namespace io::serialize;
+using namespace wm::native_ui;
 
 std::string encode(const Value &value)
 {
@@ -530,10 +537,38 @@ void finish_property_interaction(bContext *C)
   interaction.undo_name.clear();
 }
 
+/** A command's value as a number: a number's, or a switch's as 0 or 1. */
+std::optional<double> command_number(const protocol::Command *command)
+{
+  if (command == nullptr) {
+    return std::nullopt;
+  }
+  if (const protocol::FloatValue *value = command->value_as_FloatValue()) {
+    return value->value();
+  }
+  if (const protocol::IntValue *value = command->value_as_IntValue()) {
+    return double(value->value());
+  }
+  if (const protocol::BoolValue *value = command->value_as_BoolValue()) {
+    return value->value() ? 1.0 : 0.0;
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> command_text(const protocol::Command *command)
+{
+  const protocol::TextValue *value = command ? command->value_as_TextValue() : nullptr;
+  if (value == nullptr) {
+    return std::nullopt;
+  }
+  return value->value() ? value->value()->str() : std::string();
+}
+
+/** Set the property \a but edits to the value \a request gives, as an edit in the button does. */
 bool set_property(bContext *C,
                   Button &but,
                   int index,
-                  const DictionaryValue &request,
+                  const native::EditRequest &request,
                   const bool push_undo = true,
                   const bool with_selected = true)
 {
@@ -545,11 +580,15 @@ bool set_property(bContext *C,
     return false;
   }
   const bool array = RNA_property_array_check(prop);
-  const auto number = request.lookup_double("value");
-  const auto integer = request.lookup_int("value");
-  const double numeric = number.value_or(integer.value_or(0));
-  const auto phase = request.lookup_str("phase").value_or("");
-  const std::string token = request.lookup_str("interaction").value_or("");
+  /* A row made active gives its list's active index its place. */
+  const std::optional<double> number = request.action == "activate" ?
+                                           std::optional<double>(request.index) :
+                                           command_number(request.command);
+  const double numeric = number.value_or(0);
+  const std::optional<std::string> text = command_text(request.command);
+  const std::string &phase = request.phase;
+  const std::string &token = request.interaction;
+  const bool slider = request.edit && request.edit->slider;
   /* Adjust Last Operation edits the operator alone. */
   const SelectedOthers others = push_undo && with_selected ? selected_others(C, but) :
                                                               SelectedOthers();
@@ -567,20 +606,16 @@ bool set_property(bContext *C,
   switch (RNA_property_type(prop)) {
     case PROP_FLOAT: {
       if (is_color(ptr, prop) && index == -1) {
-        const auto *components = request.lookup_array("value");
+        const protocol::FloatsValue *components = request.command ?
+                                                      request.command->value_as_FloatsValue() :
+                                                      nullptr;
         const int length = RNA_property_array_length(ptr, prop);
-        if (!components || components->elements().size() != length) {
+        if (!components || !components->value() || components->value()->size() != length) {
           return false;
         }
         float color[4] = {0, 0, 0, 1};
         for (int i = 0; i < length; i++) {
-          const auto &component = components->elements()[i];
-          const auto *real = component->as_double_value();
-          const auto *integer_component = component->as_int_value();
-          if (!real && !integer_component) {
-            return false;
-          }
-          const double value = real ? real->value() : double(integer_component->value());
+          const double value = components->value()->Get(i);
           if (!std::isfinite(value) || std::abs(value) > FLT_MAX) {
             return false;
           }
@@ -613,13 +648,13 @@ bool set_property(bContext *C,
         RNA_property_float_set_array(ptr, prop, color);
         break;
       }
-      if ((!number && !integer) || !std::isfinite(numeric)) {
+      if (!number || !std::isfinite(numeric)) {
         return false;
       }
       float minimum, maximum;
       RNA_property_float_range(ptr, prop, &minimum, &maximum);
       const float value = std::clamp(float(numeric), minimum, maximum);
-      if (request.lookup_dict("slider") && others.items.is_empty() && value == (array ? RNA_property_float_get_index(ptr, prop, index) : RNA_property_float_get(ptr, prop))) {
+      if (slider && others.items.is_empty() && value == (array ? RNA_property_float_get_index(ptr, prop, index) : RNA_property_float_get(ptr, prop))) {
         return true;
       }
       if (array) {
@@ -631,13 +666,13 @@ bool set_property(bContext *C,
       break;
     }
     case PROP_INT: {
-      if ((!number && !integer) || !std::isfinite(numeric)) {
+      if (!number || !std::isfinite(numeric)) {
         return false;
       }
       int minimum, maximum;
       RNA_property_int_range(ptr, prop, &minimum, &maximum);
       const int value = int(std::clamp(numeric, double(minimum), double(maximum)));
-      if (request.lookup_dict("slider") && others.items.is_empty() && value == (array ? RNA_property_int_get_index(ptr, prop, index) : RNA_property_int_get(ptr, prop))) {
+      if (slider && others.items.is_empty() && value == (array ? RNA_property_int_get_index(ptr, prop, index) : RNA_property_int_get(ptr, prop))) {
         return true;
       }
       if (array) {
@@ -649,8 +684,8 @@ bool set_property(bContext *C,
       break;
     }
     case PROP_BOOLEAN: {
-      const auto *raw = request.lookup("value");
-      const BooleanValue *value = raw ? (*raw)->as_boolean_value() : nullptr;
+      const protocol::BoolValue *value = request.command ? request.command->value_as_BoolValue() :
+                                                           nullptr;
       if (!value) {
         return false;
       }
@@ -663,15 +698,14 @@ bool set_property(bContext *C,
       break;
     }
     case PROP_STRING: {
-      const auto value = request.lookup_str("value");
-      if (!value) {
+      if (!text) {
         return false;
       }
-      RNA_property_string_set(ptr, prop, value->c_str());
+      RNA_property_string_set(ptr, prop, text->c_str());
       break;
     }
     case PROP_ENUM: {
-      const auto value = request.lookup_str("value");
+      const std::optional<std::string> &value = text;
       const EnumPropertyItem *items;
       int count;
       bool free;
@@ -691,12 +725,12 @@ bool set_property(bContext *C,
       break;
     }
     case PROP_POINTER: {
-      const auto value = request.lookup_str("value");
+      const std::optional<std::string> &value = text;
       if (!value || !RNA_struct_is_ID(RNA_property_pointer_type(ptr, prop))) {
         return false;
       }
       PointerRNA target = PointerRNA_NULL;
-      if (!value->is_empty()) {
+      if (!value->empty()) {
         ID *id;
         FOREACH_MAIN_ID_BEGIN (CTX_data_main(C), id) {
           if (std::to_string(id->session_uid) == *value) {
@@ -759,27 +793,34 @@ struct PropertyAnimationAction {
   bool all;
 };
 
-/* Blender's widget animation colors: keyed on this frame, animated, changed from the
- * animated value, or driven. Empty when the property has no animation data. */
-const char *property_animation_state(bContext *C, Button &but, int index)
+/**
+ * How a property is animated, as Blender colors its button: keyed on this frame, animated,
+ * changed from its animated value, or driven. And whether its keyframes can be inserted and
+ * removed, see #property_animation_actions.
+ */
+std::pair<protocol::Animation, bool> property_animation(bContext *C, Button &but, int index)
 {
   if (!RNA_property_path_from_ID_check(&but.rnapoin, but.rnaprop)) {
-    return "";
+    return {protocol::Animation::None, false};
   }
   const int old_index = but.rnaindex, old_flag = but.flag, old_drawflag = but.drawflag;
   but.rnaindex = index;
   const AnimationEvalContext eval = BKE_animsys_eval_context_construct(
       CTX_data_depsgraph_pointer(C), BKE_scene_frame_get(CTX_data_scene(C)));
   button_anim_flag(&but, &eval);
-  const char *state = (but.flag & BUT_DRIVEN)               ? "DRIVEN" :
-                      (but.drawflag & BUT_ANIMATED_CHANGED) ? "CHANGED" :
-                      (but.flag & BUT_ANIMATED_KEY)         ? "KEYED" :
-                      (but.flag & BUT_ANIMATED)             ? "ANIMATED" :
-                                                              "";
+  const protocol::Animation state = (but.flag & BUT_DRIVEN) ? protocol::Animation::Driven :
+                                    (but.drawflag & BUT_ANIMATED_CHANGED) ?
+                                                              protocol::Animation::Changed :
+                                    (but.flag & BUT_ANIMATED_KEY) ? protocol::Animation::Keyed :
+                                    (but.flag & BUT_ANIMATED)     ? protocol::Animation::Animated :
+                                                                    protocol::Animation::None;
   but.rnaindex = old_index;
   but.flag = old_flag;
   but.drawflag = old_drawflag;
-  return state;
+  return {state,
+          state != protocol::Animation::Driven &&
+              RNA_property_anim_editable(&but.rnapoin, but.rnaprop) &&
+              !(but.flag & (BUT_DISABLED | BUT_INACTIVE))};
 }
 
 std::vector<PropertyAnimationAction> property_animation_actions(bContext *C, Button &but, int index)
@@ -929,225 +970,6 @@ std::map<Button *, PropertyPair> property_pairs(const Block &block)
   return pairs;
 }
 
-/** Menus several fields share, while a node tree is read: each one once, by its choices. */
-struct NativeOptionSets {
-  std::set<std::string> keys;
-  std::shared_ptr<DictionaryValue> sets = std::make_shared<DictionaryValue>();
-};
-NativeOptionSets *native_option_sets = nullptr;
-
-void project_property(bContext *C, Button &but, int index, DictionaryValue &field,
-                      const PropertyPair *pair = nullptr, const std::string *layout_name = nullptr,
-                      const SelectedOthers *others = nullptr,
-                      const std::string *own_name = nullptr)
-{
-  PointerRNA *ptr = &but.rnapoin;
-  PropertyRNA *prop = but.rnaprop;
-  /* ID properties (e.g. Geometry Nodes inputs, "Socket_2") are only named by their layout. */
-  /* Node socket values (e.g. material inputs) are all "default_value"; name them by socket. */
-  const bool socket_value = RNA_struct_is_a(ptr->type, RNA_NodeSocket) &&
-                            STREQ(RNA_property_identifier(prop), "default_value");
-  const std::string name =
-      own_name && !own_name->empty() ? *own_name :
-      layout_name && !layout_name->empty() && RNA_property_is_idprop(prop) ? *layout_name :
-      socket_value ? std::string(ed::space_node::node_socket_get_label(
-                         static_cast<const bNodeSocket *>(ptr->data))) :
-                     std::string(RNA_property_ui_name(prop));
-  const bool array = RNA_property_array_check(prop);
-  const int length = RNA_property_array_length(ptr, prop);
-  const PropertyType type = RNA_property_type(prop);
-  if (const char *state = property_animation_state(C, but, index); state[0]) {
-    field.append_str("anim_state", state);
-  }
-  const auto actions = property_animation_actions(C, but, index);
-  if (!actions.empty()) {
-    auto animation = field.append_array("animation");
-    for (const PropertyAnimationAction &action : actions) {
-      auto item = animation->append_dict();
-      item->append_str("id", action.id);
-      item->append_str("title", action.title);
-      item->append_str("icon", action.icon);
-    }
-  }
-  const SelectedOthers own_others = others ? SelectedOthers() : selected_others(C, but);
-  if (others_differ(but, is_color(ptr, prop) ? -1 : index, others ? *others : own_others)) {
-    field.append_int("mixed", 1);
-  }
-  if (is_color(ptr, prop)) {
-    float color[4] = {0, 0, 0, 1};
-    RNA_property_float_get_array(ptr, prop, color);
-    const float exposure = std::max({1.0f, color[0], color[1], color[2]});
-    if (RNA_property_subtype(prop) == PROP_COLOR) {
-      IMB_colormanagement_scene_linear_to_srgb_v3(color, color);
-    }
-    field.append_str("type", "COLOR");
-    field.append_str("label", name);
-    field.append_str("key", property_key(but, -1));
-    field.append_str("property", RNA_property_identifier(prop));
-    field.append_str("owner", RNA_struct_is_a(ptr->type, RNA_Object) ? "object" : "data");
-    field.append_int("alpha", length == 4);
-    field.append_double("exposure", std::isfinite(exposure) ? exposure : 1);
-    field.append_int("editable", RNA_property_editable(ptr, prop) &&
-        !(but.flag & (BUT_DISABLED | BUT_INACTIVE)));
-    auto values = field.append_array("value");
-    for (int i = 0; i < length; i++) {
-      values->append_double(std::isfinite(color[i]) ? color[i] : 0);
-    }
-    return;
-  }
-  std::string title = name;
-  if (pair) {
-    title = pair->component;
-    field.append_str("group", pair->title);
-    field.append_str("group_key", pair->key);
-  }
-  else if (array && length <= 4) {
-    const bool color = ELEM(RNA_property_subtype(prop), PROP_COLOR, PROP_COLOR_GAMMA);
-    const char *axes = color ? "RGBA" : length == 4 ? "WXYZ" : "XYZW";
-    title = std::string(1, axes[index]);
-    field.append_str("group", ELEM(std::string(RNA_property_identifier(prop)),
-                                   "rotation_euler", "rotation_quaternion", "rotation_axis_angle") ?
-                                  "Rotation" : name);
-    field.append_str("group_key", property_key(but, -1));
-  }
-  field.append_str("label", title);
-  field.append_str("key", property_key(but, index));
-  field.append_str("property", RNA_property_identifier(prop));
-  field.append_str("owner", RNA_struct_is_a(ptr->type, RNA_Object) ? "object" : "data");
-  if (array) {
-    field.append_int("index", index);
-  }
-  field.append_int("editable", RNA_property_editable(ptr, prop) &&
-      !(but.flag & (BUT_DISABLED | BUT_INACTIVE)));
-  field.append_str("icon", icon_name(button_icon(&but)));
-  if (but.type == ButtonType::NumSlider && ELEM(type, PROP_INT, PROP_FLOAT) &&
-      std::isfinite(but.softmin) && std::isfinite(but.softmax) && but.softmax > but.softmin) {
-    auto slider = field.append_dict("slider");
-    slider->append_double("min", but.softmin);
-    slider->append_double("max", but.softmax);
-    const PropertyScaleType scale = button_scale_type(&but);
-    slider->append_str("scale", scale == PROP_SCALE_LOG && but.softmin > 0 ? "LOG" :
-                                scale == PROP_SCALE_CUBIC ? "CUBIC" : "LINEAR");
-  }
-  if (but.type == ButtonType::Num && ELEM(type, PROP_INT, PROP_FLOAT)) {
-    const double step = type == PROP_INT ? 0.5 :
-        0.01 * static_cast<ButtonNumber &>(but).step_size;
-    field.append_double("dragStep", std::isfinite(step) && step > 0 ? step : 0.01);
-    /* Dragging speeds up over a wide range, as Blender's own number buttons do. */
-    const double soft_range = double(but.softmax) - double(but.softmin);
-    if (std::isfinite(soft_range) && soft_range > 0) {
-      field.append_double("softRange", soft_range);
-    }
-  }
-  switch (type) {
-    case PROP_BOOLEAN:
-      field.append_str("type", "BOOLEAN");
-      field.append("value", std::make_shared<BooleanValue>(array ? RNA_property_boolean_get_index(ptr, prop, index) : RNA_property_boolean_get(ptr, prop)));
-      break;
-    case PROP_INT: {
-      field.append_str("type", "INT");
-      field.append_int("value", array ? RNA_property_int_get_index(ptr, prop, index) : RNA_property_int_get(ptr, prop));
-      int minimum, maximum;
-      RNA_property_int_range(ptr, prop, &minimum, &maximum);
-      field.append_int("min", minimum);
-      field.append_int("max", maximum);
-      break;
-    }
-    case PROP_FLOAT: {
-      field.append_str("type", "FLOAT");
-      const double value = array ? RNA_property_float_get_index(ptr, prop, index) : RNA_property_float_get(ptr, prop);
-      field.append_double("value", std::isfinite(value) ? value : 0);
-      float minimum, maximum;
-      RNA_property_float_range(ptr, prop, &minimum, &maximum);
-      field.append_double("min", minimum);
-      field.append_double("max", maximum);
-      field.append_int("angle", ELEM(RNA_property_subtype(prop), PROP_ANGLE, PROP_EULER));
-      break;
-    }
-    case PROP_STRING:
-      field.append_str("type", "STRING");
-      field.append_str("value", RNA_property_string_get(ptr, prop));
-      break;
-    case PROP_ENUM: {
-      field.append_str("type", "ENUM");
-      const int selected = RNA_property_enum_get(ptr, prop);
-      /* Many nodes share a menu (each Math node's operations): sent once, see #NativeOptionSets. */
-      const bool shared = native_option_sets && !(RNA_property_flag(prop) & PROP_ENUM_FLAG);
-      std::shared_ptr<ArrayValue> shared_options = shared ? std::make_shared<ArrayValue>() : nullptr;
-      auto options = shared ? shared_options : field.append_array("options");
-      std::string shared_key;
-      const EnumPropertyItem *items;
-      int count;
-      bool free;
-      RNA_property_enum_items(C, ptr, prop, &items, &count, &free);
-      std::string current;
-      for (int i = 0; i < count; i++) {
-        const auto &item = items[i];
-        if (!item.identifier || !item.identifier[0]) {
-          continue;
-        }
-        auto option = options->append_dict();
-        option->append_str("value", item.identifier);
-        option->append_str("label", item.name);
-        option->append_str("icon", icon_name(item.icon));
-        if (const std::string preview = preview_icon_path(C, item.icon); !preview.empty()) {
-          option->append_str("preview", preview);
-        }
-        const bool checked = (RNA_property_flag(prop) & PROP_ENUM_FLAG) ?
-                                 (selected & item.value) != 0 : selected == item.value;
-        if (shared) {
-          shared_key += item.identifier;
-          shared_key += ',';
-        }
-        else {
-          option->append_int("checked", checked);
-        }
-        if (checked) {
-          current = item.identifier;
-        }
-      }
-      field.append_str("value", current);
-      if (shared) {
-        const std::string key = std::to_string(std::hash<std::string>{}(shared_key));
-        if (native_option_sets->keys.insert(key).second) {
-          native_option_sets->sets->append(key, shared_options);
-        }
-        field.append_str("options_ref", key);
-      }
-      if (free) {
-        MEM_delete(items);
-      }
-      break;
-    }
-    case PROP_POINTER: {
-      field.append_str("type", "ENUM");
-      PointerRNA current = RNA_property_pointer_get(ptr, prop);
-      field.append_str("value", current.owner_id ? std::to_string(current.owner_id->session_uid) : "");
-      auto options = field.append_array("options");
-      auto empty = options->append_dict();
-      empty->append_str("value", "");
-      empty->append_str("label", "None");
-      ID *id;
-      FOREACH_MAIN_ID_BEGIN (CTX_data_main(C), id) {
-        PointerRNA candidate = RNA_id_pointer_create(id);
-        if (RNA_struct_is_a(candidate.type, RNA_property_pointer_type(ptr, prop)) &&
-            RNA_property_pointer_poll(ptr, prop, &candidate)) {
-          auto option = options->append_dict();
-          option->append_str("value", std::to_string(id->session_uid));
-          option->append_str("label", id->name + 2);
-          option->append_str("icon", icon_name(RNA_struct_ui_icon(candidate.type)));
-        }
-      }
-      FOREACH_MAIN_ID_END;
-      break;
-    }
-    default:
-      field.append_str("type", "LABEL");
-      field.append_str("value", "");
-      break;
-  }
-}
-
 /* -------------------------------------------------------------------- */
 /** \name Data-Block Pickers, Lists and Previews
  *
@@ -1252,84 +1074,6 @@ Button *id_template_part(const Block &block, const PointerRNA &ptr, PropertyRNA 
   return nullptr;
 }
 
-void project_id_template(bContext *C,
-                         const Block &block,
-                         const PointerRNA &ptr_const,
-                         PropertyRNA *prop,
-                         DictionaryValue &field)
-{
-  PointerRNA ptr = ptr_const;
-  StructRNA *type = RNA_property_pointer_type(&ptr, prop);
-  const short idcode = RNA_type_to_ID_code(type);
-  ID *id = RNA_property_pointer_get(&ptr, prop).owner_id;
-  field.append_str("type", "ID");
-  field.append_str("key", id_template_key(ptr, prop));
-  field.append_str("label", RNA_property_ui_name(prop));
-  field.append_str("id_type", RNA_struct_ui_name(type));
-  field.append_str("icon", icon_name(RNA_struct_ui_icon(type)));
-  field.append_int("editable",
-                   RNA_property_editable(&ptr, prop) &&
-                       (!ptr.owner_id || ID_IS_EDITABLE(ptr.owner_id)));
-  field.append_str("value", id ? std::to_string(id->session_uid) : "");
-  const Button *new_button = id_template_part(block, ptr, prop, UI_ID_ADD_NEW);
-  field.append_int("can_new", new_button && new_button->optype && new_button->optype->exec &&
-                                  !(new_button->flag & BUT_DISABLED));
-  if (idcode == ID_VF) {
-    /* Fonts are chosen with the system's font picker, see `load_font`. */
-    field.append_int("font_picker", 1);
-    field.append_str("font_role", RNA_property_identifier(prop));
-    if (id) {
-      field.append_str("font_file", reinterpret_cast<VFont *>(id)->filepath);
-    }
-    /* The regular font, whose family the bold and italic fonts are shown against. */
-    if (PropertyRNA *regular = RNA_struct_find_property(&ptr, "font")) {
-      if (ID *regular_id = RNA_property_pointer_get(&ptr, regular).owner_id) {
-        field.append_str("family_file", reinterpret_cast<VFont *>(regular_id)->filepath);
-      }
-    }
-  }
-  if (id) {
-    field.append_str("name", id->name + 2);
-    field.append_int("users", id->us);
-    field.append_int("linked", ID_IS_LINKED(id));
-    if (!ID_IS_LINKED(id) && !ELEM(GS(id->name), ID_GR, ID_SCE, ID_SCR, ID_OB, ID_WS)) {
-      field.append_int("fake_user", (id->flag & ID_FLAG_FAKEUSER) != 0);
-    }
-    const Button *unlink = id_template_part(block, ptr, prop, UI_ID_DELETE);
-    if (!unlink) {
-      unlink = id_template_part(block, ptr, prop, UI_ID_NOP);
-    }
-    field.append_int("can_unlink", unlink && !(RNA_property_flag(prop) & PROP_NEVER_NULL));
-    field.append_int("can_single_user",
-                     id->us > 1 && id_template_part(block, ptr, prop, UI_ID_ALONE) != nullptr);
-    field.append_str("preview", id_preview_path(C, id));
-  }
-  auto options = field.append_array("options");
-  Main *bmain = CTX_data_main(C);
-  if (ListBaseT<ID> *ids = idcode ? which_libbase(bmain, idcode) : nullptr) {
-    for (ID &candidate : *ids) {
-      /* Blender's search hides names starting with a dot unless typed. */
-      if (candidate.name[2] == '.' && &candidate != id) {
-        continue;
-      }
-      PointerRNA candidate_ptr = RNA_id_pointer_create(&candidate);
-      if (!RNA_property_pointer_poll(&ptr, prop, &candidate_ptr)) {
-        continue;
-      }
-      auto option = options->append_dict();
-      option->append_str("value", std::to_string(candidate.session_uid));
-      option->append_str("label", candidate.name + 2);
-      option->append_int("users", candidate.us);
-      if (ID_IS_LINKED(&candidate)) {
-        option->append_int("linked", 1);
-      }
-      if (const std::string preview = id_preview_path(C, &candidate); !preview.empty()) {
-        option->append_str("preview", preview);
-      }
-    }
-  }
-}
-
 /** Data-block creation runs the template's operator; the new ID is assigned afterwards. */
 struct PendingNewID {
   PointerRNA ptr = {};
@@ -1341,7 +1085,7 @@ bool apply_id_template(bContext *C,
                        const Block &block,
                        const PointerRNA &ptr_const,
                        PropertyRNA *prop,
-                       const DictionaryValue &request,
+                       const native::EditRequest &request,
                        wmOperatorType *&r_operator_type,
                        PointerRNA *&r_operator_properties,
                        std::unique_ptr<bContextStore> &r_operator_context,
@@ -1351,8 +1095,8 @@ bool apply_id_template(bContext *C,
   if (!RNA_property_editable(&ptr, prop)) {
     return false;
   }
-  const std::string action = request.lookup_str("id_action").value_or("");
-  const std::string value = request.lookup_str("value").value_or("");
+  const std::string &action = request.action;
+  const std::string &value = request.text;
   ID *id = RNA_property_pointer_get(&ptr, prop).owner_id;
   const short idcode = RNA_type_to_ID_code(RNA_property_pointer_type(&ptr, prop));
   Main *bmain = CTX_data_main(C);
@@ -1432,16 +1176,13 @@ bool apply_id_template(bContext *C,
     }
     assign(prop, font);
     /* The family's bold and italic faces along with its regular one, as a text app sets them. */
-    if (const DictionaryValue *family = request.lookup_dict("family")) {
-      for (const auto &[key, path] : family->elements()) {
-        PropertyRNA *style = RNA_struct_find_property(&ptr, key.c_str());
-        const StringValue *style_path = path->as_string_value();
-        if (style && style_path && RNA_property_type(style) == PROP_POINTER &&
-            RNA_property_pointer_type(&ptr, style) == RNA_VectorFont)
-        {
-          if (VFont *style_font = load(style_path->value())) {
-            assign(style, style_font);
-          }
+    for (const auto &[slot, path] : request.family) {
+      PropertyRNA *style = RNA_struct_find_property(&ptr, slot.c_str());
+      if (style && RNA_property_type(style) == PROP_POINTER &&
+          RNA_property_pointer_type(&ptr, style) == RNA_VectorFont)
+      {
+        if (VFont *style_font = load(path)) {
+          assign(style, style_font);
         }
       }
     }
@@ -1589,149 +1330,23 @@ const char *physics_panel(bContext *C, const Button &but)
   }
 }
 
-/** The buttons beside a list or tree: add, remove, its menu and other operators. */
-void project_list_side(bContext *C,
-                       const ListSide *side,
-                       const Object *object,
-                       DictionaryValue &field,
-                       const bool reorder = true)
+/** The operator duplicating the active item of a list that \a add adds to, for the iPad's swipe
+ * action. Lists offer it differently (in their menu, or as Add), so it is known by their Add. */
+const char *duplicate_operator(const StringRef add)
 {
-  if (side) {
-    auto add_operator = [&](const char *name, Button *but) {
-      if (!but || !but->optype) {
-        return;
-      }
-      auto entry = field.append_dict(name);
-      entry->append_str("key", operator_key(C, *but, object));
-      entry->append_str("label", but->str.empty() ? WM_operatortype_name(but->optype, but->opptr) :
-                                                    but->str);
-      entry->append_str("icon", icon_name(button_icon(but)));
-      entry->append_int("editable", !(but->flag & (BUT_DISABLED | BUT_INACTIVE)));
-    };
-    add_operator("add", side->add);
-    add_operator("remove", side->remove);
-    /* Duplicating the active item, for the iPad's swipe action. Lists offer it differently (in
-     * their menu, or as Add), so it is known by the list's Add operator. */
-    if (side->add && side->add->optype) {
-      static const std::pair<const char *, const char *> duplicates[] = {
-          {"OBJECT_OT_shape_key_add", "OBJECT_OT_shape_key_copy"},
-          {"OBJECT_OT_vertex_group_add", "OBJECT_OT_vertex_group_copy"},
-          {"GEOMETRY_OT_color_attribute_add", "GEOMETRY_OT_color_attribute_duplicate"},
-          {"GREASE_PENCIL_OT_layer_add", "GREASE_PENCIL_OT_layer_duplicate"},
-          {"MESH_OT_uv_texture_add", "MESH_OT_uv_texture_add"},
-      };
-      for (const auto &[add, duplicate] : duplicates) {
-        if (STREQ(side->add->optype->idname, add)) {
-          field.append_str("duplicate", duplicate);
-          break;
-        }
-      }
-    }
-    field.append_int("reorder", reorder && side->up && side->down &&
-                                    !(side->up->flag & (BUT_DISABLED | BUT_INACTIVE)));
-    if (side->menu) {
-      field.append_str("menu", side->menu->idname);
-    }
-    if (!side->extras.empty()) {
-      auto extras = field.append_array("extras");
-      for (Button *but : side->extras) {
-        auto entry = extras->append_dict();
-        entry->append_str("key", operator_key(C, *but, object));
-        entry->append_str("label", but->str.empty() ? WM_operatortype_name(but->optype, but->opptr) :
-                                                      but->str);
-        entry->append_str("icon", icon_name(button_icon(but)));
-        entry->append_str("operator", but->optype ? but->optype->idname : "");
-      }
+  static const std::pair<const char *, const char *> duplicates[] = {
+      {"OBJECT_OT_shape_key_add", "OBJECT_OT_shape_key_copy"},
+      {"OBJECT_OT_vertex_group_add", "OBJECT_OT_vertex_group_copy"},
+      {"GEOMETRY_OT_color_attribute_add", "GEOMETRY_OT_color_attribute_duplicate"},
+      {"GREASE_PENCIL_OT_layer_add", "GREASE_PENCIL_OT_layer_duplicate"},
+      {"MESH_OT_uv_texture_add", "MESH_OT_uv_texture_add"},
+  };
+  for (const auto &[from, duplicate] : duplicates) {
+    if (add == from) {
+      return duplicate;
     }
   }
-}
-
-/** One item's name, icon and the controls drawn over its row, from the buttons on the row. */
-void project_list_row(bContext *C,
-                      const std::vector<const Button *> &items,
-                      DictionaryValue &row,
-                      const StringRef fallback_label = "")
-{
-  std::string label;
-  int icon = ICON_NONE;
-  for (const Button *item : items) {
-    if (icon == ICON_NONE && button_icon(item) != ICON_NONE) {
-      icon = button_icon(item);
-    }
-    if (!label.empty() || (item->flag & UI_HIDDEN)) {
-      continue;
-    }
-    if (item->rnaprop && RNA_property_type(item->rnaprop) == PROP_STRING) {
-      PointerRNA item_ptr = item->rnapoin;
-      label = RNA_property_string_get(&item_ptr, item->rnaprop);
-      if (STREQ(RNA_property_identifier(item->rnaprop), "name") &&
-          RNA_property_editable(&item_ptr, item->rnaprop))
-      {
-        row.append_str("rename_key", property_key(*item, -1));
-      }
-    }
-    else if (ELEM(item->type, ButtonType::Label, ButtonType::Text) && !item->str.empty()) {
-      label = item->str;
-    }
-  }
-  row.append_str("label", label.empty() ? std::string(fallback_label) : label);
-  /* What the row draws beside its name, such as a shape key's value and mute toggle or a
-   * vertex group's lock: edited through the same keys as any other property. */
-  std::shared_ptr<ArrayValue> controls;
-  for (const Button *item : items) {
-    if ((item->flag & UI_HIDDEN) || !item->rnaprop || !item->rnapoin.data ||
-        RNA_property_array_check(item->rnaprop) ||
-        !ELEM(RNA_property_type(item->rnaprop), PROP_BOOLEAN, PROP_INT, PROP_FLOAT, PROP_ENUM))
-    {
-      continue;
-    }
-    if (!controls) {
-      controls = row.append_array("controls");
-    }
-    auto control = controls->append_dict();
-    project_property(C, const_cast<Button &>(*item), -1, *control);
-    control->append_int("native", 1);
-  }
-  if (icon >= BIFICONID_LAST_STATIC) {
-    row.append_str("preview", preview_icon_path(C, icon));
-    icon = ICON_NONE;
-  }
-  row.append_str("icon", icon_name(icon));
-}
-
-/** A list's rows, from its row buttons and the item buttons each one draws over. */
-void project_list(bContext *C,
-                  const Block &block,
-                  const Button &first_row,
-                  const std::map<const Button *, std::vector<const Button *>> &row_items,
-                  const ListSide *side,
-                  const Object *object,
-                  DictionaryValue &field)
-{
-  project_list_side(C, side, object, field);
-  PointerRNA active_ptr = first_row.rnapoin;
-  field.append_str("type", "LIST");
-  field.append_str("key", property_key(first_row, -1));
-  field.append_str("label", "");
-  field.append_int("value", RNA_property_int_get(&active_ptr, first_row.rnaprop));
-  field.append_int("editable", RNA_property_editable(&active_ptr, first_row.rnaprop));
-  auto rows = field.append_array("rows");
-  for (const auto &button : block.buttons) {
-    if (button->type != ButtonType::ListRow || button->rnapoin.data != first_row.rnapoin.data ||
-        button->rnaprop != first_row.rnaprop)
-    {
-      continue;
-    }
-    auto row = rows->append_dict();
-    row->append_int("index", int(button->hardmax));
-    const auto items = row_items.find(button.get());
-    if (items == row_items.end()) {
-      row->append_str("label", "");
-      row->append_str("icon", "");
-      continue;
-    }
-    project_list_row(C, items->second, *row);
-  }
+  return nullptr;
 }
 
 /** A tree view's items in drawing order (shape keys, bone collections, layers), with the buttons
@@ -1754,71 +1369,22 @@ const AbstractTreeViewItem *tree_item(const ButtonViewItem &button)
   return item;
 }
 
-/** A tree, shown as a list: its items in order, indented by depth. */
-void project_tree(bContext *C,
-                  const TreeRows &tree,
-                  const std::map<const Button *, std::vector<const Button *>> &row_items,
-                  const Object *object,
-                  const std::string &key,
-                  DictionaryValue &field)
+/** Select, rename or reorder a tree's item, in the order its items are listed. */
+bool apply_tree(bContext *C, const TreeRows &tree, const native::EditRequest &request)
 {
-  bool nested = false;
-  for (const ButtonViewItem *button : tree.items) {
-    nested |= tree_item(*button)->count_parents() > 0;
-  }
-  project_list_side(C, &tree.side, object, field, !nested);
-  field.append_str("type", "LIST");
-  field.append_str("key", key);
-  field.append_str("label", "");
-  field.append_int("editable", 1);
-  int active = -1;
-  auto rows = field.append_array("rows");
-  for (int index = 0; index < int(tree.items.size()); index++) {
-    const ButtonViewItem *button = tree.items[index];
-    const AbstractTreeViewItem *item = tree_item(*button);
-    /* What the item says should be active (a shape key: the object's active key), rather than
-     * the view's own flag, which only follows it as Blender's editor redraws. Reading the flag
-     * here showed the previous item after a tap for a moment. */
-    const std::optional<bool> wanted =
-        static_cast<const AbstractViewItem *>(item)->should_be_active();
-    if (wanted.value_or(item->is_active())) {
-      active = index;
-    }
-    auto row = rows->append_dict();
-    row->append_int("index", index);
-    if (const int depth = item->count_parents()) {
-      row->append_int("depth", depth);
-    }
-    if (item->supports_renaming()) {
-      row->append_int("rename", 1);
-    }
-    const auto items = row_items.find(button);
-    project_list_row(C,
-                     items == row_items.end() ? std::vector<const Button *>() : items->second,
-                     *row,
-                     /* Public on the base, where tree items override it. */
-                     static_cast<const AbstractViewItem *>(item)->get_rename_string());
-  }
-  field.append_int("value", active);
-}
-
-/** Select, rename or reorder a tree's item, as #project_tree shows them. */
-bool apply_tree(bContext *C, const TreeRows &tree, const DictionaryValue &query)
-{
-  const std::string action = query.lookup_str("list_action").value_or("");
+  const std::string &action = request.action;
   auto item_at = [&](const int64_t index) -> AbstractViewItem * {
     return index >= 0 && index < int64_t(tree.items.size()) ? tree.items[index]->view_item :
                                                                 nullptr;
   };
   if (action == "rename") {
-    AbstractViewItem *item = item_at(query.lookup_int("index").value_or(-1));
-    const auto name = query.lookup_str("name");
-    return item && name && item->supports_renaming() && item->rename(*C, *name);
+    AbstractViewItem *item = item_at(request.index);
+    return item && item->supports_renaming() && item->rename(*C, request.text);
   }
   if (action == "move") {
     /* Make the item active, then move it as the arrows beside the tree do. */
-    const int64_t from = query.lookup_int("from").value_or(-1);
-    const int64_t to = query.lookup_int("to").value_or(-1);
+    const int64_t from = request.index;
+    const int64_t to = request.to;
     AbstractViewItem *item = item_at(from);
     Button *step = to < from ? tree.side.up : tree.side.down;
     if (!item || !item_at(to) || from == to || !step || !step->optype) {
@@ -1835,13 +1401,630 @@ bool apply_tree(bContext *C, const TreeRows &tree, const DictionaryValue &query)
     CTX_store_set(C, previous);
     return applied;
   }
-  AbstractViewItem *item = item_at(query.lookup_int("value").value_or(-1));
+  AbstractViewItem *item = item_at(request.index);
   if (!item) {
     return false;
   }
   item->activate(*C);
   return true;
 }
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Writing Controls
+ *
+ * Buttons as the nodes of a view, see `WM_native_ui_views.hh`, each with what it edits, see
+ * #native::Edit. Blender draws a data-block picker, a list or a preview as a group of small
+ * buttons; a native interface shows each as one control.
+ * \{ */
+
+using Buffer = flatbuffers::FlatBufferBuilder;
+using native::Edit;
+
+/** How a property is shown, besides as its button says. */
+struct Look {
+  /** Its name, in place of the property's own. */
+  std::string_view name;
+  /** For where space is tight, as the X of a mirror's axes. */
+  std::string_view short_label;
+  protocol::Role role = protocol::Role::None;
+  /** Its options side by side, as Blender draws an enum expanded. */
+  bool expand = false;
+  /** The other selected items with it, or none for it to edit alone. */
+  const SelectedOthers *others = nullptr;
+  /** It shares a row with another property, such as a minimum with its maximum. */
+  const PropertyPair *pair = nullptr;
+  /** Its toggles drawn together, such as a mirror's axes, and what they are captioned. */
+  std::string toggles;
+  std::string_view toggles_caption;
+  /** The mode of the row it is in, such as a rotation's. */
+  Button *mode = nullptr;
+  /** What locks it, and its component. */
+  Button *lock = nullptr;
+  int lock_index = -1;
+};
+
+/** A row of a list, as #Writer::list writes it. */
+struct ListRow {
+  int64_t index = 0;
+  int depth = 0;
+  bool renamable = false;
+  /** The buttons drawn over it, and what it is called when none of them names it. */
+  const std::vector<const Button *> *items = nullptr;
+  std::string fallback;
+};
+
+class Writer {
+ public:
+  bContext *C;
+  ViewBuilder &builder;
+  native::PanelsData &data;
+  /** The panel being written, by its id, which edits of its controls name. */
+  std::string panel;
+  const Object *object = nullptr;
+
+  Writer(bContext *C, ViewBuilder &builder, native::PanelsData &data)
+      : C(C), builder(builder), data(data)
+  {
+    data.clear();
+  }
+
+  /** A key of its own for \a base: a property drawn twice gets a second one. */
+  std::string key(const std::string &base)
+  {
+    std::string key = base;
+    for (int i = 2; !used_.insert(key).second; i++) {
+      key = base + "#" + std::to_string(i);
+    }
+    return key;
+  }
+
+  NodeId group(const NodeId parent,
+               const std::string &key,
+               const std::string_view label,
+               const protocol::Layout layout = protocol::Layout::Column)
+  {
+    return builder.add(parent, this->key(key), [&](Buffer &buffer, NodeFields &fields) {
+      fields.label = label;
+      return protocol::CreateGroup(buffer, layout);
+    });
+  }
+
+  NodeId panel_node(const NodeId parent,
+                    const std::string &id,
+                    const bool outer,
+                    const std::string_view title,
+                    const bool open,
+                    const bool fixed = false,
+                    const bool active = false,
+                    const int position = -1,
+                    const bool openable = true,
+                    const std::string_view icon = {})
+  {
+    const std::string key = this->key("panel:" + id);
+    data.panels.add_overwrite(key, {id, outer, open});
+    return builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
+      fields.label = title;
+      fields.icon = icon;
+      return protocol::CreatePanel(buffer, open, fixed, active, position, openable);
+    });
+  }
+
+  /** The name a property's button shows it by: a node socket's value by its socket. */
+  static std::string property_name(const Button &but)
+  {
+    if (RNA_struct_is_a(but.rnapoin.type, RNA_NodeSocket) &&
+        STREQ(RNA_property_identifier(but.rnaprop), "default_value"))
+    {
+      return ed::space_node::node_socket_get_label(
+          static_cast<const bNodeSocket *>(but.rnapoin.data));
+    }
+    return RNA_property_ui_name(but.rnaprop);
+  }
+
+  /** The property \a but edits, at \a index of an array, or all of a color. */
+  NodeId property(NodeId parent, Button &but, const int index, const Look &look = {})
+  {
+    PointerRNA *ptr = &but.rnapoin;
+    PropertyRNA *prop = but.rnaprop;
+    const PropertyType type = RNA_property_type(prop);
+    const bool array = RNA_property_array_check(prop);
+    const int length = RNA_property_array_length(ptr, prop);
+    const bool color = is_color(ptr, prop);
+    const std::string name = look.name.empty() ? property_name(but) : std::string(look.name);
+    std::string label = name;
+    /* A lock, a mode or a shape is shown with what it belongs to, on its own. */
+    const bool attached = ELEM(
+        look.role, protocol::Role::Lock, protocol::Role::Mode, protocol::Role::Shape);
+    if (array && length <= 4 && !color) {
+      label = (ELEM(RNA_property_subtype(prop), PROP_COLOR, PROP_COLOR_GAMMA) ? "RGBA" :
+               length == 4                                                   ? "WXYZ" :
+                                                                               "XYZW")[index];
+    }
+    if (!attached && !look.toggles.empty()) {
+      /* Toggles drawn together, such as a mirror's X, Y and Z. */
+      parent = row(parent, "toggles:" + look.toggles, [&](Buffer &buffer, NodeFields &fields) {
+        fields.label = look.toggles_caption.empty() ? std::string_view(label) :
+                                                      look.toggles_caption;
+        return protocol::CreateGroup(buffer, protocol::Layout::Joined);
+      });
+    }
+    else if (!attached && !color && (look.pair || (array && length <= 4))) {
+      /* A vector's components, or a pair such as a minimum and maximum, share a row. */
+      const bool rotation = STR_ELEM(RNA_property_identifier(prop),
+                                     "rotation_euler",
+                                     "rotation_quaternion",
+                                     "rotation_axis_angle");
+      const std::string title = look.pair ? look.pair->title : rotation ? "Rotation" : name;
+      if (look.pair) {
+        label = look.pair->component;
+      }
+      bool added = false;
+      parent = row(parent,
+                   "group:" + (look.pair ? look.pair->key : property_key(but, -1)),
+                   [&](Buffer &buffer, NodeFields &fields) {
+                     added = true;
+                     fields.label = title;
+                     return protocol::CreateGroup(buffer, protocol::Layout::Row);
+                   });
+      if (added && look.mode) {
+        property(parent, *look.mode, -1, {.role = protocol::Role::Mode});
+      }
+    }
+
+    const std::string edit_key = property_key(but, index);
+    const std::string key = this->key(edit_key);
+    data.edits.add_overwrite(key,
+                             {Edit::Kind::Property,
+                              panel,
+                              edit_key,
+                              occurrence(edit_key),
+                              array && index >= 0,
+                              but.type == ButtonType::NumSlider});
+    const SelectedOthers own = look.others ? SelectedOthers() : selected_others(C, but);
+    const bool mixed = others_differ(but, index, look.others ? *look.others : own);
+    const auto [animation, animatable] = property_animation(C, but, index);
+    const std::string icon = icon_name(button_icon(&but));
+    const auto common = [&](NodeFields &fields) {
+      fields.label = label;
+      fields.icon = icon;
+      fields.enabled = RNA_property_editable(ptr, prop) &&
+                       !(but.flag & (BUT_DISABLED | BUT_INACTIVE));
+      fields.mixed = mixed;
+      fields.animation = animation;
+      fields.animatable = animatable;
+      fields.property = RNA_property_identifier(prop);
+      fields.short_label = look.short_label;
+      fields.role = look.role;
+    };
+
+    NodeId node;
+    if (color) {
+      float values[4] = {0, 0, 0, 1};
+      RNA_property_float_get_array(ptr, prop, values);
+      if (RNA_property_subtype(prop) == PROP_COLOR) {
+        IMB_colormanagement_scene_linear_to_srgb_v3(values, values);
+      }
+      double shown[4];
+      for (int i = 0; i < length; i++) {
+        shown[i] = std::isfinite(values[i]) ? values[i] : 0.0;
+      }
+      node = builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
+        common(fields);
+        return protocol::CreateColor(buffer, buffer.CreateVector(shown, length), length == 4);
+      });
+    }
+    else if (type == PROP_BOOLEAN) {
+      const bool value = array ? RNA_property_boolean_get_index(ptr, prop, index) :
+                                 RNA_property_boolean_get(ptr, prop);
+      node = builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
+        common(fields);
+        return protocol::CreateToggle(buffer, value);
+      });
+    }
+    else if (ELEM(type, PROP_INT, PROP_FLOAT)) {
+      double value, min, max;
+      if (type == PROP_INT) {
+        int minimum, maximum;
+        RNA_property_int_range(ptr, prop, &minimum, &maximum);
+        value = array ? RNA_property_int_get_index(ptr, prop, index) :
+                        RNA_property_int_get(ptr, prop);
+        min = minimum;
+        max = maximum;
+      }
+      else {
+        float minimum, maximum;
+        RNA_property_float_range(ptr, prop, &minimum, &maximum);
+        value = array ? RNA_property_float_get_index(ptr, prop, index) :
+                        RNA_property_float_get(ptr, prop);
+        min = minimum;
+        max = maximum;
+      }
+      const bool slider = but.type == ButtonType::NumSlider && std::isfinite(but.softmin) &&
+                          std::isfinite(but.softmax) && but.softmax > but.softmin;
+      const PropertyScaleType scale = button_scale_type(&but);
+      double step = 0.0;
+      if (but.type == ButtonType::Num) {
+        step = type == PROP_INT ? 0.5 : 0.01 * static_cast<ButtonNumber &>(but).step_size;
+        step = std::isfinite(step) && step > 0 ? step : 0.01;
+      }
+      const bool angle = ELEM(RNA_property_subtype(prop), PROP_ANGLE, PROP_EULER);
+      node = builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
+        common(fields);
+        return protocol::CreateNumber(
+            buffer,
+            std::isfinite(value) ? value : 0.0,
+            type == PROP_INT,
+            angle ? protocol::NumberKind::Angle : protocol::NumberKind::Plain,
+            min,
+            max,
+            slider ? but.softmin : min,
+            slider ? but.softmax : max,
+            step,
+            3,
+            slider,
+            !slider                                         ? protocol::Scale::Linear :
+            scale == PROP_SCALE_LOG && but.softmin > 0      ? protocol::Scale::Logarithmic :
+            scale == PROP_SCALE_CUBIC                       ? protocol::Scale::Cubic :
+                                                              protocol::Scale::Linear);
+      });
+    }
+    else if (type == PROP_STRING) {
+      const std::string value = RNA_property_string_get(ptr, prop);
+      node = builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
+        common(fields);
+        return protocol::CreateTextFieldDirect(buffer, value.c_str());
+      });
+    }
+    else if (type == PROP_ENUM) {
+      node = builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
+        common(fields);
+        std::string value;
+        const auto options = enum_options(buffer, ptr, prop, value);
+        return protocol::CreateChoice(buffer,
+                                      buffer.CreateString(value),
+                                      options,
+                                      look.expand ? protocol::ChoiceStyle::Expanded :
+                                                    protocol::ChoiceStyle::Menu);
+      });
+    }
+    else if (type == PROP_POINTER) {
+      /* A data-block, chosen by name. */
+      const ID *current = RNA_property_pointer_get(ptr, prop).owner_id;
+      node = builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
+        common(fields);
+        options_.clear();
+        options_.push_back(protocol::CreateOptionDirect(buffer, "", "None"));
+        ID *id;
+        FOREACH_MAIN_ID_BEGIN (CTX_data_main(C), id) {
+          PointerRNA candidate = RNA_id_pointer_create(id);
+          if (RNA_struct_is_a(candidate.type, RNA_property_pointer_type(ptr, prop)) &&
+              RNA_property_pointer_poll(ptr, prop, &candidate))
+          {
+            options_.push_back(protocol::CreateOptionDirect(
+                buffer,
+                std::to_string(id->session_uid).c_str(),
+                id->name + 2,
+                icon_name(RNA_struct_ui_icon(candidate.type)).c_str()));
+          }
+        }
+        FOREACH_MAIN_ID_END;
+        return protocol::CreateChoice(
+            buffer,
+            buffer.CreateString(current ? std::to_string(current->session_uid) : ""),
+            buffer.CreateVector(options_));
+      });
+    }
+    else {
+      /* A property of a kind not shown, named for information. */
+      node = builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
+        common(fields);
+        return protocol::CreateLabel(buffer);
+      });
+    }
+    if (look.lock) {
+      property(node, *look.lock, look.lock_index, {.role = protocol::Role::Lock});
+    }
+    return node;
+  }
+
+  /** A data-block picker, of the template drawing \a prop of \a ptr in \a block. */
+  NodeId picker(const NodeId parent,
+                const Block &block,
+                const PointerRNA &ptr_const,
+                PropertyRNA *prop,
+                const protocol::Role role = protocol::Role::None)
+  {
+    PointerRNA ptr = ptr_const;
+    StructRNA *type = RNA_property_pointer_type(&ptr, prop);
+    const short idcode = RNA_type_to_ID_code(type);
+    ID *id = RNA_property_pointer_get(&ptr, prop).owner_id;
+    const std::string edit_key = id_template_key(ptr, prop);
+    const std::string key = this->key(edit_key);
+    data.edits.add_overwrite(key, {Edit::Kind::Picker, panel, edit_key});
+    const Button *new_button = id_template_part(block, ptr, prop, UI_ID_ADD_NEW);
+    const Button *unlink = id_template_part(block, ptr, prop, UI_ID_DELETE);
+    if (!unlink) {
+      unlink = id_template_part(block, ptr, prop, UI_ID_NOP);
+    }
+    const bool fake_user = id && !ID_IS_LINKED(id) &&
+                           !ELEM(GS(id->name), ID_GR, ID_SCE, ID_SCR, ID_OB, ID_WS);
+    const std::string preview = id ? id_preview_path(C, id) : "";
+    return builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
+      fields.label = RNA_property_ui_name(prop);
+      fields.icon = icon_name(RNA_struct_ui_icon(type));
+      fields.enabled = RNA_property_editable(&ptr, prop) &&
+                       (!ptr.owner_id || ID_IS_EDITABLE(ptr.owner_id));
+      fields.role = role;
+      options_.clear();
+      if (ListBaseT<ID> *ids = idcode ? which_libbase(CTX_data_main(C), idcode) : nullptr) {
+        for (ID &candidate : *ids) {
+          /* Blender's search hides names starting with a dot unless typed. */
+          if (candidate.name[2] == '.' && &candidate != id) {
+            continue;
+          }
+          PointerRNA candidate_ptr = RNA_id_pointer_create(&candidate);
+          if (!RNA_property_pointer_poll(&ptr, prop, &candidate_ptr)) {
+            continue;
+          }
+          options_.push_back(
+              protocol::CreateOptionDirect(buffer,
+                                           std::to_string(candidate.session_uid).c_str(),
+                                           candidate.name + 2,
+                                           nullptr,
+                                           id_preview_path(C, &candidate).c_str(),
+                                           users_text(candidate).c_str()));
+        }
+      }
+      return protocol::CreateReference(
+          buffer,
+          buffer.CreateString(RNA_struct_ui_name(type)),
+          buffer.CreateString(id ? id->name + 2 : ""),
+          buffer.CreateString(id ? std::to_string(id->session_uid) : ""),
+          id ? id->us : 0,
+          id && ID_IS_LINKED(id),
+          fake_user && (id->flag & ID_FLAG_FAKEUSER),
+          new_button && new_button->optype && new_button->optype->exec &&
+              !(new_button->flag & BUT_DISABLED),
+          id && unlink && !(RNA_property_flag(prop) & PROP_NEVER_NULL),
+          id && id->us > 1 && id_template_part(block, ptr, prop, UI_ID_ALONE),
+          fake_user,
+          buffer.CreateVector(options_),
+          buffer.CreateString(preview),
+          /* Fonts are chosen with the system's font picker, see `load_font`. */
+          idcode == ID_VF,
+          buffer.CreateString(idcode == ID_VF && id ? reinterpret_cast<VFont *>(id)->filepath :
+                                                      ""));
+    });
+  }
+
+  /** An operator's button, run by \a but's key, or a switch when it shows as a checkbox. */
+  NodeId button(const NodeId parent,
+                const Button &but,
+                const protocol::Role role = protocol::Role::None,
+                const std::string_view label = {})
+  {
+    const std::string edit_key = operator_key(C, but, object);
+    const std::string key = this->key(edit_key);
+    data.edits.add_overwrite(key, {Edit::Kind::Operator, panel, edit_key});
+    const std::string text = !label.empty()   ? std::string(label) :
+                             but.str.empty() ? WM_operatortype_name(but.optype, but.opptr) :
+                                               but.str;
+    const int icon = button_icon(&but);
+    const auto common = [&](NodeFields &fields) {
+      fields.label = text;
+      fields.icon = icon_name(icon);
+      fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE)) && but.optype->exec;
+      fields.role = role;
+    };
+    if (ELEM(icon, ICON_CHECKBOX_HLT, ICON_CHECKBOX_DEHLT)) {
+      /* A toggle operator drawn as a checkbox, such as Dyntopo: a switch. */
+      return builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
+        common(fields);
+        return protocol::CreateToggle(buffer, icon == ICON_CHECKBOX_HLT);
+      });
+    }
+    const StringRef idname = but.optype->idname;
+    const bool destructive = idname.find("remove") != StringRef::not_found ||
+                             idname.find("delete") != StringRef::not_found ||
+                             StringRef(text).startswith("Remove") ||
+                             StringRef(text).startswith("Delete");
+    return builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
+      common(fields);
+      return protocol::CreateButton(buffer,
+                                    destructive ? protocol::ButtonStyle::Destructive :
+                                                  protocol::ButtonStyle::Normal);
+    });
+  }
+
+  /** A list, or a tree as one, with \a rows, and the buttons \a side beside it. */
+  NodeId list(const NodeId parent,
+              const std::string &edit_key,
+              const ListSide *side,
+              const bool reorder,
+              const int64_t active,
+              const Span<ListRow> rows,
+              const bool editable = true)
+  {
+    const std::string key = this->key(edit_key);
+    Edit edit{Edit::Kind::List, panel, edit_key};
+    if (side && side->add && side->add->optype) {
+      edit.add = operator_key(C, *side->add, object);
+    }
+    if (side && side->remove && side->remove->optype) {
+      edit.remove = operator_key(C, *side->remove, object);
+    }
+    const bool can_add = !edit.add.empty(), can_remove = !edit.remove.empty();
+    data.edits.add_overwrite(key, std::move(edit));
+    std::string active_key;
+    bool tree = false;
+    for (const ListRow &row : rows) {
+      if (row.index == active) {
+        active_key = key + ":" + std::to_string(active);
+      }
+      tree |= row.depth > 0;
+    }
+    const NodeId list = builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
+      fields.enabled = editable;
+      return protocol::CreateListDirect(
+          buffer,
+          active_key.c_str(),
+          can_add,
+          can_remove,
+          reorder && side && side->up && side->down &&
+              !(side->up->flag & (BUT_DISABLED | BUT_INACTIVE)),
+          tree,
+          side && side->menu ? side->menu->idname : nullptr);
+    });
+    for (const ListRow &row : rows) {
+      list_row(list, key, row, row.index == active);
+    }
+    if (side) {
+      /* Adding and removing are the list's own commands; the rest are buttons beside it. */
+      for (const Button *extra : side->extras) {
+        button(list, *extra);
+      }
+      if (const char *duplicate = side->add && side->add->optype ?
+                                      duplicate_operator(side->add->optype->idname) :
+                                      nullptr)
+      {
+        const std::string duplicate_key = this->key(key + ":duplicate");
+        data.edits.add_overwrite(duplicate_key, {Edit::Kind::Call, panel, duplicate});
+        builder.add(list, duplicate_key, [&](Buffer &buffer, NodeFields &fields) {
+          fields.label = "Duplicate";
+          fields.icon = "DUPLICATE";
+          fields.role = protocol::Role::Duplicate;
+          return protocol::CreateButton(buffer);
+        });
+      }
+    }
+    return list;
+  }
+
+  /** A row with its name and icon, and the controls drawn over it, from the buttons on it. */
+  NodeId list_row(const NodeId parent,
+                  const std::string &list_key,
+                  const ListRow &row,
+                  const bool selected)
+  {
+    std::string label;
+    std::string name_key;
+    int icon = ICON_NONE;
+    static const std::vector<const Button *> none;
+    const std::vector<const Button *> &items = row.items ? *row.items : none;
+    for (const Button *item : items) {
+      if (icon == ICON_NONE && button_icon(item) != ICON_NONE) {
+        icon = button_icon(item);
+      }
+      if (!label.empty() || (item->flag & UI_HIDDEN)) {
+        continue;
+      }
+      if (item->rnaprop && RNA_property_type(item->rnaprop) == PROP_STRING) {
+        PointerRNA item_ptr = item->rnapoin;
+        label = RNA_property_string_get(&item_ptr, item->rnaprop);
+        if (STREQ(RNA_property_identifier(item->rnaprop), "name") &&
+            RNA_property_editable(&item_ptr, item->rnaprop))
+        {
+          name_key = property_key(*item, -1);
+        }
+      }
+      else if (ELEM(item->type, ButtonType::Label, ButtonType::Text) && !item->str.empty()) {
+        label = item->str;
+      }
+    }
+    if (label.empty()) {
+      label = row.fallback;
+    }
+    const std::string preview = icon >= BIFICONID_LAST_STATIC ? preview_icon_path(C, icon) : "";
+    const std::string key = this->key(list_key + ":" + std::to_string(row.index));
+    data.rows.add_overwrite(
+        key, {list_key, row.index, name_key, name_key.empty() ? 0 : occurrence(name_key)});
+    const NodeId node = builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
+      fields.label = label;
+      fields.icon = icon_name(preview.empty() ? icon : ICON_NONE);
+      return protocol::CreateRowDirect(buffer,
+                                       row.depth,
+                                       selected,
+                                       row.renamable || !name_key.empty(),
+                                       preview.c_str());
+    });
+    /* What it draws beside its name, such as a shape key's value or a vertex group's lock. */
+    for (const Button *item : items) {
+      if (!(item->flag & UI_HIDDEN) && item->rnaprop && item->rnapoin.data &&
+          !RNA_property_array_check(item->rnaprop) &&
+          ELEM(RNA_property_type(item->rnaprop), PROP_BOOLEAN, PROP_INT, PROP_FLOAT, PROP_ENUM))
+      {
+        property(node, const_cast<Button &>(*item), -1);
+      }
+    }
+    return node;
+  }
+
+  /** The options of an enum, and the value of the chosen one. */
+  flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<protocol::Option>>> enum_options(
+      Buffer &buffer, PointerRNA *ptr, PropertyRNA *prop, std::string &r_value)
+  {
+    const int selected = RNA_property_enum_get(ptr, prop);
+    const bool flags = RNA_property_flag(prop) & PROP_ENUM_FLAG;
+    const EnumPropertyItem *items;
+    int count;
+    bool free;
+    RNA_property_enum_items(C, ptr, prop, &items, &count, &free);
+    options_.clear();
+    for (int i = 0; i < count; i++) {
+      const EnumPropertyItem &item = items[i];
+      if (!item.identifier || !item.identifier[0]) {
+        continue;
+      }
+      options_.push_back(protocol::CreateOptionDirect(buffer,
+                                                      item.identifier,
+                                                      item.name,
+                                                      icon_name(item.icon).c_str(),
+                                                      preview_icon_path(C, item.icon).c_str()));
+      if (flags ? (selected & item.value) != 0 : selected == item.value) {
+        r_value = item.identifier;
+      }
+    }
+    if (free) {
+      MEM_delete(items);
+    }
+    return buffer.CreateVector(options_);
+  }
+
+ private:
+  std::set<std::string> used_;
+  /** How many buttons of each key each panel has, see #native::Edit::occurrence. */
+  std::map<std::pair<std::string, std::string>, int> occurrences_;
+
+  int occurrence(const std::string &edit_key)
+  {
+    return occurrences_[{panel, edit_key}]++;
+  }
+  /** Rows of components and of toggles, by their parent and key. */
+  std::map<std::pair<NodeId, std::string>, NodeId> rows_;
+  std::vector<flatbuffers::Offset<protocol::Option>> options_;
+
+  template<typename Write> NodeId row(const NodeId parent, const std::string &key, Write write)
+  {
+    const auto [found, added] = rows_.try_emplace({parent, key}, 0);
+    if (added) {
+      found->second = builder.add(parent, this->key(key), write);
+    }
+    return found->second;
+  }
+
+  static std::string users_text(const ID &id)
+  {
+    std::string text = id.us > 1 ? std::to_string(id.us) + " users" :
+                       id.us == 0 ? "No users" :
+                                    "";
+    if (ID_IS_LINKED(&id)) {
+      text += text.empty() ? "Linked" : " · Linked";
+    }
+    return text;
+  }
+};
 
 /** \} */
 }  // namespace
@@ -1858,10 +2041,106 @@ uint64_t native_redo_generation = 0;
 bool native_redo_dismissed = false;
 /* Counts requests to open Adjust Last Operation, for the interface to notice a new one. */
 int native_redo_show_requests = 0;
-int64_t native_redo_ack = 0;
 std::string native_redo_error;
-std::string native_redo_snapshot = "null";
-std::chrono::steady_clock::time_point native_redo_next_snapshot;
+
+/**
+ * Calls \a fn with each of an operator's properties that \a draw lays out, as its buttons do,
+ * with what it shares a row with. With \a groups, those of its property groups too, as Batch
+ * Rename's steps.
+ */
+template<typename Draw, typename Fn>
+void for_each_operator_field(bContext *C, const bool groups, Draw draw, Fn fn)
+{
+  Block *block = block_begin(C, nullptr, "native_operator", EmbossType::Emboss);
+  Layout &layout = block_layout(
+      block, LayoutDirection::Vertical, LayoutType::Panel, 0, 0, 320, 20, 0, style_get_dpi());
+  draw(layout);
+  const auto pairs = property_pairs(*block);
+  block_end(C, block);
+  std::set<std::string> seen;
+  for (const auto &button : block->buttons) {
+    Button &but = *button;
+    if (!but.rnaprop || !but.rnapoin.data || (but.flag & UI_HIDDEN) ||
+        !(RNA_struct_is_a(but.rnapoin.type, RNA_OperatorProperties) ||
+          (groups && RNA_struct_is_a(but.rnapoin.type, RNA_PropertyGroup))) ||
+        !ELEM(RNA_property_type(but.rnaprop),
+              PROP_BOOLEAN,
+              PROP_INT,
+              PROP_FLOAT,
+              PROP_STRING,
+              PROP_ENUM))
+    {
+      continue;
+    }
+    const int length = RNA_property_array_length(&but.rnapoin, but.rnaprop);
+    const bool color = is_color(&but.rnapoin, but.rnaprop);
+    const int begin = !color && length ? std::max(0, but.rnaindex) : -1;
+    const int end = !color && length && but.rnaindex < 0 ? length : begin + 1;
+    for (int index = begin; index < end; ++index) {
+      if (seen.insert(property_key(but, index)).second) {
+        const auto pair = pairs.find(&but);
+        fn(but, index, pair == pairs.end() ? nullptr : &pair->second);
+      }
+    }
+  }
+  block_free(C, block);
+}
+
+/** Writes an operator's properties under \a parent, which \a top writes on the first of them. */
+template<typename Draw, typename Top>
+void write_operator(Writer &writer, const bool groups, Draw draw, Top top)
+{
+  std::optional<NodeId> parent;
+  const SelectedOthers none;
+  for_each_operator_field(
+      writer.C, groups, draw, [&](Button &but, const int index, const PropertyPair *pair) {
+        if (!parent) {
+          parent = top();
+        }
+        writer.property(*parent, but, index, {.others = &none, .pair = pair});
+      });
+}
+
+/** Sets the operator's property \a request edits; false when it is not there. */
+template<typename Draw>
+bool edit_operator(bContext *C, const bool groups, Draw draw, const native::EditRequest &request)
+{
+  bool applied = false;
+  for_each_operator_field(
+      C, groups, draw, [&](Button &but, const int index, const PropertyPair * /*pair*/) {
+        if (!applied && request.edit && property_key(but, index) == request.edit->key) {
+          applied = set_property(C, but, index, request, false);
+        }
+      });
+  return applied;
+}
+
+/** The last operation, while it can be adjusted. */
+wmOperator *redo_operator(bContext *C)
+{
+  wmOperator *op = WM_operator_last_redo(C);
+  if (!op || op != native_redo_operator || native_redo_dismissed || !CTX_wm_view3d(C) ||
+      !CTX_wm_region(C) || G.moving || !WM_operator_repeat_check(C, op) ||
+      !WM_operator_poll(C, op->type) || !WM_operator_check_ui_enabled(C, op->type->name))
+  {
+    return nullptr;
+  }
+  if (wmWindow *window = CTX_wm_window(C)) {
+    for (wmEventHandler &handler : window->runtime->modalhandlers) {
+      if (ELEM(handler.type, WM_HANDLER_TYPE_OP, WM_HANDLER_TYPE_UI)) {
+        return nullptr;
+      }
+    }
+  }
+  return op;
+}
+
+void redo_draw(bContext *C, Layout &layout)
+{
+  /* The operator's own interface, macros and `poll_property` included. */
+  template_operator_redo_properties(&layout, C);
+}
+
 }  // namespace
 
 void native_properties_interaction_finish(bContext *C)
@@ -1878,14 +2157,12 @@ void native_redo_operator_register(bContext *C, wmOperator *op)
   ++native_redo_generation;
   native_redo_dismissed = false;
   native_redo_error.clear();
-  native_redo_next_snapshot = {};
 }
 
 void native_redo_operator_free(wmOperator *op)
 {
   if (native_redo_operator == op) {
     native_redo_operator = nullptr;
-    native_redo_next_snapshot = {};
   }
 }
 
@@ -1893,124 +2170,69 @@ void native_redo_show(bContext * /*C*/)
 {
   native_redo_dismissed = false;
   ++native_redo_show_requests;
-  native_redo_next_snapshot = {};
   WM_main_add_notifier(NC_WINDOW, nullptr);
 }
 
 void native_redo_operator_clear()
 {
   native_redo_operator = nullptr;
-  native_redo_next_snapshot = {};
 }
 
-std::string native_operator_redo_query(bContext *C, const std::string &json, bool execute)
+namespace native {
+
+void redo_write(bContext *C, PanelsData &data, ViewBuilder &builder)
 {
-  wmOperator *op = WM_operator_last_redo(C);
-  if (!op || op != native_redo_operator || native_redo_dismissed || !CTX_wm_view3d(C) ||
-      !CTX_wm_region(C))
-  {
-    return "null";
+  Writer writer(C, builder, data);
+  wmOperator *op = redo_operator(C);
+  data.identity = op ? std::to_string(native_redo_generation) : "";
+  if (op) {
+    write_operator(
+        writer, false, [&](Layout &layout) { redo_draw(C, layout); }, [&]() {
+          return builder.top(data.identity, [&](Buffer &buffer, NodeFields &fields) {
+            fields.label = WM_operatortype_name(op->type, op->ptr);
+            return protocol::CreateOperatorDirect(buffer,
+                                                  op->type->idname,
+                                                  nullptr,
+                                                  nullptr,
+                                                  native_redo_error.c_str(),
+                                                  uint32_t(native_redo_show_requests));
+          });
+        });
   }
-  auto query_value = execute ? decode(json) : nullptr;
-  const auto *query = query_value ? query_value->as_dictionary_value() : nullptr;
-  const std::string identity = std::to_string(native_redo_generation);
-  if (execute) {
-    if (!query || query->lookup_str("id").value_or("") != identity) {
-      return "null";
-    }
-    native_redo_ack = query->lookup_int("sequence").value_or(native_redo_ack);
-    native_redo_next_snapshot = {};
-    native_redo_error.clear();
-    if (query->lookup_str("action").value_or("") == "dismiss") {
-      native_redo_dismissed = true;
-      return "null";
-    }
+  if (data.edits.is_empty()) {
+    /* No operation, or none with settings. */
+    builder.top("none", [](Buffer &buffer, NodeFields & /*fields*/) {
+      return protocol::CreateGroup(buffer);
+    });
   }
-  bool enabled = !G.moving && WM_operator_repeat_check(C, op) && WM_operator_poll(C, op->type) &&
-                 WM_operator_check_ui_enabled(C, op->type->name);
-  if (wmWindow *window = CTX_wm_window(C)) {
-    for (wmEventHandler &handler : window->runtime->modalhandlers) {
-      if (handler.type == WM_HANDLER_TYPE_OP || handler.type == WM_HANDLER_TYPE_UI) {
-        enabled = false;
-        break;
-      }
-    }
-  }
-  if (!enabled) {
-    return "null";
-  }
-  const auto now = std::chrono::steady_clock::now();
-  if (!execute && now < native_redo_next_snapshot) {
-    return native_redo_snapshot;
-  }
-  DictionaryValue result;
-  result.append_str("id", identity);
-  result.append_str("title", WM_operatortype_name(op->type, op->ptr));
-  result.append_str("operator", op->type->idname);
-  result.append_int("ack", native_redo_ack);
-  result.append_int("show", native_redo_show_requests);
-  auto fields = result.append_array("properties");
-  Block *block = block_begin(C, nullptr, "native_operator_redo", EmbossType::Emboss);
-  Layout &layout = block_layout(
-      block, LayoutDirection::Vertical, LayoutType::Panel, 0, 0, 320, 20, 0, style_get_dpi());
-  /* Uses the actual operator UI, including macros and poll_property visibility. */
-  template_operator_redo_properties(&layout, C);
-  const auto pairs = property_pairs(*block);
-  block_end(C, block);
-  std::set<std::string> seen;
-  bool applied = false;
-  for (const auto &button : block->buttons) {
-    Button &but = *button;
-    if (!but.rnaprop || !but.rnapoin.data || (but.flag & UI_HIDDEN) ||
-        !RNA_struct_is_a(but.rnapoin.type, RNA_OperatorProperties) ||
-        !ELEM(RNA_property_type(but.rnaprop),
-              PROP_BOOLEAN,
-              PROP_INT,
-              PROP_FLOAT,
-              PROP_STRING,
-              PROP_ENUM))
-    {
-      continue;
-    }
-    const int length = RNA_property_array_length(&but.rnapoin, but.rnaprop);
-    const bool color = is_color(&but.rnapoin, but.rnaprop);
-    const int begin = !color && length ? std::max(0, but.rnaindex) : -1;
-    const int end = !color && length && but.rnaindex < 0 ? length : begin + 1;
-    for (int index = begin; index < end; ++index) {
-      const std::string key = property_key(but, index);
-      if (!seen.insert(key).second) {
-        continue;
-      }
-      if (execute && query->lookup_str("key").value_or("") == key) {
-        applied = set_property(C, but, index, *query, false);
-      }
-      else if (!execute) {
-        auto field = fields->append_dict();
-        const auto pair = pairs.find(&but);
-        project_property(C, but, index, *field, pair == pairs.end() ? nullptr : &pair->second);
-      }
-    }
-  }
-  block_free(C, block);
-  if (execute) {
-    if (!applied || !ED_undo_operator_repeat(C, op)) {
-      native_redo_error = "This operation could not be adjusted.";
-    }
-    /* Rebuild from the executed operator, whose check callback may change its UI. */
-    return native_operator_redo_query(C, "", false);
-  }
-  result.append_str("error", native_redo_error);
-  native_redo_snapshot = fields->elements().is_empty() ? "null" : encode(result);
-  native_redo_next_snapshot = now + std::chrono::milliseconds(200);
-  return native_redo_snapshot;
 }
+
+std::string redo_edit(bContext *C, PanelsData &data, const EditRequest &request)
+{
+  wmOperator *op = redo_operator(C);
+  if (!op || data.identity != std::to_string(native_redo_generation)) {
+    return "The operation can no longer be adjusted.";
+  }
+  native_redo_error.clear();
+  if (request.action == "dismiss") {
+    native_redo_dismissed = true;
+    return "";
+  }
+  if (!edit_operator(C, false, [&](Layout &layout) { redo_draw(C, layout); }, request) ||
+      !ED_undo_operator_repeat(C, op))
+  {
+    native_redo_error = "This operation could not be adjusted.";
+  }
+  return native_redo_error;
+}
+
+}  // namespace native
 
 namespace {
 /* An operator whose properties are set before it runs, in place of Blender's dialog: owned here
  * until it runs or is cancelled, see #native_operator_dialog_begin. */
 wmOperator *native_dialog_operator = nullptr;
 uint64_t native_dialog_generation = 0;
-int64_t native_dialog_ack = 0;
 std::string native_dialog_title;
 std::string native_dialog_confirm;
 std::string native_dialog_message;
@@ -2067,104 +2289,74 @@ bool native_operator_dialog_begin(bContext *C,
   return true;
 }
 
-std::string native_operator_dialog_query(bContext *C, const std::string &json, const bool execute)
+namespace native {
+
+static void dialog_draw(bContext *C, Layout &layout)
+{
+  /* The operator's own dialog, its draw function included, as Blender would show it. */
+  uiTemplateOperatorPropertyButs(C, &layout, native_dialog_operator, BUT_LABEL_ALIGN_NONE, 0);
+}
+
+void dialog_write(bContext *C, PanelsData &data, ViewBuilder &builder)
+{
+  Writer writer(C, builder, data);
+  wmOperator *op = native_dialog_operator;
+  data.identity = op ? "dialog" + std::to_string(native_dialog_generation) : "";
+  if (!op) {
+    builder.top("none", [](Buffer &buffer, NodeFields & /*fields*/) {
+      return protocol::CreateGroup(buffer);
+    });
+    return;
+  }
+  const NodeId top = builder.top(data.identity, [&](Buffer &buffer, NodeFields &fields) {
+    fields.label = native_dialog_title;
+    return protocol::CreateOperatorDirect(buffer,
+                                          op->type->idname,
+                                          native_dialog_confirm.c_str(),
+                                          native_dialog_message.c_str());
+  });
+  write_operator(
+      writer, true, [&](Layout &layout) { dialog_draw(C, layout); }, [&]() { return top; });
+}
+
+std::string dialog_edit(bContext *C, PanelsData &data, const EditRequest &request)
 {
   wmOperator *op = native_dialog_operator;
-  if (!op) {
-    return "null";
+  if (!op || data.identity != "dialog" + std::to_string(native_dialog_generation)) {
+    return "The dialog is no longer open.";
   }
-  auto query_value = execute ? decode(json) : nullptr;
-  const auto *query = query_value ? query_value->as_dictionary_value() : nullptr;
-  const std::string identity = "dialog" + std::to_string(native_dialog_generation);
-  if (execute) {
-    if (!query || query->lookup_str("id").value_or("") != identity) {
-      return "null";
+  if (ELEM(request.action, "cancel", "dismiss")) {
+    native_dialog_end();
+    if (op->type->cancel) {
+      op->type->cancel(C, op);
     }
-    native_dialog_ack = query->lookup_int("sequence").value_or(native_dialog_ack);
-    const std::string action = query->lookup_str("action").value_or("");
-    if (action == "cancel" || action == "dismiss") {
-      native_dialog_end();
-      if (op->type->cancel) {
-        op->type->cancel(C, op);
-      }
-      WM_operator_free(op);
-      return "null";
-    }
-    if (action == "confirm") {
-      native_dialog_end();
-      wmWindow *previous_window = CTX_wm_window(C);
-      ScrArea *previous_area = CTX_wm_area(C);
-      ARegion *previous_region = CTX_wm_region(C);
-      native_dialog_context(C);
-      /* As Blender's OK button: the operator is registered, or freed. */
-      WM_operator_call_ex(C, op, true);
-      CTX_wm_window_set(C, previous_window);
-      CTX_wm_area_set(C, previous_area);
-      CTX_wm_region_set(C, previous_region);
-      return "null";
-    }
+    WM_operator_free(op);
+    return "";
   }
-  DictionaryValue result;
-  result.append_str("id", identity);
-  result.append_str("title", native_dialog_title);
-  result.append_str("confirm", native_dialog_confirm);
-  result.append_str("message", native_dialog_message);
-  result.append_str("operator", op->type->idname);
-  result.append_int("ack", native_dialog_ack);
-  auto fields = result.append_array("properties");
-  Block *block = block_begin(C, nullptr, "native_operator_dialog", EmbossType::Emboss);
-  Layout &layout = block_layout(
-      block, LayoutDirection::Vertical, LayoutType::Panel, 0, 0, 320, 20, 0, style_get_dpi());
-  /* The operator's own dialog, including its draw function, as Blender would show it. */
-  uiTemplateOperatorPropertyButs(C, &layout, op, BUT_LABEL_ALIGN_NONE, 0);
-  const auto pairs = property_pairs(*block);
-  block_end(C, block);
-  std::set<std::string> seen;
-  bool applied = false;
-  for (const auto &button : block->buttons) {
-    Button &but = *button;
-    /* The operator's properties, and those of its property groups, as Batch Rename's steps. */
-    if (!but.rnaprop || !but.rnapoin.data || (but.flag & UI_HIDDEN) ||
-        !(RNA_struct_is_a(but.rnapoin.type, RNA_OperatorProperties) ||
-          RNA_struct_is_a(but.rnapoin.type, RNA_PropertyGroup)) ||
-        !ELEM(RNA_property_type(but.rnaprop),
-              PROP_BOOLEAN,
-              PROP_INT,
-              PROP_FLOAT,
-              PROP_STRING,
-              PROP_ENUM))
-    {
-      continue;
-    }
-    const int length = RNA_property_array_length(&but.rnapoin, but.rnaprop);
-    const bool color = is_color(&but.rnapoin, but.rnaprop);
-    const int begin = !color && length ? std::max(0, but.rnaindex) : -1;
-    const int end = !color && length && but.rnaindex < 0 ? length : begin + 1;
-    for (int index = begin; index < end; ++index) {
-      const std::string key = property_key(but, index);
-      if (!seen.insert(key).second) {
-        continue;
-      }
-      if (execute && query->lookup_str("key").value_or("") == key) {
-        applied = set_property(C, but, index, *query, false);
-      }
-      else if (!execute) {
-        auto field = fields->append_dict();
-        const auto pair = pairs.find(&but);
-        project_property(C, but, index, *field, pair == pairs.end() ? nullptr : &pair->second);
-      }
-    }
+  if (request.action == "confirm") {
+    native_dialog_end();
+    wmWindow *previous_window = CTX_wm_window(C);
+    ScrArea *previous_area = CTX_wm_area(C);
+    ARegion *previous_region = CTX_wm_region(C);
+    native_dialog_context(C);
+    /* As Blender's OK button: the operator is registered, or freed. */
+    WM_operator_call_ex(C, op, true);
+    CTX_wm_window_set(C, previous_window);
+    CTX_wm_area_set(C, previous_area);
+    CTX_wm_region_set(C, previous_region);
+    return "";
   }
-  block_free(C, block);
-  if (execute) {
-    /* As Blender's dialog: the operator may change its properties as others change. */
-    if (applied && op->type->check) {
-      op->type->check(C, op);
-    }
-    return native_operator_dialog_query(C, "", false);
+  if (!edit_operator(C, true, [&](Layout &layout) { dialog_draw(C, layout); }, request)) {
+    return "This setting is no longer available.";
   }
-  return encode(result);
+  /* As Blender's dialog: the operator may change its properties as others change. */
+  if (op->type->check) {
+    op->type->check(C, op);
+  }
+  return "";
 }
+
+}  // namespace native
 
 namespace {
 
@@ -2176,9 +2368,18 @@ constexpr const char *PREFERENCES_TAB_PREFIX = "PREFERENCES_";
  * is the section's panel context, or empty for a section drawn with lists of its own (the
  * add-ons), which the native interface shows in its own way.
  */
+/** A tab of Properties or of the Preferences. */
+struct Tab {
+  std::string id, title, icon;
+  /** Tabs group by this number, as the Preferences' sections between separators. */
+  int group = 0;
+  /** Shown by Blender's own Preferences only, see #protocol::Option. */
+  bool external = false;
+};
+
 std::string preferences_tabs(bContext *C,
                              const std::string &requested_tab,
-                             ArrayValue &tab_items,
+                             Vector<Tab> &tabs,
                              std::string &panel_context)
 {
   /* Icons for the sections, which Blender's Preferences list as text only. */
@@ -2220,7 +2421,7 @@ std::string preferences_tabs(bContext *C,
   for (int i = 0; i < section_count; i++) {
     const EnumPropertyItem &section = sections[i];
     if (!section.identifier || !section.identifier[0]) {
-      group += tab_items.elements().is_empty() ? 0 : 1;
+      group += tabs.is_empty() ? 0 : 1;
       continue;
     }
     if (hidden_sections.count(section.identifier)) {
@@ -2229,15 +2430,12 @@ std::string preferences_tabs(bContext *C,
     if (selected.empty() || requested == section.identifier) {
       selected = section.identifier;
     }
-    auto item = tab_items.append_dict();
-    item->append_str("id", PREFERENCES_TAB_PREFIX + std::string(section.identifier));
-    item->append_str("title", section.name);
     const auto icon = section_icons.find(section.identifier);
-    item->append_str("icon", icon != section_icons.end() ? icon->second : "PREFERENCES");
-    item->append_int("group", group);
-    if (external_sections.count(section.identifier)) {
-      item->append_int("external", 1);
-    }
+    tabs.append({PREFERENCES_TAB_PREFIX + std::string(section.identifier),
+                 section.name,
+                 icon != section_icons.end() ? icon->second : "PREFERENCES",
+                 group,
+                 external_sections.count(section.identifier) != 0});
   }
   if (free_sections) {
     MEM_delete(sections);
@@ -2248,6 +2446,28 @@ std::string preferences_tabs(bContext *C,
     std::transform(panel_context.begin(), panel_context.end(), panel_context.begin(), ::tolower);
   }
   return PREFERENCES_TAB_PREFIX + selected;
+}
+
+/** A button showing a property's value, which is a control of its own. */
+bool value_button(const Button &but)
+{
+  if (!but.rnaprop || !but.rnapoin.data || but.optype || (but.flag & UI_HIDDEN) ||
+      ELEM(but.type, ButtonType::ListRow, ButtonType::ListBox, ButtonType::ViewItem) ||
+      button_menutype_get(&but))
+  {
+    return false;
+  }
+  PointerRNA template_ptr;
+  PropertyRNA *template_prop;
+  int template_event;
+  if (template_id_property_get(but, template_ptr, template_prop, template_event)) {
+    return false;
+  }
+  const PropertyType type = RNA_property_type(but.rnaprop);
+  return ELEM(type, PROP_BOOLEAN, PROP_INT, PROP_FLOAT, PROP_STRING, PROP_ENUM) ||
+         (type == PROP_POINTER &&
+          RNA_struct_is_ID(RNA_property_pointer_type(const_cast<PointerRNA *>(&but.rnapoin),
+                                                      but.rnaprop)));
 }
 
 /**
@@ -2320,44 +2540,49 @@ static Vector<std::string> tool_tab_contexts(const bContext *C)
 }
 
 /**
- * Properties, the tool settings, a viewport popover or Preferences, as \a json asks for them, or
- * an edit of them with \a execute. With \a r_result, the description is left there rather than
- * written as JSON, for interfaces that take it as views.
+ * Properties, the tool settings, a viewport popover or Preferences, as \a data asks for them:
+ * written with \a writer, or edited as \a request asks. Says why when an edit cannot be made.
  */
-static std::string properties_query(bContext *C,
-                                    const std::string &json,
-                                    const bool execute,
-                                    DictionaryValue *r_result)
+static std::string panels_walk(bContext *C,
+                               native::PanelsData &data,
+                               Writer *writer,
+                               const native::EditRequest *request)
 {
-  DictionaryValue result;
-  auto query_value = decode(json);
-  const auto *query = query_value ? query_value->as_dictionary_value() : nullptr;
-  if (!query || !CTX_data_scene(C)) {
-    return "{}";
+  const bool execute = request != nullptr;
+  /* With nothing to show, a view is its top alone. */
+  const auto nothing = [&](const char *error) -> std::string {
+    if (writer) {
+      writer->builder.top("properties", [](Buffer &buffer, NodeFields & /*fields*/) {
+        return protocol::CreateGroup(buffer);
+      });
+    }
+    return execute ? error : "";
+  };
+  if (!CTX_data_scene(C)) {
+    return nothing("There is no scene.");
   }
   /* The panels draw their items' previews, such as materials', which need the scene evaluated:
    * evaluated first, as before Blender's own redraw, since an edit may have just changed it. */
   CTX_data_ensure_evaluated_depsgraph(C);
   if (execute) {
-    const std::string token = query->lookup_str("interaction").value_or("");
+    const std::string &token = request->interaction;
     if (!token.empty() && token == native_property_interaction.closed_token) {
       return "";
     }
     if (token != native_property_interaction.token) {
       finish_property_interaction(C);
     }
-    if (query->lookup_str("phase").value_or("") == "cancel" &&
-        native_property_interaction.token.empty()) {
+    if (request->phase == "cancel" && native_property_interaction.token.empty()) {
       return "";
     }
   }
-  const std::string requested_tab = query->lookup_str("tab").value_or("OBJECT");
+  const std::string requested_tab = data.tab.empty() ? "OBJECT" : data.tab;
   const bool shading = requested_tab == "SHADING";
   /* The viewport's overlays, a popover beside its shading in Blender's header. */
   const bool overlays = requested_tab == "OVERLAYS";
   const bool header_popover = shading || overlays;
   /* The toolbar's tool settings; the Properties' Tool tab is Blender's own, see #tool_tab. */
-  const bool tool_settings = requested_tab == "TOOL" && !query->lookup_int("properties").value_or(0);
+  const bool tool_settings = requested_tab == "TOOL" && !data.tool_tab;
   const bool viewport = header_popover || tool_settings;
   /* The Preferences' sections, their tabs named apart from the Properties' ones. */
   const bool preferences = StringRef(requested_tab).startswith(PREFERENCES_TAB_PREFIX);
@@ -2369,7 +2594,7 @@ static std::string properties_query(bContext *C,
     detached_context = std::make_unique<PropertiesContext>(C);
   }
   else if (!CTX_wm_view3d(C)) {
-    return "{}";
+    return nothing("There is no 3D Viewport.");
   }
   ARegion *panel_region = viewport ? CTX_wm_region(C) : detached_context->region;
   ARegionType *panel_region_type = viewport ?
@@ -2377,39 +2602,36 @@ static std::string properties_query(bContext *C,
       panel_region->runtime->type;
   std::string tab_id = tool_settings ? "TOOL" : shading ? "SHADING" : overlays ? "OVERLAYS" : "OBJECT";
   std::string panel_context;
-  auto tab_items = result.append_array("tabs");
+  Vector<Tab> tabs;
   if (preferences) {
-    tab_id = preferences_tabs(C, requested_tab, *tab_items, panel_context);
+    tab_id = preferences_tabs(C, requested_tab, tabs, panel_context);
   }
   else if (!viewport) {
     PropertiesContext &context = *static_cast<PropertiesContext *>(detached_context.get());
     PointerRNA space_ptr = RNA_pointer_create_discrete(nullptr, RNA_SpaceProperties, context.space);
     PropertyRNA *tab_prop = RNA_struct_find_property(&space_ptr, "context");
-    const EnumPropertyItem *tabs;
+    const EnumPropertyItem *items;
     int tab_count;
     bool free_tabs;
-    RNA_property_enum_items(C, &space_ptr, tab_prop, &tabs, &tab_count, &free_tabs);
+    RNA_property_enum_items(C, &space_ptr, tab_prop, &items, &tab_count, &free_tabs);
     int selected = BCONTEXT_OBJECT;
-    if (!RNA_enum_value_from_identifier(tabs, requested_tab.c_str(), &selected)) {
+    if (!RNA_enum_value_from_identifier(items, requested_tab.c_str(), &selected)) {
       selected = context.space->mainb;
     }
     context.space->mainbuser = context.space->mainb = selected;
     ED_buttons_native_context_prepare(C, context.space);
     for (int i = 0; i < tab_count; i++) {
-      const auto &tab = tabs[i];
+      const auto &tab = items[i];
       if (!tab.identifier || !tab.identifier[0]) {
         continue;
       }
-      auto item = tab_items->append_dict();
-      item->append_str("id", tab.identifier);
-      item->append_str("title", tab.name);
-      item->append_str("icon", icon_name(tab.icon));
+      tabs.append({tab.identifier, tab.name, icon_name(tab.icon)});
       if (tab.value == context.space->mainb) {
         tab_id = tab.identifier;
       }
     }
     if (free_tabs) {
-      MEM_delete(tabs);
+      MEM_delete(items);
     }
   }
   /* Native lists scroll themselves, so draw all their items. */
@@ -2424,35 +2646,63 @@ static std::string properties_query(bContext *C,
       panel_context = "particle";
     }
   }
-  result.append_str("tab", tab_id);
-  result.append_str("name", tool_settings ? "Tool Settings" :
-                            shading       ? "Viewport Shading" :
-                            overlays      ? "Overlays" :
-                            preferences   ? "Preferences" :
-                                            "Properties");
-  if (preferences && panel_context.empty()) {
-    /* A section drawn with lists of its own (the add-ons), which the native interface shows in
-     * its own way. */
-    result.append_int("external", 1);
-  }
   Object *object = preferences ? nullptr : CTX_data_active_object(C);
   std::string identity = tab_id + ":" + std::to_string(object ? object->id.session_uid : 0);
   if (tool_settings) {
     const bToolRef *tool = WM_toolsystem_ref_from_context(C);
-    if (!tool) { return execute ? "The active tool is no longer available." : "{}"; }
+    if (!tool) {
+      return nothing("The active tool is no longer available.");
+    }
     identity += ":" + std::string(tool->idname) + ":" + CTX_data_mode_string(C);
-    result.append_str("tool", tool->idname);
-    if (execute && query->lookup_str("id").value_or("") != identity) {
+    if (execute && data.identity != identity) {
       return "The active tool has changed.";
     }
   }
-  result.append_str("id", identity);
-  auto sections = std::make_shared<ArrayValue>();
-  const ArrayValue *expanded = query->lookup_array("expanded");
-  /* Sub-panel disclosure overrides keyed by panel id; absent ids use the panel type default. */
-  const DictionaryValue *subpanel_states = query->lookup_dict("subpanels");
-  const auto requested_panel = query->lookup_str("panel");
-  const auto requested_key = query->lookup_str("key");
+  /* The panels' nodes, by the panels' ids; a viewport popover's sub-panels are their outer's. */
+  std::map<std::string, NodeId> panel_nodes;
+  NodeId top = 0;
+  if (writer) {
+    data.tab = tab_id;
+    data.identity = identity;
+    writer->object = object;
+    top = writer->builder.top("properties", [&](Buffer &buffer, NodeFields &fields) {
+      fields.label = tool_settings ? "Tool Settings" :
+                     shading       ? "Viewport Shading" :
+                     overlays      ? "Overlays" :
+                     preferences   ? "Preferences" :
+                                     "Properties";
+      /* What it shows: another object's controls start again. */
+      fields.property = identity;
+      return protocol::CreateGroup(buffer);
+    });
+    if (!tabs.is_empty()) {
+      writer->builder.add(top, "tabs", [&](Buffer &buffer, NodeFields & /*fields*/) {
+        std::vector<flatbuffers::Offset<protocol::Option>> options;
+        for (const Tab &tab : tabs) {
+          options.push_back(protocol::CreateOptionDirect(buffer,
+                                                         tab.id.c_str(),
+                                                         tab.title.c_str(),
+                                                         tab.icon.c_str(),
+                                                         nullptr,
+                                                         nullptr,
+                                                         tab.group,
+                                                         tab.external));
+        }
+        return protocol::CreateChoice(buffer,
+                                      buffer.CreateString(tab_id),
+                                      buffer.CreateVector(options),
+                                      protocol::ChoiceStyle::Tabs);
+      });
+    }
+  }
+  const std::set<std::string> *expanded = data.expanded().lookup_ptr(tab_id);
+  /* Sub-panels opened or closed, by their ids; others are as their types have them. */
+  const Map<std::string, bool> *subpanel_states = data.subpanels().lookup_ptr(tab_id);
+  const std::string *requested_panel = execute ? &request->edit->panel : nullptr;
+  const std::string *requested_key = execute ? &request->edit->key : nullptr;
+  /* Physics' switches, which head their settings' panels, by those panels' ids. */
+  std::map<std::string, NodeId> physics_panels;
+  int outer_count = 0;
   bool applied = false;
   wmOperatorType *operator_type = nullptr;
   PointerRNA *operator_properties = nullptr;
@@ -2463,11 +2713,7 @@ static std::string properties_query(bContext *C,
   std::set<std::string> open_panels;
   /* Whether each candidate's body is visible, so nested sub-panels follow their parent. */
   std::map<std::string, bool> visible_panels;
-  std::map<std::string, int> panel_depths;
   std::map<std::string, std::string> outer_panels;
-  std::map<std::string, std::shared_ptr<ArrayValue>> outer_fields;
-  /* Properties of each section the other selected items have, and don't. */
-  std::map<std::string, int> common_sections, missing_sections;
   struct Candidate {
     PanelType *type;
     Panel *instance;
@@ -2532,6 +2778,14 @@ static std::string properties_query(bContext *C,
       candidates.push_back({&pt, nullptr, pt.idname, header_popover ? "" : pt.parent_id});
     }
   }
+  /* An outer panel's open: as an interface left it, or else only the first. */
+  const auto is_open = [&](const std::string &id) {
+    return expanded ? expanded->count(id) != 0 : viewport || preferences || outer_count == 0;
+  };
+  /* A physics' switch heads the panel of its settings, so the switches come first. */
+  std::stable_partition(candidates.begin(), candidates.end(), [](const Candidate &candidate) {
+    return candidate.id == "PHYSICS_PT_add";
+  });
   for (size_t candidate_index = 0; candidate_index < candidates.size(); candidate_index++) {
     const Candidate candidate = candidates[candidate_index];
     PanelType &pt = *candidate.type;
@@ -2558,22 +2812,18 @@ static std::string properties_query(bContext *C,
     }
     bool subpanel_open = !(pt.flag & PANEL_TYPE_DEFAULT_CLOSED);
     if (collapsible_subpanel && subpanel_states) {
-      if (const std::shared_ptr<Value> *state = subpanel_states->lookup(candidate.id)) {
-        if (const BooleanValue *flag = (*state)->as_boolean_value()) {
-          subpanel_open = flag->value();
-        }
-      }
+      subpanel_open = subpanel_states->lookup_default(candidate.id, subpanel_open);
     }
     /* Header-less panels (e.g. Add Modifier above the stack) cannot be collapsed. */
     const bool header_hidden = is_outer && (pt.flag & PANEL_TYPE_NO_HEADER);
-    const bool open = header_hidden ? true : is_outer ? (expanded ? std::any_of(expanded->elements().begin(), expanded->elements().end(),
-        [&](const auto &item) { return item->as_string_value() && item->as_string_value()->value() == candidate.id; }) : viewport || preferences || sections->elements().is_empty()) :
-        open_panels.count(outer) != 0 && (!collapsible_subpanel || subpanel_open);
+    const bool open = header_hidden ? true :
+                      is_outer      ? is_open(candidate.id) :
+                                      open_panels.count(outer) != 0 &&
+                                     (!collapsible_subpanel || subpanel_open);
     if (open && is_outer) {
       open_panels.insert(outer);
     }
     visible_panels[candidate.id] = open;
-    panel_depths[candidate.id] = is_outer ? 0 : panel_depths[candidate.parent] + 1;
     std::string panel_title = pt.label;
     bool panel_active = false;
     if (candidate.instance && !pt.parent) {
@@ -2594,46 +2844,18 @@ static std::string properties_query(bContext *C,
       }
     }
     if (is_outer) {
-      auto section = sections->append_dict();
-      section->append_str("id", candidate.id);
-      section->append_str("title", panel_title);
-      section->append_int("open", open);
-      if (header_hidden) {
-        section->append_int("header_hidden", 1);
-      }
-      if (panel_active) {
-        section->append_int("active", 1);
-      }
-      if (candidate.instance && pt.reorder) {
-        section->append_int("stack_index", stack_index++);
-      }
-      outer_fields[outer] = section->append_array("properties");
+      outer_count++;
     }
-    auto fields = outer_fields[outer];
-    if (!fields) {
+    else if (writer && !panel_nodes.count(collapsible_subpanel ? candidate.parent : outer)) {
+      /* Its panel was left out. */
       continue;
-    }
-    auto append_field = [&]() {
-      auto field = fields->append_dict();
-      if (!is_outer) {
-        field->append_str("section", panel_title);
-        field->append_str("subpanel", candidate.id);
-      }
-      return field;
-    };
-    if (collapsible_subpanel && !execute) {
-      /* Disclosure row for the sub-panel, emitted even when collapsed so it can be reopened. */
-      auto field = append_field();
-      field->append_str("type", "SUBPANEL");
-      field->append_int("open", open);
-      field->append_int("depth", panel_depths[candidate.id]);
     }
     const bool target_panel = requested_panel && *requested_panel == candidate.id;
     if (execute && target_panel && candidate.instance && !pt.parent && pt.reorder &&
-        query->lookup_str("panel_action").value_or("") == "reorder")
+        request->action == "reorder")
     {
       /* Dragged to another place in the stack, as dragging its header in Blender does. */
-      const int64_t to = query->lookup_int("to").value_or(-1);
+      const int64_t to = request->to;
       if (to >= 0) {
         pt.reorder(C, candidate.instance, int(to));
         applied = true;
@@ -3007,6 +3229,55 @@ static std::string properties_query(bContext *C,
       }
       return nullptr;
     };
+    /* Where the panel's controls go, see below. */
+    NodeId node = top;
+    /* A list from its first row, or its box while it has none. */
+    const auto write_list = [&](const Button &first) {
+      Vector<ListRow> rows;
+      for (const auto &button : block->buttons) {
+        if (button->type == ButtonType::ListRow && button->rnapoin.data == first.rnapoin.data &&
+            button->rnaprop == first.rnaprop)
+        {
+          const auto items = row_items.find(button.get());
+          rows.append({int64_t(button->hardmax),
+                       0,
+                       false,
+                       items == row_items.end() ? nullptr : &items->second});
+        }
+      }
+      PointerRNA active_ptr = first.rnapoin;
+      writer->list(node,
+                   property_key(first, -1),
+                   list_side_for(first),
+                   true,
+                   RNA_property_int_get(&active_ptr, first.rnaprop),
+                   rows,
+                   RNA_property_editable(&active_ptr, first.rnaprop));
+    };
+    /* A tree as a list: its items in order, indented by depth. */
+    const auto write_tree = [&](const TreeRows &tree, const std::string &key) {
+      Vector<ListRow> rows;
+      int64_t active = -1;
+      bool nested = false;
+      for (const int64_t index : IndexRange(tree.items.size())) {
+        const ButtonViewItem *button = tree.items[index];
+        const AbstractTreeViewItem *item = tree_item(*button);
+        const AbstractViewItem &view_item = *item;
+        /* What the item says should be active (a shape key: the object's active key), rather
+         * than the view's own flag, which only follows it as Blender's editor redraws. */
+        if (view_item.should_be_active().value_or(item->is_active())) {
+          active = index;
+        }
+        const auto items = row_items.find(button);
+        rows.append({index,
+                     item->count_parents(),
+                     item->supports_renaming(),
+                     items == row_items.end() ? nullptr : &items->second,
+                     view_item.get_rename_string()});
+        nested |= item->count_parents() > 0;
+      }
+      writer->list(node, key, &tree.side, !nested, active, rows);
+    };
     const bool physics_toggles = candidate.id == "PHYSICS_PT_add";
     /* Aligned rows of toggle buttons (e.g. Mirror X Y Z) are shown as one group, captioned by a
      * label just before them. */
@@ -3042,56 +3313,88 @@ static std::string properties_query(bContext *C,
         }
       }
     }
+    /* The other selected items with each property, and the panel's node, left out with its
+     * sub-panels when they lack all it shows, such as a modifier only the active item has. The
+     * physics' switches head panels of their own, see below. */
+    std::map<const Button *, SelectedOthers> others_of;
+    bool dropped = false;
+    if (writer) {
+      writer->panel = candidate.id;
+    }
+    if (writer && is_outer && !physics_toggles) {
+      int missing = 0, common = 0;
+      for (const auto &button : block->buttons) {
+        Button &but = *button;
+        if (!combined.count(&but) && !named_rows.count(&but) && value_button(but)) {
+          const SelectedOthers &others = others_of[&but] = selected_others(C, but);
+          (others.missing ? missing : common)++;
+        }
+      }
+      dropped = missing && !common;
+    }
+    if (writer && !physics_toggles && !dropped) {
+      const auto physics = physics_panels.find(candidate.id);
+      if (is_outer && physics != physics_panels.end()) {
+        node = physics->second;
+      }
+      else if (is_outer || collapsible_subpanel) {
+        node = writer->panel_node(is_outer ? top : panel_nodes.at(candidate.parent),
+                                  candidate.id,
+                                  is_outer,
+                                  panel_title,
+                                  open,
+                                  header_hidden,
+                                  panel_active,
+                                  is_outer && candidate.instance && pt.reorder ? stack_index++ :
+                                                                                 -1);
+      }
+      else {
+        node = panel_nodes.at(outer);
+      }
+      panel_nodes[candidate.id] = node;
+    }
     std::set<std::string> seen;
+    std::map<std::string, int> occurrences;
     int named_row_count = 0;
     for (const auto &button : block->buttons) {
       Button &but = *button;
-      if (!execute) {
+      if (dropped) {
+        break;
+      }
+      if (writer) {
         for (size_t index = 0; index < empty_lists.size(); index++) {
-          if (empty_lists[index].first != &but) {
-            continue;
+          if (empty_lists[index].first == &but) {
+            writer->list(node,
+                         "empty:" + candidate.id + ":" + std::to_string(index),
+                         &empty_lists[index].second,
+                         false,
+                         -1,
+                         {});
           }
-          auto field = append_field();
-          project_list_side(C, &empty_lists[index].second, object, *field, false);
-          field->append_str("type", "LIST");
-          field->append_str("key", "empty:" + candidate.id + ":" + std::to_string(index));
-          field->append_str("label", "");
-          field->append_int("value", -1);
-          field->append_int("editable", 1);
-          field->append_array("rows");
-          field->append_str("panel", candidate.id);
-          field->append_str("tab", tab_id);
-          field->append_int("native", 1);
         }
       }
       if (!execute && combined.count(&but)) {
         continue;
       }
       if (const auto named = named_rows.find(&but); named != named_rows.end()) {
-        if (!execute && open) {
-          auto field = append_field();
-          field->append_str("type", "ITEM_ROW");
-          field->append_str("key", "row:" + candidate.id + ":" + std::to_string(named_row_count++));
-          field->append_str("label", but.str);
-          field->append_str("icon", icon_name(button_icon(&but)));
-          auto controls = field->append_array("controls");
-          auto operators = field->append_array("operators");
+        if (writer && open) {
+          const std::string key = writer->key("row:" + candidate.id + ":" +
+                                              std::to_string(named_row_count++));
+          const NodeId row = writer->builder.add(node, key, [&](Buffer &buffer, NodeFields &fields) {
+            fields.label = but.str;
+            fields.icon = icon_name(button_icon(&but));
+            return protocol::CreateRow(buffer);
+          });
+          for (const Button *item : named->second) {
+            if (!item->optype) {
+              writer->property(row, const_cast<Button &>(*item), -1);
+            }
+          }
           for (const Button *item : named->second) {
             if (item->optype) {
-              auto entry = operators->append_dict();
-              entry->append_str("key", operator_key(C, *item, object));
-              entry->append_str("label", WM_operatortype_name(item->optype, item->opptr));
-              entry->append_str("icon", icon_name(button_icon(item)));
-              entry->append_int("editable", !(item->flag & (BUT_DISABLED | BUT_INACTIVE)));
-              continue;
+              writer->button(row, *item);
             }
-            auto control = controls->append_dict();
-            project_property(C, const_cast<Button &>(*item), -1, *control);
-            control->append_int("native", 1);
           }
-          field->append_str("panel", candidate.id);
-          field->append_str("tab", tab_id);
-          field->append_int("native", 1);
         }
         continue;
       }
@@ -3102,18 +3405,14 @@ static std::string properties_query(bContext *C,
         if (template_event == UI_ID_BROWSE) {
           const std::string key = id_template_key(template_ptr, template_prop);
           if (execute) {
-            if (target_panel && requested_key && *requested_key == key && !applied) {
-              applied = apply_id_template(C, *block, template_ptr, template_prop, *query,
+            if (target_panel && *requested_key == key && !applied) {
+              applied = apply_id_template(C, *block, template_ptr, template_prop, *request,
                                           operator_type, operator_properties, operator_context,
                                           pending_new_id);
             }
           }
           else if (seen.insert(key).second) {
-            auto field = append_field();
-            project_id_template(C, *block, template_ptr, template_prop, *field);
-            field->append_str("panel", candidate.id);
-            field->append_str("tab", tab_id);
-            field->append_int("native", 1);
+            writer->picker(node, *block, template_ptr, template_prop);
           }
         }
         continue;
@@ -3126,14 +3425,10 @@ static std::string properties_query(bContext *C,
               return row->type == ButtonType::ListRow && row->rnapoin.data == but.rnapoin.data &&
                      row->rnaprop == but.rnaprop;
             });
-        if (!execute && !has_rows && but.rnaprop && but.rnapoin.data &&
+        if (writer && !has_rows && but.rnaprop && but.rnapoin.data &&
             seen.insert(property_key(but, -1)).second)
         {
-          auto field = append_field();
-          project_list(C, *block, but, row_items, list_side_for(but), object, *field);
-          field->append_str("panel", candidate.id);
-          field->append_str("tab", tab_id);
-          field->append_int("native", 1);
+          write_list(but);
         }
         continue;
       }
@@ -3145,29 +3440,24 @@ static std::string properties_query(bContext *C,
           }
           const std::string key = tree_key(index);
           if (execute) {
-            if (target_panel && requested_key && *requested_key == key && !applied) {
-              applied = apply_tree(C, trees[index], *query);
+            if (target_panel && *requested_key == key && !applied) {
+              applied = apply_tree(C, trees[index], *request);
             }
           }
           else if (seen.insert(key).second) {
-            auto field = append_field();
-            project_tree(C, trees[index], row_items, object, key, *field);
-            field->append_str("panel", candidate.id);
-            field->append_str("tab", tab_id);
-            field->append_int("native", 1);
+            write_tree(trees[index], key);
           }
         }
         continue;
       }
-      if (but.type == ButtonType::ListRow && execute && target_panel && requested_key &&
-          *requested_key == property_key(but, -1) &&
-          query->lookup_str("list_action").value_or("") == "move")
+      if (but.type == ButtonType::ListRow && execute && target_panel &&
+          *requested_key == property_key(but, -1) && request->action == "move")
       {
         /* Drag to reorder: make the item active, then move it as the list's arrows do. */
         if (!applied) {
           ListSide *side = list_side_for(but);
-          const int from = int(query->lookup_int("from").value_or(-1));
-          const int to = int(query->lookup_int("to").value_or(-1));
+          const int from = int(request->index);
+          const int to = int(request->to);
           Button *step = side ? (to < from ? side->up : side->down) : nullptr;
           if (step && step->optype && from >= 0 && to >= 0 && from != to) {
             PointerRNA active_ptr = but.rnapoin;
@@ -3185,13 +3475,9 @@ static std::string properties_query(bContext *C,
         }
         continue;
       }
-      if (but.type == ButtonType::ListRow && !execute) {
+      if (but.type == ButtonType::ListRow && writer) {
         if (seen.insert(property_key(but, -1)).second) {
-          auto field = append_field();
-          project_list(C, *block, but, row_items, list_side_for(but), object, *field);
-          field->append_str("panel", candidate.id);
-          field->append_str("tab", tab_id);
-          field->append_int("native", 1);
+          write_list(but);
         }
         continue;
       }
@@ -3199,29 +3485,24 @@ static std::string properties_query(bContext *C,
       {
         /* The Preview panel's render (#template_preview). */
         ID *id = reinterpret_cast<ID *>(but.poin);
-        if (!execute && seen.insert("preview:" + std::to_string(id->session_uid)).second) {
-          auto field = append_field();
-          field->append_str("type", "PREVIEW");
-          field->append_str("key", "preview:" + std::to_string(id->session_uid));
-          field->append_str("label", id->name + 2);
-          field->append_str("preview", id_large_preview_path(C, id));
+        const std::string key = "preview:" + std::to_string(id->session_uid);
+        if (writer && seen.insert(key).second) {
+          const std::string image = id_large_preview_path(C, id);
+          const NodeId picture = writer->builder.add(
+              node, writer->key(key), [&](Buffer &buffer, NodeFields &fields) {
+                fields.label = id->name + 2;
+                return protocol::CreatePictureDirect(buffer, image.c_str());
+              });
           /* The preview's shape choice, shown on the preview itself. */
           for (const auto &shape : block->buttons) {
             if (shape->type == ButtonType::Row && shape->rnaprop &&
                 STREQ(RNA_property_identifier(shape->rnaprop), "preview_render_type"))
             {
-              auto shape_field = field->append_dict("shape");
-              project_property(C, *shape, -1, *shape_field);
-              shape_field->append_str("panel", candidate.id);
-              shape_field->append_str("tab", tab_id);
-              shape_field->append_int("native", 1);
+              writer->property(picture, *shape, -1, {.role = protocol::Role::Shape});
               seen.insert(property_key(*shape, -1));
               break;
             }
           }
-          field->append_str("panel", candidate.id);
-          field->append_str("tab", tab_id);
-          field->append_int("native", 1);
         }
         continue;
       }
@@ -3235,8 +3516,8 @@ static std::string properties_query(bContext *C,
                                 RNA_property_identifier(menu_enum_prop);
         PointerRNA op_ptr = WM_operator_properties_create_ptr(menu_ot);
         if (execute) {
-          const auto value = query->lookup_str("value");
-          if (target_panel && requested_key && *requested_key == key && value && !operator_type &&
+          const std::optional<std::string> value = command_text(request->command);
+          if (target_panel && *requested_key == key && value && !operator_type &&
               !(but.flag & (BUT_DISABLED | BUT_INACTIVE)))
           {
             operator_type = menu_ot;
@@ -3253,34 +3534,36 @@ static std::string properties_query(bContext *C,
           }
         }
         else if (seen.insert(key).second) {
-          auto field = append_field();
-          field->append_str("type", "OPERATOR_MENU");
-          field->append_str("label", but.str.empty() ? WM_operatortype_name(menu_ot, nullptr) : but.str);
-          field->append_str("key", key);
-          field->append_str("icon", icon_name(button_icon(&but)));
-          field->append_int("editable", !(but.flag & (BUT_DISABLED | BUT_INACTIVE)));
-          auto options = field->append_array("options");
-          const EnumPropertyItem *items;
-          int count;
-          bool free;
-          RNA_property_enum_items_gettexted(C, &op_ptr, menu_enum_prop, &items, &count, &free);
-          for (int i = 0; i < count; i++) {
-            auto option = options->append_dict();
-            if (!items[i].identifier || !items[i].identifier[0]) {
-              /* Headings start groups; unnamed items are separators. */
-              option->append_str("heading", items[i].name ? items[i].name : "");
-              continue;
+          const std::string node_key = writer->key(key);
+          const std::string label = but.str.empty() ? WM_operatortype_name(menu_ot, nullptr) :
+                                                      but.str;
+          data.edits.add_overwrite(node_key, {native::Edit::Kind::OperatorMenu, candidate.id, key});
+          writer->builder.add(node, node_key, [&](Buffer &buffer, NodeFields &fields) {
+            fields.label = label;
+            fields.icon = icon_name(button_icon(&but));
+            fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE));
+            std::vector<flatbuffers::Offset<protocol::Option>> options;
+            const EnumPropertyItem *items;
+            int count;
+            bool free;
+            RNA_property_enum_items_gettexted(C, &op_ptr, menu_enum_prop, &items, &count, &free);
+            for (int i = 0; i < count; i++) {
+              const bool heading = !items[i].identifier || !items[i].identifier[0];
+              /* Headings start groups, and have no value; unnamed ones are separators. */
+              options.push_back(protocol::CreateOptionDirect(
+                  buffer,
+                  heading ? nullptr : items[i].identifier,
+                  items[i].name ? items[i].name : "",
+                  heading ? nullptr : icon_name(items[i].icon).c_str()));
             }
-            option->append_str("value", items[i].identifier);
-            option->append_str("label", items[i].name);
-            option->append_str("icon", icon_name(items[i].icon));
-          }
-          if (free) {
-            MEM_delete(items);
-          }
-          field->append_str("panel", candidate.id);
-          field->append_str("tab", tab_id);
-          field->append_int("native", 1);
+            if (free) {
+              MEM_delete(items);
+            }
+            return protocol::CreateChoice(buffer,
+                                          buffer.CreateString(""),
+                                          buffer.CreateVector(options),
+                                          protocol::ChoiceStyle::Actions);
+          });
         }
         continue;
       }
@@ -3319,17 +3602,23 @@ static std::string properties_query(bContext *C,
         menu = WM_menutype_find(name.c_str(), true);
       }
       if (menu) {
-        if (!execute && !(but.flag & UI_HIDDEN)) {
-          auto field = append_field();
-          field->append_str("type", "MENU");
-          field->append_str("label", but.str.empty() ? menu->label : but.str);
-          field->append_str("key", menu->idname);
-          field->append_str("menu", menu->idname);
-          field->append_str("tab", tab_id);
-          field->append_str("icon", icon_name(button_icon(&but)));
-          field->append_int("editable", !(but.flag & (BUT_DISABLED | BUT_INACTIVE)));
+        /* Opened by the interface, as a view of its own. */
+        if (writer && !(but.flag & UI_HIDDEN)) {
+          const std::string label = but.str.empty() ? menu->label : but.str;
+          writer->builder.add(
+              node, writer->key(menu->idname), [&](Buffer &buffer, NodeFields &fields) {
+                fields.label = label;
+                fields.icon = icon_name(button_icon(&but));
+                fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE));
+                const auto param = protocol::CreateParamDirect(
+                    buffer,
+                    "menu",
+                    protocol::Value::TextValue,
+                    protocol::CreateTextValueDirect(buffer, menu->idname).Union());
+                return protocol::CreateMenuButton(
+                    buffer, buffer.CreateString("menu"), buffer.CreateVector(&param, 1));
+              });
         }
-        /* Menu activation belongs to UIKit, never to a Blender popup operator. */
         continue;
       }
       if (but.optype && !(but.flag & UI_HIDDEN)) {
@@ -3344,7 +3633,7 @@ static std::string properties_query(bContext *C,
           continue;
         }
         const std::string key = operator_key(C, but, object);
-        if (execute && !operator_type && target_panel && requested_key && *requested_key == key &&
+        if (execute && !operator_type && target_panel && *requested_key == key &&
             !(but.flag & (BUT_DISABLED | BUT_INACTIVE)) && but.optype->exec) {
           operator_type = but.optype;
           operator_properties = but.opptr;
@@ -3353,37 +3642,40 @@ static std::string properties_query(bContext *C,
             operator_context = std::make_unique<bContextStore>(*but.context);
           }
         }
-        else if (!execute && seen.insert(key).second) {
-          auto field = append_field();
-          field->append_str("type", "OPERATOR");
-          field->append_str("label", but.str.empty() ? WM_operatortype_name(but.optype, but.opptr) : but.str);
-          field->append_str("key", key);
-          field->append_str("icon", icon_name(button_icon(&but)));
-          if (ELEM(button_icon(&but), ICON_CHECKBOX_HLT, ICON_CHECKBOX_DEHLT)) {
-            /* A toggle operator drawn as a checkbox (e.g. Dyntopo): native UI shows a switch. */
-            field->append_int("checkbox", 1);
-            field->append_int("value", button_icon(&but) == ICON_CHECKBOX_HLT);
-          }
-          else if (physics_toggles) {
-            /* Physics are added and removed with one button each, which shows an X while the
-             * physics is on: a switch per type. */
-            const bool enabled = button_icon(&but) == ICON_X;
-            field->append_int("checkbox", 1);
-            field->append_int("value", enabled);
-            field->append_str("leading_icon", icon_name(enabled ? physics_icon(C, but) :
-                                                                  button_icon(&but)));
-            /* Natively each physics is one section: this switch heads its settings. */
-            if (const char *panel_id = physics_panel(C, but)) {
-              field->append_str("physics_panel", panel_id);
-            }
-          }
-          field->append_int("editable", !(but.flag & (BUT_DISABLED | BUT_INACTIVE)) && but.optype->exec);
-          if (header_operator) {
-            field->append_int("header", 1);
-          }
-          field->append_str("panel", candidate.id);
-          field->append_str("tab", tab_id);
-          field->append_int("native", 1);
+        else if (writer && physics_toggles && seen.insert(key).second) {
+          /* Physics are added and removed with a button each, which shows an X while the
+           * physics is on: natively, each is a panel of its settings, headed by a switch. */
+          const bool on = button_icon(&but) == ICON_X;
+          const char *settings = physics_panel(C, but);
+          const std::string id = settings ? settings : key;
+          const std::string label = but.str.empty() ?
+                                        WM_operatortype_name(but.optype, but.opptr) :
+                                        but.str;
+          const NodeId physics = writer->panel_node(
+              top,
+              id,
+              true,
+              label,
+              on && is_open(id),
+              false,
+              false,
+              -1,
+              on,
+              icon_name(on ? physics_icon(C, but) : button_icon(&but)));
+          physics_panels[id] = physics;
+          const std::string switch_key = writer->key(key);
+          data.edits.add_overwrite(switch_key,
+                                   {native::Edit::Kind::Operator, candidate.id, key, 0, false, false,
+                                    settings ? settings : ""});
+          writer->builder.add(physics, switch_key, [&](Buffer &buffer, NodeFields &fields) {
+            fields.label = label;
+            fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE)) && but.optype->exec;
+            fields.role = protocol::Role::Header;
+            return protocol::CreateToggle(buffer, on);
+          });
+        }
+        else if (writer && seen.insert(key).second) {
+          writer->button(node, but, header_operator ? protocol::Role::Header : protocol::Role::None);
         }
         continue;
       }
@@ -3398,87 +3690,73 @@ static std::string properties_query(bContext *C,
       const int length = RNA_property_array_length(&but.rnapoin, but.rnaprop);
       const bool color = is_color(&but.rnapoin, but.rnaprop);
       /* Only what every selected item has. */
-      const SelectedOthers others = execute ? SelectedOthers() : selected_others(C, but);
+      const auto found_others = others_of.find(&but);
+      const SelectedOthers others = execute                       ? SelectedOthers() :
+                                    found_others != others_of.end() ? found_others->second :
+                                                                      selected_others(C, but);
       if (others.missing) {
-        if (is_outer) {
-          missing_sections[candidate.id] += 1;
-        }
         continue;
-      }
-      if (is_outer) {
-        common_sections[candidate.id] += 1;
       }
       const int begin = !color && length ? std::max(0, but.rnaindex) : -1;
       const int end = !color && length && but.rnaindex < 0 ? std::min(length, 16) : begin + 1;
       for (int index = begin; index < end; index++) {
         const std::string key = property_key(but, index);
+        if (execute) {
+          /* Of the buttons with its key, the one it is, as each row of a list has its own. */
+          if (target_panel && *requested_key == key && !applied &&
+              occurrences[key]++ == request->edit->occurrence)
+          {
+            applied = ELEM(request->action, "", "activate") ?
+                          set_property(C, but, index, *request) :
+                          animate_property(C, but, index, request->action);
+          }
+          continue;
+        }
         if (!seen.insert(key).second) {
           continue;
         }
-        if (execute) {
-          if (target_panel && requested_key && *requested_key == key) {
-            const auto animation_action = query->lookup_str("animation_action");
-            applied = animation_action ? animate_property(C, but, index, *animation_action) :
-                                         set_property(C, but, index, *query);
-          }
+        if (attached_locks.count(key) || attached_modes.count(key)) {
+          continue;
         }
-        else {
-          if (attached_locks.count(key) || attached_modes.count(key)) {
-            continue;
-          }
-          auto field = append_field();
-          const auto pair = pairs.find(&but);
-          const auto layout_name = layout_names.find(but.rnaprop);
-          /* One property on several items, such as each bone collection's visibility: the
-           * property's name is the same on all of them, the text Blender draws tells them apart. */
-          const auto own_name = shared_properties.count(but.rnaprop) ? tool_labels.find(&but) :
-                                                                       tool_labels.end();
-          project_property(C, but, index, *field, pair == pairs.end() ? nullptr : &pair->second,
-                           layout_name == layout_names.end() ? nullptr : &layout_name->second,
-                           &others,
-                           own_name == tool_labels.end() ? nullptr : &own_name->second);
-          if (but.type == ButtonType::Row && RNA_property_type(but.rnaprop) == PROP_ENUM) {
-            /* Authored as an expanded row (e.g. selection mode), not a dropdown. */
-            field->append_int("expand", 1);
-          }
-          if (const auto group = toggle_groups.find(&but); group != toggle_groups.end()) {
-            field->append_str("toggle_group", candidate.id + ":" + std::to_string(group->second.first));
-            field->append_str("toggle_caption", group->second.second);
-          }
-          /* The short text Blender draws, for the tool settings and for a row of toggles, such
-           * as the Axes' X, Y and Z, rather than each property's full name. */
-          if (const auto found = tool_labels.find(&but);
-              found != tool_labels.end() && (tool_settings || toggle_groups.count(&but))) {
-            field->append_str("toolbar_label", found->second);
-          }
-          if (const auto found = field_modes.find(key); found != field_modes.end()) {
-            auto mode = field->append_dict("group_menu");
-            project_property(C, *found->second, -1, *mode);
-            mode->append_str("panel", candidate.id);
-            mode->append_str("tab", tab_id);
-            mode->append_int("native", 1);
-          }
-          if (const auto found = field_locks.find(key); found != field_locks.end()) {
-            auto lock = field->append_dict("lock");
-            project_property(C, *found->second.first, found->second.second, *lock);
-            lock->append_str("panel", candidate.id);
-            lock->append_str("tab", tab_id);
-            lock->append_int("native", 1);
-          }
-          if (header_toggle) {
-            field->append_int("header", 1);
-            if (candidate.instance) {
-              field->append_int("header_cluster", 1);
-            }
-          }
-          if (header_name) {
-            field->append_int("header", 1);
-            field->append_int("header_name", 1);
-          }
-          field->append_str("panel", candidate.id);
-          field->append_str("tab", tab_id);
-          field->append_int("native", 1);
+        Look look;
+        look.others = &others;
+        if (const auto pair = pairs.find(&but); pair != pairs.end()) {
+          look.pair = &pair->second;
         }
+        /* One property on several items, such as each bone collection's visibility, is named by
+         * the text Blender draws; a property of its own, such as a Geometry Nodes input, by its
+         * layout's. */
+        const auto own_name = tool_labels.find(&but);
+        const auto layout_name = layout_names.find(but.rnaprop);
+        if (shared_properties.count(but.rnaprop) && own_name != tool_labels.end()) {
+          look.name = own_name->second;
+        }
+        else if (layout_name != layout_names.end() && RNA_property_is_idprop(but.rnaprop)) {
+          look.name = layout_name->second;
+        }
+        /* Authored as an expanded row, such as the selection mode, not a menu. */
+        look.expand = but.type == ButtonType::Row && RNA_property_type(but.rnaprop) == PROP_ENUM;
+        if (const auto group = toggle_groups.find(&but); group != toggle_groups.end()) {
+          look.toggles = candidate.id + ":" + std::to_string(group->second.first);
+          look.toggles_caption = group->second.second;
+        }
+        /* The short text Blender draws, for the tool settings and for a row of toggles, such as
+         * the Axes' X, Y and Z, rather than each property's full name. */
+        if (own_name != tool_labels.end() && (tool_settings || toggle_groups.count(&but))) {
+          look.short_label = own_name->second;
+        }
+        if (const auto found = field_modes.find(key); found != field_modes.end()) {
+          look.mode = found->second;
+        }
+        if (const auto found = field_locks.find(key); found != field_locks.end()) {
+          look.lock = found->second.first;
+          look.lock_index = found->second.second;
+        }
+        look.role = header_name                          ? protocol::Role::Name :
+                    header_toggle && candidate.instance ? protocol::Role::Visibility :
+                    header_toggle                       ? protocol::Role::Header :
+                                                          protocol::Role::None;
+        writer->property(node, but, index, look);
       }
     }
     panel->layout = nullptr;
@@ -3549,49 +3827,60 @@ static std::string properties_query(bContext *C,
         flags &= curve->strinfo[i].flag;
       }
     }
-    auto style = result.append_dict("text_style");
-    style->append_int("bold", (flags & CU_CHINFO_BOLD) != 0);
-    style->append_int("italic", (flags & CU_CHINFO_ITALIC) != 0);
-    style->append_int("underline", (flags & CU_CHINFO_UNDERLINE) != 0);
-    style->append_int("small_caps", (flags & CU_CHINFO_SMALLCAPS) != 0);
-    style->append_str("font_file", curve->vfont ? curve->vfont->filepath : "");
     PointerRNA curve_ptr = RNA_id_pointer_create(const_cast<ID *>(&curve->id));
+    const NodeId style = writer->builder.add(top, "text_style", [](Buffer &buffer, NodeFields &) {
+      return protocol::CreateGroup(buffer);
+    });
+    const auto add = [&](const char *name, auto write) {
+      writer->builder.add(style,
+                          std::string("text_style:") + name,
+                          [&](Buffer &buffer, NodeFields &fields) {
+                            fields.label = name;
+                            return write(buffer);
+                          });
+    };
+    for (const auto [name, flag] : {std::pair{"bold", CU_CHINFO_BOLD},
+                                    std::pair{"italic", CU_CHINFO_ITALIC},
+                                    std::pair{"underline", CU_CHINFO_UNDERLINE},
+                                    std::pair{"small_caps", CU_CHINFO_SMALLCAPS}})
+    {
+      add(name, [&](Buffer &buffer) { return protocol::CreateToggle(buffer, flags & flag); });
+    }
+    add("font_file", [&](Buffer &buffer) {
+      return protocol::CreateTextFieldDirect(buffer, curve->vfont ? curve->vfont->filepath : "");
+    });
     for (const char *identifier : {"align_x", "align_y"}) {
       PropertyRNA *prop = RNA_struct_find_property(&curve_ptr, identifier);
       const char *value = "";
-      RNA_property_enum_identifier(C, &curve_ptr, prop, RNA_property_enum_get(&curve_ptr, prop), &value);
-      style->append_str(identifier, value);
+      RNA_property_enum_identifier(
+          C, &curve_ptr, prop, RNA_property_enum_get(&curve_ptr, prop), &value);
+      add(identifier,
+          [&](Buffer &buffer) { return protocol::CreateTextFieldDirect(buffer, value); });
     }
     for (const char *identifier : {"size", "space_line", "space_character", "space_word"}) {
-      style->append_double(identifier, RNA_float_get(&curve_ptr, identifier));
+      add(identifier, [&](Buffer &buffer) {
+        return protocol::CreateNumber(buffer, RNA_float_get(&curve_ptr, identifier));
+      });
     }
   }
-  /* Sections of only the active item's own (e.g. a modifier the others lack) leave with their
-   * properties. */
-  auto common = result.append_array("sections");
-  for (const std::shared_ptr<Value> &section : sections->elements()) {
-    const std::string id = section->as_dictionary_value()->lookup_str("id").value_or("");
-    if (missing_sections.count(id) && !common_sections.count(id)) {
-      continue;
-    }
-    common->append(section);
-  }
-  if (r_result) {
-    *r_result = std::move(result);
-    return "";
-  }
-  return encode(result);
+  return "";
 }
 
-std::string native_properties_query(bContext *C, const std::string &json, bool execute)
+
+namespace native {
+
+void panels_write(bContext *C, PanelsData &data, ViewBuilder &builder)
 {
-  return properties_query(C, json, execute, nullptr);
+  Writer writer(C, builder, data);
+  panels_walk(C, data, &writer, nullptr);
 }
 
-void native_properties_describe(bContext *C, const std::string &json, DictionaryValue &r_result)
+std::string panels_edit(bContext *C, PanelsData &data, const EditRequest &request)
 {
-  properties_query(C, json, false, &r_result);
+  return panels_walk(C, data, nullptr, &request);
 }
+
+}  // namespace native
 
 std::string native_properties_menu_query(bContext *C, const std::string &json, bool execute)
 {
@@ -4103,8 +4392,7 @@ std::string native_preview_path(const Scene *scene, const ImBuf *ibuf, const std
   return entry.second;
 }
 
-void project_node(bContext *C,
-                  bNodeTree &tree,
+void project_node(bNodeTree &tree,
                   bNode &node,
                   const std::set<const bNodeSocket *> &linked,
                   DictionaryValue &item,
@@ -4247,29 +4535,45 @@ void project_node(bContext *C,
       }
     }
   }
-  if (node.is_frame() || node.is_reroute()) {
-    return;
-  }
-  auto fields = item.append_array("fields");
-  Block *block = native_node_block(C, tree, node, linked);
+}
+
+/** A node's values as controls under its record \a record: its own under `<node>/fields`, a
+ * socket's under `<node>/socket:<id>`. */
+void write_node_fields(Writer &writer,
+                       const NodeId record,
+                       const std::string &record_key,
+                       bNodeTree &tree,
+                       bNode &node,
+                       const std::set<const bNodeSocket *> &linked)
+{
+  writer.panel = node.name;
+  Block *block = native_node_block(writer.C, tree, node, linked);
+  std::map<std::string, NodeId> groups;
+  const auto group = [&](const std::string &name) {
+    const auto [found, added] = groups.try_emplace(name, 0);
+    if (added) {
+      found->second = writer.group(record, record_key + "/" + name, name);
+    }
+    return found->second;
+  };
+  /* A node's own values: other selected nodes are left alone. */
+  const SelectedOthers none;
   for_each_node_field(
       *block,
       [&](Button &but, const int index, const std::string & /*key*/) {
-        auto field = fields->append_dict();
-        /* A node's own value: other selected nodes are left alone. */
-        const SelectedOthers none;
-        project_property(C, but, index, *field, nullptr, nullptr, &none);
-        field->append_str("node", node.name);
-        if (RNA_struct_is_a(but.rnapoin.type, RNA_NodeSocket)) {
-          field->append_str("socket", static_cast<bNodeSocket *>(but.rnapoin.data)->identifier);
-        }
+        const bool socket = RNA_struct_is_a(but.rnapoin.type, RNA_NodeSocket);
+        writer.property(
+            group(socket ? "socket:" + std::string(
+                                           static_cast<bNodeSocket *>(but.rnapoin.data)->identifier) :
+                           "fields"),
+            but,
+            index,
+            {.others = &none});
       },
       [&](PointerRNA &ptr, PropertyRNA *prop) {
-        auto field = fields->append_dict();
-        project_id_template(C, *block, ptr, prop, *field);
-        field->append_str("node", node.name);
+        writer.picker(group("fields"), *block, ptr, prop);
       });
-  block_free(C, block);
+  block_free(writer.C, block);
 }
 
 /** The colors of a node type's socket types, once each and in order, for the add list. */
@@ -4659,19 +4963,20 @@ std::optional<std::string> native_node_key(bContext *C, bNodeTree &tree, const D
 }
 
 /** A node's value, or the header's data-block, which is there even while there is no tree. */
-std::optional<std::string> apply_node_property(bContext *C,
-                                               bNodeTree *tree,
-                                               bNode *node,
-                                               const DictionaryValue &query)
+bool apply_node_property(bContext *C,
+                         bNodeTree *tree,
+                         bNode *node,
+                         const native::EditRequest &request)
 {
   Main *bmain = CTX_data_main(C);
-  const bool header = query.lookup_int("header").value_or(0);
+  const bool header = request.edit->panel.empty();
   if ((!node || !tree) && !header) {
-    return std::nullopt;
+    return false;
   }
   Block *block = header ? native_node_header_block(C) :
                           native_node_block(C, *tree, *node, linked_sockets(*tree));
-  const std::string key = query.lookup_str("key").value_or("");
+  const std::string &key = request.edit->key;
+  const bool picker = request.edit->kind == native::Edit::Kind::Picker;
   bool applied = false;
   wmOperatorType *operator_type = nullptr;
   PointerRNA *operator_properties = nullptr;
@@ -4680,13 +4985,14 @@ std::optional<std::string> apply_node_property(bContext *C,
   for_each_node_field(
       *block,
       [&](Button &but, const int index, const std::string &field_key) {
-        if (!applied && field_key == key && !query.lookup_str("id_action")) {
-          applied = set_property(C, but, index, query, true, false);
+        if (!applied && !picker && field_key == key) {
+          applied = request.action.empty() ? set_property(C, but, index, request, true, false) :
+                                             animate_property(C, but, index, request.action);
         }
       },
       [&](PointerRNA &ptr, PropertyRNA *prop) {
-        if (!applied && query.lookup_str("id_action") && id_template_key(ptr, prop) == key) {
-          applied = apply_id_template(C, *block, ptr, prop, query, operator_type,
+        if (!applied && picker && id_template_key(ptr, prop) == key) {
+          applied = apply_id_template(C, *block, ptr, prop, request, operator_type,
                                       operator_properties, operator_context, pending);
         }
       });
@@ -4719,7 +5025,7 @@ std::optional<std::string> apply_node_property(bContext *C,
   else {
     BKE_main_ensure_invariants(*bmain);
   }
-  return applied ? std::optional<std::string>("") : std::nullopt;
+  return applied;
 }
 
 /** Applies one of the canvas's actions to the tree it shows; the undo step's name, or none. */
@@ -4728,9 +5034,6 @@ std::optional<std::string> apply_node_action(bContext *C, bNodeTree &tree, const
   Main *bmain = CTX_data_main(C);
   const std::string action = query.lookup_str("action").value_or("");
   bNode *node = bke::node_find_node_by_name(tree, query.lookup_str("node").value_or(""));
-  if (action == "property") {
-    return apply_node_property(C, &tree, node, query);
-  }
   if (action == "select") {
     if (!query.lookup_int("extend").value_or(0)) {
       for (bNode &other : tree.nodes) {
@@ -5120,66 +5423,106 @@ void native_nodes_compositor_job(bContext *C)
   }
 }
 
-std::string native_nodes_query(bContext *C, const std::string &json, const bool execute)
+namespace native {
+
+std::string nodes_edit(bContext *C, NodesData & /*data*/, const DictionaryValue &query)
 {
-  auto query_value = decode(json);
-  const auto *query = query_value ? query_value->as_dictionary_value() : nullptr;
-  if (!query || !CTX_data_scene(C)) {
-    return execute ? "This node tree is no longer available." : "null";
+  if (!CTX_data_scene(C)) {
+    return "This node tree is no longer available.";
   }
-  NativeNodeTree shown = native_node_tree(C, *query);
+  NativeNodeTree shown = native_node_tree(C, query);
+  if (!shown.tree) {
+    return "This node tree is no longer available.";
+  }
+  shown.tree->ensure_topology_cache();
+  /* Resolved from the viewport's context; edited in a node editor's. */
+  NodeSpaceContext node_space(C, shown);
+  const std::optional<std::string> undo = apply_node_action(C, *shown.tree, query);
+  if (!undo) {
+    return "This node change could not be made.";
+  }
+  if (!undo->empty()) {
+    ED_undo_push(C, undo->c_str());
+  }
+  WM_event_add_notifier(C, NC_NODE | NA_EDITED, shown.tree);
+  if (shown.root->type == NTREE_COMPOSIT && query.lookup_str("phase").value_or("") != "update") {
+    /* The backdrop and previews follow, as in Blender's editor. */
+    ED_node_compositor_job(C);
+  }
+  return "";
+}
+
+std::string nodes_edit_control(bContext *C, NodesData &data, const EditRequest &request)
+{
+  if (!CTX_data_scene(C)) {
+    return "This node tree is no longer available.";
+  }
+  NativeNodeTree shown = native_node_tree(C, *data.state);
   if (shown.tree) {
     shown.tree->ensure_topology_cache();
   }
-  /* Resolved from the viewport's context; edited and drawn in a node editor's, whose header
-   * offers a tree to pick or make even while there is none. */
+  /* A node editor's header offers a tree to pick or make even while there is none. */
+  NodeSpaceContext node_space(C, shown);
+  bNode *node = shown.tree ? bke::node_find_node_by_name(*shown.tree, request.edit->panel) :
+                             nullptr;
+  if (!apply_node_property(C, shown.tree, node, request)) {
+    return "This value is no longer available.";
+  }
+  WM_event_add_notifier(C, NC_NODE | NA_EDITED, shown.tree);
+  if (shown.root && shown.root->type == NTREE_COMPOSIT && request.phase != "update") {
+    ED_node_compositor_job(C);
+  }
+  return "";
+}
+
+/**
+ * The tree as records, see #wm::native_ui::records_add: the tree's own values, its nodes'
+ * under `nodes/nodes`, each keyed `node:<name>` with its values as controls, see
+ * #write_node_fields, and the header's data-block pickers under `header`.
+ */
+void nodes_write(bContext *C, NodesData &data, ViewBuilder &builder)
+{
+  Writer writer(C, builder, data);
+  const DictionaryValue &query = *data.state;
+  DictionaryValue result;
+  const auto finish = [&]() {
+    result.append_int("ack", data.ack);
+    result.append_str("error", data.error);
+    return records_add(builder, std::nullopt, "nodes", result);
+  };
+  if (!CTX_data_scene(C)) {
+    finish();
+    return;
+  }
+  NativeNodeTree shown = native_node_tree(C, query);
+  if (shown.tree) {
+    shown.tree->ensure_topology_cache();
+  }
+  /* Resolved from the viewport's context; drawn in a node editor's, whose header offers a tree
+   * to pick or make even while there is none. */
   std::optional<NodeSpaceContext> node_space;
   node_space.emplace(C, shown);
-  if (execute) {
-    if (!shown.tree) {
-      if (query->lookup_str("action").value_or("") == "property" &&
-          apply_node_property(C, nullptr, nullptr, *query))
-      {
-        WM_event_add_notifier(C, NC_NODE | NA_EDITED, nullptr);
-        return "";
-      }
-      return "This node tree is no longer available.";
-    }
-    const std::optional<std::string> undo = apply_node_action(C, *shown.tree, *query);
-    if (!undo) {
-      return "This node change could not be made.";
-    }
-    if (!undo->empty()) {
-      ED_undo_push(C, undo->c_str());
-    }
-    WM_event_add_notifier(C, NC_NODE | NA_EDITED, shown.tree);
-    if (shown.root->type == NTREE_COMPOSIT && query->lookup_str("phase").value_or("") != "update") {
-      /* The backdrop and previews follow, as in Blender's editor. */
-      ED_node_compositor_job(C);
-    }
-    return "";
+  if (data.composite) {
+    data.composite = false;
+    native_nodes_compositor_job(C);
   }
-  DictionaryValue result;
-  result.append_str("tree", query->lookup_str("tree").value_or("SHADER"));
+  result.append_str("tree", query.lookup_str("tree").value_or("SHADER"));
   /* The header's data-block picker, as the Properties editor shows one. */
-  auto append_header_ids = [&]() {
+  const auto write_header = [&](const NodeId top) {
     Block *header = native_node_header_block(C);
-    auto ids = result.append_array("header_ids");
+    writer.panel.clear();
+    const NodeId group = writer.group(top, "header", "header");
     for_each_node_field(
         *header,
         [](Button & /*but*/, const int /*index*/, const std::string & /*key*/) {},
-        [&](PointerRNA &ptr, PropertyRNA *prop) {
-          auto field = ids->append_dict();
-          project_id_template(C, *header, ptr, prop, *field);
-          field->append_int("header", 1);
-        });
+        [&](PointerRNA &ptr, PropertyRNA *prop) { writer.picker(group, *header, ptr, prop); });
     block_free(C, header);
   };
   if (!shown.tree) {
     result.append_str("empty", shown.empty);
     result.append_str("create", shown.create);
-    append_header_ids();
-    return encode(result);
+    write_header(finish());
+    return;
   }
   result.append_str("name", shown.tree->id.name + 2);
   result.append_str("owner", shown.owner);
@@ -5191,7 +5534,6 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
   }
   bNodeTree &tree = *shown.tree;
   const std::set<const bNodeSocket *> linked = linked_sockets(tree);
-  auto nodes = result.append_array("nodes");
   NodeReadContext read;
   read.space = node_space->space;
   read.scene = CTX_data_scene(C);
@@ -5203,7 +5545,7 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
       log.ensure_execution_times();
     });
   }
-  else if (tree.type == NTREE_SHADER && query->lookup_int("previews").value_or(0) &&
+  else if (tree.type == NTREE_SHADER && query.lookup_int("previews").value_or(0) &&
            std::any_of(tree.nodes.begin(), tree.nodes.end(),
                        [](const bNode &node) { return node.flag & NODE_PREVIEW; }))
   {
@@ -5211,11 +5553,6 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
   }
   else if (tree.type == NTREE_COMPOSIT) {
     read.compositor_previews = &shown.root->runtime->previews;
-  }
-  NativeOptionSets option_sets;
-  native_option_sets = &option_sets;
-  for (bNode &node : tree.nodes) {
-    project_node(C, tree, node, linked, *nodes->append_dict(), read);
   }
   /* The compositor's Viewer, behind the nodes as Blender's backdrop. */
   /* Only with a node plugged into a Viewer, through any reroutes: otherwise its result is an
@@ -5236,7 +5573,7 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
     return STREQ(node.idname, "CompositorNodeViewer") &&
            std::any_of(node.inputs.begin(), node.inputs.end(), fed);
   });
-  if (tree.type == NTREE_COMPOSIT && viewed && query->lookup_int("backdrop").value_or(0)) {
+  if (tree.type == NTREE_COMPOSIT && viewed && query.lookup_int("backdrop").value_or(0)) {
     Main *bmain = CTX_data_main(C);
     Image *viewer = BKE_image_ensure_viewer(bmain, IMA_TYPE_COMPOSITE, "Viewer Node");
     void *lock;
@@ -5316,7 +5653,6 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
   if (tree.type == NTREE_COMPOSIT) {
     result.append_int("can_backdrop", 1);
   }
-  append_header_ids();
   if (native_node_key_request.sequence) {
     auto key = result.append_dict("key_request");
     key->append_int("sequence", native_node_key_request.sequence);
@@ -5325,13 +5661,11 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
   }
   /* What the compositor computes for this editor: its backdrop and the previews turned on. */
   ED_node_compositor_native_outputs_set(
-      tree.type == NTREE_COMPOSIT && query->lookup_int("backdrop").value_or(0),
+      tree.type == NTREE_COMPOSIT && query.lookup_int("backdrop").value_or(0),
       tree.type == NTREE_COMPOSIT &&
           std::any_of(tree.nodes.begin(), tree.nodes.end(), [](const bNode &node) {
             return node.flag & NODE_PREVIEW;
           }));
-  native_option_sets = nullptr;
-  result.append("option_sets", option_sets.sets);
   auto links = result.append_array("links");
   for (const bNodeLink &link : tree.links) {
     if (!link.fromnode || !link.tonode || !link.fromsock || !link.tosock ||
@@ -5380,11 +5714,28 @@ std::string native_nodes_query(bContext *C, const std::string &json, const bool 
       item->append_str("kind", output->typeinfo->ui_name);
     }
   }
-  if (query->lookup_int("with_add").value_or(0)) {
+  /* The nodes it can add, once for each tree. */
+  const std::string add_for = std::to_string(tree.id.session_uid);
+  if (add_for != data.add_for) {
+    data.add_for = add_for;
     project_node_add_items(C, tree, *result.append_array("add"));
   }
-  return encode(result);
+  const NodeId top = finish();
+  write_header(top);
+  const NodeId nodes = writer.group(top, "nodes/nodes", "nodes");
+  for (bNode &node : tree.nodes) {
+    DictionaryValue item;
+    project_node(tree, node, linked, item, read);
+    const std::string key = "node:" + std::string(node.name);
+    const NodeId record = records_add(builder, nodes, key, item);
+    if (!node.is_frame() && !node.is_reroute()) {
+      write_node_fields(writer, record, key, tree, node, linked);
+    }
+  }
 }
+
+}  // namespace native
+
 
 /** \} */
 

@@ -85,8 +85,8 @@ on a control's change:
   WM_native_ui_send(Commands{[Command{subscription, target: node.key, op: Set, value, phase}]})
 ```
 
-Draw each node by its content type: `Panel` as a collapsible section with the children listed in
-its `header` beside its title, `Group` by its layout (`Row` for a vector's components, `Joined`
+Draw each node by its content type: `Panel` as a collapsible section with its children of the
+roles `Name`, `Visibility` and `Header` beside its title, `Group` by its layout (`Row` for a vector's components, `Joined`
 for toggles drawn together), `Number` as a field to drag or type (or a slider), `Choice` by its
 style, `List` with its `Row` children, and so on. A node's `role` says what it is to its parent,
 such as a component's lock or a row's mode, so a shell can show it with what it belongs to.

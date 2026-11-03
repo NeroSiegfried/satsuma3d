@@ -87,14 +87,12 @@ table Group {
   layout: Layout;
 }
 
-/// A panel, which can be opened and closed. Its controls are its children; those of its header
-/// are listed in `header`.
+/// A panel, which can be opened and closed. Its controls are its children, some drawn in its
+/// header, see `Role`.
 table Panel {
   expanded: bool = true;
   /// It cannot be closed.
   fixed: bool;
-  /// Keys of its children drawn in its header, such as a modifier's switches.
-  header: [string];
   /// The active one of a stack of panels, such as the active modifier.
   active: bool;
   /// Its place in a stack of panels that can be put in another order, such as modifiers, which
@@ -407,6 +405,8 @@ enum Role : ubyte {
   Visibility,
   /// Duplicates the active row of the list it is a child of.
   Duplicate,
+  /// Drawn in the header of the panel it is a child of, such as a modifier's Remove.
+  Header,
 }
 
 /// How a property is animated, as Blender colors its control.

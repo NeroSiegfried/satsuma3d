@@ -175,8 +175,10 @@ public enum Blender_NativeUI_Role: UInt8, Enum, Verifiable {
   case visibility = 5
   ///  Duplicates the active row of the list it is a child of.
   case duplicate = 6
+  ///  Drawn in the header of the panel it is a child of, such as a modifier's Remove.
+  case header = 7
 
-  public static var max: Blender_NativeUI_Role { return .duplicate }
+  public static var max: Blender_NativeUI_Role { return .header }
   public static var min: Blender_NativeUI_Role { return .none_ }
 }
 
@@ -605,8 +607,8 @@ public struct Blender_NativeUI_Group: FlatBufferObject, Verifiable {
   }
 }
 
-///  A panel, which can be opened and closed. Its controls are its children; those of its header
-///  are listed in `header`.
+///  A panel, which can be opened and closed. Its controls are its children, some drawn in its
+///  header, see `Role`.
 public struct Blender_NativeUI_Panel: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
@@ -619,10 +621,9 @@ public struct Blender_NativeUI_Panel: FlatBufferObject, Verifiable {
   private enum VTOFFSET: VOffset {
     case expanded = 4
     case fixed = 6
-    case header = 8
-    case active = 10
-    case position = 12
-    case openable = 14
+    case active = 8
+    case position = 10
+    case openable = 12
     var v: Int32 { Int32(self.rawValue) }
     var p: VOffset { self.rawValue }
   }
@@ -630,10 +631,6 @@ public struct Blender_NativeUI_Panel: FlatBufferObject, Verifiable {
   public var expanded: Bool { let o = _accessor.offset(VTOFFSET.expanded.v); return o == 0 ? true : _accessor.readBuffer(of: Bool.self, at: o) }
   ///  It cannot be closed.
   public var fixed: Bool { let o = _accessor.offset(VTOFFSET.fixed.v); return o == 0 ? false : _accessor.readBuffer(of: Bool.self, at: o) }
-  ///  Keys of its children drawn in its header, such as a modifier's switches.
-  public var hasHeader: Bool { let o = _accessor.offset(VTOFFSET.header.v); return o == 0 ? false : true }
-  public var headerCount: Int32 { let o = _accessor.offset(VTOFFSET.header.v); return o == 0 ? 0 : _accessor.vector(count: o) }
-  public func header(at index: Int32) -> String? { let o = _accessor.offset(VTOFFSET.header.v); return o == 0 ? nil : _accessor.directString(at: _accessor.vector(at: o) + index * 4) }
   ///  The active one of a stack of panels, such as the active modifier.
   public var active: Bool { let o = _accessor.offset(VTOFFSET.active.v); return o == 0 ? false : _accessor.readBuffer(of: Bool.self, at: o) }
   ///  Its place in a stack of panels that can be put in another order, such as modifiers, which
@@ -641,12 +638,11 @@ public struct Blender_NativeUI_Panel: FlatBufferObject, Verifiable {
   public var position: Int32 { let o = _accessor.offset(VTOFFSET.position.v); return o == 0 ? -1 : _accessor.readBuffer(of: Int32.self, at: o) }
   ///  It can be opened: not when there is nothing in it, as a physics that is off.
   public var openable: Bool { let o = _accessor.offset(VTOFFSET.openable.v); return o == 0 ? true : _accessor.readBuffer(of: Bool.self, at: o) }
-  public static func startPanel(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 6) }
+  public static func startPanel(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 5) }
   public static func add(expanded: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: expanded, def: true,
    at: VTOFFSET.expanded.p) }
   public static func add(fixed: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: fixed, def: false,
    at: VTOFFSET.fixed.p) }
-  public static func addVectorOf(header: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: header, at: VTOFFSET.header.p) }
   public static func add(active: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: active, def: false,
    at: VTOFFSET.active.p) }
   public static func add(position: Int32, _ fbb: inout FlatBufferBuilder) { fbb.add(element: position, def: -1, at: VTOFFSET.position.p) }
@@ -657,7 +653,6 @@ public struct Blender_NativeUI_Panel: FlatBufferObject, Verifiable {
     _ fbb: inout FlatBufferBuilder,
     expanded: Bool = true,
     fixed: Bool = false,
-    headerVectorOffset header: Offset = Offset(),
     active: Bool = false,
     position: Int32 = -1,
     openable: Bool = true
@@ -665,7 +660,6 @@ public struct Blender_NativeUI_Panel: FlatBufferObject, Verifiable {
     let __start = Blender_NativeUI_Panel.startPanel(&fbb)
     Blender_NativeUI_Panel.add(expanded: expanded, &fbb)
     Blender_NativeUI_Panel.add(fixed: fixed, &fbb)
-    Blender_NativeUI_Panel.addVectorOf(header: header, &fbb)
     Blender_NativeUI_Panel.add(active: active, &fbb)
     Blender_NativeUI_Panel.add(position: position, &fbb)
     Blender_NativeUI_Panel.add(openable: openable, &fbb)
@@ -676,7 +670,6 @@ public struct Blender_NativeUI_Panel: FlatBufferObject, Verifiable {
     var _v = try verifier.visitTable(at: position)
     try _v.visit(field: VTOFFSET.expanded.p, fieldName: "expanded", required: false, type: Bool.self)
     try _v.visit(field: VTOFFSET.fixed.p, fieldName: "fixed", required: false, type: Bool.self)
-    try _v.visit(field: VTOFFSET.header.p, fieldName: "header", required: false, type: ForwardOffset<Vector<ForwardOffset<String>, String>>.self)
     try _v.visit(field: VTOFFSET.active.p, fieldName: "active", required: false, type: Bool.self)
     try _v.visit(field: VTOFFSET.position.p, fieldName: "position", required: false, type: Int32.self)
     try _v.visit(field: VTOFFSET.openable.p, fieldName: "openable", required: false, type: Bool.self)
