@@ -69,6 +69,20 @@ class List : Table() {
             val o = __offset(12)
             return if(o != 0) 0.toByte() != bb.get(o + bb_pos) else false
         }
+    /**
+     * A menu of more it can do, as a `MenuButton` names it.
+     */
+    val menu : String?
+        get() {
+            val o = __offset(14)
+            return if (o != 0) {
+                __string(o + bb_pos)
+            } else {
+                null
+            }
+        }
+    val menuAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(14, 1)
+    fun menuInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 14, 1)
     companion object {
         fun validateVersion() = Constants.FLATBUFFERS_25_2_10()
         fun getRootAsList(_bb: ByteBuffer): List = getRootAsList(_bb, List())
@@ -76,8 +90,9 @@ class List : Table() {
             _bb.order(ByteOrder.LITTLE_ENDIAN)
             return (obj.__assign(_bb.getInt(_bb.position()) + _bb.position(), _bb))
         }
-        fun createList(builder: FlatBufferBuilder, activeOffset: Int, canAdd: Boolean, canRemove: Boolean, canReorder: Boolean, tree: Boolean) : Int {
-            builder.startTable(5)
+        fun createList(builder: FlatBufferBuilder, activeOffset: Int, canAdd: Boolean, canRemove: Boolean, canReorder: Boolean, tree: Boolean, menuOffset: Int) : Int {
+            builder.startTable(6)
+            addMenu(builder, menuOffset)
             addActive(builder, activeOffset)
             addTree(builder, tree)
             addCanReorder(builder, canReorder)
@@ -85,12 +100,13 @@ class List : Table() {
             addCanAdd(builder, canAdd)
             return endList(builder)
         }
-        fun startList(builder: FlatBufferBuilder) = builder.startTable(5)
+        fun startList(builder: FlatBufferBuilder) = builder.startTable(6)
         fun addActive(builder: FlatBufferBuilder, active: Int) = builder.addOffset(0, active, 0)
         fun addCanAdd(builder: FlatBufferBuilder, canAdd: Boolean) = builder.addBoolean(1, canAdd, false)
         fun addCanRemove(builder: FlatBufferBuilder, canRemove: Boolean) = builder.addBoolean(2, canRemove, false)
         fun addCanReorder(builder: FlatBufferBuilder, canReorder: Boolean) = builder.addBoolean(3, canReorder, false)
         fun addTree(builder: FlatBufferBuilder, tree: Boolean) = builder.addBoolean(4, tree, false)
+        fun addMenu(builder: FlatBufferBuilder, menu: Int) = builder.addOffset(5, menu, 0)
         fun endList(builder: FlatBufferBuilder) : Int {
             val o = builder.endTable()
             return o

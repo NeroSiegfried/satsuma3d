@@ -20,8 +20,10 @@ import kotlin.math.sign
 
 /**
  * A data-block chosen for a property, such as an object's material. Commands: `Set` chooses
- * another by its `value`, `Add` makes a new one, `Remove` takes it away, `Rename` renames it, and
- * `Invoke` with `fake_user` or `single_user` toggles its fake user or makes it single-user.
+ * another by its `value`, `Add` makes a new one, or loads one from the files its texts name (a
+ * font's regular, bold, italic and bold italic faces), `Remove` takes it away, `Rename` renames
+ * it, and `Invoke` with `fake_user` or `single_user` toggles its fake user or makes it
+ * single-user.
  */
 @Suppress("unused")
 class Reference : Table() {
@@ -91,7 +93,8 @@ class Reference : Table() {
             return if(o != 0) 0.toByte() != bb.get(o + bb_pos) else false
         }
     /**
-     * What can be done with it: a new one, take it away, or make it single-user.
+     * What can be done with it: a new one, take it away, make it single-user, or keep it with a
+     * fake user.
      */
     val canNew : Boolean
         get() {
@@ -108,12 +111,18 @@ class Reference : Table() {
             val o = __offset(20)
             return if(o != 0) 0.toByte() != bb.get(o + bb_pos) else false
         }
+    val canFakeUser : Boolean
+        get() {
+            val o = __offset(22)
+            return if(o != 0) 0.toByte() != bb.get(o + bb_pos) else false
+        }
     /**
-     * The data-blocks to choose from. Long lists come as a view of their own instead.
+     * The data-blocks to choose from, each described by its users. Long lists come as a view of
+     * their own instead.
      */
     fun options(j: Int) : Blender.NativeUI.Option? = options(Blender.NativeUI.Option(), j)
     fun options(obj: Blender.NativeUI.Option, j: Int) : Blender.NativeUI.Option? {
-        val o = __offset(22)
+        val o = __offset(24)
         return if (o != 0) {
             obj.__assign(__indirect(__vector(o) + j * 4), bb)
         } else {
@@ -122,8 +131,44 @@ class Reference : Table() {
     }
     val optionsLength : Int
         get() {
-            val o = __offset(22); return if (o != 0) __vector_len(o) else 0
+            val o = __offset(24); return if (o != 0) __vector_len(o) else 0
         }
+    /**
+     * An image of the chosen one.
+     */
+    val preview : String?
+        get() {
+            val o = __offset(26)
+            return if (o != 0) {
+                __string(o + bb_pos)
+            } else {
+                null
+            }
+        }
+    val previewAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(26, 1)
+    fun previewInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 26, 1)
+    /**
+     * A font, which an interface may choose with its own font picker.
+     */
+    val font : Boolean
+        get() {
+            val o = __offset(28)
+            return if(o != 0) 0.toByte() != bb.get(o + bb_pos) else false
+        }
+    /**
+     * The file it was loaded from, such as a font's.
+     */
+    val file : String?
+        get() {
+            val o = __offset(30)
+            return if (o != 0) {
+                __string(o + bb_pos)
+            } else {
+                null
+            }
+        }
+    val fileAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(30, 1)
+    fun fileInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 30, 1)
     companion object {
         fun validateVersion() = Constants.FLATBUFFERS_25_2_10()
         fun getRootAsReference(_bb: ByteBuffer): Reference = getRootAsReference(_bb, Reference())
@@ -131,13 +176,17 @@ class Reference : Table() {
             _bb.order(ByteOrder.LITTLE_ENDIAN)
             return (obj.__assign(_bb.getInt(_bb.position()) + _bb.position(), _bb))
         }
-        fun createReference(builder: FlatBufferBuilder, typeOffset: Int, nameOffset: Int, valueOffset: Int, users: Int, linked: Boolean, fakeUser: Boolean, canNew: Boolean, canUnlink: Boolean, canSingleUser: Boolean, optionsOffset: Int) : Int {
-            builder.startTable(10)
+        fun createReference(builder: FlatBufferBuilder, typeOffset: Int, nameOffset: Int, valueOffset: Int, users: Int, linked: Boolean, fakeUser: Boolean, canNew: Boolean, canUnlink: Boolean, canSingleUser: Boolean, canFakeUser: Boolean, optionsOffset: Int, previewOffset: Int, font: Boolean, fileOffset: Int) : Int {
+            builder.startTable(14)
+            addFile(builder, fileOffset)
+            addPreview(builder, previewOffset)
             addOptions(builder, optionsOffset)
             addUsers(builder, users)
             addValue(builder, valueOffset)
             addName(builder, nameOffset)
             addType(builder, typeOffset)
+            addFont(builder, font)
+            addCanFakeUser(builder, canFakeUser)
             addCanSingleUser(builder, canSingleUser)
             addCanUnlink(builder, canUnlink)
             addCanNew(builder, canNew)
@@ -145,7 +194,7 @@ class Reference : Table() {
             addLinked(builder, linked)
             return endReference(builder)
         }
-        fun startReference(builder: FlatBufferBuilder) = builder.startTable(10)
+        fun startReference(builder: FlatBufferBuilder) = builder.startTable(14)
         fun addType(builder: FlatBufferBuilder, type: Int) = builder.addOffset(0, type, 0)
         fun addName(builder: FlatBufferBuilder, name: Int) = builder.addOffset(1, name, 0)
         fun addValue(builder: FlatBufferBuilder, value: Int) = builder.addOffset(2, value, 0)
@@ -155,7 +204,8 @@ class Reference : Table() {
         fun addCanNew(builder: FlatBufferBuilder, canNew: Boolean) = builder.addBoolean(6, canNew, false)
         fun addCanUnlink(builder: FlatBufferBuilder, canUnlink: Boolean) = builder.addBoolean(7, canUnlink, false)
         fun addCanSingleUser(builder: FlatBufferBuilder, canSingleUser: Boolean) = builder.addBoolean(8, canSingleUser, false)
-        fun addOptions(builder: FlatBufferBuilder, options: Int) = builder.addOffset(9, options, 0)
+        fun addCanFakeUser(builder: FlatBufferBuilder, canFakeUser: Boolean) = builder.addBoolean(9, canFakeUser, false)
+        fun addOptions(builder: FlatBufferBuilder, options: Int) = builder.addOffset(10, options, 0)
         fun createOptionsVector(builder: FlatBufferBuilder, data: IntArray) : Int {
             builder.startVector(4, data.size, 4)
             for (i in data.size - 1 downTo 0) {
@@ -164,6 +214,9 @@ class Reference : Table() {
             return builder.endVector()
         }
         fun startOptionsVector(builder: FlatBufferBuilder, numElems: Int) = builder.startVector(4, numElems, 4)
+        fun addPreview(builder: FlatBufferBuilder, preview: Int) = builder.addOffset(11, preview, 0)
+        fun addFont(builder: FlatBufferBuilder, font: Boolean) = builder.addBoolean(12, font, false)
+        fun addFile(builder: FlatBufferBuilder, file: Int) = builder.addOffset(13, file, 0)
         fun endReference(builder: FlatBufferBuilder) : Int {
             val o = builder.endTable()
             return o

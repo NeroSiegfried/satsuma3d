@@ -15,5 +15,6 @@ class Value private constructor() {
         const val TextValue: UByte = 4u
         const val FloatsValue: UByte = 5u
         const val IntsValue: UByte = 6u
+        const val TextsValue: UByte = 7u
     }
 }

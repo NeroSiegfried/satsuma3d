@@ -20,8 +20,9 @@ public enum Blender_NativeUI_Value: UInt8, UnionEnum {
   case textvalue = 4
   case floatsvalue = 5
   case intsvalue = 6
+  case textsvalue = 7
 
-  public static var max: Blender_NativeUI_Value { return .intsvalue }
+  public static var max: Blender_NativeUI_Value { return .textsvalue }
   public static var min: Blender_NativeUI_Value { return .none_ }
 }
 
@@ -95,8 +96,10 @@ public enum Blender_NativeUI_ChoiceStyle: UInt8, Enum, Verifiable {
   case expanded = 1
   ///  As tabs.
   case tabs = 2
+  ///  A menu of things to do: choosing one does it, and none stays chosen.
+  case actions = 3
 
-  public static var max: Blender_NativeUI_ChoiceStyle { return .tabs }
+  public static var max: Blender_NativeUI_ChoiceStyle { return .actions }
   public static var min: Blender_NativeUI_ChoiceStyle { return .menu }
 }
 
@@ -147,6 +150,30 @@ public enum Blender_NativeUI_Content: UInt8, UnionEnum {
 
   public static var max: Blender_NativeUI_Content { return .menu }
   public static var min: Blender_NativeUI_Content { return .none_ }
+}
+
+
+///  What a control is to the one it belongs to, for interfaces that show it with it.
+public enum Blender_NativeUI_Role: UInt8, Enum, Verifiable {
+  public typealias T = UInt8
+  public static var byteSize: Int { return MemoryLayout<UInt8>.size }
+  public var value: UInt8 { return self.rawValue }
+  case none_ = 0
+  ///  Locks the control it is a child of.
+  case lock = 1
+  ///  The mode of the row it is a child of, such as a rotation's.
+  case mode = 2
+  ///  The shape of the preview it is a child of.
+  case shape = 3
+  ///  The name of the panel it is in the header of, such as a modifier's.
+  case name = 4
+  ///  Where the panel it is in the header of applies, such as a modifier's Edit Mode and Render.
+  case visibility = 5
+  ///  Duplicates the active row of the list it is a child of.
+  case duplicate = 6
+
+  public static var max: Blender_NativeUI_Role { return .duplicate }
+  public static var min: Blender_NativeUI_Role { return .none_ }
 }
 
 
@@ -434,6 +461,43 @@ public struct Blender_NativeUI_IntsValue: FlatBufferObject, Verifiable {
   }
 }
 
+public struct Blender_NativeUI_TextsValue: FlatBufferObject, Verifiable {
+
+  static func validateVersion() { FlatBuffersVersion_25_2_10() }
+  public var __buffer: ByteBuffer! { return _accessor.bb }
+  private var _accessor: Table
+
+  private init(_ t: Table) { _accessor = t }
+  public init(_ bb: ByteBuffer, o: Int32) { _accessor = Table(bb: bb, position: o) }
+
+  private enum VTOFFSET: VOffset {
+    case value = 4
+    var v: Int32 { Int32(self.rawValue) }
+    var p: VOffset { self.rawValue }
+  }
+
+  public var hasValue: Bool { let o = _accessor.offset(VTOFFSET.value.v); return o == 0 ? false : true }
+  public var valueCount: Int32 { let o = _accessor.offset(VTOFFSET.value.v); return o == 0 ? 0 : _accessor.vector(count: o) }
+  public func value(at index: Int32) -> String? { let o = _accessor.offset(VTOFFSET.value.v); return o == 0 ? nil : _accessor.directString(at: _accessor.vector(at: o) + index * 4) }
+  public static func startTextsValue(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 1) }
+  public static func addVectorOf(value: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: value, at: VTOFFSET.value.p) }
+  public static func endTextsValue(_ fbb: inout FlatBufferBuilder, start: UOffset) -> Offset { let end = Offset(offset: fbb.endTable(at: start)); return end }
+  public static func createTextsValue(
+    _ fbb: inout FlatBufferBuilder,
+    valueVectorOffset value: Offset = Offset()
+  ) -> Offset {
+    let __start = Blender_NativeUI_TextsValue.startTextsValue(&fbb)
+    Blender_NativeUI_TextsValue.addVectorOf(value: value, &fbb)
+    return Blender_NativeUI_TextsValue.endTextsValue(&fbb, start: __start)
+  }
+
+  public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
+    var _v = try verifier.visitTable(at: position)
+    try _v.visit(field: VTOFFSET.value.p, fieldName: "value", required: false, type: ForwardOffset<Vector<ForwardOffset<String>, String>>.self)
+    _v.finish()
+  }
+}
+
 ///  A named value, such as a view's parameter.
 public struct Blender_NativeUI_Param: FlatBufferObject, Verifiable {
 
@@ -493,6 +557,8 @@ public struct Blender_NativeUI_Param: FlatBufferObject, Verifiable {
         try ForwardOffset<Blender_NativeUI_FloatsValue>.verify(&verifier, at: pos, of: Blender_NativeUI_FloatsValue.self)
       case .intsvalue:
         try ForwardOffset<Blender_NativeUI_IntsValue>.verify(&verifier, at: pos, of: Blender_NativeUI_IntsValue.self)
+      case .textsvalue:
+        try ForwardOffset<Blender_NativeUI_TextsValue>.verify(&verifier, at: pos, of: Blender_NativeUI_TextsValue.self)
       }
     })
     _v.finish()
@@ -550,6 +616,9 @@ public struct Blender_NativeUI_Panel: FlatBufferObject, Verifiable {
     case expanded = 4
     case fixed = 6
     case header = 8
+    case active = 10
+    case position = 12
+    case openable = 14
     var v: Int32 { Int32(self.rawValue) }
     var p: VOffset { self.rawValue }
   }
@@ -561,23 +630,41 @@ public struct Blender_NativeUI_Panel: FlatBufferObject, Verifiable {
   public var hasHeader: Bool { let o = _accessor.offset(VTOFFSET.header.v); return o == 0 ? false : true }
   public var headerCount: Int32 { let o = _accessor.offset(VTOFFSET.header.v); return o == 0 ? 0 : _accessor.vector(count: o) }
   public func header(at index: Int32) -> String? { let o = _accessor.offset(VTOFFSET.header.v); return o == 0 ? nil : _accessor.directString(at: _accessor.vector(at: o) + index * 4) }
-  public static func startPanel(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 3) }
+  ///  The active one of a stack of panels, such as the active modifier.
+  public var active: Bool { let o = _accessor.offset(VTOFFSET.active.v); return o == 0 ? false : _accessor.readBuffer(of: Bool.self, at: o) }
+  ///  Its place in a stack of panels that can be put in another order, such as modifiers, which
+  ///  `Move` with the place as `value` does; -1 when not in one.
+  public var position: Int32 { let o = _accessor.offset(VTOFFSET.position.v); return o == 0 ? -1 : _accessor.readBuffer(of: Int32.self, at: o) }
+  ///  It can be opened: not when there is nothing in it, as a physics that is off.
+  public var openable: Bool { let o = _accessor.offset(VTOFFSET.openable.v); return o == 0 ? true : _accessor.readBuffer(of: Bool.self, at: o) }
+  public static func startPanel(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 6) }
   public static func add(expanded: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: expanded, def: true,
    at: VTOFFSET.expanded.p) }
   public static func add(fixed: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: fixed, def: false,
    at: VTOFFSET.fixed.p) }
   public static func addVectorOf(header: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: header, at: VTOFFSET.header.p) }
+  public static func add(active: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: active, def: false,
+   at: VTOFFSET.active.p) }
+  public static func add(position: Int32, _ fbb: inout FlatBufferBuilder) { fbb.add(element: position, def: -1, at: VTOFFSET.position.p) }
+  public static func add(openable: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: openable, def: true,
+   at: VTOFFSET.openable.p) }
   public static func endPanel(_ fbb: inout FlatBufferBuilder, start: UOffset) -> Offset { let end = Offset(offset: fbb.endTable(at: start)); return end }
   public static func createPanel(
     _ fbb: inout FlatBufferBuilder,
     expanded: Bool = true,
     fixed: Bool = false,
-    headerVectorOffset header: Offset = Offset()
+    headerVectorOffset header: Offset = Offset(),
+    active: Bool = false,
+    position: Int32 = -1,
+    openable: Bool = true
   ) -> Offset {
     let __start = Blender_NativeUI_Panel.startPanel(&fbb)
     Blender_NativeUI_Panel.add(expanded: expanded, &fbb)
     Blender_NativeUI_Panel.add(fixed: fixed, &fbb)
     Blender_NativeUI_Panel.addVectorOf(header: header, &fbb)
+    Blender_NativeUI_Panel.add(active: active, &fbb)
+    Blender_NativeUI_Panel.add(position: position, &fbb)
+    Blender_NativeUI_Panel.add(openable: openable, &fbb)
     return Blender_NativeUI_Panel.endPanel(&fbb, start: __start)
   }
 
@@ -586,6 +673,9 @@ public struct Blender_NativeUI_Panel: FlatBufferObject, Verifiable {
     try _v.visit(field: VTOFFSET.expanded.p, fieldName: "expanded", required: false, type: Bool.self)
     try _v.visit(field: VTOFFSET.fixed.p, fieldName: "fixed", required: false, type: Bool.self)
     try _v.visit(field: VTOFFSET.header.p, fieldName: "header", required: false, type: ForwardOffset<Vector<ForwardOffset<String>, String>>.self)
+    try _v.visit(field: VTOFFSET.active.p, fieldName: "active", required: false, type: Bool.self)
+    try _v.visit(field: VTOFFSET.position.p, fieldName: "position", required: false, type: Int32.self)
+    try _v.visit(field: VTOFFSET.openable.p, fieldName: "openable", required: false, type: Bool.self)
     _v.finish()
   }
 }
@@ -657,6 +747,7 @@ public struct Blender_NativeUI_Number: FlatBufferObject, Verifiable {
     case precision = 20
     case slider = 22
     case scale = 24
+    case unit = 26
     var v: Int32 { Int32(self.rawValue) }
     var p: VOffset { self.rawValue }
   }
@@ -677,7 +768,10 @@ public struct Blender_NativeUI_Number: FlatBufferObject, Verifiable {
   ///  Drawn as a slider over the soft range.
   public var slider: Bool { let o = _accessor.offset(VTOFFSET.slider.v); return o == 0 ? false : _accessor.readBuffer(of: Bool.self, at: o) }
   public var scale: Blender_NativeUI_Scale { let o = _accessor.offset(VTOFFSET.scale.v); return o == 0 ? .linear : Blender_NativeUI_Scale(rawValue: _accessor.readBuffer(of: UInt8.self, at: o)) ?? .linear }
-  public static func startNumber(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 11) }
+  ///  Shown after the value, such as "px".
+  public var unit: String? { let o = _accessor.offset(VTOFFSET.unit.v); return o == 0 ? nil : _accessor.string(at: o) }
+  public var unitSegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.unit.v) }
+  public static func startNumber(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 12) }
   public static func add(value: Double, _ fbb: inout FlatBufferBuilder) { fbb.add(element: value, def: 0.0, at: VTOFFSET.value.p) }
   public static func add(integer: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: integer, def: false,
    at: VTOFFSET.integer.p) }
@@ -691,6 +785,7 @@ public struct Blender_NativeUI_Number: FlatBufferObject, Verifiable {
   public static func add(slider: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: slider, def: false,
    at: VTOFFSET.slider.p) }
   public static func add(scale: Blender_NativeUI_Scale, _ fbb: inout FlatBufferBuilder) { fbb.add(element: scale.rawValue, def: 0, at: VTOFFSET.scale.p) }
+  public static func add(unit: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: unit, at: VTOFFSET.unit.p) }
   public static func endNumber(_ fbb: inout FlatBufferBuilder, start: UOffset) -> Offset { let end = Offset(offset: fbb.endTable(at: start)); return end }
   public static func createNumber(
     _ fbb: inout FlatBufferBuilder,
@@ -704,7 +799,8 @@ public struct Blender_NativeUI_Number: FlatBufferObject, Verifiable {
     step: Double = 0.0,
     precision: UInt8 = 3,
     slider: Bool = false,
-    scale: Blender_NativeUI_Scale = .linear
+    scale: Blender_NativeUI_Scale = .linear,
+    unitOffset unit: Offset = Offset()
   ) -> Offset {
     let __start = Blender_NativeUI_Number.startNumber(&fbb)
     Blender_NativeUI_Number.add(value: value, &fbb)
@@ -718,6 +814,7 @@ public struct Blender_NativeUI_Number: FlatBufferObject, Verifiable {
     Blender_NativeUI_Number.add(precision: precision, &fbb)
     Blender_NativeUI_Number.add(slider: slider, &fbb)
     Blender_NativeUI_Number.add(scale: scale, &fbb)
+    Blender_NativeUI_Number.add(unit: unit, &fbb)
     return Blender_NativeUI_Number.endNumber(&fbb, start: __start)
   }
 
@@ -734,6 +831,7 @@ public struct Blender_NativeUI_Number: FlatBufferObject, Verifiable {
     try _v.visit(field: VTOFFSET.precision.p, fieldName: "precision", required: false, type: UInt8.self)
     try _v.visit(field: VTOFFSET.slider.p, fieldName: "slider", required: false, type: Bool.self)
     try _v.visit(field: VTOFFSET.scale.p, fieldName: "scale", required: false, type: Blender_NativeUI_Scale.self)
+    try _v.visit(field: VTOFFSET.unit.p, fieldName: "unit", required: false, type: ForwardOffset<String>.self)
     _v.finish()
   }
 }
@@ -806,6 +904,8 @@ public struct Blender_NativeUI_Option: FlatBufferObject, Verifiable {
     case icon = 8
     case preview = 10
     case description = 12
+    case group = 14
+    case external = 16
     var v: Int32 { Int32(self.rawValue) }
     var p: VOffset { self.rawValue }
   }
@@ -822,12 +922,19 @@ public struct Blender_NativeUI_Option: FlatBufferObject, Verifiable {
   public var previewSegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.preview.v) }
   public var description: String? { let o = _accessor.offset(VTOFFSET.description.v); return o == 0 ? nil : _accessor.string(at: o) }
   public var descriptionSegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.description.v) }
-  public static func startOption(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 5) }
+  ///  Options group under headings by this number, such as the Preferences' sections.
+  public var group: Int32 { let o = _accessor.offset(VTOFFSET.group.v); return o == 0 ? 0 : _accessor.readBuffer(of: Int32.self, at: o) }
+  ///  Chosen without the interface showing it, as a section only Blender's own Preferences show.
+  public var external: Bool { let o = _accessor.offset(VTOFFSET.external.v); return o == 0 ? false : _accessor.readBuffer(of: Bool.self, at: o) }
+  public static func startOption(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 7) }
   public static func add(value: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: value, at: VTOFFSET.value.p) }
   public static func add(label: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: label, at: VTOFFSET.label.p) }
   public static func add(icon: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: icon, at: VTOFFSET.icon.p) }
   public static func add(preview: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: preview, at: VTOFFSET.preview.p) }
   public static func add(description: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: description, at: VTOFFSET.description.p) }
+  public static func add(group: Int32, _ fbb: inout FlatBufferBuilder) { fbb.add(element: group, def: 0, at: VTOFFSET.group.p) }
+  public static func add(external: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: external, def: false,
+   at: VTOFFSET.external.p) }
   public static func endOption(_ fbb: inout FlatBufferBuilder, start: UOffset) -> Offset { let end = Offset(offset: fbb.endTable(at: start)); return end }
   public static func createOption(
     _ fbb: inout FlatBufferBuilder,
@@ -835,7 +942,9 @@ public struct Blender_NativeUI_Option: FlatBufferObject, Verifiable {
     labelOffset label: Offset = Offset(),
     iconOffset icon: Offset = Offset(),
     previewOffset preview: Offset = Offset(),
-    descriptionOffset description: Offset = Offset()
+    descriptionOffset description: Offset = Offset(),
+    group: Int32 = 0,
+    external: Bool = false
   ) -> Offset {
     let __start = Blender_NativeUI_Option.startOption(&fbb)
     Blender_NativeUI_Option.add(value: value, &fbb)
@@ -843,6 +952,8 @@ public struct Blender_NativeUI_Option: FlatBufferObject, Verifiable {
     Blender_NativeUI_Option.add(icon: icon, &fbb)
     Blender_NativeUI_Option.add(preview: preview, &fbb)
     Blender_NativeUI_Option.add(description: description, &fbb)
+    Blender_NativeUI_Option.add(group: group, &fbb)
+    Blender_NativeUI_Option.add(external: external, &fbb)
     return Blender_NativeUI_Option.endOption(&fbb, start: __start)
   }
 
@@ -853,6 +964,8 @@ public struct Blender_NativeUI_Option: FlatBufferObject, Verifiable {
     try _v.visit(field: VTOFFSET.icon.p, fieldName: "icon", required: false, type: ForwardOffset<String>.self)
     try _v.visit(field: VTOFFSET.preview.p, fieldName: "preview", required: false, type: ForwardOffset<String>.self)
     try _v.visit(field: VTOFFSET.description.p, fieldName: "description", required: false, type: ForwardOffset<String>.self)
+    try _v.visit(field: VTOFFSET.group.p, fieldName: "group", required: false, type: Int32.self)
+    try _v.visit(field: VTOFFSET.external.p, fieldName: "external", required: false, type: Bool.self)
     _v.finish()
   }
 }
@@ -965,8 +1078,10 @@ public struct Blender_NativeUI_Color: FlatBufferObject, Verifiable {
 }
 
 ///  A data-block chosen for a property, such as an object's material. Commands: `Set` chooses
-///  another by its `value`, `Add` makes a new one, `Remove` takes it away, `Rename` renames it, and
-///  `Invoke` with `fake_user` or `single_user` toggles its fake user or makes it single-user.
+///  another by its `value`, `Add` makes a new one, or loads one from the files its texts name (a
+///  font's regular, bold, italic and bold italic faces), `Remove` takes it away, `Rename` renames
+///  it, and `Invoke` with `fake_user` or `single_user` toggles its fake user or makes it
+///  single-user.
 public struct Blender_NativeUI_Reference: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
@@ -986,7 +1101,11 @@ public struct Blender_NativeUI_Reference: FlatBufferObject, Verifiable {
     case canNew = 16
     case canUnlink = 18
     case canSingleUser = 20
-    case options = 22
+    case canFakeUser = 22
+    case options = 24
+    case preview = 26
+    case font = 28
+    case file = 30
     var v: Int32 { Int32(self.rawValue) }
     var p: VOffset { self.rawValue }
   }
@@ -1003,15 +1122,26 @@ public struct Blender_NativeUI_Reference: FlatBufferObject, Verifiable {
   public var users: Int32 { let o = _accessor.offset(VTOFFSET.users.v); return o == 0 ? 0 : _accessor.readBuffer(of: Int32.self, at: o) }
   public var linked: Bool { let o = _accessor.offset(VTOFFSET.linked.v); return o == 0 ? false : _accessor.readBuffer(of: Bool.self, at: o) }
   public var fakeUser: Bool { let o = _accessor.offset(VTOFFSET.fakeUser.v); return o == 0 ? false : _accessor.readBuffer(of: Bool.self, at: o) }
-  ///  What can be done with it: a new one, take it away, or make it single-user.
+  ///  What can be done with it: a new one, take it away, make it single-user, or keep it with a
+  ///  fake user.
   public var canNew: Bool { let o = _accessor.offset(VTOFFSET.canNew.v); return o == 0 ? false : _accessor.readBuffer(of: Bool.self, at: o) }
   public var canUnlink: Bool { let o = _accessor.offset(VTOFFSET.canUnlink.v); return o == 0 ? false : _accessor.readBuffer(of: Bool.self, at: o) }
   public var canSingleUser: Bool { let o = _accessor.offset(VTOFFSET.canSingleUser.v); return o == 0 ? false : _accessor.readBuffer(of: Bool.self, at: o) }
-  ///  The data-blocks to choose from. Long lists come as a view of their own instead.
+  public var canFakeUser: Bool { let o = _accessor.offset(VTOFFSET.canFakeUser.v); return o == 0 ? false : _accessor.readBuffer(of: Bool.self, at: o) }
+  ///  The data-blocks to choose from, each described by its users. Long lists come as a view of
+  ///  their own instead.
   public var hasOptions: Bool { let o = _accessor.offset(VTOFFSET.options.v); return o == 0 ? false : true }
   public var optionsCount: Int32 { let o = _accessor.offset(VTOFFSET.options.v); return o == 0 ? 0 : _accessor.vector(count: o) }
   public func options(at index: Int32) -> Blender_NativeUI_Option? { let o = _accessor.offset(VTOFFSET.options.v); return o == 0 ? nil : Blender_NativeUI_Option(_accessor.bb, o: _accessor.indirect(_accessor.vector(at: o) + index * 4)) }
-  public static func startReference(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 10) }
+  ///  An image of the chosen one.
+  public var preview: String? { let o = _accessor.offset(VTOFFSET.preview.v); return o == 0 ? nil : _accessor.string(at: o) }
+  public var previewSegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.preview.v) }
+  ///  A font, which an interface may choose with its own font picker.
+  public var font: Bool { let o = _accessor.offset(VTOFFSET.font.v); return o == 0 ? false : _accessor.readBuffer(of: Bool.self, at: o) }
+  ///  The file it was loaded from, such as a font's.
+  public var file: String? { let o = _accessor.offset(VTOFFSET.file.v); return o == 0 ? nil : _accessor.string(at: o) }
+  public var fileSegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.file.v) }
+  public static func startReference(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 14) }
   public static func add(type: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: type, at: VTOFFSET.type.p) }
   public static func add(name: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: name, at: VTOFFSET.name.p) }
   public static func add(value: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: value, at: VTOFFSET.value.p) }
@@ -1026,7 +1156,13 @@ public struct Blender_NativeUI_Reference: FlatBufferObject, Verifiable {
    at: VTOFFSET.canUnlink.p) }
   public static func add(canSingleUser: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: canSingleUser, def: false,
    at: VTOFFSET.canSingleUser.p) }
+  public static func add(canFakeUser: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: canFakeUser, def: false,
+   at: VTOFFSET.canFakeUser.p) }
   public static func addVectorOf(options: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: options, at: VTOFFSET.options.p) }
+  public static func add(preview: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: preview, at: VTOFFSET.preview.p) }
+  public static func add(font: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: font, def: false,
+   at: VTOFFSET.font.p) }
+  public static func add(file: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: file, at: VTOFFSET.file.p) }
   public static func endReference(_ fbb: inout FlatBufferBuilder, start: UOffset) -> Offset { let end = Offset(offset: fbb.endTable(at: start)); return end }
   public static func createReference(
     _ fbb: inout FlatBufferBuilder,
@@ -1039,7 +1175,11 @@ public struct Blender_NativeUI_Reference: FlatBufferObject, Verifiable {
     canNew: Bool = false,
     canUnlink: Bool = false,
     canSingleUser: Bool = false,
-    optionsVectorOffset options: Offset = Offset()
+    canFakeUser: Bool = false,
+    optionsVectorOffset options: Offset = Offset(),
+    previewOffset preview: Offset = Offset(),
+    font: Bool = false,
+    fileOffset file: Offset = Offset()
   ) -> Offset {
     let __start = Blender_NativeUI_Reference.startReference(&fbb)
     Blender_NativeUI_Reference.add(type: type, &fbb)
@@ -1051,7 +1191,11 @@ public struct Blender_NativeUI_Reference: FlatBufferObject, Verifiable {
     Blender_NativeUI_Reference.add(canNew: canNew, &fbb)
     Blender_NativeUI_Reference.add(canUnlink: canUnlink, &fbb)
     Blender_NativeUI_Reference.add(canSingleUser: canSingleUser, &fbb)
+    Blender_NativeUI_Reference.add(canFakeUser: canFakeUser, &fbb)
     Blender_NativeUI_Reference.addVectorOf(options: options, &fbb)
+    Blender_NativeUI_Reference.add(preview: preview, &fbb)
+    Blender_NativeUI_Reference.add(font: font, &fbb)
+    Blender_NativeUI_Reference.add(file: file, &fbb)
     return Blender_NativeUI_Reference.endReference(&fbb, start: __start)
   }
 
@@ -1066,7 +1210,11 @@ public struct Blender_NativeUI_Reference: FlatBufferObject, Verifiable {
     try _v.visit(field: VTOFFSET.canNew.p, fieldName: "canNew", required: false, type: Bool.self)
     try _v.visit(field: VTOFFSET.canUnlink.p, fieldName: "canUnlink", required: false, type: Bool.self)
     try _v.visit(field: VTOFFSET.canSingleUser.p, fieldName: "canSingleUser", required: false, type: Bool.self)
+    try _v.visit(field: VTOFFSET.canFakeUser.p, fieldName: "canFakeUser", required: false, type: Bool.self)
     try _v.visit(field: VTOFFSET.options.p, fieldName: "options", required: false, type: ForwardOffset<Vector<ForwardOffset<Blender_NativeUI_Option>, Blender_NativeUI_Option>>.self)
+    try _v.visit(field: VTOFFSET.preview.p, fieldName: "preview", required: false, type: ForwardOffset<String>.self)
+    try _v.visit(field: VTOFFSET.font.p, fieldName: "font", required: false, type: Bool.self)
+    try _v.visit(field: VTOFFSET.file.p, fieldName: "file", required: false, type: ForwardOffset<String>.self)
     _v.finish()
   }
 }
@@ -1226,6 +1374,7 @@ public struct Blender_NativeUI_List: FlatBufferObject, Verifiable {
     case canRemove = 8
     case canReorder = 10
     case tree = 12
+    case menu = 14
     var v: Int32 { Int32(self.rawValue) }
     var p: VOffset { self.rawValue }
   }
@@ -1238,7 +1387,10 @@ public struct Blender_NativeUI_List: FlatBufferObject, Verifiable {
   public var canReorder: Bool { let o = _accessor.offset(VTOFFSET.canReorder.v); return o == 0 ? false : _accessor.readBuffer(of: Bool.self, at: o) }
   ///  Its rows nest, as a tree.
   public var tree: Bool { let o = _accessor.offset(VTOFFSET.tree.v); return o == 0 ? false : _accessor.readBuffer(of: Bool.self, at: o) }
-  public static func startList(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 5) }
+  ///  A menu of more it can do, as a `MenuButton` names it.
+  public var menu: String? { let o = _accessor.offset(VTOFFSET.menu.v); return o == 0 ? nil : _accessor.string(at: o) }
+  public var menuSegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.menu.v) }
+  public static func startList(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 6) }
   public static func add(active: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: active, at: VTOFFSET.active.p) }
   public static func add(canAdd: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: canAdd, def: false,
    at: VTOFFSET.canAdd.p) }
@@ -1248,6 +1400,7 @@ public struct Blender_NativeUI_List: FlatBufferObject, Verifiable {
    at: VTOFFSET.canReorder.p) }
   public static func add(tree: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: tree, def: false,
    at: VTOFFSET.tree.p) }
+  public static func add(menu: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: menu, at: VTOFFSET.menu.p) }
   public static func endList(_ fbb: inout FlatBufferBuilder, start: UOffset) -> Offset { let end = Offset(offset: fbb.endTable(at: start)); return end }
   public static func createList(
     _ fbb: inout FlatBufferBuilder,
@@ -1255,7 +1408,8 @@ public struct Blender_NativeUI_List: FlatBufferObject, Verifiable {
     canAdd: Bool = false,
     canRemove: Bool = false,
     canReorder: Bool = false,
-    tree: Bool = false
+    tree: Bool = false,
+    menuOffset menu: Offset = Offset()
   ) -> Offset {
     let __start = Blender_NativeUI_List.startList(&fbb)
     Blender_NativeUI_List.add(active: active, &fbb)
@@ -1263,6 +1417,7 @@ public struct Blender_NativeUI_List: FlatBufferObject, Verifiable {
     Blender_NativeUI_List.add(canRemove: canRemove, &fbb)
     Blender_NativeUI_List.add(canReorder: canReorder, &fbb)
     Blender_NativeUI_List.add(tree: tree, &fbb)
+    Blender_NativeUI_List.add(menu: menu, &fbb)
     return Blender_NativeUI_List.endList(&fbb, start: __start)
   }
 
@@ -1273,6 +1428,7 @@ public struct Blender_NativeUI_List: FlatBufferObject, Verifiable {
     try _v.visit(field: VTOFFSET.canRemove.p, fieldName: "canRemove", required: false, type: Bool.self)
     try _v.visit(field: VTOFFSET.canReorder.p, fieldName: "canReorder", required: false, type: Bool.self)
     try _v.visit(field: VTOFFSET.tree.p, fieldName: "tree", required: false, type: Bool.self)
+    try _v.visit(field: VTOFFSET.menu.p, fieldName: "menu", required: false, type: ForwardOffset<String>.self)
     _v.finish()
   }
 }
@@ -1413,7 +1569,11 @@ public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable {
     case enabled = 16
     case mixed = 18
     case animation = 20
-    case property = 22
+    case animatable = 22
+    case property = 24
+    case role = 26
+    case shortLabel = 28
+    case leadingIcon = 30
     var v: Int32 { Int32(self.rawValue) }
     var p: VOffset { self.rawValue }
   }
@@ -1437,10 +1597,19 @@ public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable {
   ///  Several selected items differ in this value.
   public var mixed: Bool { let o = _accessor.offset(VTOFFSET.mixed.v); return o == 0 ? false : _accessor.readBuffer(of: Bool.self, at: o) }
   public var animation: Blender_NativeUI_Animation { let o = _accessor.offset(VTOFFSET.animation.v); return o == 0 ? .none_ : Blender_NativeUI_Animation(rawValue: _accessor.readBuffer(of: UInt8.self, at: o)) ?? .none_ }
+  ///  Its keyframes can be inserted and removed, see `Op`.
+  public var animatable: Bool { let o = _accessor.offset(VTOFFSET.animatable.v); return o == 0 ? false : _accessor.readBuffer(of: Bool.self, at: o) }
   ///  The Blender property it edits, as a data path, for interfaces that show or copy it.
   public var property: String? { let o = _accessor.offset(VTOFFSET.property.v); return o == 0 ? nil : _accessor.string(at: o) }
   public var propertySegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.property.v) }
-  public static func startNode(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 10) }
+  public var role: Blender_NativeUI_Role { let o = _accessor.offset(VTOFFSET.role.v); return o == 0 ? .none_ : Blender_NativeUI_Role(rawValue: _accessor.readBuffer(of: UInt8.self, at: o)) ?? .none_ }
+  ///  A shorter label, for where space is tight, such as the X of a mirror's axes.
+  public var shortLabel: String? { let o = _accessor.offset(VTOFFSET.shortLabel.v); return o == 0 ? nil : _accessor.string(at: o) }
+  public var shortLabelSegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.shortLabel.v) }
+  ///  An icon to show before its label.
+  public var leadingIcon: String? { let o = _accessor.offset(VTOFFSET.leadingIcon.v); return o == 0 ? nil : _accessor.string(at: o) }
+  public var leadingIconSegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.leadingIcon.v) }
+  public static func startNode(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 14) }
   public static func add(key: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: key, at: VTOFFSET.key.p) }
   public static func add(contentType: Blender_NativeUI_Content, _ fbb: inout FlatBufferBuilder) { fbb.add(element: contentType.rawValue, def: 0, at: VTOFFSET.contentType.p) }
   public static func add(content: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: content, at: VTOFFSET.content.p) }
@@ -1452,7 +1621,12 @@ public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable {
   public static func add(mixed: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: mixed, def: false,
    at: VTOFFSET.mixed.p) }
   public static func add(animation: Blender_NativeUI_Animation, _ fbb: inout FlatBufferBuilder) { fbb.add(element: animation.rawValue, def: 0, at: VTOFFSET.animation.p) }
+  public static func add(animatable: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: animatable, def: false,
+   at: VTOFFSET.animatable.p) }
   public static func add(property: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: property, at: VTOFFSET.property.p) }
+  public static func add(role: Blender_NativeUI_Role, _ fbb: inout FlatBufferBuilder) { fbb.add(element: role.rawValue, def: 0, at: VTOFFSET.role.p) }
+  public static func add(shortLabel: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: shortLabel, at: VTOFFSET.shortLabel.p) }
+  public static func add(leadingIcon: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: leadingIcon, at: VTOFFSET.leadingIcon.p) }
   public static func endNode(_ fbb: inout FlatBufferBuilder, start: UOffset) -> Offset { let end = Offset(offset: fbb.endTable(at: start)); fbb.require(table: end, fields: [4]); return end }
   public static func createNode(
     _ fbb: inout FlatBufferBuilder,
@@ -1465,7 +1639,11 @@ public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable {
     enabled: Bool = true,
     mixed: Bool = false,
     animation: Blender_NativeUI_Animation = .none_,
-    propertyOffset property: Offset = Offset()
+    animatable: Bool = false,
+    propertyOffset property: Offset = Offset(),
+    role: Blender_NativeUI_Role = .none_,
+    shortLabelOffset shortLabel: Offset = Offset(),
+    leadingIconOffset leadingIcon: Offset = Offset()
   ) -> Offset {
     let __start = Blender_NativeUI_Node.startNode(&fbb)
     Blender_NativeUI_Node.add(key: key, &fbb)
@@ -1477,7 +1655,11 @@ public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable {
     Blender_NativeUI_Node.add(enabled: enabled, &fbb)
     Blender_NativeUI_Node.add(mixed: mixed, &fbb)
     Blender_NativeUI_Node.add(animation: animation, &fbb)
+    Blender_NativeUI_Node.add(animatable: animatable, &fbb)
     Blender_NativeUI_Node.add(property: property, &fbb)
+    Blender_NativeUI_Node.add(role: role, &fbb)
+    Blender_NativeUI_Node.add(shortLabel: shortLabel, &fbb)
+    Blender_NativeUI_Node.add(leadingIcon: leadingIcon, &fbb)
     return Blender_NativeUI_Node.endNode(&fbb, start: __start)
   }
 
@@ -1528,7 +1710,11 @@ public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable {
     try _v.visit(field: VTOFFSET.enabled.p, fieldName: "enabled", required: false, type: Bool.self)
     try _v.visit(field: VTOFFSET.mixed.p, fieldName: "mixed", required: false, type: Bool.self)
     try _v.visit(field: VTOFFSET.animation.p, fieldName: "animation", required: false, type: Blender_NativeUI_Animation.self)
+    try _v.visit(field: VTOFFSET.animatable.p, fieldName: "animatable", required: false, type: Bool.self)
     try _v.visit(field: VTOFFSET.property.p, fieldName: "property", required: false, type: ForwardOffset<String>.self)
+    try _v.visit(field: VTOFFSET.role.p, fieldName: "role", required: false, type: Blender_NativeUI_Role.self)
+    try _v.visit(field: VTOFFSET.shortLabel.p, fieldName: "shortLabel", required: false, type: ForwardOffset<String>.self)
+    try _v.visit(field: VTOFFSET.leadingIcon.p, fieldName: "leadingIcon", required: false, type: ForwardOffset<String>.self)
     _v.finish()
   }
 }
@@ -1924,6 +2110,8 @@ public struct Blender_NativeUI_Command: FlatBufferObject, Verifiable {
         try ForwardOffset<Blender_NativeUI_FloatsValue>.verify(&verifier, at: pos, of: Blender_NativeUI_FloatsValue.self)
       case .intsvalue:
         try ForwardOffset<Blender_NativeUI_IntsValue>.verify(&verifier, at: pos, of: Blender_NativeUI_IntsValue.self)
+      case .textsvalue:
+        try ForwardOffset<Blender_NativeUI_TextsValue>.verify(&verifier, at: pos, of: Blender_NativeUI_TextsValue.self)
       }
     })
     try _v.visit(field: VTOFFSET.phase.p, fieldName: "phase", required: false, type: Blender_NativeUI_Phase.self)

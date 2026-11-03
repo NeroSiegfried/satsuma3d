@@ -101,6 +101,20 @@ class Number : Table() {
             val o = __offset(24)
             return if(o != 0) bb.get(o + bb_pos).toUByte() else 0u
         }
+    /**
+     * Shown after the value, such as "px".
+     */
+    val unit : String?
+        get() {
+            val o = __offset(26)
+            return if (o != 0) {
+                __string(o + bb_pos)
+            } else {
+                null
+            }
+        }
+    val unitAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(26, 1)
+    fun unitInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 26, 1)
     companion object {
         fun validateVersion() = Constants.FLATBUFFERS_25_2_10()
         fun getRootAsNumber(_bb: ByteBuffer): Number = getRootAsNumber(_bb, Number())
@@ -108,14 +122,15 @@ class Number : Table() {
             _bb.order(ByteOrder.LITTLE_ENDIAN)
             return (obj.__assign(_bb.getInt(_bb.position()) + _bb.position(), _bb))
         }
-        fun createNumber(builder: FlatBufferBuilder, value: Double, integer: Boolean, kind: UByte, min: Double, max: Double, softMin: Double, softMax: Double, step: Double, precision: UByte, slider: Boolean, scale: UByte) : Int {
-            builder.startTable(11)
+        fun createNumber(builder: FlatBufferBuilder, value: Double, integer: Boolean, kind: UByte, min: Double, max: Double, softMin: Double, softMax: Double, step: Double, precision: UByte, slider: Boolean, scale: UByte, unitOffset: Int) : Int {
+            builder.startTable(12)
             addStep(builder, step)
             addSoftMax(builder, softMax)
             addSoftMin(builder, softMin)
             addMax(builder, max)
             addMin(builder, min)
             addValue(builder, value)
+            addUnit(builder, unitOffset)
             addScale(builder, scale)
             addSlider(builder, slider)
             addPrecision(builder, precision)
@@ -123,7 +138,7 @@ class Number : Table() {
             addInteger(builder, integer)
             return endNumber(builder)
         }
-        fun startNumber(builder: FlatBufferBuilder) = builder.startTable(11)
+        fun startNumber(builder: FlatBufferBuilder) = builder.startTable(12)
         fun addValue(builder: FlatBufferBuilder, value: Double) = builder.addDouble(0, value, 0.0)
         fun addInteger(builder: FlatBufferBuilder, integer: Boolean) = builder.addBoolean(1, integer, false)
         fun addKind(builder: FlatBufferBuilder, kind: UByte) = builder.addByte(2, kind.toByte(), 0)
@@ -135,6 +150,7 @@ class Number : Table() {
         fun addPrecision(builder: FlatBufferBuilder, precision: UByte) = builder.addByte(8, precision.toByte(), 3)
         fun addSlider(builder: FlatBufferBuilder, slider: Boolean) = builder.addBoolean(9, slider, false)
         fun addScale(builder: FlatBufferBuilder, scale: UByte) = builder.addByte(10, scale.toByte(), 0)
+        fun addUnit(builder: FlatBufferBuilder, unit: Int) = builder.addOffset(11, unit, 0)
         fun endNumber(builder: FlatBufferBuilder) : Int {
             val o = builder.endTable()
             return o

@@ -60,6 +60,31 @@ class Panel : Table() {
         get() {
             val o = __offset(8); return if (o != 0) __vector_len(o) else 0
         }
+    /**
+     * The active one of a stack of panels, such as the active modifier.
+     */
+    val active : Boolean
+        get() {
+            val o = __offset(10)
+            return if(o != 0) 0.toByte() != bb.get(o + bb_pos) else false
+        }
+    /**
+     * Its place in a stack of panels that can be put in another order, such as modifiers, which
+     * `Move` with the place as `value` does; -1 when not in one.
+     */
+    val position : Int
+        get() {
+            val o = __offset(12)
+            return if(o != 0) bb.getInt(o + bb_pos) else -1
+        }
+    /**
+     * It can be opened: not when there is nothing in it, as a physics that is off.
+     */
+    val openable : Boolean
+        get() {
+            val o = __offset(14)
+            return if(o != 0) 0.toByte() != bb.get(o + bb_pos) else true
+        }
     companion object {
         fun validateVersion() = Constants.FLATBUFFERS_25_2_10()
         fun getRootAsPanel(_bb: ByteBuffer): Panel = getRootAsPanel(_bb, Panel())
@@ -67,14 +92,17 @@ class Panel : Table() {
             _bb.order(ByteOrder.LITTLE_ENDIAN)
             return (obj.__assign(_bb.getInt(_bb.position()) + _bb.position(), _bb))
         }
-        fun createPanel(builder: FlatBufferBuilder, expanded: Boolean, fixed: Boolean, headerOffset: Int) : Int {
-            builder.startTable(3)
+        fun createPanel(builder: FlatBufferBuilder, expanded: Boolean, fixed: Boolean, headerOffset: Int, active: Boolean, position: Int, openable: Boolean) : Int {
+            builder.startTable(6)
+            addPosition(builder, position)
             addHeader(builder, headerOffset)
+            addOpenable(builder, openable)
+            addActive(builder, active)
             addFixed(builder, fixed)
             addExpanded(builder, expanded)
             return endPanel(builder)
         }
-        fun startPanel(builder: FlatBufferBuilder) = builder.startTable(3)
+        fun startPanel(builder: FlatBufferBuilder) = builder.startTable(6)
         fun addExpanded(builder: FlatBufferBuilder, expanded: Boolean) = builder.addBoolean(0, expanded, true)
         fun addFixed(builder: FlatBufferBuilder, fixed: Boolean) = builder.addBoolean(1, fixed, false)
         fun addHeader(builder: FlatBufferBuilder, header: Int) = builder.addOffset(2, header, 0)
@@ -86,6 +114,9 @@ class Panel : Table() {
             return builder.endVector()
         }
         fun startHeaderVector(builder: FlatBufferBuilder, numElems: Int) = builder.startVector(4, numElems, 4)
+        fun addActive(builder: FlatBufferBuilder, active: Boolean) = builder.addBoolean(3, active, false)
+        fun addPosition(builder: FlatBufferBuilder, position: Int) = builder.addInt(4, position, -1)
+        fun addOpenable(builder: FlatBufferBuilder, openable: Boolean) = builder.addBoolean(5, openable, true)
         fun endPanel(builder: FlatBufferBuilder) : Int {
             val o = builder.endTable()
             return o

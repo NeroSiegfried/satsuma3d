@@ -20,5 +20,9 @@ class ChoiceStyle private constructor() {
          * As tabs.
          */
         const val Tabs: UByte = 2u
+        /**
+         * A menu of things to do: choosing one does it, and none stays chosen.
+         */
+        const val Actions: UByte = 3u
     }
 }

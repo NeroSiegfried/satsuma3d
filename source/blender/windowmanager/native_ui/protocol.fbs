@@ -44,6 +44,10 @@ table IntsValue {
   value: [long];
 }
 
+table TextsValue {
+  value: [string];
+}
+
 /// A value of a field, of a command, or of a view's parameter.
 union Value {
   BoolValue,
@@ -52,6 +56,7 @@ union Value {
   TextValue,
   FloatsValue,
   IntsValue,
+  TextsValue,
 }
 
 /// A named value, such as a view's parameter.
@@ -90,6 +95,13 @@ table Panel {
   fixed: bool;
   /// Keys of its children drawn in its header, such as a modifier's switches.
   header: [string];
+  /// The active one of a stack of panels, such as the active modifier.
+  active: bool;
+  /// Its place in a stack of panels that can be put in another order, such as modifiers, which
+  /// `Move` with the place as `value` does; -1 when not in one.
+  position: int = -1;
+  /// It can be opened: not when there is nothing in it, as a physics that is off.
+  openable: bool = true;
 }
 
 /// A switch.
@@ -144,6 +156,8 @@ table Number {
   /// Drawn as a slider over the soft range.
   slider: bool;
   scale: Scale;
+  /// Shown after the value, such as "px".
+  unit: string;
 }
 
 /// Text.
@@ -163,6 +177,10 @@ table Option {
   /// An image of it, such as a MatCap's, to show instead of the icon.
   preview: string;
   description: string;
+  /// Options group under headings by this number, such as the Preferences' sections.
+  group: int;
+  /// Chosen without the interface showing it, as a section only Blender's own Preferences show.
+  external: bool;
 }
 
 /// How a choice is drawn.
@@ -173,6 +191,8 @@ enum ChoiceStyle : ubyte {
   Expanded,
   /// As tabs.
   Tabs,
+  /// A menu of things to do: choosing one does it, and none stays chosen.
+  Actions,
 }
 
 /// A choice of options, such as an enum.
@@ -193,8 +213,10 @@ table Color {
 }
 
 /// A data-block chosen for a property, such as an object's material. Commands: `Set` chooses
-/// another by its `value`, `Add` makes a new one, `Remove` takes it away, `Rename` renames it, and
-/// `Invoke` with `fake_user` or `single_user` toggles its fake user or makes it single-user.
+/// another by its `value`, `Add` makes a new one, or loads one from the files its texts name (a
+/// font's regular, bold, italic and bold italic faces), `Remove` takes it away, `Rename` renames
+/// it, and `Invoke` with `fake_user` or `single_user` toggles its fake user or makes it
+/// single-user.
 table Reference {
   /// The data-block's type, such as "Material".
   type: string;
@@ -205,12 +227,21 @@ table Reference {
   users: int;
   linked: bool;
   fake_user: bool;
-  /// What can be done with it: a new one, take it away, or make it single-user.
+  /// What can be done with it: a new one, take it away, make it single-user, or keep it with a
+  /// fake user.
   can_new: bool;
   can_unlink: bool;
   can_single_user: bool;
-  /// The data-blocks to choose from. Long lists come as a view of their own instead.
+  can_fake_user: bool;
+  /// The data-blocks to choose from, each described by its users. Long lists come as a view of
+  /// their own instead.
   options: [Option];
+  /// An image of the chosen one.
+  preview: string;
+  /// A font, which an interface may choose with its own font picker.
+  font: bool;
+  /// The file it was loaded from, such as a font's.
+  file: string;
 }
 
 /// How a button is drawn.
@@ -253,6 +284,8 @@ table List {
   can_reorder: bool;
   /// Its rows nest, as a tree.
   tree: bool;
+  /// A menu of more it can do, as a `MenuButton` names it.
+  menu: string;
 }
 
 /// A row of a list.
@@ -297,6 +330,23 @@ union Content {
 /* -------------------------------------------------------------------- */
 /* Nodes */
 
+/// What a control is to the one it belongs to, for interfaces that show it with it.
+enum Role : ubyte {
+  None,
+  /// Locks the control it is a child of.
+  Lock,
+  /// The mode of the row it is a child of, such as a rotation's.
+  Mode,
+  /// The shape of the preview it is a child of.
+  Shape,
+  /// The name of the panel it is in the header of, such as a modifier's.
+  Name,
+  /// Where the panel it is in the header of applies, such as a modifier's Edit Mode and Render.
+  Visibility,
+  /// Duplicates the active row of the list it is a child of.
+  Duplicate,
+}
+
 /// How a property is animated, as Blender colors its control.
 enum Animation : ubyte {
   None,
@@ -326,8 +376,15 @@ table Node {
   /// Several selected items differ in this value.
   mixed: bool;
   animation: Animation;
+  /// Its keyframes can be inserted and removed, see `Op`.
+  animatable: bool;
   /// The Blender property it edits, as a data path, for interfaces that show or copy it.
   property: string;
+  role: Role;
+  /// A shorter label, for where space is tight, such as the X of a mirror's axes.
+  short_label: string;
+  /// An icon to show before its label.
+  leading_icon: string;
 }
 
 /* -------------------------------------------------------------------- */

@@ -92,6 +92,22 @@ class Option : Table() {
         }
     val descriptionAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(12, 1)
     fun descriptionInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 12, 1)
+    /**
+     * Options group under headings by this number, such as the Preferences' sections.
+     */
+    val group : Int
+        get() {
+            val o = __offset(14)
+            return if(o != 0) bb.getInt(o + bb_pos) else 0
+        }
+    /**
+     * Chosen without the interface showing it, as a section only Blender's own Preferences show.
+     */
+    val external : Boolean
+        get() {
+            val o = __offset(16)
+            return if(o != 0) 0.toByte() != bb.get(o + bb_pos) else false
+        }
     companion object {
         fun validateVersion() = Constants.FLATBUFFERS_25_2_10()
         fun getRootAsOption(_bb: ByteBuffer): Option = getRootAsOption(_bb, Option())
@@ -99,21 +115,25 @@ class Option : Table() {
             _bb.order(ByteOrder.LITTLE_ENDIAN)
             return (obj.__assign(_bb.getInt(_bb.position()) + _bb.position(), _bb))
         }
-        fun createOption(builder: FlatBufferBuilder, valueOffset: Int, labelOffset: Int, iconOffset: Int, previewOffset: Int, descriptionOffset: Int) : Int {
-            builder.startTable(5)
+        fun createOption(builder: FlatBufferBuilder, valueOffset: Int, labelOffset: Int, iconOffset: Int, previewOffset: Int, descriptionOffset: Int, group: Int, external: Boolean) : Int {
+            builder.startTable(7)
+            addGroup(builder, group)
             addDescription(builder, descriptionOffset)
             addPreview(builder, previewOffset)
             addIcon(builder, iconOffset)
             addLabel(builder, labelOffset)
             addValue(builder, valueOffset)
+            addExternal(builder, external)
             return endOption(builder)
         }
-        fun startOption(builder: FlatBufferBuilder) = builder.startTable(5)
+        fun startOption(builder: FlatBufferBuilder) = builder.startTable(7)
         fun addValue(builder: FlatBufferBuilder, value: Int) = builder.addOffset(0, value, 0)
         fun addLabel(builder: FlatBufferBuilder, label: Int) = builder.addOffset(1, label, 0)
         fun addIcon(builder: FlatBufferBuilder, icon: Int) = builder.addOffset(2, icon, 0)
         fun addPreview(builder: FlatBufferBuilder, preview: Int) = builder.addOffset(3, preview, 0)
         fun addDescription(builder: FlatBufferBuilder, description: Int) = builder.addOffset(4, description, 0)
+        fun addGroup(builder: FlatBufferBuilder, group: Int) = builder.addInt(5, group, 0)
+        fun addExternal(builder: FlatBufferBuilder, external: Boolean) = builder.addBoolean(6, external, false)
         fun endOption(builder: FlatBufferBuilder) : Int {
             val o = builder.endTable()
             return o

@@ -116,19 +116,60 @@ class Node : Table() {
             return if(o != 0) bb.get(o + bb_pos).toUByte() else 0u
         }
     /**
+     * Its keyframes can be inserted and removed, see `Op`.
+     */
+    val animatable : Boolean
+        get() {
+            val o = __offset(22)
+            return if(o != 0) 0.toByte() != bb.get(o + bb_pos) else false
+        }
+    /**
      * The Blender property it edits, as a data path, for interfaces that show or copy it.
      */
     val property : String?
         get() {
-            val o = __offset(22)
+            val o = __offset(24)
             return if (o != 0) {
                 __string(o + bb_pos)
             } else {
                 null
             }
         }
-    val propertyAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(22, 1)
-    fun propertyInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 22, 1)
+    val propertyAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(24, 1)
+    fun propertyInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 24, 1)
+    val role : UByte
+        get() {
+            val o = __offset(26)
+            return if(o != 0) bb.get(o + bb_pos).toUByte() else 0u
+        }
+    /**
+     * A shorter label, for where space is tight, such as the X of a mirror's axes.
+     */
+    val shortLabel : String?
+        get() {
+            val o = __offset(28)
+            return if (o != 0) {
+                __string(o + bb_pos)
+            } else {
+                null
+            }
+        }
+    val shortLabelAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(28, 1)
+    fun shortLabelInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 28, 1)
+    /**
+     * An icon to show before its label.
+     */
+    val leadingIcon : String?
+        get() {
+            val o = __offset(30)
+            return if (o != 0) {
+                __string(o + bb_pos)
+            } else {
+                null
+            }
+        }
+    val leadingIconAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(30, 1)
+    fun leadingIconInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 30, 1)
     companion object {
         fun validateVersion() = Constants.FLATBUFFERS_25_2_10()
         fun getRootAsNode(_bb: ByteBuffer): Node = getRootAsNode(_bb, Node())
@@ -136,21 +177,25 @@ class Node : Table() {
             _bb.order(ByteOrder.LITTLE_ENDIAN)
             return (obj.__assign(_bb.getInt(_bb.position()) + _bb.position(), _bb))
         }
-        fun createNode(builder: FlatBufferBuilder, keyOffset: Int, contentType: UByte, contentOffset: Int, labelOffset: Int, iconOffset: Int, descriptionOffset: Int, enabled: Boolean, mixed: Boolean, animation: UByte, propertyOffset: Int) : Int {
-            builder.startTable(10)
+        fun createNode(builder: FlatBufferBuilder, keyOffset: Int, contentType: UByte, contentOffset: Int, labelOffset: Int, iconOffset: Int, descriptionOffset: Int, enabled: Boolean, mixed: Boolean, animation: UByte, animatable: Boolean, propertyOffset: Int, role: UByte, shortLabelOffset: Int, leadingIconOffset: Int) : Int {
+            builder.startTable(14)
+            addLeadingIcon(builder, leadingIconOffset)
+            addShortLabel(builder, shortLabelOffset)
             addProperty(builder, propertyOffset)
             addDescription(builder, descriptionOffset)
             addIcon(builder, iconOffset)
             addLabel(builder, labelOffset)
             addContent(builder, contentOffset)
             addKey(builder, keyOffset)
+            addRole(builder, role)
+            addAnimatable(builder, animatable)
             addAnimation(builder, animation)
             addMixed(builder, mixed)
             addEnabled(builder, enabled)
             addContentType(builder, contentType)
             return endNode(builder)
         }
-        fun startNode(builder: FlatBufferBuilder) = builder.startTable(10)
+        fun startNode(builder: FlatBufferBuilder) = builder.startTable(14)
         fun addKey(builder: FlatBufferBuilder, key: Int) = builder.addOffset(0, key, 0)
         fun addContentType(builder: FlatBufferBuilder, contentType: UByte) = builder.addByte(1, contentType.toByte(), 0)
         fun addContent(builder: FlatBufferBuilder, content: Int) = builder.addOffset(2, content, 0)
@@ -160,7 +205,11 @@ class Node : Table() {
         fun addEnabled(builder: FlatBufferBuilder, enabled: Boolean) = builder.addBoolean(6, enabled, true)
         fun addMixed(builder: FlatBufferBuilder, mixed: Boolean) = builder.addBoolean(7, mixed, false)
         fun addAnimation(builder: FlatBufferBuilder, animation: UByte) = builder.addByte(8, animation.toByte(), 0)
-        fun addProperty(builder: FlatBufferBuilder, property: Int) = builder.addOffset(9, property, 0)
+        fun addAnimatable(builder: FlatBufferBuilder, animatable: Boolean) = builder.addBoolean(9, animatable, false)
+        fun addProperty(builder: FlatBufferBuilder, property: Int) = builder.addOffset(10, property, 0)
+        fun addRole(builder: FlatBufferBuilder, role: UByte) = builder.addByte(11, role.toByte(), 0)
+        fun addShortLabel(builder: FlatBufferBuilder, shortLabel: Int) = builder.addOffset(12, shortLabel, 0)
+        fun addLeadingIcon(builder: FlatBufferBuilder, leadingIcon: Int) = builder.addOffset(13, leadingIcon, 0)
         fun endNode(builder: FlatBufferBuilder) : Int {
             val o = builder.endTable()
                 builder.required(o, 4)
