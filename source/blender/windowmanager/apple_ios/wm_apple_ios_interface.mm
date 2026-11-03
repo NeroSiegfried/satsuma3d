@@ -143,12 +143,6 @@ Class blenderIOSSwiftClass(NSString *name)
   return swift_class;
 }
 
-NSString *blenderIOSMenuRoute(NSDictionary *route)
-{
-  NSData *data = [NSJSONSerialization dataWithJSONObject:route options:0 error:nil];
-  return [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease];
-}
-
 UIImage *blenderIOSMenuIcon(NSDictionary *item)
 {
   NSString *name = item[@"icon"];
@@ -202,7 +196,7 @@ void blenderIOSMenuRun(NSString *route, const CGPoint *position)
 
 UIMenu *blenderIOSNativeSubmenu(NSDictionary *item, NSString *identifier)
 {
-  NSString *route = blenderIOSMenuRoute(item[@"route"]);
+  NSString *route = item[@"route"];
   /* Uncached providers refresh dynamic menus (recent files, undo, add-ons) on open.
    * Blender builds them on its loop; UIKit never calls into Python. */
   UIDeferredMenuElement *content = [UIDeferredMenuElement
@@ -339,7 +333,7 @@ NSArray<UIMenuElement *> *blenderIOSNativeMenuElements(NSArray *items)
       continue;
     }
     if (![item[@"title"] isKindOfClass:NSString.class] || ![item[@"title"] length] ||
-        ![item[@"route"] isKindOfClass:NSDictionary.class])
+        ![item[@"route"] isKindOfClass:NSString.class])
     {
       continue;
     }
@@ -357,7 +351,7 @@ NSArray<UIMenuElement *> *blenderIOSNativeMenuElements(NSArray *items)
       [children addObject:blenderIOSNativeSubmenu(item, nil)];
       continue;
     }
-    NSString *route = blenderIOSMenuRoute(item[@"route"]);
+    NSString *route = item[@"route"];
     UIImage *icon = blenderIOSMenuIcon(item);
     if (UIKeyCommand *command = blenderIOSMenuKeyCommand(item, route, icon)) {
       command.attributes = [item[@"disabled"] boolValue] ? UIMenuElementAttributesDisabled : 0;

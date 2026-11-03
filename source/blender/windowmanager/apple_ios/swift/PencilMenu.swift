@@ -341,10 +341,10 @@ public final class SwiftPencilMenu: UIView, @MainActor GHOSTIOSPencilMenu {
     page = 0
     menuVisible = true
     history.removeAll()
-    loadItems(route: ["root": "context", "path": []], title: nil)
+    loadItems(route: "context", title: nil)
   }
 
-  private func loadItems(route: NSDictionary, title: String?) {
+  private func loadItems(route: String, title: String?) {
     self.title = title
     requestGeneration += 1
     let generation = requestGeneration
@@ -353,7 +353,7 @@ public final class SwiftPencilMenu: UIView, @MainActor GHOSTIOSPencilMenu {
     items = []
     page = 0
     buildPage()
-    delegate?.pencilMenu(self, requestItemsForRoute: route as! [AnyHashable: Any],
+    delegate?.pencilMenu(self, requestItemsForRoute: route,
                          at: anchor) { [weak self] received in
       guard let self, self.active, self.menuVisible, generation == self.requestGeneration else { return }
       var actions: [[String: Any]] = []
@@ -431,7 +431,7 @@ public final class SwiftPencilMenu: UIView, @MainActor GHOSTIOSPencilMenu {
     }
     if (item["submenu"] as? NSNumber)?.boolValue ?? false {
       history.append((items, page, title ?? ""))
-      loadItems(route: (item["route"] as? NSDictionary) ?? [:], title: item["title"] as? String)
+      loadItems(route: (item["route"] as? String) ?? "", title: item["title"] as? String)
       return
     }
     dismiss()

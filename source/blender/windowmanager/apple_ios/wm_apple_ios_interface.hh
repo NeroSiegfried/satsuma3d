@@ -31,7 +31,6 @@ UIImage *blenderIOSIcon(NSString *key, NSString *systemImage);
 UIImage *blenderIOSBrushImage(NSString *previewPath, CGFloat diameter);
 UIImage *blenderIOSActionIcon(NSString *opName, NSString *propertyName, NSString *propertyValue);
 Class blenderIOSSwiftClass(NSString *name);
-NSString *blenderIOSMenuRoute(NSDictionary *route);
 UIImage *blenderIOSMenuIcon(NSDictionary *item);
 /** A Blender menu's items, given once Blender built them, or nil should it not; with \a position,
  * Blender's cursor there in the window's pixels. */

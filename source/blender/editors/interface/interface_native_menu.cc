@@ -2,12 +2,23 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-/** Native menus are projections of Blender layouts, not a second command registry. */
+/** \file
+ * \ingroup edinterface
+ *
+ * Blender's menus as `menu` views, see `interface_native.hh`: drawn as Blender draws them, and run
+ * as their buttons do, rather than kept as a second list of commands.
+ *
+ * A menu's item is known by its route: the menu it is in, by Blender's name and, in a Properties
+ * tab, the tab after a tab character, then a line for each step to it, each item it is under and
+ * the item itself. A step names its item by what it shows and does, which is checked again as it
+ * runs: nothing of Blender's is kept between drawing a menu and running its item.
+ */
+
 #include "BKE_context.hh"
 #include "BKE_screen.hh"
 #include "BLT_translation.hh"
-#include "BLI_serialize.hh"
 #include "BLI_set.hh"
+#include "BLI_string_utils.hh"
 #include "ED_undo.hh"
 #include "RNA_access.hh"
 #include "RNA_enum_types.hh"
@@ -16,19 +27,11 @@
 #include "WM_native_interface.hh"
 #include "WM_types.hh"
 #include "interface_intern.hh"
-
-#include <sstream>
+#include "interface_native.hh"
 
 namespace blender::ui {
 namespace {
-using namespace io::serialize;
-
-std::string encode(const Value &value)
-{
-  std::ostringstream stream;
-  JsonFormatter().serialize(stream, value);
-  return stream.str();
-}
+using namespace wm::native_ui;
 
 std::string label(const Button &but)
 {
@@ -61,32 +64,37 @@ const wmKeyMapItem *shortcut(const bContext *C, const Button &but)
   return kmi;
 }
 
-/* Validate the whole route again at activation. Never keep RNA pointers, buttons, or
- * list indices across UIKit callbacks, undo, file loads, or add-on registration. */
+/** A step of a route to \a but: what it shows and does, each after a tab. */
 std::string identity(bContext *C, Button &but)
 {
-  ArrayValue key;
-  key.append_str(label(but));
-  key.append_int(int(but.type));
+  std::string key = label(but) + "\t" + std::to_string(int(but.type));
   if (MenuType *mt = button_menutype_get(&but)) {
-    key.append_str(mt->idname);
+    key += std::string("\t") + mt->idname;
   }
   if (but.optype) {
-    key.append_str(but.optype->idname);
-    key.append_int(int(but.opcontext));
+    key += std::string("\t") + but.optype->idname + "\t" + std::to_string(int(but.opcontext));
     if (but.opptr) {
-      key.append_str(RNA_pointer_as_string_keywords(C, but.opptr, false, false, true, INT_MAX));
+      key += "\t" + RNA_pointer_as_string_keywords(C, but.opptr, false, false, true, INT_MAX);
     }
   }
   if (but.rnaprop) {
-    key.append_str(RNA_property_identifier(but.rnaprop));
-    key.append_int(but.rnaindex);
+    key += std::string("\t") + RNA_property_identifier(but.rnaprop) + "\t" +
+           std::to_string(but.rnaindex);
     if (RNA_property_type(but.rnaprop) == PROP_ENUM) {
-      key.append_int(int(but.hardmax));
+      key += "\t" + std::to_string(int(but.hardmax));
     }
   }
-  return encode(key);
+  /* Lines part the steps of a route. */
+  std::replace(key.begin(), key.end(), '\n', ' ');
+  return key;
 }
+
+/** What a menu is drawn into: the menu's node, the routes of its items. */
+struct MenuWriter {
+  ViewBuilder &builder;
+  NodeId top;
+  int separators = 0;
+};
 
 struct Invocation {
   wmOperatorType *type = nullptr;
@@ -227,13 +235,18 @@ bool hidden_from_menu_bar(Button &but)
   return !but.optype && but.rnaprop && properties.contains(RNA_property_identifier(but.rnaprop));
 }
 
+/**
+ * Draws the menu \a mt, or the one \a parent opens, and writes its items with \a writer, or
+ * follows \a path into it, \a depth steps along, to the item to capture in \a invocation. Routes
+ * of items start with \a root.
+ */
 void project(bContext *C,
              MenuType *mt,
              Button *parent,
              const std::string &root,
-             const ArrayValue &path,
+             const Span<std::string> path,
              int depth,
-             ArrayValue &result,
+             MenuWriter *writer,
              Invocation *invocation)
 {
   if (depth > 16) {
@@ -276,29 +289,32 @@ void project(bContext *C,
     const bool submenu = is_submenu(but);
     const bool action = is_action(but);
     const bool disabled = but.flag & (BUT_DISABLED | BUT_INACTIVE);
-    if (depth < path.elements().size()) {
-      const StringValue *step = path.elements()[depth]->as_string_value();
-      if (!step || identity(C, but) != step->value()) {
+    if (depth < path.size()) {
+      if (identity(C, but) != path[depth]) {
         continue;
       }
       if (!disabled) {
-        if (invocation && depth + 1 == path.elements().size() && action && !submenu) {
+        if (invocation && depth + 1 == path.size() && action && !submenu) {
           invocation->capture(but);
         }
         else if (submenu) {
-          project(C, button_menutype_get(&but), &but, root, path, depth + 1, result, invocation);
+          project(C, button_menutype_get(&but), &but, root, path, depth + 1, writer, invocation);
         }
       }
       break;
     }
-    if (invocation) {
+    if (!writer) {
       continue;
     }
     if (ELEM(root, "TOPBAR_MT_editor_menus", "VIEW3D_MT_editor_menus") && hidden_from_menu_bar(but)) {
       continue;
     }
     if (ELEM(but.type, ButtonType::Sepr, ButtonType::SeprLine)) {
-      result.append_dict()->append_int("separator", 1);
+      writer->builder.add(writer->top,
+                          "separator:" + std::to_string(writer->separators++),
+                          [](auto &buffer, NodeFields & /*fields*/) {
+                            return protocol::CreateSeparator(buffer);
+                          });
       continue;
     }
     std::string title = label(but);
@@ -313,43 +329,72 @@ void project(bContext *C,
     if (title.empty()) {
       continue;
     }
-    auto item = result.append_dict();
-    item->append_str("title", title);
-    item->append_int("disabled", disabled || (!submenu && !action));
-    item->append_int("checked", action && but.rnaprop && button_is_pushed(&but));
-    item->append_int("submenu", submenu);
-    item->append_int("action", action);
-    item->append_str("operator", but.optype ? but.optype->idname : "");
-    /* Preserve the layout's icon, not a guess based on the operator. Enum choices
-     * and submenus can have different artwork even when their command is shared. */
+    /* The layout's icon, not one for the operator: an enum's choices and submenus can have
+     * their own though they run the same operator. */
     const int icon = button_icon(&but);
-    const char *icon_name = nullptr;
-    if (!ELEM(icon, ICON_NONE, ICON_BLANK1) &&
-        RNA_enum_identifier(rna_enum_icon_items, icon, &icon_name))
+    const char *icon_name = "";
+    if (ELEM(icon, ICON_NONE, ICON_BLANK1) ||
+        !RNA_enum_identifier(rna_enum_icon_items, icon, &icon_name))
     {
-      item->append_str("icon", icon_name);
+      icon_name = "";
     }
-    if (MenuType *child = button_menutype_get(&but)) {
-      item->append_str("menu", child->idname);
+    std::string route = root;
+    for (const std::string &step : path) {
+      route += "\n" + step;
     }
+    route += "\n" + identity(C, but);
+    const auto common = [&](NodeFields &fields) {
+      fields.label = title;
+      fields.icon = icon_name;
+      fields.enabled = !disabled && (submenu || action);
+    };
+    if (submenu) {
+      /* Its route, and the submenu's name, such as `TOPBAR_MT_file_new`. */
+      MenuType *child = button_menutype_get(&but);
+      writer->builder.add(writer->top, route, [&](auto &buffer, NodeFields &fields) {
+        common(fields);
+        flatbuffers::Offset<protocol::Param> params[2];
+        int count = 0;
+        for (const auto &[name, value] :
+             {std::pair{"route", route.c_str()}, std::pair{"menu", child ? child->idname : ""}})
+        {
+          params[count++] = protocol::CreateParamDirect(
+              buffer,
+              name,
+              protocol::Value::TextValue,
+              protocol::CreateTextValueDirect(buffer, value).Union());
+        }
+        return protocol::CreateMenuButton(
+            buffer, buffer.CreateString("menu"), buffer.CreateVector(params, count));
+      });
+      continue;
+    }
+    /* The key that runs it, as `ctrl+shift+A`. */
+    std::string shortcut_text;
     const char *key_name = nullptr;
     if (const wmKeyMapItem *kmi = shortcut(C, but);
         kmi && RNA_enum_identifier(rna_enum_event_type_items, kmi->type, &key_name))
     {
-      auto key = item->append_dict("key");
-      key->append_str("type", key_name);
-      key->append_int("shift", kmi->shift == KM_MOD_HELD);
-      key->append_int("ctrl", kmi->ctrl == KM_MOD_HELD);
-      key->append_int("alt", kmi->alt == KM_MOD_HELD);
-      key->append_int("oskey", kmi->oskey == KM_MOD_HELD);
+      for (const auto &[held, modifier] : {std::pair{kmi->ctrl, "ctrl+"},
+                                           std::pair{kmi->alt, "alt+"},
+                                           std::pair{kmi->shift, "shift+"},
+                                           std::pair{kmi->oskey, "oskey+"}})
+      {
+        if (held == KM_MOD_HELD) {
+          shortcut_text += modifier;
+        }
+      }
+      shortcut_text += key_name;
     }
-    auto route = item->append_dict("route");
-    route->append_str("root", root);
-    auto steps = route->append_array("path");
-    for (const auto &step : path.elements()) {
-      steps->append(step);
-    }
-    steps->append_str(identity(C, but));
+    writer->builder.add(writer->top, route, [&](auto &buffer, NodeFields &fields) {
+      common(fields);
+      return protocol::CreateButtonDirect(buffer,
+                                          protocol::ButtonStyle::Normal,
+                                          but.optype ? but.optype->idname : nullptr,
+                                          nullptr,
+                                          shortcut_text.empty() ? nullptr : shortcut_text.c_str(),
+                                          action && but.rnaprop && button_is_pushed(&but));
+    });
   }
   block_free(nullptr, block);
   CTX_store_set(C, previous);
@@ -383,32 +428,52 @@ static const char *native_context_menu_id(const bContext *C)
   }
 }
 
-std::string native_menu_query(bContext *C, const std::string &request, const bool execute)
+/** \a text up to \a separator, and what comes after it, if anything. */
+static std::pair<StringRef, StringRef> split(const StringRef text, const char separator)
 {
-  ArrayValue result;
-  std::istringstream stream(request);
-  std::unique_ptr<Value> value = JsonFormatter().deserialize(stream);
-  const DictionaryValue *query = value ? value->as_dictionary_value() : nullptr;
-  if (!query) {
-    return encode(result);
+  const int64_t found = text.find(separator);
+  if (found == StringRef::not_found) {
+    return {text, {}};
   }
-  const auto root = query->lookup_str("root");
-  const ArrayValue *path = query->lookup_array("path");
-  if (root && *root == "menubar" && path && path->elements().is_empty() && !execute) {
+  return {text.substr(0, found), text.substr(found + 1)};
+}
+
+/** The steps of \a route, after its first line, the root's. */
+static Vector<std::string> route_path(const StringRef route)
+{
+  Vector<std::string> steps;
+  for (StringRef rest = split(route, '\n').second; !rest.is_empty();) {
+    const auto [step, after] = split(rest, '\n');
+    steps.append(step);
+    rest = after;
+  }
+  return steps;
+}
+
+/** Writes the menu \a route names, with \a writer, or with \a invocation runs its item. */
+static void native_menu(bContext *C,
+                        const StringRef route,
+                        MenuWriter *writer,
+                        Invocation *invocation)
+{
+  const StringRef first = split(route, '\n').first;
+  const std::string root = split(first, '\t').first;
+  const Vector<std::string> path = route_path(route);
+  if (root == "menubar" && path.is_empty() && writer) {
     for (const char *idname : {"TOPBAR_MT_editor_menus", "VIEW3D_MT_editor_menus"}) {
       if (MenuType *mt = WM_menutype_find(idname, true)) {
-        project(C, mt, nullptr, idname, *path, 0, result, nullptr);
+        project(C, mt, nullptr, idname, path, 0, writer, nullptr);
       }
     }
-    return encode(result);
+    return;
   }
-  if (!root || !path || (execute && *root == "context")) {
-    return encode(result);
+  if (invocation && root == "context") {
+    return;
   }
   const char *context_id = native_context_menu_id(C);
-  const std::string resolved = *root == "context" ? (context_id ? context_id : "") : *root;
-  /* Properties requests reconstruct a detached Properties editor before arriving here.
-   * Its registered panel menus use the same poll and route validation as viewport menus. */
+  const std::string resolved = root == "context" ? (context_id ? context_id : "") : root;
+  /* A Properties tab's menus are drawn in a Properties editor of their own, see
+   * #native::in_properties_tab, and checked as the viewport's. */
   const bool properties_menu = CTX_wm_space_properties(C) &&
                                WM_menutype_find(resolved.c_str(), true);
   if (!ELEM(resolved,
@@ -420,65 +485,93 @@ std::string native_menu_query(bContext *C, const std::string &request, const boo
             "TOPBAR_MT_file_export") &&
       (!context_id || resolved != context_id) && !properties_menu)
   {
-    return encode(result);
+    return;
   }
-  if (*root == "context" && path->elements().is_empty() && !execute) {
-    /* Name the radial menu as Blender titles the context menu. Edit Mesh's menu has no label of
-     * its own, so it uses the mode name instead (e.g. "Mesh"). */
-    std::string heading;
-    if (MenuType *mt = WM_menutype_find(resolved.c_str(), true)) {
-      heading = CTX_IFACE_(mt->translation_context, mt->label);
-    }
-    else if (PanelType *pt = WM_paneltype_find(resolved.c_str(), true)) {
-      heading = CTX_IFACE_(pt->translation_context, pt->label);
-    }
-    const char *mode_name = nullptr;
-    if (heading.empty() &&
-        RNA_enum_name(rna_enum_context_mode_items, CTX_data_mode_enum(C), &mode_name))
-    {
-      heading = IFACE_(mode_name);
-      const std::string suffix = " Edit";
-      if (heading.size() > suffix.size() && heading.ends_with(suffix)) {
-        heading.resize(heading.size() - suffix.size());
-      }
-    }
-    if (!heading.empty()) {
-      result.append_dict()->append_str("heading", heading);
-    }
-  }
+  /* What `first` names its items' routes after: the menu, and its tab. */
+  const std::string item_root = root == "context" ? resolved : std::string(first);
   if (MenuType *mt = WM_menutype_find(resolved.c_str(), true)) {
-    Invocation invocation;
-    project(C, mt, nullptr, resolved, *path, 0, result, execute ? &invocation : nullptr);
-    if (execute) {
-      invocation.execute(C);
+    project(C, mt, nullptr, item_root, path, 0, writer, invocation);
+    if (invocation) {
+      invocation->execute(C);
     }
   }
   else if (PanelType *pt = WM_paneltype_find(resolved.c_str(), true)) {
-    /* Brush contexts are settings panels, not command lists. Preserve their actual
-     * controls instead of inventing unrelated radial actions for these modes. */
+    /* A mode whose context menu is a panel of settings, such as Sculpt Mode's: opened as one. */
     if (pt->poll && !pt->poll(C, pt)) {
-      return encode(result);
+      return;
     }
-    if (!execute && path->elements().is_empty()) {
-      auto item = result.append_dict();
-      item->append_str("title", std::string(pt->label) + " Settings");
-      item->append_int("action", 1);
-      item->append_str("operator", "WM_OT_call_panel");
-      auto route = item->append_dict("route");
-      route->append_str("root", resolved);
-      route->append_array("path")->append_str("panel");
+    if (writer && path.is_empty()) {
+      const std::string label = std::string(pt->label) + " Settings";
+      writer->builder.add(
+          writer->top, resolved + "\npanel", [&](auto &buffer, NodeFields &fields) {
+            fields.label = label;
+            return protocol::CreateButtonDirect(
+                buffer, protocol::ButtonStyle::Normal, "WM_OT_call_panel");
+          });
     }
-    else if (execute && path->elements().size() == 1) {
-      const StringValue *step = path->elements()[0]->as_string_value();
-      if (step && step->value() == "panel") {
-        PointerRNA properties = WM_operator_properties_create("WM_OT_call_panel");
-        RNA_string_set(&properties, "name", resolved.c_str());
-        WM_operator_name_call(C, "WM_OT_call_panel", wm::OpCallContext::InvokeRegionWin,
-                              &properties, nullptr);
-        WM_operator_properties_free(&properties);
-      }
+    else if (invocation && path.size() == 1 && path[0] == "panel") {
+      PointerRNA properties = WM_operator_properties_create("WM_OT_call_panel");
+      RNA_string_set(&properties, "name", resolved.c_str());
+      WM_operator_name_call(
+          C, "WM_OT_call_panel", wm::OpCallContext::InvokeRegionWin, &properties, nullptr);
+      WM_operator_properties_free(&properties);
     }
   }
-  return encode(result);
 }
+
+/** The heading of the context menu: as Blender titles it, or for Edit Mode, its mode, as
+ * "Mesh". */
+static std::string native_context_menu_heading(bContext *C)
+{
+  const char *context_id = native_context_menu_id(C);
+  if (!context_id) {
+    return "";
+  }
+  std::string heading;
+  if (MenuType *mt = WM_menutype_find(context_id, true)) {
+    heading = CTX_IFACE_(mt->translation_context, mt->label);
+  }
+  else if (PanelType *pt = WM_paneltype_find(context_id, true)) {
+    heading = CTX_IFACE_(pt->translation_context, pt->label);
+  }
+  const char *mode_name = nullptr;
+  if (heading.empty() &&
+      RNA_enum_name(rna_enum_context_mode_items, CTX_data_mode_enum(C), &mode_name))
+  {
+    heading = IFACE_(mode_name);
+    const std::string suffix = " Edit";
+    if (heading.size() > suffix.size() && heading.ends_with(suffix)) {
+      heading.resize(heading.size() - suffix.size());
+    }
+  }
+  return heading;
+}
+
+namespace native {
+
+void menu_write(bContext *C, const StringRef route, ViewBuilder &builder)
+{
+  const auto [first, path] = split(route, '\n');
+  const StringRef tab = split(first, '\t').second;
+  const std::string heading = first == "context" && path.is_empty() ?
+                                native_context_menu_heading(C) :
+                                "";
+  MenuWriter writer{builder, builder.top("menu", [&](auto &buffer, NodeFields &fields) {
+                      fields.label = heading;
+                      return protocol::CreateMenu(buffer);
+                    })};
+  in_properties_tab(C, tab, [&]() { native_menu(C, route, &writer, nullptr); });
+}
+
+void menu_run(bContext *C, const StringRef route)
+{
+  const StringRef tab = split(split(route, '\n').first, '\t').second;
+  in_properties_tab(C, tab, [&]() {
+    Invocation invocation;
+    native_menu(C, route, nullptr, &invocation);
+  });
+}
+
+}  // namespace native
+
 }  // namespace blender::ui

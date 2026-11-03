@@ -10,7 +10,7 @@
 
 @protocol GHOSTIOSPencilMenuDelegate <NSObject>
 - (void)pencilMenu:(UIView<GHOSTIOSPencilMenu> *)menu
-    requestItemsForRoute:(NSDictionary *)route
+    requestItemsForRoute:(NSString *)route
                  atPoint:(CGPoint)point
               completion:(void (^)(NSArray<NSDictionary *> *))completion;
 - (void)pencilMenu:(UIView<GHOSTIOSPencilMenu> *)menu

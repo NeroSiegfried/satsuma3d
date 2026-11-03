@@ -51,20 +51,14 @@ final class BlenderMenus {
   @ObservationIgnored private var context: String?
 
   /** The route of a menu by Blender's name, such as `VIEW3D_MT_add`, optionally in a Properties
-   * tab. */
+   * tab, after a tab character. */
   static func route(_ menu: String, tab: String? = nil) -> String {
-    var route: [String: Any] = ["root": menu, "path": []]
-    if let tab, !tab.isEmpty { route["propertiesTab"] = tab }
-    return encode(route)
+    guard let tab, !tab.isEmpty else { return menu }
+    return menu + "\t" + tab
   }
 
   /** The context menu for what is selected. */
   static let contextRoute = route("context")
-
-  private static func encode(_ route: Any) -> String {
-    guard let data = try? JSONSerialization.data(withJSONObject: route, options: .sortedKeys) else { return "" }
-    return String(decoding: data, as: UTF8.self)
-  }
 
   /** Ask Blender for a menu and the submenus under it, `depth` levels deep, unless they are known
    * for `context` already. */
@@ -451,11 +445,8 @@ final class SwiftMenus: NSObject {
 
   private static func dictionary(_ node: NativeNode) -> NSDictionary? {
     if node.kind == .separator { return ["separator": 1] }
-    guard let data = node.key.data(using: .utf8),
-          let route = try? JSONSerialization.jsonObject(with: data) as? NSDictionary
-    else { return nil }
     let item: NSMutableDictionary = [
-      "title": node.label, "route": route, "icon": node.icon ?? "",
+      "title": node.label, "route": node.key, "icon": node.icon ?? "",
       "disabled": node.enabled ? 0 : 1, "submenu": node.kind == .menubutton ? 1 : 0,
       "action": node.kind == .button ? 1 : 0,
     ]
@@ -463,7 +454,7 @@ final class SwiftMenus: NSObject {
       item["checked"] = button.pressed ? 1 : 0
       item["operator"] = button.operator_ ?? ""
       if let key = button.key, !key.isEmpty {
-        /* Modifiers before the key, joined by `+`, as `bridge_menu_shortcut` writes them. */
+        /* Modifiers before the key, joined by `+`, as Blender writes them. */
         var parts = key.split(separator: "+").map(String.init)
         let type = parts.removeLast()
         item["key"] = ["type": type, "ctrl": parts.contains("ctrl") ? 1 : 0, "alt": parts.contains("alt") ? 1 : 0,

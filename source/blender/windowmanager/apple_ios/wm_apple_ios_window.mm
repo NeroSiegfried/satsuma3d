@@ -120,7 +120,7 @@ extern "C" UIMenu *wm_apple_ios_context_menu()
   return blenderIOSNativeSubmenu(
       @{
         @"title" : @"Actions",
-        @"route" : @{@"root" : @"context", @"path" : @[]},
+        @"route" : @"context",
       },
       nil);
 }
@@ -216,7 +216,7 @@ extern "C" void wm_apple_ios_window_drop_files(void *window,
     NSString *op = source[@"operator"];
     NSString *title = source[@"title"];
     if (![title isKindOfClass:NSString.class] || !title.length ||
-        ![source[@"route"] isKindOfClass:NSDictionary.class] ||
+        ![source[@"route"] isKindOfClass:NSString.class] ||
         (![source[@"action"] boolValue] && ![source[@"submenu"] boolValue]))
     {
       continue;
@@ -243,7 +243,7 @@ extern "C" void wm_apple_ios_window_drop_files(void *window,
 }
 
 - (void)pencilMenu:(UIView<GHOSTIOSPencilMenu> *)menu
-    requestItemsForRoute:(NSDictionary *)route
+    requestItemsForRoute:(NSString *)route
                  atPoint:(CGPoint)point
               completion:(void (^)(NSArray<NSDictionary *> *))completion
 {
@@ -252,7 +252,7 @@ extern "C" void wm_apple_ios_window_drop_files(void *window,
     return;
   }
   const CGPoint pixels = [self pixels:point from:menu];
-  blenderIOSMenuItems(blenderIOSMenuRoute(route), &pixels, ^(NSArray *result) {
+  blenderIOSMenuItems(route, &pixels, ^(NSArray *result) {
     completion([self radialItems:result]);
   });
 }
@@ -262,12 +262,12 @@ extern "C" void wm_apple_ios_window_drop_files(void *window,
            atPoint:(CGPoint)point
 {
   if (!_window || [item[@"disabled"] boolValue] ||
-      ![item[@"route"] isKindOfClass:NSDictionary.class])
+      ![item[@"route"] isKindOfClass:NSString.class])
   {
     return;
   }
   const CGPoint pixels = [self pixels:point from:menu];
-  blenderIOSMenuRun(blenderIOSMenuRoute(item[@"route"]), &pixels);
+  blenderIOSMenuRun(item[@"route"], &pixels);
 }
 
 @end
@@ -348,7 +348,7 @@ extern "C" void wm_apple_ios_build_menu_bar(id<UIMenuBuilder> builder, NSArray *
 /** Ask Blender for its menu bar's menus, given to \a completion once it built them. */
 extern "C" void wm_apple_ios_menu_bar_request(void (^completion)(NSArray *_Nullable items))
 {
-  blenderIOSMenuItems(@"{\"path\":[],\"root\":\"menubar\"}", nullptr, completion);
+  blenderIOSMenuItems(@"menubar", nullptr, completion);
 }
 
 /** \} */

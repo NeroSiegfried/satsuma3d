@@ -83,27 +83,12 @@
 #include <cmath>
 #include <map>
 #include <set>
-#include <sstream>
 #include <vector>
 
 namespace blender::ui {
-std::string native_menu_query(bContext *C, const std::string &request, bool execute);
 namespace {
 using namespace io::serialize;
 using namespace wm::native_ui;
-
-std::string encode(const Value &value)
-{
-  std::ostringstream stream;
-  JsonFormatter().serialize(stream, value);
-  return stream.str();
-}
-
-std::unique_ptr<Value> decode(const std::string &json)
-{
-  std::istringstream stream(json);
-  return JsonFormatter().deserialize(stream);
-}
 
 /* A detached editor provides the same context as the desktop one, without changing the visible
  * area or retaining scene pointers between requests. */
@@ -3882,16 +3867,13 @@ std::string panels_edit(bContext *C, PanelsData &data, const EditRequest &reques
 
 }  // namespace native
 
-std::string native_properties_menu_query(bContext *C, const std::string &json, bool execute)
+namespace native {
+
+void in_properties_tab(bContext *C, const StringRef tab, const FunctionRef<void()> fn)
 {
-  auto value = decode(json);
-  const auto *request = value ? value->as_dictionary_value() : nullptr;
-  if (!request) {
-    return "[]";
-  }
-  const auto tab = request->lookup_str("propertiesTab");
-  if (!tab || *tab == "TOOL") {
-    return native_menu_query(C, json, execute);
+  if (tab.is_empty() || tab == "TOOL") {
+    fn();
+    return;
   }
   PropertiesContext context(C);
   PointerRNA ptr = RNA_pointer_create_discrete(nullptr, RNA_SpaceProperties, context.space);
@@ -3900,29 +3882,17 @@ std::string native_properties_menu_query(bContext *C, const std::string &json, b
   int count, selected;
   bool free;
   RNA_property_enum_items(C, &ptr, prop, &items, &count, &free);
-  if (tab && RNA_enum_value_from_identifier(items, tab->c_str(), &selected)) {
+  if (RNA_enum_value_from_identifier(items, std::string(tab).c_str(), &selected)) {
     context.space->mainbuser = selected;
     ED_buttons_native_context_prepare(C, context.space);
   }
   if (free) {
     MEM_delete(items);
   }
-  const std::string menu_json = native_menu_query(C, json, execute);
-  auto menu_value = decode(menu_json);
-  if (tab && menu_value && menu_value->as_array_value()) {
-    for (auto &item : menu_value->as_array_value()->elements()) {
-      if (auto *entry = item->as_dictionary_value()) {
-        if (auto *route = entry->lookup("route")) {
-          if ((*route)->as_dictionary_value()) {
-            static_cast<DictionaryValue *>(route->get())->append_str("propertiesTab", *tab);
-          }
-        }
-      }
-    }
-    return encode(*menu_value);
-  }
-  return menu_json;
+  fn();
 }
+
+}  // namespace native
 
 /* -------------------------------------------------------------------- */
 /** \name Node Graphs

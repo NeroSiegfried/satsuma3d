@@ -16,7 +16,9 @@
 #include <set>
 #include <string>
 
+#include "BLI_function_ref.hh"
 #include "BLI_map.hh"
+#include "BLI_string_ref.hh"
 
 #include "WM_native_ui_views.hh"
 
@@ -166,6 +168,15 @@ std::string redo_edit(bContext *C, PanelsData &data, const EditRequest &request)
 /** An operator's properties before it runs, see `native_operator_dialog_begin`. */
 void dialog_write(bContext *C, PanelsData &data, wm::native_ui::ViewBuilder &builder);
 std::string dialog_edit(bContext *C, PanelsData &data, const EditRequest &request);
+
+/** One of Blender's menus by its route, see `interface_native_menu.cc`: its items, keyed by
+ * their own routes. */
+void menu_write(bContext *C, StringRef route, wm::native_ui::ViewBuilder &builder);
+/** Run the menu item at \a route. */
+void menu_run(bContext *C, StringRef route);
+/** Calls \a fn in a Properties editor showing \a tab, as its menus are drawn in, or as it is
+ * without a tab, or for the Tool tab. */
+void in_properties_tab(bContext *C, StringRef tab, FunctionRef<void()> fn);
 
 void nodes_write(bContext *C, NodesData &data, wm::native_ui::ViewBuilder &builder);
 /** An edit of the tree itself, such as moving nodes, as \a edit's values describe it. */

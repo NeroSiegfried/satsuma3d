@@ -131,15 +131,15 @@
 
 #include <fmt/format.h>
 
-namespace blender::ui {
-std::string native_menu_query(bContext *C, const std::string &request, bool execute);
-}  // namespace blender::ui
+namespace blender::ui::native {
+void menu_write(bContext *C, StringRef route, wm::native_ui::ViewBuilder &builder);
+void menu_run(bContext *C, StringRef route);
+}  // namespace blender::ui::native
 namespace blender::ed::graph {
 std::string native_graph_query(bContext *C, const std::string &request, bool execute);
 }  // namespace blender::ed::graph
 namespace blender::ui {
 void native_properties_interaction_finish(bContext *C);
-std::string native_properties_menu_query(bContext *C, const std::string &request, bool execute);
 }  // namespace blender::ui
 
 namespace blender {
@@ -2813,8 +2813,8 @@ void bridge_timeline_keys_view_build(bContext *C,
 /* -------------------------------------------------------------------- */
 /** \name The Menu and Popup Views
  *
- * `menu`: one of Blender's menus, subscribed to with its `route`, as `native_menu_query` takes
- * it. Its items are keyed by their own routes: buttons, which `Invoke` runs (where the pointer is
+ * `menu`: one of Blender's menus, subscribed to with its `route`, see
+ * `interface_native_menu.cc`. Its items are keyed by their own routes: buttons, which `Invoke` runs (where the pointer is
  * with `x` and `y` parameters, for operators that follow it from there), and menu buttons, the
  * routes of their submenus. Built once for each subscription: a menu shows what Blender has as
  * it opens.
@@ -2823,17 +2823,6 @@ void bridge_timeline_keys_view_build(bContext *C,
  * a menu, an operator's choice of an enum, or Rename Active Item. Keyed by a number that grows
  * with each, so the interface shows each once.
  * \{ */
-
-std::string bridge_menu_shortcut(const io::serialize::DictionaryValue &key)
-{
-  std::string result;
-  for (const char *modifier : {"ctrl", "alt", "shift", "oskey"}) {
-    if (bridge_number(key, modifier, 0.0) != 0.0) {
-      result += std::string(modifier) + "+";
-    }
-  }
-  return result + std::string(bridge_text(key, "type"));
-}
 
 /** Blender's cursor where the pointer is, at the `x` and `y` of \a params in the window's pixels,
  * for menus that list and operators that follow the pointer from there, as Bevel. */
@@ -2854,91 +2843,15 @@ void bridge_menu_view_build(bContext *C,
                             views::ViewData * /*data*/,
                             views::ViewBuilder &builder)
 {
-  using namespace io::serialize;
   const std::optional<std::string_view> route = params.text("route");
-  std::shared_ptr<Value> items;
-  std::string heading;
   bridge_menu_cursor_set(C, params);
   if (route && CTX_wm_window(C) && CTX_wm_area(C) && CTX_wm_region(C)) {
-    std::istringstream stream(ui::native_properties_menu_query(C, std::string(*route), false));
-    items = JsonFormatter().deserialize(stream);
-  }
-  const ArrayValue *array = items ? items->as_array_value() : nullptr;
-  if (array) {
-    for (const std::shared_ptr<Value> &item : array->elements()) {
-      if (const DictionaryValue *entry = item->as_dictionary_value()) {
-        heading = std::string(bridge_text(*entry, "heading"));
-        if (!heading.empty()) {
-          break;
-        }
-      }
-    }
-  }
-  const NodeId top = builder.top("menu", [&](ViewBuffer &buffer, NodeFields &fields) {
-    fields.label = heading;
-    return views::protocol::CreateMenu(buffer);
-  });
-  if (array == nullptr) {
+    ui::native::menu_write(C, *route, builder);
     return;
   }
-  int separators = 0;
-  for (const std::shared_ptr<Value> &item : array->elements()) {
-    const DictionaryValue *entry = item->as_dictionary_value();
-    if (entry == nullptr || !bridge_text(*entry, "heading").empty()) {
-      continue;
-    }
-    if (bridge_number(*entry, "separator", 0.0) != 0.0) {
-      builder.add(top,
-                  "separator:" + std::to_string(separators++),
-                  [](ViewBuffer &buffer, NodeFields & /*fields*/) {
-                    return views::protocol::CreateSeparator(buffer);
-                  });
-      continue;
-    }
-    const DictionaryValue *item_route = entry->lookup_dict("route");
-    if (item_route == nullptr) {
-      continue;
-    }
-    std::ostringstream route_stream;
-    JsonFormatter().serialize(route_stream, *item_route);
-    const std::string key = route_stream.str();
-    const auto common = [&](NodeFields &fields) {
-      fields.label = bridge_text(*entry, "title");
-      fields.icon = bridge_text(*entry, "icon");
-      fields.enabled = bridge_number(*entry, "disabled", 0.0) == 0.0;
-    };
-    if (bridge_number(*entry, "submenu", 0.0) != 0.0) {
-      builder.add(top, key, [&](ViewBuffer &buffer, NodeFields &fields) {
-        common(fields);
-        /* Its route, and the submenu's name, such as `TOPBAR_MT_file_new`. */
-        std::vector<flatbuffers::Offset<views::protocol::Param>> menu_params;
-        for (const auto &[name, value] :
-             {std::pair{"route", std::string_view(key)}, std::pair{"menu", bridge_text(*entry, "menu")}})
-        {
-          menu_params.push_back(views::protocol::CreateParamDirect(
-              buffer,
-              name,
-              views::protocol::Value::TextValue,
-              views::protocol::CreateTextValueDirect(buffer, std::string(value).c_str()).Union()));
-        }
-        return views::protocol::CreateMenuButtonDirect(buffer, "menu", &menu_params);
-      });
-      continue;
-    }
-    builder.add(top, key, [&](ViewBuffer &buffer, NodeFields &fields) {
-      common(fields);
-      const DictionaryValue *shortcut = entry->lookup_dict("key");
-      const std::string shortcut_text = shortcut ? bridge_menu_shortcut(*shortcut) : "";
-      const std::string_view op_name = bridge_text(*entry, "operator");
-      return views::protocol::CreateButtonDirect(
-          buffer,
-          views::protocol::ButtonStyle::Normal,
-          op_name.empty() ? nullptr : op_name.data(),
-          nullptr,
-          shortcut_text.empty() ? nullptr : shortcut_text.c_str(),
-          bridge_number(*entry, "checked", 0.0) != 0.0);
-    });
-  }
+  builder.top("menu", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return views::protocol::CreateMenu(buffer);
+  });
 }
 
 views::CommandResult bridge_menu_view_command(bContext *C,
@@ -2951,13 +2864,12 @@ views::CommandResult bridge_menu_view_command(bContext *C,
     r_error = "Menu items are only run";
     return views::CommandResult::Failed;
   }
-  wmWindow *win = CTX_wm_window(C);
-  if (win == nullptr || CTX_wm_area(C) == nullptr || CTX_wm_region(C) == nullptr) {
+  if (CTX_wm_window(C) == nullptr || CTX_wm_area(C) == nullptr || CTX_wm_region(C) == nullptr) {
     r_error = "No window to run it in";
     return views::CommandResult::Failed;
   }
   bridge_menu_cursor_set(C, views::Params(command.params()));
-  ui::native_properties_menu_query(C, command.target()->str(), true);
+  ui::native::menu_run(C, command.target()->string_view());
   return views::CommandResult::Done;
 }
 
