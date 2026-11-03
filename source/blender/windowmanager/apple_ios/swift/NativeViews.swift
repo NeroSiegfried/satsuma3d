@@ -283,6 +283,29 @@ enum Operators {
   }
 }
 
+/** The scene as 3D geometry, for Apple Vision Pro and the AR preview: what is done to it, through
+ * the `volume` view; its geometry comes apart, see `wm_apple_ios_volume.cc`. */
+@MainActor
+enum BlenderVolume {
+  private static let view = NativeViews.shared.subscribe("volume")
+
+  /** Blender gathers the geometry only while it shows. */
+  static func setShown(_ shown: Bool) {
+    NativeViews.shared.send(view, target: "", value: .bool(shown))
+  }
+
+  /** Select an object by its name only. */
+  static func select(_ name: String) {
+    NativeViews.shared.send(view, target: name, op: .activate)
+  }
+
+  /** Move an object by an offset in world space from where the move began. */
+  static func move(_ name: String, by delta: SIMD3<Float>, phase: NativePhase) {
+    NativeViews.shared.send(view, target: name, op: .move,
+                            value: .floats([Double(delta.x), Double(delta.y), Double(delta.z)]), phase: phase)
+  }
+}
+
 /** The interface's settings Blender keeps, from the `settings` view. */
 @MainActor
 enum BlenderSettings {

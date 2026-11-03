@@ -78,7 +78,7 @@ final class VolumeStore {
   func windowOpened(_ open: Bool) {
     guard open != shown else { return }
     shown = open
-    Engine.setting("volume_visible", open ? "1" : "0")
+    BlenderVolume.setShown(open)
     timer?.invalidate()
     timer = nil
     if open {
@@ -299,7 +299,7 @@ struct VolumeView: View {
     }
     .gesture(SpatialTapGesture().targetedToAnyEntity().onEnded { value in
       guard let name = store.objectName(value.entity) else { return }
-      Engine.setting("volume_select", name)
+      BlenderVolume.select(name)
     })
     .gesture(DragGesture(minimumDistance: 0.002).targetedToAnyEntity()
       .onChanged { value in
@@ -308,19 +308,19 @@ struct VolumeView: View {
         if moving == nil {
           let start = value.convert(value.startLocation3D, from: .local, to: store.scene)
           moving = (name, start, .distantPast)
-          Engine.setting("volume_select", name)
-          Engine.setting("volume_move", "\(name)|begin|0|0|0")
+          BlenderVolume.select(name)
+          BlenderVolume.move(name, by: .zero, phase: .begin)
         }
         guard let current = moving, Date().timeIntervalSince(current.lastSent) > 1.0 / 30.0 else { return }
         let delta = here - current.start
-        Engine.setting("volume_move", "\(name)|move|\(delta.x)|\(delta.y)|\(delta.z)")
+        BlenderVolume.move(name, by: SIMD3<Float>(delta), phase: .update)
         moving?.lastSent = Date()
       }
       .onEnded { value in
         guard let current = moving else { return }
         let here = value.convert(value.location3D, from: .local, to: store.scene)
         let delta = here - current.start
-        Engine.setting("volume_move", "\(current.name)|end|\(delta.x)|\(delta.y)|\(delta.z)")
+        BlenderVolume.move(current.name, by: SIMD3<Float>(delta), phase: .end)
         moving = nil
       })
     .simultaneousGesture(MagnifyGesture().targetedToAnyEntity()

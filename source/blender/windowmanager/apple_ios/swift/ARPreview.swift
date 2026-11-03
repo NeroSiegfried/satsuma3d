@@ -46,7 +46,7 @@ struct ARPreview: View {
     .ignoresSafeArea()
     .gesture(SpatialTapGesture().targetedToAnyEntity().onEnded { value in
       guard let name = store.objectName(value.entity) else { return }
-      Engine.setting("volume_select", name)
+      BlenderVolume.select(name)
     })
     .simultaneousGesture(MagnifyGesture()
       .onChanged { value in

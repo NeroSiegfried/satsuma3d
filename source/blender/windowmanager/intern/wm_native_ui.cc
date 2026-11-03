@@ -272,7 +272,6 @@ struct BridgePencilHoverRequest {
   int x = 0, y = 0;
 };
 GHOST_Latest<BridgePencilHoverRequest> bridge_hover_requests;
-GHOST_Latest<std::string> bridge_hover_snapshot;
 /* Window coordinates of the asset drag in progress. */
 int2 bridge_asset_drag_xy(0);
 BridgePencilHoverRequest bridge_hover_request;
@@ -1046,9 +1045,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     return;
   }
   bool preview = false;
-  if (bridge_volume_command(C, command.setting, command.value)) {
-    return;
-  }
   if (command.setting == "interface") {
     bridge_interface_set(C, command.value == "desktop");
     return;
@@ -3754,6 +3750,68 @@ void bridge_outliner_view_build(bContext *C,
 /** \} */
 
 /* -------------------------------------------------------------------- */
+/** \name The Volume View
+ *
+ * Commands to the scene shown as 3D geometry on Apple Vision Pro, whose geometry comes apart, see
+ * `wm_apple_ios_volume.cc`: `Set` of `shown`, whether it shows; `Activate` of an object by its
+ * name selects it, or with an `extend` parameter toggles it in the selection, and of none
+ * deselects all; `Move` of an object by its name moves it by the value's offset in world space,
+ * from where the move began, a drag's phases making one undo step.
+ * \{ */
+
+void bridge_volume_view_build(bContext * /*C*/,
+                              const views::Params & /*params*/,
+                              views::ViewData * /*data*/,
+                              views::ViewBuilder &builder)
+{
+  builder.top("volume", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return views::protocol::CreateGroup(buffer);
+  });
+}
+
+views::CommandResult bridge_volume_view_command(bContext *C,
+                                                const views::Params & /*params*/,
+                                                views::ViewData * /*data*/,
+                                                const views::protocol::Command &command,
+                                                std::string &r_error)
+{
+  const std::string target = command.target()->str();
+  switch (command.op()) {
+    case views::protocol::Op::Set: {
+      const views::protocol::BoolValue *shown = command.value_as_BoolValue();
+      bridge_volume_command(C, "volume_visible", shown && shown->value() ? "1" : "0");
+      return views::CommandResult::Done;
+    }
+    case views::protocol::Op::Activate:
+      bridge_volume_command(
+          C, "volume_select", (views::Params(command.params()).flag("extend") ? "+" : "") + target);
+      return views::CommandResult::Done;
+    case views::protocol::Op::Move: {
+      const views::protocol::FloatsValue *delta = command.value_as_FloatsValue();
+      const char *phase = command.phase() == views::protocol::Phase::Begin ? "begin" :
+                          ELEM(command.phase(),
+                               views::protocol::Phase::End,
+                               views::protocol::Phase::Once) ?
+                                                                  "end" :
+                                                                  "move";
+      double offset[3] = {0.0, 0.0, 0.0};
+      for (int i = 0; delta && delta->value() && i < 3 && i < int(delta->value()->size()); i++) {
+        offset[i] = delta->value()->Get(i);
+      }
+      bridge_volume_command(C,
+                            "volume_move",
+                            fmt::format("{}|{}|{}|{}|{}", target, phase, offset[0], offset[1], offset[2]));
+      return views::CommandResult::Done;
+    }
+    default:
+      r_error = "Not something the volume does";
+      return views::CommandResult::Failed;
+  }
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
 /** \name The Settings and Render Views
  *
  * `settings`: the interface's own settings that Blender keeps, which it sets as it starts and as
@@ -4059,6 +4117,13 @@ void WM_native_ui_views_register()
   outliner.build = bridge_outliner_view_build;
   view_type_add(std::move(outliner));
 
+  ViewType volume;
+  volume.name = "volume";
+  volume.notifiers = {0};
+  volume.build = bridge_volume_view_build;
+  volume.command = bridge_volume_view_command;
+  view_type_add(std::move(volume));
+
   ViewType render;
   render.name = "render";
   render.notifiers = {NC_SCENE, NC_WM, NC_IMAGE};
@@ -4125,13 +4190,6 @@ bool WM_native_ui_stylus_roll(float *r_angle, float r_tilt[2])
   r_tilt[0] = bridge_pencil_tilt_x;
   r_tilt[1] = bridge_pencil_tilt_y;
   return bridge_pencil_roll_down;
-}
-
-extern "C" char *WM_native_ui_stylus_hover_copy_json()
-{
-  static std::string snapshot = "{}";
-  bridge_hover_snapshot.take(snapshot);
-  return strdup(snapshot.c_str());
 }
 
 extern "C" void WM_native_ui_setting_enqueue(const char *setting, const char *value)
@@ -5138,18 +5196,6 @@ void WM_native_ui_flush_commands(bContext *C)
       mval[1] = bridge_asset_drag_xy.y - region->winrct.ymin;
     }
     ED_view3d_pencil_hover_update(C, active, mval, drag_to_object);
-    const View3DPencilHover hit = ED_view3d_pencil_hover_get(region);
-    /* Published when it changes: every snapshot wakes the native interface. */
-    static std::string hover_published;
-    std::string hover = "{\"object\":" + std::to_string(hit.object_uid) +
-                        ",\"kind\":" + std::to_string(hit.kind) +
-                        ",\"index\":" + std::to_string(hit.index) +
-                        ",\"cursorVisible\":" + (bridge_hover_request.active ? "true" : "false") +
-                        "}";
-    if (hover != hover_published) {
-      hover_published = hover;
-      bridge_hover_snapshot.publish(std::move(hover));
-    }
     bridge_context_pop(C, context_store);
   }
 

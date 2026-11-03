@@ -110,8 +110,6 @@ void WM_native_ui_stylus_hover_set(bool active, int x, int y);
 /** A stylus touching the screen rolled to \a angle radians, tilted by \a tilt_x and \a tilt_y;
  * \a down is false as it lifts. */
 void WM_native_ui_stylus_roll_set(bool down, float angle, float tilt_x, float tilt_y);
-/** What the hovering stylus is over, as JSON. */
-char *WM_native_ui_stylus_hover_copy_json(void);
 /** A pointer hovers over the navigation gizmo, or stopped. */
 void WM_native_ui_navigation_hover_set(bool active);
 
