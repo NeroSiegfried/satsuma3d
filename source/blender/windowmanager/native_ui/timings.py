@@ -5,11 +5,13 @@
 """Summarize how long the bridge took, from a session recorded with `BLENDER_NATIVE_UI_RECORD`.
 
 Reads `timings.jsonl` (Blender building what it sends) and `interface_timings.jsonl` (the
-interface reading and showing it) from a recording's folder. Given a second recording, compares
-the two part by part: an area moves to a new path only when it is no slower on any of them.
+interface reading and showing it) from a recording's folder. Given recordings of a baseline and
+of a candidate, compares them part by part: an area moves to a new path only when it is no slower
+on any of them. Several recordings of each are pooled, as one session's timing decides which tool
+is active when, and so how long its parts take.
 
-    python3 timings.py RECORDING
-    python3 timings.py BASELINE CANDIDATE
+    python3 timings.py RECORDING...
+    python3 timings.py --baseline RECORDING... --candidate RECORDING...
 """
 
 import argparse
@@ -22,8 +24,14 @@ FILES = ("timings.jsonl", "interface_timings.jsonl")
 NOISE_MS = 0.05
 
 
-def load(directory):
+def load(directories):
     parts = {}
+    for directory in directories:
+        load_one(directory, parts)
+    return parts
+
+
+def load_one(directory, parts):
     for name in FILES:
         path = os.path.join(directory, name)
         if not os.path.exists(path):
@@ -38,7 +46,6 @@ def load(directory):
                 part["ms"].append(record["ms"])
                 if record.get("bytes"):
                     part["bytes"].append(record["bytes"])
-    return parts
 
 
 def summary(values):
@@ -84,13 +91,14 @@ def compare(baseline, candidate):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("recording", help="A recording's folder")
-    parser.add_argument("candidate", nargs="?", help="Another recording, to compare with the first")
+    parser.add_argument("recordings", nargs="*", help="Recordings' folders, to summarize")
+    parser.add_argument("--baseline", nargs="+", help="Recordings of the way things were")
+    parser.add_argument("--candidate", nargs="+", help="Recordings of the way to compare with them")
     args = parser.parse_args()
-    baseline = summarize(load(args.recording))
-    if not args.candidate:
-        print_summary(baseline)
+    if not args.baseline:
+        print_summary(summarize(load(args.recordings)))
         return
+    baseline = summarize(load(args.baseline))
     candidate = summarize(load(args.candidate))
     print_summary(candidate)
     slower = compare(baseline, candidate)
