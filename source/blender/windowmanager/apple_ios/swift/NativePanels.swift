@@ -129,6 +129,10 @@ final class PanelsModel {
 
   var tabsNode: NativeNode? { view.node("tabs") }
   var tabs: [Blender_NativeUI_Option] { tabsNode?.choice?.allOptions ?? [] }
+  var tabItems: [PanelTab] {
+    tabs.map { PanelTab(id: $0.value ?? "", title: $0.label ?? "", icon: $0.icon ?? "", group: Int($0.group),
+                        external: $0.external) }
+  }
   /** The tab Blender shows. */
   var shownTab: String? { tabsNode?.choice?.value }
   var currentTab: String {
@@ -143,6 +147,12 @@ final class PanelsModel {
     /* Shown again on it. */
     view.params["tab"] = .text(tab)
     NativeViews.shared.send(view, target: "tabs", op: .set_, value: .text(tab))
+  }
+
+  /** A Preferences section, whose add-ons or keymaps come with the window's panels. */
+  func selectPreferencesTab(_ tab: String) {
+    selectTab(tab)
+    Engine.setting("native_preferences_state", json: ["tab": tab])
   }
 
   /** \} */
@@ -286,6 +296,17 @@ final class PanelsModel {
     }
     return result
   }
+}
+
+/** A tab of the panels, as Settings lists the Preferences' sections. */
+struct PanelTab: Identifiable, Equatable {
+  let id: String
+  let title: String
+  let icon: String
+  /** Tabs Blender lists apart, as the Preferences' sections. */
+  var group = 0
+  /** A Preferences section only Blender's own Preferences show. */
+  var external = false
 }
 
 /** A row of a panel's card: a control, or a sub-panel's heading. */

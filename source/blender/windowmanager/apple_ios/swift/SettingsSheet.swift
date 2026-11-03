@@ -502,13 +502,13 @@ private struct KeymapList: View {
 
 /** The Keymap section: its panels, then the keymaps themselves. */
 private struct KeymapPage: View {
-  let store: InspectorStore
+  let model: PanelsModel
   @Bindable var lists: PreferencesLists
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 17) {
-        InspectorForm(store: store, scrolls: false)
+        PanelsForm(model: model, scrolls: false)
           .tint(PanelStyle.tint)
         KeymapList(lists: lists)
           .padding(.horizontal, 16)
@@ -553,14 +553,14 @@ private let preferencesIcons: [String: (symbol: String, color: Color)] = [
   "EXPERIMENTAL": ("flask.fill", .red),
 ]
 
-private func preferencesIcon(_ tab: InspectorTab) -> SettingsIcon {
+private func preferencesIcon(_ tab: PanelTab) -> SettingsIcon {
   let icon = preferencesIcons[String(tab.id.dropFirst("PREFERENCES_".count))] ?? ("gearshape.fill", .gray)
   return SettingsIcon(symbol: icon.symbol, color: icon.color)
 }
 
 struct SettingsView: View {
   @ObservedObject var model: SettingsModel
-  let preferences: InspectorStore
+  let preferences: PanelsModel
   let lists: PreferencesLists
   @Environment(\.horizontalSizeClass) private var sizeClass
   /** The page shown: the iPad's, or a Preferences section's tab. */
@@ -569,9 +569,9 @@ struct SettingsView: View {
   static let iPadPage = "IPAD"
 
   /** The sections as Blender groups them, between its separators. */
-  private var groups: [[InspectorTab]] {
-    var result: [[InspectorTab]] = []
-    for tab in preferences.tabs {
+  private var groups: [[PanelTab]] {
+    var result: [[PanelTab]] = []
+    for tab in preferences.tabItems {
       if let last = result.last?.last, last.group == tab.group { result[result.count - 1].append(tab) }
       else { result.append([tab]) }
     }
@@ -581,7 +581,7 @@ struct SettingsView: View {
   private var selection: Binding<String?> {
     Binding(get: { page }, set: { tab in
       page = tab
-      if let tab, tab != Self.iPadPage { preferences.selectTab(tab) }
+      if let tab, tab != Self.iPadPage { preferences.selectPreferencesTab(tab) }
     })
   }
 
@@ -622,12 +622,12 @@ struct SettingsView: View {
             Group {
               switch page {
                 case "PREFERENCES_ADDONS": AddonsPage(lists: lists)
-                case "PREFERENCES_KEYMAP": KeymapPage(store: preferences, lists: lists)
-                default: InspectorForm(store: preferences).tint(PanelStyle.tint)
+                case "PREFERENCES_KEYMAP": KeymapPage(model: preferences, lists: lists)
+                default: PanelsForm(model: preferences).tint(PanelStyle.tint)
               }
             }
             .background(Color(uiColor: .systemGroupedBackground))
-            .navigationTitle(preferences.tabs.first { $0.id == page }?.title ?? "")
+            .navigationTitle(preferences.tabItems.first { $0.id == page }?.title ?? "")
           }
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -664,10 +664,10 @@ public final class SwiftSettings: NSObject, UIAdaptivePresentationControllerDele
   private let model = SettingsModel()
   /** Blender's Preferences, which Blender fills along with the window's panels while Settings
    * shows, see `SwiftScenePanels.updateSnapshot`. */
-  let preferences: InspectorStore
+  let preferences: PanelsModel
   let lists: PreferencesLists
 
-  init(presenter: UIViewController, preferences: InspectorStore, lists: PreferencesLists) {
+  init(presenter: UIViewController, preferences: PanelsModel, lists: PreferencesLists) {
     self.presenter = presenter
     self.preferences = preferences
     self.lists = lists
@@ -694,7 +694,8 @@ public final class SwiftSettings: NSObject, UIAdaptivePresentationControllerDele
     controller.presentationController?.delegate = self
     sheet = controller
     Engine.setting("native_preferences_visible", "1")
-    preferences.requestProperties()
+    preferences.setShown(true)
+    preferences.selectPreferencesTab(preferences.currentTab)
     presenter.present(controller, animated: true)
   }
 
@@ -721,6 +722,7 @@ public final class SwiftSettings: NSObject, UIAdaptivePresentationControllerDele
   /** Blender stops reading the Preferences, and saves them if they changed. */
   private func preferencesClosed() {
     Engine.setting("native_preferences_visible", "0")
+    preferences.setShown(false)
   }
 }
 

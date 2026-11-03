@@ -33,7 +33,7 @@ final class SwiftScenePanels {
   /** The active tool's settings, which the top bar shows. */
   let tools = PanelsModel(mode: .toolStrip, tab: "TOOL")
   /** Blender's Preferences, which Settings shows. */
-  let preferences = InspectorStore(mode: .preferences, tab: "PREFERENCES_INTERFACE")
+  let preferences = PanelsModel(mode: .preferences, tab: "PREFERENCES_INTERFACE")
   let preferenceLists = PreferencesLists()
   private(set) lazy var hierarchy = HierarchyStore { [weak self] request in self?.requests.send(request) }
 
@@ -50,6 +50,7 @@ final class SwiftScenePanels {
   init() {
     properties.setShown(false)
     shading.setShown(false)
+    preferences.setShown(false)
     Self.current = self
   }
 
@@ -114,8 +115,6 @@ final class SwiftScenePanels {
     guard let snapshot = snapshot as? JSON else { return }
     if let preferencesSnapshot = snapshot.dict("preferences") {
       preferenceLists.update(preferencesSnapshot)
-      preferences.update(snapshot: ["ack": snapshot["ack"] ?? 0, "error": snapshot["error"] ?? "",
-                                    "inspector": preferencesSnapshot])
     }
     let ack = (snapshot["ack"] as? NSNumber)?.uint64Value ?? 0
     if let graph = snapshot.dict("graph") { graphSnapshot?(graph) }

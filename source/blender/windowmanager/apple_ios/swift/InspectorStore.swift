@@ -35,16 +35,6 @@ func jsonDictEqual(_ a: JSON, _ b: JSON) -> Bool {
   (a as NSDictionary).isEqual(b as NSDictionary)
 }
 
-struct InspectorTab: Identifiable, Equatable {
-  let id: String
-  let title: String
-  let icon: String
-  /** Tabs Blender lists apart, as the Preferences' sections. */
-  var group = 0
-  /** A Preferences section only Blender's own Preferences show. */
-  var external = false
-}
-
 /** A row of a section. Rows are identified by meaning, so updates animate only what changed. */
 struct InspectorRow: Identifiable, Equatable {
   enum Kind: Equatable {
@@ -138,7 +128,7 @@ final class InspectorStore {
 
   let mode: Mode
   private(set) var sections: [InspectorSection] = []
-  private(set) var tabs: [InspectorTab] = []
+  private(set) var tabs: [PanelTab] = []
   private(set) var selectedTab: String?
   private(set) var title = "Properties"
   /** A text object's style, size, alignment and spacing, for the Text section; else none. */
@@ -443,7 +433,7 @@ final class InspectorStore {
 
   private func updateTabs(_ inspector: JSON) {
     let next = inspector.array("tabs").map {
-      InspectorTab(id: $0.string("id") ?? "", title: $0.string("title") ?? "", icon: $0.string("icon") ?? "",
+      PanelTab(id: $0.string("id") ?? "", title: $0.string("title") ?? "", icon: $0.string("icon") ?? "",
                    group: $0.int("group") ?? 0, external: $0.bool("external"))
     }
     if next != tabs { tabs = next }
