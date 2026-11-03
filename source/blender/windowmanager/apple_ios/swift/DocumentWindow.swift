@@ -70,9 +70,6 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     }
     model.onRender = { [weak commands] status in commands?.render?.updateStatus(status) }
     model.onPreferences = { [weak commands] preferences in commands?.settings?.updatePreferences(preferences) }
-    model.onToolSettings = { [weak shell] settings, ack in
-      shell?.panels.updateToolSettingsStores(settings, acknowledgement: ack) ?? false
-    }
     /* Industry Compatible is the iPad's default keymap; switch once, then respect the choice. */
     if !UserDefaults.standard.bool(forKey: "BlenderKeymapDefaulted") {
       UserDefaults.standard.set(true, forKey: "BlenderKeymapDefaulted")

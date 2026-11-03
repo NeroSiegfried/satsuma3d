@@ -481,7 +481,7 @@ struct DocumentToolbar: ToolbarContent {
           }
         }
       }
-      else if model.toolSettingsShown {
+      else if shell.panels.tools.hasToolSettings {
         Button("Tool Settings", systemImage: "slider.horizontal.3") { model.toolSettingsOpen = true }
       }
     }
@@ -621,8 +621,8 @@ struct DocumentToolbar: ToolbarContent {
         .accessibilityIdentifier("blender.setting.Mirror")
       }
     }
-    else if model.toolSettingsShown {
-      ToolSettingsItems(store: shell.panels.toolStripStore, popouts: shell.panels.toolPopoverStore)
+    else if shell.panels.tools.hasToolSettings {
+      ToolSettingsItems(model: shell.panels.tools)
     }
   }
 
@@ -631,7 +631,7 @@ struct DocumentToolbar: ToolbarContent {
     if transformTools.contains(model.activeTool) {
       transformSettings
     }
-    else if model.toolSettingsShown && model.toolStripRoom < 160 {
+    else if shell.panels.tools.hasToolSettings && model.toolStripRoom < 160 {
       /* No room for the strip beside the other items: all the settings in a popover. */
       Button("Tool Settings", systemImage: "slider.horizontal.3") { model.toolSettingsOpen = true }
         .labelStyle(.iconOnly)
@@ -643,7 +643,7 @@ struct DocumentToolbar: ToolbarContent {
         .background(ToolStripMarker { model.toolStripRoom = $0 })
         .accessibilityIdentifier("blender.tool-settings.more")
     }
-    else if model.toolSettingsShown {
+    else if shell.panels.tools.hasToolSettings {
       toolSettings
     }
   }
@@ -716,7 +716,7 @@ struct DocumentToolbar: ToolbarContent {
     /* The room less the capsule's padding, and the overflow button when it is shown. */
     let room = model.toolStripRoom - 24
     let overflow = stripWidth > room + 0.5
-    let strip = ToolStrip(store: shell.panels.toolStripStore, popouts: shell.panels.toolPopoverStore)
+    let strip = ToolStrip(model: shell.panels.tools)
       .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { stripWidth = $0 }
     return HStack(spacing: 4) {
       if overflow {

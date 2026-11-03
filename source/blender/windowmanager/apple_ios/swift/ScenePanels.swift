@@ -29,9 +29,9 @@ final class SwiftScenePanels {
   /** The curve editor's curves, which the timeline shows. */
   var graphSnapshot: ((JSON) -> Void)?
   var storyboardSnapshot: ((JSON) -> Void)?
-  private let shading = InspectorStore(mode: .shading, tab: "SHADING")
-  private let toolStrip = InspectorStore(mode: .toolStrip, tab: "TOOL")
-  private let toolPopover = InspectorStore(mode: .toolPopover, tab: "TOOL")
+  private let shading = PanelsModel(mode: .shading, tab: "SHADING")
+  /** The active tool's settings, which the top bar shows. */
+  let tools = PanelsModel(mode: .toolStrip, tab: "TOOL")
   /** Blender's Preferences, which Settings shows. */
   let preferences = InspectorStore(mode: .preferences, tab: "PREFERENCES_INTERFACE")
   let preferenceLists = PreferencesLists()
@@ -49,6 +49,7 @@ final class SwiftScenePanels {
 
   init() {
     properties.setShown(false)
+    shading.setShown(false)
     Self.current = self
   }
 
@@ -116,10 +117,6 @@ final class SwiftScenePanels {
       preferences.update(snapshot: ["ack": snapshot["ack"] ?? 0, "error": snapshot["error"] ?? "",
                                     "inspector": preferencesSnapshot])
     }
-    if let shadingSnapshot = snapshot.dict("shading"), shadingVisible {
-      shading.update(snapshot: ["ack": snapshot["ack"] ?? 0, "error": snapshot["error"] ?? "",
-                                "inspector": shadingSnapshot])
-    }
     let ack = (snapshot["ack"] as? NSNumber)?.uint64Value ?? 0
     if let graph = snapshot.dict("graph") { graphSnapshot?(graph) }
     if let storyboard = snapshot.dict("storyboard") { storyboardSnapshot?(storyboard) }
@@ -176,7 +173,7 @@ final class SwiftScenePanels {
        * from the trailing side, as the segments sit. */
       let overlays = shading.currentTab == "OVERLAYS"
       ZStack {
-        InspectorForm(store: shading)
+        PanelsForm(model: shading)
           .id(shading.currentTab)
           .transition(UIAccessibility.isReduceMotionEnabled ? .opacity :
                         .asymmetric(insertion: .move(edge: overlays ? .trailing : .leading),
@@ -233,9 +230,8 @@ final class SwiftScenePanels {
   func setShadingShown(_ shown: Bool) {
     guard shown != shadingVisible else { return }
     shadingVisible = shown
-    if shown { shading.requestProperties() }
-    else { ColorPickerSession.active?.close() }
-    Engine.setting("native_shading_visible", shown ? "1" : "0")
+    shading.setShown(shown)
+    if !shown { ColorPickerSession.active?.close() }
   }
 
   /** \} */
@@ -244,22 +240,11 @@ final class SwiftScenePanels {
   /** \name Tool settings
    * \{ */
 
-  /** The tool's settings for the toolbar. Returns whether the tool has any. */
-  func updateToolSettingsStores(_ settings: JSON, acknowledgement ack: NSNumber) -> Bool {
-    let snapshot: JSON = ["inspector": settings, "ack": ack]
-    toolStrip.update(snapshot: snapshot)
-    toolPopover.update(snapshot: snapshot)
-    return !toolStrip.sections.allSatisfy { $0.rows.isEmpty }
-  }
-
-  var toolStripStore: InspectorStore { toolStrip }
-  /** The tool's settings in full, as the popover shows them. */
-  var toolPopoverStore: InspectorStore { toolPopover }
 
   /** All the tool's settings, in a popover from the toolbar. */
   func toolSettingsContent(done: @escaping () -> Void) -> some View {
     NavigationStack {
-      InspectorForm(store: toolPopover)
+      PanelsForm(model: tools)
         .tint(PanelStyle.tint)
         .navigationTitle("Tool Settings")
         .navigationBarTitleDisplayMode(.inline)

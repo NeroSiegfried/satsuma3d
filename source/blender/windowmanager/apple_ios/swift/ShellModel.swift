@@ -86,8 +86,6 @@ final class ShellModel {
   private(set) var transformSettings: [String: String] = [:]
   /** The viewport's overlays, X-Ray, gizmos, statistics and wireframe toggles. */
   private(set) var viewport: JSON?
-  /** The active tool's settings, which the top bar shows, and whether it has any. */
-  private(set) var toolSettingsShown = false
   /** Blender's own interface is showing, as on a desktop computer. */
   private(set) var desktop = false
   /** Blender's viewport has shown its first frame. */
@@ -134,7 +132,6 @@ final class ShellModel {
    * which says whether the tool has any. */
   @ObservationIgnored var onRender: ((Any?) -> Void)?
   @ObservationIgnored var onPreferences: ((Any?) -> Void)?
-  @ObservationIgnored var onToolSettings: ((JSON, NSNumber) -> Bool)?
 
   init(window: UnsafeMutableRawPointer?) {
     self.window = window
@@ -183,9 +180,6 @@ final class ShellModel {
     set(\.viewport, toolbar.viewport.dictionary, equal: { jsonEqual($0, $1) })
     onRender?(toolbar.render.value)
     onPreferences?(toolbar.preferences.value)
-    if let settings = onToolSettings?(toolbar.toolSettings.dictionary ?? [:], toolbar.propertiesAck as NSNumber) {
-      set(\.toolSettingsShown, settings)
-    }
     set(\.desktop, toolbar.desktop)
   }
 

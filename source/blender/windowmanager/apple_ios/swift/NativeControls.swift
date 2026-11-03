@@ -585,11 +585,7 @@ struct NativeMenuButton: View {
   let node: NativeNode
 
   var body: some View {
-    let menu = node.content(Blender_NativeUI_MenuButton.self)
-    let name = menu.flatMap { button in
-      (0..<button.paramsCount).compactMap { button.params(at: $0) }
-        .first { $0.key == "menu" }?.value(type: Blender_NativeUI_TextValue.self)?.value
-    } ?? ""
+    let name = menuName(node)
     BlenderMenuButton(property: ["menu": name, "label": node.label, "icon": node.icon ?? "",
                                  "tab": model.currentTab, "editable": node.enabled ? 1 : 0])
   }

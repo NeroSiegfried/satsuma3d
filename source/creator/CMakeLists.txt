@@ -414,6 +414,7 @@ else()
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/NativeControls.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/NativeLists.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/NativePanels.swift
+      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/NativeToolSettings.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/NodeEditor.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/PencilMenu.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/PropertyControls.swift

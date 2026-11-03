@@ -99,7 +99,9 @@ final class PanelsModel {
     if let tab { params["tab"] = .text(tab) }
     /* Properties' own Tool tab, not the toolbar's tool settings. */
     if mode == .properties { params["properties"] = .bool(true) }
-    view = NativeViews.shared.subscribe("properties", params: params)
+    /* The tool's settings follow a change of tool at once. */
+    let tool = mode == .toolStrip || mode == .toolPopover
+    view = NativeViews.shared.subscribe(tool ? "tool_settings" : "properties", params: params)
     view.settled = { [weak self] in self?.settle() }
   }
 
@@ -129,12 +131,18 @@ final class PanelsModel {
   var tabs: [Blender_NativeUI_Option] { tabsNode?.choice?.allOptions ?? [] }
   /** The tab Blender shows. */
   var shownTab: String? { tabsNode?.choice?.value }
-  var currentTab: String { chosenTab ?? shownTab ?? "OBJECT" }
+  var currentTab: String {
+    if let tab = chosenTab ?? shownTab { return tab }
+    if case .text(let tab)? = view.params["tab"] { return tab }
+    return "OBJECT"
+  }
 
   func selectTab(_ tab: String) {
-    guard tab != currentTab, let node = tabsNode else { return }
+    guard tab != currentTab else { return }
     chosenTab = tab
-    send(node, .set_, .text(tab))
+    /* Shown again on it. */
+    view.params["tab"] = .text(tab)
+    NativeViews.shared.send(view, target: "tabs", op: .set_, value: .text(tab))
   }
 
   /** \} */
@@ -461,6 +469,8 @@ struct PanelSection: View {
   let model: PanelsModel
   let panel: NativeNode
   var title: String?
+  /** Its controls alone, without its header, as in a popover of its own. */
+  var bare = false
   /** Another of the stack's panels dragged over this one, which takes its place. */
   @State private var dropping = false
 
@@ -468,8 +478,8 @@ struct PanelSection: View {
   private var position: Int? { content.flatMap { $0.position >= 0 ? Int($0.position) : nil } }
 
   var body: some View {
-    let fixed = content?.fixed ?? false
-    let expanded = model.isOpen(panel)
+    let fixed = bare || (content?.fixed ?? false)
+    let expanded = bare || model.isOpen(panel)
     VStack(alignment: .leading, spacing: 0) {
       if !fixed {
         draggableHeader(expanded: expanded)
