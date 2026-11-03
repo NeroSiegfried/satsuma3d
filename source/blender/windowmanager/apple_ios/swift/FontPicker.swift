@@ -393,6 +393,124 @@ struct FontSlotRow: View {
   }
 }
 
+/** A font slot of a view's panel: its family, typeface and, for the bold and italic slots, the
+ * face they use. A font chosen loads from its file, the regular one with its family's faces. */
+struct NativeFontSlotRow: View {
+  let model: PanelsModel
+  let node: NativeNode
+  private let anchor = AnchorBox()
+
+  private var reference: Blender_NativeUI_Reference? { node.reference }
+  private var role: String { node.node.property ?? "font" }
+  private var font: UIFont? { FontFiles.font(file: reference?.file, size: 17) }
+  /** The regular font's family, which the other slots usually share. */
+  private var family: String? {
+    let regular = model.view.top.map { model.children(ofAll: $0) }?.first {
+      $0.kind == .reference && $0.node.property == "font"
+    }
+    return FontFiles.font(file: regular?.reference?.file, size: 17).map(familyName)
+  }
+  private var slotTitle: String {
+    ["font_bold": "Bold", "font_italic": "Italic", "font_bold_italic": "Bold Italic"][role] ?? node.label
+  }
+
+  var body: some View {
+    if role == "font" {
+      VStack(alignment: .leading, spacing: 8) {
+        Button(action: pick) {
+          HStack {
+            Text(font.map(familyName) ?? "Default Font")
+              .font(font.map { Font($0 as CTFont) } ?? .body)
+              .lineLimit(1)
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.up.chevron.down")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(.secondary)
+          }
+          .padding(.horizontal, 12)
+          .frame(minHeight: 44)
+          .background(PanelStyle.field, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(PresentationAnchor(anchor: anchor))
+        .disabled(!node.enabled)
+        .accessibilityLabel("Font, \(font.map(familyName) ?? "Default Font")")
+        .accessibilityHint("Shows the fonts to choose from.")
+        if let font, typefaces(ofFamily: familyName(font)).count > 1 {
+          typefaceMenu(font)
+        }
+      }
+      .padding(.vertical, 4)
+    }
+    else {
+      /* Blender's fonts for bold and italic text, which choosing a family sets too. */
+      HStack {
+        Text(slotTitle)
+        Spacer(minLength: 8)
+        Button(action: pick) {
+          HStack(spacing: 4) {
+            Text(font.map { familyName($0) == family ? styleName($0) : "\(familyName($0)) \(styleName($0))" } ?? "Default")
+              .font(font.map { Font($0.withSize(15) as CTFont) } ?? .body)
+              .lineLimit(1)
+            Image(systemName: "chevron.up.chevron.down").font(.caption2.weight(.semibold))
+          }
+          .foregroundStyle(.tint)
+        }
+        .buttonStyle(.plain)
+        .background(PresentationAnchor(anchor: anchor))
+        .disabled(!node.enabled)
+      }
+      .frame(minHeight: 40)
+    }
+  }
+
+  private func pick() {
+    FontPickerSession(current: reference?.file) { choose($0) }.present(from: anchor)
+  }
+
+  /** Writes the face, and for the regular slot its family, then loads them in Blender. */
+  private func choose(_ descriptor: CTFontDescriptor) {
+    FontFiles.write(descriptor, family: role == "font") { url, faces in
+      var files = [url.path]
+      if !faces.isEmpty {
+        files += ["font_bold", "font_italic", "font_bold_italic"].map { faces[$0]?.path ?? "" }
+      }
+      model.send(node, .add, .texts(files))
+    }
+  }
+
+  /** The family's typefaces, in a second menu beside the family. */
+  private func typefaceMenu(_ font: UIFont) -> some View {
+    Menu {
+      ForEach(typefaces(ofFamily: familyName(font)), id: \.name) { face in
+        Button {
+          guard let chosen = UIFont(name: face.name, size: 17) else { return }
+          choose(chosen.fontDescriptor as CTFontDescriptor)
+        } label: {
+          if face.name == font.fontName { Label(face.style, systemImage: "checkmark") }
+          else { Text(face.style) }
+        }
+      }
+    } label: {
+      HStack {
+        Text(styleName(font))
+        Spacer(minLength: 8)
+        Image(systemName: "chevron.up.chevron.down")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+      }
+      .padding(.horizontal, 12)
+      .frame(minHeight: 40)
+      .background(PanelStyle.field, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .disabled(!node.enabled)
+    .accessibilityLabel("Typeface, \(styleName(font))")
+  }
+}
+
 /** \} */
 
 /* -------------------------------------------------------------------- */
