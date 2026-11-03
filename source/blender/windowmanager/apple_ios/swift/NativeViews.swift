@@ -125,6 +125,8 @@ final class NativeViews {
 
   private var views: [UInt32: NativeView] = [:]
   private var lastCommand: UInt32 = 0
+  /** Views written as text, see `checkViews`. */
+  fileprivate var checked: [(String, NativeView)] = []
   /** What a command answered, by its number, until taken with `outcome(of:)`. */
   private var acks: [UInt32: String?] = [:]
 
@@ -215,6 +217,63 @@ final class NativeViews {
         guard let ack = updates.acks(at: index) else { continue }
         acks[ack.command] = .some(ack.error)
       }
+      writeCheckedViews()
     }
   }
 }
+
+/* -------------------------------------------------------------------- */
+/** \name Checking views
+ *
+ * With `BLENDER_NATIVE_UI_VIEWS` in the environment, such as `properties:OBJECT,properties:TOOL`,
+ * those views are shown to no one but written as text to `native_ui_record/views/` in the
+ * temporary folder whenever they change, to check what Blender sends.
+ * \{ */
+
+extension NativeViews {
+  /** Subscribe to the views to check, if any. */
+  func checkViews() {
+    guard let names = ProcessInfo.processInfo.environment["BLENDER_NATIVE_UI_VIEWS"] else { return }
+    for entry in names.split(separator: ",") {
+      let parts = entry.split(separator: ":", maxSplits: 1).map(String.init)
+      let params: [String: NativeValue] = parts.count > 1 ? ["tab": .text(parts[1])] : [:]
+      checked.append((String(entry), subscribe(parts[0], params: params)))
+    }
+  }
+
+  /** Write the checked views as they are now. */
+  func writeCheckedViews() {
+    guard !checked.isEmpty else { return }
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("native_ui_record/views")
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    for (name, view) in checked {
+      guard let top = view.top else { continue }
+      var lines: [String] = []
+      describe(top, in: view, depth: 0, into: &lines)
+      try? lines.joined(separator: "\n").write(to: folder.appendingPathComponent(name + ".txt"),
+                                                atomically: true, encoding: .utf8)
+    }
+  }
+
+  private func describe(_ node: NativeNode, in view: NativeView, depth: Int, into lines: inout [String]) {
+    let content = node.node
+    var line = String(repeating: "  ", count: depth) + "\(content.contentType) \(node.key)"
+    if let label = content.label { line += " \"\(label)\"" }
+    switch content.contentType {
+      case .toggle: line += " = \(content.content(type: Blender_NativeUI_Toggle.self)?.value ?? false)"
+      case .number: line += " = \(content.content(type: Blender_NativeUI_Number.self)?.value ?? 0)"
+      case .choice: line += " = \(content.content(type: Blender_NativeUI_Choice.self)?.value ?? "")"
+      case .textfield: line += " = \(content.content(type: Blender_NativeUI_TextField.self)?.value ?? "")"
+      case .reference: line += " = \(content.content(type: Blender_NativeUI_Reference.self)?.name ?? "")"
+      case .panel: line += (content.content(type: Blender_NativeUI_Panel.self)?.expanded ?? true) ? " (open)" : " (closed)"
+      default: break
+    }
+    if !content.enabled { line += " [disabled]" }
+    lines.append(line)
+    for child in view.children(of: node) {
+      describe(child, in: view, depth: depth + 1, into: &lines)
+    }
+  }
+}
+
+/** \} */

@@ -103,6 +103,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
                                            object: nil)
     model.pullToolbar(copy: true)
     shell.pullSnapshots()
+    NativeViews.shared.checkViews()
     SoakProbe.start(model: model, shell: shell)
     model.refreshWindowState()
     /* Snapshots arrive by notification. Whether the viewport has drawn is read from the
