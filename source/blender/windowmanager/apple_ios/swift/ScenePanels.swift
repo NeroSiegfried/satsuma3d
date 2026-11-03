@@ -21,7 +21,7 @@ final class SwiftScenePanels {
   /** The Properties editor, from Blender's `properties` view while it shows. */
   let properties = PanelsModel(mode: .properties)
   /** The Outliner's edits, which go through the panels' requests. */
-  private let requests = InspectorStore(mode: .properties)
+  private let requests = InspectorStore(setting: "native_panel_edit")
   /** The native node editor, which Blender's panel snapshots also feed. */
   let nodes = NodeEditorModel()
   /** The native Image Editor, which they feed too. */

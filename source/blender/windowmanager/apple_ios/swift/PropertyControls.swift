@@ -395,9 +395,7 @@ struct PropertyActions: View {
     if let lock = property.dict("lock") {
       let locked = lock.bool("value")
       Button {
-        if let current = store.current(propertyKey(property))?.dict("lock"), current.bool("editable") {
-          store.edit(current, value: !locked)
-        }
+        if lock.bool("editable") { store.edit(lock, value: !locked) }
       } label: {
         Label(locked ? "Unlock" : "Lock", systemImage: locked ? "lock.open" : "lock")
       }
@@ -405,7 +403,7 @@ struct PropertyActions: View {
     }
     ForEach(Array(property.array("animation").enumerated()), id: \.offset) { _, entry in
       Button {
-        store.animate(store.current(propertyKey(property)) ?? property, action: entry.string("id") ?? "")
+        store.animate(property, action: entry.string("id") ?? "")
       } label: {
         Label {
           Text(entry.string("title") ?? "")
@@ -598,7 +596,6 @@ struct OperatorToggle: View {
       set: { value in
         on = value
         store.runOperator(property)
-        if value, let panel = property.string("physics_panel") { store.expandSection(panel) }
       }))
       .labelsHidden()
       .switchTint(nil)
@@ -791,28 +788,7 @@ struct EnumControl: View {
   private var current: JSON? { options.first(where: isChecked) }
 
   var body: some View {
-    if store.mode == .shading && property.string("property") == "type" {
-      /* Read here, so the picker follows the value it shows. */
-      let selection = store.value(property) as? String ?? ""
-      Picker(label, selection: Binding(
-        get: { selection },
-        set: { store.edit(property, value: $0) })) {
-        ForEach(Array(options.enumerated()), id: \.offset) { _, option in
-          if let image = BlenderIcon.image(option.string("icon")) {
-            Image(uiImage: image).tag(option.string("value") ?? "")
-              .accessibilityLabel(option.string("label") ?? "")
-          }
-          else {
-            Text(option.string("label") ?? "").tag(option.string("value") ?? "")
-          }
-        }
-      }
-      .pickerStyle(.segmented)
-      /* As tall as UIKit makes it under the form's 40 point control minimum. */
-      .controlSize(.large)
-      .disabled(!property.bool("editable"))
-    }
-    else if options.contains(where: { !($0.string("preview") ?? "").isEmpty }) {
+    if options.contains(where: { !($0.string("preview") ?? "").isEmpty }) {
       PreviewEnumButton(store: store, property: property, compact: compact)
     }
     else if property.bool("expand") && (2...6).contains(options.count) && (!compact || Self.segmentsFit(property)) {

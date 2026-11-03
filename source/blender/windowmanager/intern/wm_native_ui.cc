@@ -312,7 +312,6 @@ std::chrono::steady_clock::time_point bridge_panels_next_snapshot;
 /* The last panels snapshot the native interface was given; cleared when it asks for different panels. */
 std::string bridge_panels_published;
 std::string bridge_panels_json = "null";
-std::string bridge_properties_state = "{\"tab\":\"OBJECT\"}";
 /** Blender's Preferences, a section at a time, in the iPad's Settings, see `SettingsSheet.swift`. */
 std::string bridge_preferences_state = "{\"tab\":\"PREFERENCES_INTERFACE\"}";
 /** The keymaps Settings shows with their items and what it searches for, as JSON. */
@@ -1533,12 +1532,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     UNUSED_VARS(imports);
 #endif
     bridge_panels_next_snapshot = {};
-    return;
-  }
-  if (command.setting == "native_properties_state") {
-    bridge_properties_state = command.value;
-    bridge_panels_next_snapshot = {};
-    bridge_panels_published.clear();
     return;
   }
   if (command.setting == "native_properties_edit" || command.setting == "native_panel_edit") {
@@ -2807,15 +2800,6 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
       if (!bridge_properties_error.empty()) {
         merged.append_str("error", bridge_properties_error);
       }
-      if (bridge_panels_visible & 1) {
-        std::istringstream properties_stream(bridge_timed("panels.inspector", [&] {
-          return ui::native_properties_query(C, bridge_properties_state, false);
-        }));
-        auto properties = JsonFormatter().deserialize(properties_stream);
-        if (properties) {
-          merged.append("inspector", std::move(properties));
-        }
-      }
       if (bridge_panels_visible & 8) {
         /* Another object, material or modifier chosen anywhere shows straight away. */
         std::string identity = ui::native_nodes_identity(C, bridge_nodes_state);
@@ -4052,7 +4036,6 @@ static void bridge_dispatch(bContext *C, BridgeMessage &message)
   const auto *setting = std::get_if<BridgeSettingCommand>(&message);
   const auto *menu = std::get_if<BridgeMenuRequest>(&message);
   if ((!menu || menu->execute) && (!setting || (setting->setting != "native_properties_edit" &&
-                                                setting->setting != "native_properties_state" &&
                                                 setting->setting != "native_panels" &&
                                                 setting->setting != "native_nodes_state" &&
                                                 setting->setting != "native_nodes_visible" &&
@@ -4073,7 +4056,6 @@ static void bridge_dispatch(bContext *C, BridgeMessage &message)
   }
   const bool panel_message = setting && (setting->setting == "native_panels" ||
                                          setting->setting == "native_panel_edit" ||
-                                         setting->setting == "native_properties_state" ||
                                          setting->setting == "native_properties_edit" ||
                                          setting->setting == "native_nodes_state" ||
                                          setting->setting == "native_nodes_visible" ||

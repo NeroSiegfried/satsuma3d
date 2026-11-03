@@ -42,7 +42,7 @@ final class NodeEditorModel {
   /** Bumped to fit the view to the tree, as when another tree shows. */
   private(set) var fitRequest = 0
   /** The controls on the nodes, which edit through the same store as Properties' controls. */
-  let store = InspectorStore(mode: .nodes)
+  let store = InspectorStore()
   @ObservationIgnored var shownChanged: (Bool) -> Void = { _ in }
 
   var nodes: [JSON] { snapshot?.array("nodes") ?? [] }

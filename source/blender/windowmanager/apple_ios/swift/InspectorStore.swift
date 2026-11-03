@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 /** \file
- * The Properties editor, viewport shading and tool settings as SwiftUI state. Blender sends each
- * panel's buttons as JSON (see `interface_native_properties.cc`); this turns them into sections
- * and rows, and sends edits back through the engine inbox.
+ * Edits of the controls Blender describes as JSON, which the node editor's nodes still are (see
+ * `interface_native_properties.cc`), sent through the engine inbox. Panels elsewhere are views,
+ * see `NativePanels.swift`.
  *
  * Edits carry a sequence number. Snapshots acknowledging an older sequence are ignored, so a
  * control never jumps back to a stale value while Blender is still applying an edit.
@@ -35,6 +35,7 @@ func jsonDictEqual(_ a: JSON, _ b: JSON) -> Bool {
   (a as NSDictionary).isEqual(b as NSDictionary)
 }
 
+/** A row of a section. Rows are identified by meaning, so updates animate only what changed. */
 /** A row of a section. Rows are identified by meaning, so updates animate only what changed. */
 struct InspectorRow: Identifiable, Equatable {
   enum Kind: Equatable {
@@ -73,33 +74,6 @@ struct InspectorRow: Identifiable, Equatable {
   var kind: Kind
 }
 
-struct InspectorSection: Identifiable, Equatable {
-  let id: String
-  let title: String
-  let active: Bool
-  let headerHidden: Bool
-  let icon: String?
-  let switchOnly: Bool
-  var headerControls: [JSON]
-  var rows: [InspectorRow]
-  /** Its place in a stack of panels that can be dragged into another order, such as modifiers. */
-  var stackIndex: Int? = nil
-
-  /** The same panel under another title. */
-  func titled(_ title: String) -> InspectorSection {
-    InspectorSection(id: id, title: title, active: active, headerHidden: headerHidden, icon: icon,
-                     switchOnly: switchOnly, headerControls: headerControls, rows: rows,
-                     stackIndex: stackIndex)
-  }
-
-  static func == (a: InspectorSection, b: InspectorSection) -> Bool {
-    a.id == b.id && a.title == b.title && a.active == b.active && a.headerHidden == b.headerHidden &&
-      a.stackIndex == b.stackIndex &&
-      a.icon == b.icon && a.switchOnly == b.switchOnly && a.rows == b.rows &&
-      jsonListEqual(a.headerControls, b.headerControls)
-  }
-}
-
 /** A value the user just set, observed per property so an edit redraws only its own control. */
 @MainActor
 @Observable
@@ -107,67 +81,26 @@ final class PendingValue {
   var value: Any?
 }
 
-/** Observed per property: a snapshot redraws only the views that read what it changed. */
+/** Edits of JSON controls, and their values until Blender shows them. */
 @MainActor
 @Observable
 final class InspectorStore {
-  enum Mode {
-    /** The Properties editor, with its tabs. */
-    case properties
-    /** The viewport shading popover. */
-    case shading
-    /** Tool settings in the top bar, as one compact strip. */
-    case toolStrip
-    /** All tool settings in a popover. */
-    case toolPopover
-    /** Blender's Preferences, a section at a time, in Settings. */
-    case preferences
-    /** The controls on a node editor's nodes. */
-    case nodes
-  }
-
-  let mode: Mode
-  private(set) var sections: [InspectorSection] = []
-  private(set) var tabs: [PanelTab] = []
-  private(set) var selectedTab: String?
-  private(set) var title = "Properties"
-  /** A text object's style, size, alignment and spacing, for the Text section; else none. */
-  private(set) var textStyle: JSON?
   private(set) var status = ""
-  private(set) var objectID: String?
-  private(set) var hasInspector = false
-  private(set) var loaded = false
-  /** Open sections per tab; nil until Blender first reports which are open. */
-  private(set) var expandedPanels: [String: Set<String>] = [:]
-  /** Per tab: sub-panel id to open state, once the user toggles it. */
-  private(set) var subpanelStates: [String: [String: Bool]] = [:]
   /** Values the user just set, shown until Blender acknowledges them. Kept once made, so the
    * controls reading them keep observing the same value. */
   @ObservationIgnored private var pendingValues: [String: PendingValue] = [:]
-  /** Every value in the latest accepted snapshot, by key. Rows can still show older data while
-   * a change of layout animates; reading values here keeps them from showing the value from
-   * before an edit for the length of that animation. */
-  @ObservationIgnored private var latestValues: [String: Any] = [:]
   /** Bumped when controls must drop local editing state, e.g. on selection change. */
   private(set) var generation = 0
 
-  @ObservationIgnored var visible = true
   /** Sent with every edit: for nodes, which tree the edit is in. */
   @ObservationIgnored var requestContext: JSON = [:]
-  @ObservationIgnored private var snapshot: JSON?
-  @ObservationIgnored private var shownTab: String?
-  @ObservationIgnored private var inspector: JSON?
   @ObservationIgnored private(set) var sequence: UInt64 = 0
   private static var nextSequence: UInt64 = 0
+  /** Where edits go: the node editor's, or the window's panels', such as the Outliner's. */
+  private let setting: String
 
-  init(mode: Mode, tab: String? = nil) {
-    self.mode = mode
-    self.selectedTab = tab
-  }
-
-  /** Observers redraw on every assignment, even of the same value. */
-  private func set<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<InspectorStore, Value>, _ value: Value) {
-    if self[keyPath: keyPath] != value { self[keyPath: keyPath] = value }
+  init(setting: String = "native_nodes_edit") {
+    self.setting = setting
   }
 
   private func pendingValue(_ key: String) -> PendingValue {
@@ -182,35 +115,19 @@ final class InspectorStore {
     if !jsonEqual(pending.value, value) { pending.value = value }
   }
 
-  var currentTab: String { selectedTab ?? "OBJECT" }
-
-  /** Whether Blender lists the tabs: Properties and the Preferences. */
-  private var hasTabs: Bool { mode == .properties || mode == .preferences }
-
-  /* -------------------------------------------------------------------- */
-  /** \name Sending edits
-   * \{ */
-
   func send(_ request: JSON) {
     InspectorStore.nextSequence += 1
     sequence = InspectorStore.nextSequence
     var payload = request
     payload.merge(requestContext) { $1 }
     payload["sequence"] = NSNumber(value: sequence)
-    /* Properties' own Tool tab, not the toolbar's tool settings. */
-    if mode == .properties { payload["properties"] = 1 }
-    if mode == .nodes {
-      Engine.setting("native_nodes_edit", json: payload)
-      return
-    }
-    Engine.setting(request.bool("native") ? "native_properties_edit" : "native_panel_edit",
-                   json: payload)
+    Engine.setting(setting, json: payload)
   }
 
   func edit(_ property: JSON, value: Any) {
     var request = property
     request["action"] = "property"
-    request["id"] = objectID ?? ""
+    request["id"] = ""
     request["value"] = value
     setPending(property, value)
     send(request)
@@ -220,7 +137,7 @@ final class InspectorStore {
   func preview(_ property: JSON, value: Any, interaction: String, phase: String) {
     var request = property
     request["action"] = "property"
-    request["id"] = objectID ?? ""
+    request["id"] = ""
     request["value"] = value
     request["interaction"] = interaction
     request["phase"] = phase
@@ -231,7 +148,7 @@ final class InspectorStore {
   /** Requests for pickers, lists, menus and operators, keyed by the button in its panel. */
   func request(_ property: JSON, extra: JSON) {
     var request: JSON = [
-      "action": "property", "id": objectID ?? "", "native": 1,
+      "action": "property", "id": "", "native": 1,
       "key": property.string("key") ?? "", "panel": property.string("panel") ?? "",
       "tab": property.string("tab") ?? "",
     ]
@@ -244,7 +161,7 @@ final class InspectorStore {
 
   func runOperator(_ property: JSON) {
     var request = property
-    request["id"] = objectID ?? ""
+    request["id"] = ""
     send(request)
   }
 
@@ -252,7 +169,7 @@ final class InspectorStore {
     var request = property
     request["action"] = "animation"
     request["animation_action"] = action
-    request["id"] = objectID ?? ""
+    request["id"] = ""
     send(request)
   }
 
@@ -262,24 +179,10 @@ final class InspectorStore {
   }
 
   func value(_ property: JSON) -> Any? {
-    let key = propertyKey(property)
-    return pendingValue(key).value ?? latestValues[key] ?? property["value"]
+    pendingValue(propertyKey(property)).value ?? property["value"]
   }
 
-  private func collectValues(_ object: Any, into values: inout [String: Any]) {
-    if let dictionary = object as? JSON {
-      if dictionary["key"] != nil, let value = dictionary["value"] {
-        values[propertyKey(dictionary)] = value
-      }
-      for child in dictionary.values { collectValues(child, into: &values) }
-    }
-    else if let array = object as? [Any] {
-      for child in array { collectValues(child, into: &values) }
-    }
-  }
-
-  /** A new snapshot of values not read through `update`, such as a node tree's: what was set is
-   * shown by it now. */
+  /** A new snapshot: what was set is shown by it now. */
   func clearPendingValues(ack: UInt64) {
     guard ack >= sequence else { return }
     for pending in pendingValues.values where pending.value != nil { pending.value = nil }
@@ -289,364 +192,4 @@ final class InspectorStore {
   func isMixed(_ property: JSON) -> Bool {
     property.bool("mixed") && pendingValue(propertyKey(property)).value == nil
   }
-
-  /** \} */
-
-  /* -------------------------------------------------------------------- */
-  /** \name Tabs and disclosure
-   * \{ */
-
-  func requestProperties() {
-    guard mode == .properties || mode == .shading || mode == .preferences else { return }
-    var state: JSON = ["tab": currentTab, "properties": mode == .properties ? 1 : 0]
-    if let expanded = expandedPanels[currentTab] { state["expanded"] = Array(expanded) }
-    if let subpanels = subpanelStates[currentTab], !subpanels.isEmpty { state["subpanels"] = subpanels }
-    let setting = switch mode {
-      case .shading: "native_shading_state"
-      case .preferences: "native_preferences_state"
-      default: "native_properties_state"
-    }
-    Engine.setting(setting, json: state)
-  }
-
-  func selectTab(_ tab: String) {
-    guard tab != selectedTab else { return }
-    selectedTab = tab
-    generation += 1
-    requestProperties()
-  }
-
-  func isExpanded(_ section: String) -> Bool {
-    guard let expanded = expandedPanels[currentTab] else { return true }
-    return expanded.contains(section)
-  }
-
-  /** Move a stack's panel, such as a modifier, to another place in the stack. */
-  func moveSection(_ section: String, to index: Int) {
-    guard let from = sections.first(where: { $0.id == section })?.stackIndex, from != index else { return }
-    request(["panel": section, "tab": currentTab], extra: ["panel_action": "reorder", "to": index])
-    Haptics.impact()
-  }
-
-  func toggleSection(_ section: String) {
-    var expanded = expandedPanels[currentTab] ?? Set(sections.map(\.id))
-    if expanded.contains(section) { expanded.remove(section) }
-    else { expanded.insert(section) }
-    withMotion { expandedPanels[currentTab] = expanded }
-    requestProperties()
-  }
-
-  /** Physics turned on opens its settings below the switch. */
-  func expandSection(_ section: String) {
-    var expanded = expandedPanels[currentTab] ?? Set(sections.map(\.id))
-    expanded.insert(section)
-    expandedPanels[currentTab] = expanded
-    requestProperties()
-  }
-
-  func toggleSubpanel(_ subpanel: String, currentlyOpen: Bool) {
-    var states = subpanelStates[currentTab] ?? [:]
-    states[subpanel] = !currentlyOpen
-    withMotion { subpanelStates[currentTab] = states }
-    requestProperties()
-  }
-
-  func subpanelOpen(_ subpanel: String, reported: Bool) -> Bool {
-    subpanelStates[currentTab]?[subpanel] ?? reported
-  }
-
-  /** \} */
-
-  /* -------------------------------------------------------------------- */
-  /** \name Snapshots
-   * \{ */
-
-  /** Returns whether the snapshot was accepted. */
-  @discardableResult
-  func update(snapshot incoming: JSON) -> Bool {
-    let ack = (incoming["ack"] as? NSNumber)?.uint64Value ?? 0
-    if ack < sequence { return false }
-    /* A hidden inspector applies the latest snapshot when it opens. */
-    if mode == .properties && !visible { return false }
-    let merged = keepingCollapsedContents(incoming)
-    if let snapshot, (snapshot as NSDictionary).isEqual(merged as NSDictionary) { return false }
-    snapshot = merged
-    set(\.status, merged.string("error") ?? "")
-    var values: [String: Any] = [:]
-    collectValues(merged, into: &values)
-    latestValues = values
-    for pending in pendingValues.values where pending.value != nil { pending.value = nil }
-    guard let raw = merged.dict("inspector") else {
-      if merged["inspector"] is NSNull {
-        set(\.hasInspector, false)
-        set(\.sections, [])
-        set(\.loaded, true)
-      }
-      return true
-    }
-    let inspector = mode == .properties ? physicsSections(raw) : raw
-    if hasTabs { updateTabs(inspector) }
-    if let tab = inspector.string("tab"), hasTabs, tab != selectedTab { return true }
-    self.inspector = inspector
-    set(\.hasInspector, true)
-    set(\.loaded, true)
-    set(\.title, inspector.string("name") ?? "Properties")
-    let textStyle = merged.dict("text_style") ?? inspector.dict("text_style")
-    if !jsonEqual(textStyle.map { $0 as NSDictionary }, self.textStyle.map { $0 as NSDictionary }) {
-      self.textStyle = textStyle
-    }
-    let newObject = inspector.string("id")
-    let replacing = newObject != objectID || sections.isEmpty || inspector.string("tab") != shownTab
-    if newObject != objectID {
-      objectID = newObject
-      generation += 1
-    }
-    shownTab = inspector.string("tab")
-    let built = buildSections(inspector)
-    /* Unchanged sections keep their views; changed ones redraw only the rows that changed. */
-    guard built != sections else { return true }
-    /* Only rows coming and going within the same panel animate: a first fill, another object or
-     * another tab replaces the rows at once, so no row waits on an insertion that may never be
-     * shown. New values never animate, they just show. */
-    if replacing || layout(built) == layout(sections) { sections = built }
-    else { withMotion(.smooth(duration: 0.25)) { sections = built } }
-    return true
-  }
-
-  /** Which sections and rows show, to tell rows coming and going from values changing. A list's
-   * items count too: one added or removed changes its height, which the panels below follow. */
-  private func layout(_ sections: [InspectorSection]) -> [[String]] {
-    sections.map { section in
-      [section.id] + visibleRows(section).map { row in
-        if case .composite(let property) = row.kind, property.string("type") == "LIST" {
-          return "\(row.id)#\(property.array("rows").count)"
-        }
-        return row.id
-      }
-    }
-  }
-
-  func clear() {
-    set(\.hasInspector, false)
-    set(\.sections, [])
-  }
-
-  private func updateTabs(_ inspector: JSON) {
-    let next = inspector.array("tabs").map {
-      PanelTab(id: $0.string("id") ?? "", title: $0.string("title") ?? "", icon: $0.string("icon") ?? "",
-                   group: $0.int("group") ?? 0, external: $0.bool("external"))
-    }
-    if next != tabs { tabs = next }
-    if selectedTab == nil || !tabs.contains(where: { $0.id == selectedTab }) {
-      set(\.selectedTab, inspector.string("tab"))
-    }
-    if let tab = selectedTab, expandedPanels[tab] == nil, inspector.string("tab") == tab {
-      expandedPanels[tab] = Set(inspector.array("sections").filter { $0.bool("open") }
-        .compactMap { $0.string("id") })
-    }
-  }
-
-  /** Collapsed sections arrive with only their header controls; keep the contents Blender sent
-   * before, so collapsing animates the rows away rather than rebuilding them. */
-  private func keepingCollapsedContents(_ snapshot: JSON) -> JSON {
-    guard let inspector = snapshot.dict("inspector"),
-          let previous = self.snapshot?.dict("inspector"),
-          jsonEqual(inspector["id"], previous["id"])
-    else { return snapshot }
-    var sections: [JSON] = []
-    for section in inspector.array("sections") {
-      if section.has("open") && !section.bool("open"),
-         let old = previous.array("sections").first(where: { jsonEqual($0["id"], section["id"]) })
-      {
-        var properties = section.array("properties")
-        properties += old.array("properties").filter { !$0.bool("header") || $0.has("section") }
-        var merged = section
-        merged["properties"] = properties
-        sections.append(merged)
-      }
-      else {
-        sections.append(section)
-      }
-    }
-    var merged = inspector
-    merged["sections"] = sections
-    var result = snapshot
-    result["inspector"] = merged
-    return result
-  }
-
-  /** Blender lists the physics as buttons above their settings. Natively each physics is one
-   * section: its switch in the header and, while on, its settings below. */
-  private func physicsSections(_ inspector: JSON) -> JSON {
-    guard inspector.string("tab") == "PHYSICS",
-          let add = inspector.array("sections").first(where: { $0.string("id") == "PHYSICS_PT_add" })
-    else { return inspector }
-    var byID: [String: JSON] = [:]
-    for section in inspector.array("sections") {
-      if let id = section.string("id"), id != "PHYSICS_PT_add" { byID[id] = section }
-    }
-    var sections: [JSON] = []
-    var used = Set<String>()
-    for toggle in add.array("properties") {
-      let panel = toggle.string("physics_panel") ?? toggle.string("key") ?? ""
-      var header = toggle
-      header["header"] = 1
-      if var settings = byID[panel], toggle.bool("value") {
-        settings["properties"] = [header] + settings.array("properties")
-        settings["icon"] = toggle.string("leading_icon") ?? ""
-        sections.append(settings)
-        used.insert(panel)
-      }
-      else {
-        sections.append(["id": panel, "title": toggle.string("label") ?? "", "open": 0,
-                         "icon": toggle.string("leading_icon") ?? "", "switch_only": 1,
-                         "properties": [header]])
-      }
-    }
-    for section in inspector.array("sections") {
-      let id = section.string("id") ?? ""
-      if id != "PHYSICS_PT_add" && !used.contains(id) { sections.append(section) }
-    }
-    var result = inspector
-    result["sections"] = sections
-    return result
-  }
-
-  /** \} */
-
-  /* -------------------------------------------------------------------- */
-  /** \name Rows
-   * \{ */
-
-  private func buildSections(_ inspector: JSON) -> [InspectorSection] {
-    let strip = mode == .toolStrip
-    var result: [InspectorSection] = []
-    for section in inspector.array("sections") {
-      let sectionID = section.string("id") ?? section.string("title") ?? ""
-      if section.bool("header_hidden"), hasTabs,
-         expandedPanels[currentTab]?.contains(sectionID) != true
-      {
-        /* Blender draws these without a header, so they stay open. */
-        expandedPanels[currentTab, default: []].insert(sectionID)
-      }
-      var model = InspectorSection(
-        id: sectionID, title: section.string("title") ?? "", active: section.bool("active"),
-        headerHidden: section.bool("header_hidden"), icon: section.string("icon"),
-        switchOnly: section.bool("switch_only"), headerControls: [], rows: [])
-      model.stackIndex = section.int("stack_index")
-      var innerSection: String?
-      var headingIndex: Int?
-      var vectorIndex: [String: Int] = [:]
-      var toggleIndex: [String: Int] = [:]
-      var seen: [String: Int] = [:]
-      func uniqueID(_ base: String) -> String {
-        let count = (seen[base] ?? 0) + 1
-        seen[base] = count
-        return count == 1 ? base : "\(base)#\(count)"
-      }
-      for property in section.array("properties") {
-        let type = property.string("type") ?? ""
-        let subpanel = property.string("subpanel") ?? property.string("section")
-        if let name = property.string("section"), innerSection != subpanel, !strip {
-          innerSection = subpanel
-          let disclosure = type == "SUBPANEL"
-          let open = disclosure ? subpanelOpen(subpanel ?? "", reported: property.bool("open")) : true
-          model.rows.append(InspectorRow(
-            id: uniqueID("heading:" + (subpanel ?? "")),
-            kind: .heading(title: name, subpanel: subpanel ?? "", disclosure: disclosure, open: open,
-                           depth: max(0, (property.int("depth") ?? 1) - 1), controls: [])))
-          headingIndex = model.rows.count - 1
-        }
-        if type == "SUBPANEL" { continue }
-        let key = propertyKey(property)
-        if let group = property.string("toggle_group") {
-          if let index = toggleIndex[group], case .toggles(let caption, var items) = model.rows[index].kind {
-            items.append(property)
-            model.rows[index].kind = .toggles(caption: caption, items: items)
-          }
-          else {
-            let caption = (property.string("toggle_caption") ?? "").isEmpty ?
-              (property.string("label") ?? "") : property.string("toggle_caption")!
-            model.rows.append(InspectorRow(id: uniqueID("toggles:" + group),
-                                           kind: .toggles(caption: caption, items: [property])))
-            toggleIndex[group] = model.rows.count - 1
-          }
-          continue
-        }
-        if ["ID", "LIST", "ITEM_ROW", "PREVIEW", "OPERATOR_MENU"].contains(type) {
-          if strip { continue }
-          model.rows.append(InspectorRow(id: uniqueID("property:" + key), kind: .composite(property)))
-          continue
-        }
-        if strip {
-          model.rows.append(InspectorRow(id: uniqueID("property:" + key), kind: .property(property)))
-          continue
-        }
-        let headerControl = property.bool("header") &&
-          ((type == "OPERATOR" && !property.bool("checkbox")) || type == "BOOLEAN" ||
-           (type == "OPERATOR" && property.bool("checkbox")) || property.bool("header_name"))
-        if headerControl {
-          if property.has("section"), let index = headingIndex,
-             case .heading(let title, let sub, let disclosure, let open, let depth, var controls) = model.rows[index].kind
-          {
-            controls.append(property)
-            model.rows[index].kind = .heading(title: title, subpanel: sub, disclosure: disclosure,
-                                              open: open, depth: depth, controls: controls)
-          }
-          else {
-            model.headerControls.append(property)
-          }
-          continue
-        }
-        if let group = property.string("group"), !group.isEmpty {
-          let identity = property.string("group_key") ??
-            "\(property["owner"] ?? "").\(property["property"] ?? "")"
-          let groupKey = "\(property.string("panel") ?? "").\(innerSection ?? "").\(identity)"
-          if let index = vectorIndex[groupKey], case .vector(let title, var items) = model.rows[index].kind {
-            items.append(property)
-            model.rows[index].kind = .vector(title: title, items: items)
-          }
-          else {
-            model.rows.append(InspectorRow(id: uniqueID("vector:" + groupKey),
-                                           kind: .vector(title: group, items: [property])))
-            vectorIndex[groupKey] = model.rows.count - 1
-          }
-          continue
-        }
-        model.rows.append(InspectorRow(id: uniqueID("property:" + key), kind: .property(property)))
-      }
-      result.append(model)
-    }
-    return result
-  }
-
-  /** Rows shown under a heading that is collapsed are hidden. */
-  func visibleRows(_ section: InspectorSection) -> [InspectorRow] {
-    var rows: [InspectorRow] = []
-    var hiddenDepth: Int?
-    for row in section.rows {
-      if case .heading(_, let subpanel, let disclosure, let reported, let depth, _) = row.kind {
-        if let hidden = hiddenDepth, depth > hidden { continue }
-        hiddenDepth = nil
-        rows.append(row)
-        if disclosure && !subpanelOpen(subpanel, reported: reported) { hiddenDepth = depth }
-        continue
-      }
-      if hiddenDepth != nil { continue }
-      rows.append(row)
-    }
-    return rows
-  }
-
-  /** The latest version of a property, by key, for menus built before the latest snapshot. */
-  func current(_ key: String) -> JSON? {
-    for section in inspector?.array("sections") ?? [] {
-      for property in section.array("properties") where propertyKey(property) == key {
-        return property
-      }
-    }
-    return nil
-  }
-
-  /** \} */
 }
