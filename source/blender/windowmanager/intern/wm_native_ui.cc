@@ -1237,16 +1237,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
                command.value.substr(0, 200).c_str(), bridge_properties_error.c_str());
     return;
   }
-  if (command.setting == "native_panels") {
-    bridge_panels_next_snapshot = {};
-    bridge_panels_published.clear();
-    /* Settings, open over the window, stays as it is. */
-    bridge_panels_visible = (bridge_panels_visible & (32 | 64 | 128)) | (command.value == "3" ? 3 :
-                                                     command.value == "2" ? 2 :
-                                                     command.value == "1" ? 1 :
-                                                                            0);
-    return;
-  }
 #ifdef WITH_PYTHON
   if (command.setting == "keymap") {
     /* From the iPad's Settings, see `bl_ui.native_settings`. */
@@ -1325,19 +1315,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     const std::string expression = "bl_ui.native_actions.run(bpy.context, \"" +
                                    bridge_json_escape(command.value) + "\", \"" +
                                    bridge_json_escape(tool ? tool->idname : "") + "\")";
-    BPY_run_string_eval(C, imports, expression.c_str());
-    return;
-  }
-  if (command.setting == "native_panel_edit") {
-    bridge_panels_next_snapshot = {};
-    const char *imports[] = {"bpy", "bl_ui", nullptr};
-    bool blocked = false;
-#  if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
-    blocked = WM_apple_ios_dialog_active(CTX_wm_window(C));
-#  endif
-    const std::string expression = "bl_ui.native_panels.apply_json(bpy.context, \"" +
-                                   bridge_json_escape(command.value) + "\", " +
-                                   (blocked ? "True" : "False") + ")";
     BPY_run_string_eval(C, imports, expression.c_str());
     return;
   }
@@ -2087,22 +2064,8 @@ void bridge_panels_build(bContext *C)
       /* Scene projection follows the native refresh cadence, not the viewport frame rate. */
       bridge_panels_next_snapshot = now + std::chrono::milliseconds(250);
       BridgeTimer panels_timer("panels");
-      const std::string expression = "bl_ui.native_panels.snapshot_json(bpy.context, " +
-                                     std::to_string(bridge_panels_visible & 2) + ")";
-      /* Read anew each time: should Python fail, nothing of the last snapshot stays. */
-      std::string base_json;
-      bridge_python(C, "panels.hierarchy", expression.c_str(), base_json);
       using namespace io::serialize;
-      std::istringstream base_stream(base_json);
-      auto base = JsonFormatter().deserialize(base_stream);
       DictionaryValue merged;
-      if (const auto *dictionary = base ? base->as_dictionary_value() : nullptr) {
-        for (const auto &item : dictionary->elements()) {
-          if (item.first != "ack" && (item.first != "error" || bridge_properties_error.empty())) {
-            merged.append(item.first, item.second);
-          }
-        }
-      }
       merged.append_int("ack", bridge_panels_sequence);
       if (!bridge_properties_error.empty()) {
         merged.append_str("error", bridge_properties_error);
@@ -3716,6 +3679,81 @@ views::CommandResult bridge_preferences_list_view_command(bContext *C,
 /** \} */
 
 /* -------------------------------------------------------------------- */
+/** \name The Outliner View
+ *
+ * The scene's collections and objects, as `bl_ui.native_panels.hierarchy_json` lists them: the
+ * tree list `outliner`, its rows keyed by their path from the scene's collection, such as
+ * `/c12/o34` for an object in a collection, the active object's the list's active row. Each row
+ * has its `<key>:hidden` toggle, the `<key>:actions` it allows, and `<key>:accepts`, whether rows
+ * may be dropped on it. Edits run `wm.native_panel_edit`.
+ * \{ */
+
+void bridge_outliner_view_build(bContext *C,
+                                const views::Params & /*params*/,
+                                views::ViewData * /*data*/,
+                                views::ViewBuilder &builder)
+{
+  using namespace io::serialize;
+  const std::shared_ptr<Value> rows = bridge_python_value(
+      C, "outliner", "bl_ui.native_panels.hierarchy_json(bpy.context)");
+  const ArrayValue *array = rows ? rows->as_array_value() : nullptr;
+  std::string active;
+  if (array) {
+    for (const std::shared_ptr<Value> &item : array->elements()) {
+      if (const DictionaryValue *row = item->as_dictionary_value(); row && bridge_flag(*row, "active")) {
+        active = bridge_text(*row, "key");
+      }
+    }
+  }
+  const NodeId top = builder.top("outliner", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return views::protocol::CreateGroup(buffer);
+  });
+  const NodeId list = builder.add(top, "rows", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return views::protocol::CreateListDirect(
+        buffer, active.c_str(), false, false, true, true);
+  });
+  if (array == nullptr) {
+    return;
+  }
+  for (const std::shared_ptr<Value> &item : array->elements()) {
+    const DictionaryValue *row = item->as_dictionary_value();
+    if (row == nullptr) {
+      continue;
+    }
+    const std::string key(bridge_text(*row, "key"));
+    const NodeId node = builder.add(list, key, [&](ViewBuffer &buffer, NodeFields &fields) {
+      fields.label = bridge_text(*row, "name");
+      fields.icon = bridge_text(*row, "icon");
+      fields.enabled = bridge_flag(*row, "enabled");
+      return views::protocol::CreateRow(buffer,
+                                        int32_t(bridge_number(*row, "depth", 0.0)),
+                                        bridge_flag(*row, "selected"),
+                                        true);
+    });
+    builder.add(node, key + ":hidden", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      return views::protocol::CreateToggle(buffer, bridge_flag(*row, "hidden"));
+    });
+    builder.add(node, key + ":actions", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      OptionOffsets options;
+      if (const ArrayValue *actions = row->lookup_array("actions")) {
+        for (const std::shared_ptr<Value> &action : actions->elements()) {
+          if (const StringValue *name = action->as_string_value()) {
+            options.push_back(views::protocol::CreateOptionDirect(buffer, name->value().c_str()));
+          }
+        }
+      }
+      return views::protocol::CreateChoiceDirect(
+          buffer, nullptr, &options, views::protocol::ChoiceStyle::Actions);
+    });
+    builder.add(node, key + ":accepts", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      return bridge_data(buffer, bridge_flag(*row, "accepts"));
+    });
+  }
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
 /** \name The Settings and Render Views
  *
  * `settings`: the interface's own settings that Blender keeps, which it sets as it starts and as
@@ -4008,6 +4046,18 @@ void WM_native_ui_views_register()
   preferences_list.build = bridge_preferences_list_view_build;
   preferences_list.command = bridge_preferences_list_view_command;
   view_type_add(std::move(preferences_list));
+
+  ViewType outliner;
+  outliner.name = "outliner";
+  /* Listed with Python, four times a second at most. */
+  outliner.min_interval = 0.25;
+  outliner.notifiers = {NC_SCENE, NC_OBJECT, NC_ID, NC_WM, NC_SPACE, NC_GEOM};
+  outliner.wants = [](const wmNotifier &note) {
+    /* Not as the frame changes, as during playback. */
+    return note.category != NC_SCENE || note.data != ND_FRAME;
+  };
+  outliner.build = bridge_outliner_view_build;
+  view_type_add(std::move(outliner));
 
   ViewType render;
   render.name = "render";

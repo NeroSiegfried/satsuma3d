@@ -17,6 +17,7 @@
 #include <variant>
 
 #include "BKE_context.hh"
+#include "BKE_report.hh"
 
 #include "CLG_log.h"
 
@@ -515,13 +516,21 @@ bool operator_run(bContext *C,
     }
   }
   if (valid) {
-    /* Navigation is invoked, so it animates; anything else runs as a button runs it. */
+    /* Navigation is invoked, so it animates; anything else runs as a button runs it. Why it
+     * failed, as it reports it, answers the command. */
+    ReportList *reports = CTX_wm_reports(C);
+    const Report *before = reports ? BKE_reports_last_displayable(reports) : nullptr;
     WM_operator_name_call_ptr(C,
                               ot,
                               operator_navigates(idname) ? OpCallContext::InvokeRegionWin :
                                                            OpCallContext::ExecRegionWin,
                               &ptr,
                               nullptr);
+    const Report *report = reports ? BKE_reports_last_displayable(reports) : nullptr;
+    if (report && report != before && report->type >= RPT_ERROR) {
+      r_error = report->message;
+      valid = false;
+    }
   }
   WM_operator_properties_free(&ptr);
   return valid;

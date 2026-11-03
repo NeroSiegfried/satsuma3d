@@ -20,8 +20,6 @@ final class SwiftScenePanels {
 
   /** The Properties editor, from Blender's `properties` view while it shows. */
   let properties = PanelsModel(mode: .properties)
-  /** The Outliner's edits, which go through the panels' requests. */
-  private let requests = InspectorStore(setting: "native_panel_edit")
   /** The native node editor, which Blender's panel snapshots also feed. */
   let nodes = NodeEditorModel()
   /** The native Image Editor, which they feed too. */
@@ -38,7 +36,15 @@ final class SwiftScenePanels {
   /** Blender's Preferences, which Settings shows. */
   let preferences = PanelsModel(mode: .preferences, tab: "PREFERENCES_INTERFACE")
   let preferenceLists = PreferencesLists()
-  private(set) lazy var hierarchy = HierarchyStore { [weak self] request in self?.requests.send(request) }
+  private(set) lazy var hierarchy = HierarchyStore { [weak self] request in self?.editOutliner(request) }
+  /** The Outliner's rows, from Blender's `outliner` view while it shows. */
+  private let outliner: NativeView = {
+    let view = NativeViews.shared.subscribe("outliner")
+    NativeViews.shared.pause(view)
+    return view
+  }()
+  /** Where its edits run, whose error the Outliner shows until one works. */
+  private let outlinerEdits = NativeViews.shared.subscribe("operators")
 
   private var showInspector = false
   private var showHierarchy = false
@@ -110,8 +116,42 @@ final class SwiftScenePanels {
   private func applyVisibility() {
     if !showInspector { ColorPickerSession.active?.close() }
     properties.setShown(showInspector)
-    Engine.setting("native_panels", showHierarchy ? "2" : "0")
+    if showHierarchy { NativeViews.shared.resume(outliner) } else { NativeViews.shared.pause(outliner) }
     panelsDidChange?()
+  }
+
+  /** An edit of the Outliner, as `wm.native_panel_edit` takes it. */
+  private func editOutliner(_ request: JSON) {
+    guard let data = try? JSONSerialization.data(withJSONObject: request) else { return }
+    NativeViews.shared.send(outlinerEdits, target: "wm.native_panel_edit", op: .invoke,
+                            params: ["request": .text(String(decoding: data, as: UTF8.self))])
+  }
+
+  /** The Outliner's rows as Blender's view has them now, as its store reads them. */
+  func updateOutliner() {
+    guard showHierarchy, let top = outliner.top,
+          let list = outliner.children(of: top).first(where: { $0.key == "rows" }) else { return }
+    let rows = outliner.children(of: list)
+    let parents = Set(rows.map { String($0.key[..<($0.key.lastIndex(of: "/") ?? $0.key.startIndex)]) })
+    let nodes: [JSON] = rows.map { row in
+      let key = row.key
+      let slash = key.lastIndex(of: "/") ?? key.startIndex
+      let segment = key[key.index(after: slash)...]
+      let children = outliner.children(of: row)
+      func child(_ suffix: String) -> NativeNode? { children.first { $0.key == key + suffix } }
+      return [
+        "key": key, "parent": String(key[..<slash]), "depth": NSNumber(value: row.row?.depth ?? 0),
+        "kind": segment.first == "c" ? "collection" : "object", "id": String(segment.dropFirst()),
+        "name": row.label, "icon": row.icon ?? "", "enabled": row.enabled,
+        "active": key == list.list?.active, "selected": row.row?.selected ?? false,
+        "hidden": child(":hidden")?.toggle?.value ?? false,
+        "actions": child(":actions")?.choice?.allOptions.compactMap(\.value) ?? [],
+        "accepts": child(":accepts")?.content(Blender_NativeUI_Data.self)?
+          .value(type: Blender_NativeUI_BoolValue.self)?.value ?? false,
+        "children": parents.contains(key),
+      ]
+    }
+    hierarchy.update(nodes: nodes, status: outlinerEdits.error ?? "")
   }
 
   func updateSnapshot(_ snapshot: Any?) {
@@ -124,10 +164,6 @@ final class SwiftScenePanels {
     }
     if let imageSnapshot = snapshot.dict("image"), image.shown {
       image.update(imageSnapshot)
-    }
-    if ack < requests.sequence { return }
-    if let nodes = snapshot["hierarchy"] as? [Any] {
-      hierarchy.update(nodes: nodes.compactMap { $0 as? JSON }, status: snapshot.string("error") ?? "")
     }
   }
 

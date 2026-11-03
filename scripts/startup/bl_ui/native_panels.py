@@ -2,14 +2,12 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-"""Engine-thread hierarchy snapshots. Properties comes from Blender's actual UI layouts."""
+"""The Outliner's rows for the native interface, and its edits. Properties comes from Blender's
+actual UI layouts."""
 
 import json
 import bpy
 from bpy.props import StringProperty
-
-_ack = 0
-_error = ""
 
 
 def _uid(item):
@@ -201,11 +199,9 @@ def _hierarchy(context):
     return rows
 
 
-def snapshot_json(context, mask):
-    result = {"ack": _ack, "error": _error}
-    if mask & 2:
-        result["hierarchy"] = _hierarchy(context)
-    return json.dumps(result, ensure_ascii=True, allow_nan=False)
+def hierarchy_json(context):
+    """The Outliner's rows, in outline order, for the native interface's `outliner` view."""
+    return json.dumps(_hierarchy(context), ensure_ascii=True, allow_nan=False)
 
 
 class WM_OT_native_panel_edit(bpy.types.Operator):
@@ -215,7 +211,6 @@ class WM_OT_native_panel_edit(bpy.types.Operator):
     request: StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
 
     def execute(self, context):
-        global _error
         try:
             request = json.loads(self.request)
             obj = next((obj for obj in context.view_layer.objects if _uid(obj) == request.get('id')), None)
@@ -357,22 +352,9 @@ class WM_OT_native_panel_edit(bpy.types.Operator):
             for area in context.screen.areas:
                 area.tag_redraw()
         except (ValueError, TypeError, RuntimeError, ReferenceError, KeyError) as error:
-            _error = str(error)
+            self.report({'ERROR'}, str(error))
             return {'CANCELLED'}
         return {'FINISHED'}
-
-
-def apply_json(context, payload, blocked=False):
-    global _ack, _error
-    _error = ""
-    try:
-        request = json.loads(payload)
-        _ack = int(request['sequence'])
-        if blocked or context.window.modal_operators:
-            raise ValueError("Finish the current operation before changing the hierarchy.")
-        bpy.ops.wm.native_panel_edit('EXEC_DEFAULT', True, request=payload)
-    except (ValueError, TypeError, RuntimeError, KeyError) as error:
-        _error = str(error)
 
 
 class VIEW3D_PT_native_sculpt_settings(bpy.types.Panel):
