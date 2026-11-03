@@ -2319,7 +2319,15 @@ static Vector<std::string> tool_tab_contexts(const bContext *C)
   return contexts;
 }
 
-std::string native_properties_query(bContext *C, const std::string &json, bool execute)
+/**
+ * Properties, the tool settings, a viewport popover or Preferences, as \a json asks for them, or
+ * an edit of them with \a execute. With \a r_result, the description is left there rather than
+ * written as JSON, for interfaces that take it as views.
+ */
+static std::string properties_query(bContext *C,
+                                    const std::string &json,
+                                    const bool execute,
+                                    DictionaryValue *r_result)
 {
   DictionaryValue result;
   auto query_value = decode(json);
@@ -3568,7 +3576,21 @@ std::string native_properties_query(bContext *C, const std::string &json, bool e
     }
     common->append(section);
   }
+  if (r_result) {
+    *r_result = std::move(result);
+    return "";
+  }
   return encode(result);
+}
+
+std::string native_properties_query(bContext *C, const std::string &json, bool execute)
+{
+  return properties_query(C, json, execute, nullptr);
+}
+
+void native_properties_describe(bContext *C, const std::string &json, DictionaryValue &r_result)
+{
+  properties_query(C, json, false, &r_result);
 }
 
 std::string native_properties_menu_query(bContext *C, const std::string &json, bool execute)
