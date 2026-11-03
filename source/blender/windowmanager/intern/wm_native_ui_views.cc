@@ -458,6 +458,272 @@ static bool commands_execute(bContext *C, std::vector<std::vector<uint8_t>> rece
 /** \} */
 
 /* -------------------------------------------------------------------- */
+/** \name Records
+ * \{ */
+
+using io::serialize::ArrayValue;
+using io::serialize::DictionaryValue;
+using io::serialize::eValueType;
+
+/** A value written as a parameter, or null for one that needs nodes of its own. */
+static std::optional<std::pair<protocol::Value, flatbuffers::Offset<void>>> record_value(
+    flatbuffers::FlatBufferBuilder &buffer, const io::serialize::Value &value)
+{
+  switch (value.type()) {
+    case eValueType::String:
+      return std::pair{protocol::Value::TextValue,
+                       protocol::CreateTextValue(
+                           buffer, buffer.CreateString(value.as_string_value()->value()))
+                           .Union()};
+    case eValueType::Int:
+      return std::pair{protocol::Value::IntValue,
+                       protocol::CreateIntValue(buffer, value.as_int_value()->value()).Union()};
+    case eValueType::Double:
+      return std::pair{protocol::Value::FloatValue,
+                       protocol::CreateFloatValue(buffer, value.as_double_value()->value()).Union()};
+    case eValueType::Boolean:
+      return std::pair{protocol::Value::BoolValue,
+                       protocol::CreateBoolValue(buffer, value.as_boolean_value()->value()).Union()};
+    case eValueType::Array: {
+      const Span<std::shared_ptr<io::serialize::Value>> items =
+          value.as_array_value()->elements();
+      const auto all = [&](auto test) {
+        return std::all_of(items.begin(), items.end(), [&](const auto &item) { return test(*item); });
+      };
+      if (all([](const io::serialize::Value &item) { return item.type() == eValueType::Int; })) {
+        std::vector<int64_t> ints;
+        for (const auto &item : items) {
+          ints.push_back(item->as_int_value()->value());
+        }
+        return std::pair{protocol::Value::IntsValue,
+                         protocol::CreateIntsValue(buffer, buffer.CreateVector(ints)).Union()};
+      }
+      if (all([](const io::serialize::Value &item) {
+            return ELEM(item.type(), eValueType::Int, eValueType::Double);
+          }))
+      {
+        std::vector<double> doubles;
+        for (const auto &item : items) {
+          doubles.push_back(item->type() == eValueType::Int ? double(item->as_int_value()->value()) :
+                                                              item->as_double_value()->value());
+        }
+        return std::pair{protocol::Value::FloatsValue,
+                         protocol::CreateFloatsValue(buffer, buffer.CreateVector(doubles)).Union()};
+      }
+      if (all([](const io::serialize::Value &item) { return item.type() == eValueType::String; })) {
+        std::vector<flatbuffers::Offset<flatbuffers::String>> texts;
+        for (const auto &item : items) {
+          texts.push_back(buffer.CreateString(item->as_string_value()->value()));
+        }
+        return std::pair{protocol::Value::TextsValue,
+                         protocol::CreateTextsValue(buffer, buffer.CreateVector(texts)).Union()};
+      }
+      return std::nullopt;
+    }
+    default:
+      return std::nullopt;
+  }
+}
+
+/** Whether a value is written as a parameter, see #record_value. */
+static bool record_value_fits(const io::serialize::Value &value)
+{
+  if (value.type() != eValueType::Array) {
+    return ELEM(value.type(), eValueType::String, eValueType::Int, eValueType::Double, eValueType::Boolean);
+  }
+  const Span<std::shared_ptr<io::serialize::Value>> items = value.as_array_value()->elements();
+  const bool numbers = std::all_of(items.begin(), items.end(), [](const auto &item) {
+    return ELEM(item->type(), eValueType::Int, eValueType::Double);
+  });
+  const bool texts = std::all_of(items.begin(), items.end(), [](const auto &item) {
+    return item->type() == eValueType::String;
+  });
+  return numbers || texts;
+}
+
+/** The key an item of a list keeps as others come and go. */
+static std::string record_item_key(const io::serialize::Value &item, const int index)
+{
+  if (const DictionaryValue *dictionary = item.as_dictionary_value()) {
+    for (const char *name : {"key", "id"}) {
+      if (const std::shared_ptr<io::serialize::Value> *found = dictionary->lookup(name)) {
+        if (const io::serialize::StringValue *text = (*found)->as_string_value()) {
+          return text->value();
+        }
+        if (const io::serialize::IntValue *number = (*found)->as_int_value()) {
+          return std::to_string(number->value());
+        }
+      }
+    }
+  }
+  return "#" + std::to_string(index);
+}
+
+static void record_child(ViewBuilder &builder,
+                         NodeId parent,
+                         const std::string &key,
+                         std::string_view name,
+                         const io::serialize::Value &value);
+
+/** A record labelled with its \a name in the record it is a value of. */
+static NodeId record_add(ViewBuilder &builder,
+                         const std::optional<NodeId> parent,
+                         const std::string &key,
+                         const std::string_view name,
+                         const DictionaryValue &value)
+{
+  std::vector<const DictionaryValue::Item *> children;
+  const auto write = [&](flatbuffers::FlatBufferBuilder &buffer, NodeFields &fields) {
+    fields.label = name;
+    std::vector<flatbuffers::Offset<protocol::Param>> params;
+    for (const DictionaryValue::Item &item : value.elements()) {
+      if (item.second->type() == eValueType::Null) {
+        continue;
+      }
+      if (const auto written = record_value(buffer, *item.second)) {
+        params.push_back(protocol::CreateParam(
+            buffer, buffer.CreateString(item.first), written->first, written->second));
+      }
+      else {
+        children.push_back(&item);
+      }
+    }
+    return protocol::CreateRecord(buffer, buffer.CreateVector(params));
+  };
+  const NodeId node = parent ? builder.add(*parent, key, write) : builder.top(key, write);
+  for (const DictionaryValue::Item *item : children) {
+    record_child(builder, node, key + "/" + item->first, item->first, *item->second);
+  }
+  return node;
+}
+
+NodeId records_add(ViewBuilder &builder,
+                   const std::optional<NodeId> parent,
+                   const std::string &key,
+                   const DictionaryValue &value)
+{
+  return record_add(builder, parent, key, "", value);
+}
+
+/** A value that is a dictionary or a list of more than numbers or texts, see #records_add. */
+static void record_child(ViewBuilder &builder,
+                         const NodeId parent,
+                         const std::string &key,
+                         const std::string_view name,
+                         const io::serialize::Value &value)
+{
+  if (const DictionaryValue *dictionary = value.as_dictionary_value()) {
+    record_add(builder, parent, key, name, *dictionary);
+    return;
+  }
+  const ArrayValue *array = value.as_array_value();
+  const NodeId group = builder.add(parent, key, [&](flatbuffers::FlatBufferBuilder &buffer, NodeFields &fields) {
+    fields.label = name;
+    return protocol::CreateGroup(buffer);
+  });
+  if (array == nullptr) {
+    return;
+  }
+  int index = 0;
+  for (const std::shared_ptr<io::serialize::Value> &item : array->elements()) {
+    const std::string item_key = key + "/" + record_item_key(*item, index++);
+    if (const DictionaryValue *dictionary = item->as_dictionary_value()) {
+      record_add(builder, group, item_key, "", *dictionary);
+    }
+    else if (item->type() == eValueType::Array && !record_value_fits(*item)) {
+      record_child(builder, group, item_key, "", *item);
+    }
+    else {
+      /* A value of its own: a number, a text, a list of them, or none. */
+      builder.add(group, item_key, [&](flatbuffers::FlatBufferBuilder &buffer, NodeFields &) {
+        const auto written = item->type() == eValueType::Null ? std::nullopt :
+                                                                 record_value(buffer, *item);
+        return written ? protocol::CreateData(buffer, written->first, written->second) :
+                         protocol::CreateData(buffer);
+      });
+    }
+  }
+}
+
+/** The dictionary in \a dictionary named \a name, added if there is none. */
+static DictionaryValue &dictionary_ensure(DictionaryValue &dictionary, const std::string &name)
+{
+  for (const DictionaryValue::Item &item : dictionary.elements()) {
+    if (item.first == name && item.second->as_dictionary_value()) {
+      return *const_cast<DictionaryValue *>(item.second->as_dictionary_value());
+    }
+  }
+  return *dictionary.append_dict(name);
+}
+
+std::unique_ptr<DictionaryValue> params_dictionary(
+    const flatbuffers::Vector<flatbuffers::Offset<protocol::Param>> *params)
+{
+  auto root = std::make_unique<DictionaryValue>();
+  if (params == nullptr) {
+    return root;
+  }
+  for (const protocol::Param *param : *params) {
+    /* A value of a dictionary in it, as `properties.type`. */
+    std::string key = param->key()->str();
+    DictionaryValue *result = root.get();
+    for (size_t dot = key.find('.'); dot != std::string::npos; dot = key.find('.')) {
+      result = &dictionary_ensure(*result, key.substr(0, dot));
+      key = key.substr(dot + 1);
+    }
+    switch (param->value_type()) {
+      case protocol::Value::BoolValue:
+        result->append(key,
+                       std::make_shared<io::serialize::BooleanValue>(param->value_as_BoolValue()->value()));
+        break;
+      case protocol::Value::IntValue:
+        result->append_int(key, param->value_as_IntValue()->value());
+        break;
+      case protocol::Value::FloatValue:
+        result->append_double(key, param->value_as_FloatValue()->value());
+        break;
+      case protocol::Value::TextValue: {
+        const flatbuffers::String *text = param->value_as_TextValue()->value();
+        result->append_str(key, text ? text->str() : "");
+        break;
+      }
+      case protocol::Value::FloatsValue: {
+        auto array = result->append_array(key);
+        if (const auto *values = param->value_as_FloatsValue()->value()) {
+          for (const double value : *values) {
+            array->append_double(value);
+          }
+        }
+        break;
+      }
+      case protocol::Value::IntsValue: {
+        auto array = result->append_array(key);
+        if (const auto *values = param->value_as_IntsValue()->value()) {
+          for (const int64_t value : *values) {
+            array->append_int(value);
+          }
+        }
+        break;
+      }
+      case protocol::Value::TextsValue: {
+        auto array = result->append_array(key);
+        if (const auto *values = param->value_as_TextsValue()->value()) {
+          for (const flatbuffers::String *value : *values) {
+            array->append_str(value->str());
+          }
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return root;
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
 /** \name Operators
  *
  * The `operators` view, which shows nothing: `Invoke` runs the operator its target names, with

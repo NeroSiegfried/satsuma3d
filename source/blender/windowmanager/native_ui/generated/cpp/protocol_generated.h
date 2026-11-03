@@ -82,6 +82,9 @@ struct SeparatorBuilder;
 struct Asset;
 struct AssetBuilder;
 
+struct Record;
+struct RecordBuilder;
+
 struct Data;
 struct DataBuilder;
 
@@ -448,11 +451,12 @@ enum class Content : uint8_t {
   Operator = 17,
   Data = 18,
   Asset = 19,
+  Record = 20,
   MIN = NONE,
-  MAX = Asset
+  MAX = Record
 };
 
-inline const Content (&EnumValuesContent())[20] {
+inline const Content (&EnumValuesContent())[21] {
   static const Content values[] = {
     Content::NONE,
     Content::Group,
@@ -473,13 +477,14 @@ inline const Content (&EnumValuesContent())[20] {
     Content::Menu,
     Content::Operator,
     Content::Data,
-    Content::Asset
+    Content::Asset,
+    Content::Record
   };
   return values;
 }
 
 inline const char * const *EnumNamesContent() {
-  static const char * const names[21] = {
+  static const char * const names[22] = {
     "NONE",
     "Group",
     "Panel",
@@ -500,13 +505,14 @@ inline const char * const *EnumNamesContent() {
     "Operator",
     "Data",
     "Asset",
+    "Record",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameContent(Content e) {
-  if (::flatbuffers::IsOutRange(e, Content::NONE, Content::Asset)) return "";
+  if (::flatbuffers::IsOutRange(e, Content::NONE, Content::Record)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesContent()[index];
 }
@@ -589,6 +595,10 @@ template<> struct ContentTraits<Blender::NativeUI::Data> {
 
 template<> struct ContentTraits<Blender::NativeUI::Asset> {
   static const Content enum_value = Content::Asset;
+};
+
+template<> struct ContentTraits<Blender::NativeUI::Record> {
+  static const Content enum_value = Content::Record;
 };
 
 bool VerifyContent(::flatbuffers::Verifier &verifier, const void *obj, Content type);
@@ -2795,6 +2805,67 @@ inline ::flatbuffers::Offset<Asset> CreateAssetDirect(
       preview__);
 }
 
+/// An item of a canvas, such as a node of a node tree or a curve of an animation, by its values:
+/// `params`, each a value by its name, as the canvas's view describes them. Lists of items in it,
+/// such as a node's sockets, are its children.
+struct Record FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef RecordBuilder Builder;
+  struct Traits;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_PARAMS = 4
+  };
+  const ::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Param>> *params() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Param>> *>(VT_PARAMS);
+  }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_PARAMS) &&
+           verifier.VerifyVector(params()) &&
+           verifier.VerifyVectorOfTables(params()) &&
+           verifier.EndTable();
+  }
+};
+
+struct RecordBuilder {
+  typedef Record Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_params(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Param>>> params) {
+    fbb_.AddOffset(Record::VT_PARAMS, params);
+  }
+  explicit RecordBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<Record> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<Record>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<Record> CreateRecord(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Param>>> params = 0) {
+  RecordBuilder builder_(_fbb);
+  builder_.add_params(params);
+  return builder_.Finish();
+}
+
+struct Record::Traits {
+  using type = Record;
+  static auto constexpr Create = CreateRecord;
+};
+
+inline ::flatbuffers::Offset<Record> CreateRecordDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const std::vector<::flatbuffers::Offset<Blender::NativeUI::Param>> *params = nullptr) {
+  auto params__ = params ? _fbb.CreateVector<::flatbuffers::Offset<Blender::NativeUI::Param>>(*params) : 0;
+  return Blender::NativeUI::CreateRecord(
+      _fbb,
+      params__);
+}
+
 /// A value an interface uses as it sees fit, rather than a control: such as where Blender draws
 /// the navigation gizmo, for an interface to keep clear of it.
 struct Data FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -3456,6 +3527,9 @@ struct Node FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const Blender::NativeUI::Asset *content_as_Asset() const {
     return content_type() == Blender::NativeUI::Content::Asset ? static_cast<const Blender::NativeUI::Asset *>(content()) : nullptr;
   }
+  const Blender::NativeUI::Record *content_as_Record() const {
+    return content_type() == Blender::NativeUI::Content::Record ? static_cast<const Blender::NativeUI::Record *>(content()) : nullptr;
+  }
   const ::flatbuffers::String *label() const {
     return GetPointer<const ::flatbuffers::String *>(VT_LABEL);
   }
@@ -3599,6 +3673,10 @@ template<> inline const Blender::NativeUI::Data *Node::content_as<Blender::Nativ
 
 template<> inline const Blender::NativeUI::Asset *Node::content_as<Blender::NativeUI::Asset>() const {
   return content_as_Asset();
+}
+
+template<> inline const Blender::NativeUI::Record *Node::content_as<Blender::NativeUI::Record>() const {
+  return content_as_Record();
 }
 
 struct NodeBuilder {
@@ -4631,6 +4709,10 @@ inline bool VerifyContent(::flatbuffers::Verifier &verifier, const void *obj, Co
     }
     case Content::Asset: {
       auto ptr = reinterpret_cast<const Blender::NativeUI::Asset *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case Content::Record: {
+      auto ptr = reinterpret_cast<const Blender::NativeUI::Record *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;

@@ -46,14 +46,6 @@ final class ShellPanels {
       PanelWindows.set(.image, open: shown)
 #endif
     }
-    panels.graphSnapshot = { [weak self] snapshot in
-      guard let self, timeline.store.curvesShown else { return }
-      timeline.store.curves.update(snapshot)
-    }
-    panels.storyboardSnapshot = { [weak self] snapshot in
-      guard let self, timeline.store.storyboardShown else { return }
-      timeline.store.storyboard.update(snapshot)
-    }
 #if !os(visionOS)
     timeline.curvesDidOpen = { [weak self] in
       self?.panels.nodes.setShown(false)
@@ -76,6 +68,8 @@ final class ShellPanels {
     assets.update()
     panels.preferenceLists.update()
     panels.updateOutliner()
+    timeline.store.curves.pull()
+    timeline.store.storyboard.pull()
     if let snapshot = takeJSON("panels", WM_native_ui_panels_take_json()) {
       InterfaceTimings.measure("panels.apply") { panels.updateSnapshot(snapshot) }
     }

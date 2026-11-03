@@ -23,6 +23,7 @@
 #include <string>
 #include <string_view>
 
+#include "BLI_serialize.hh"
 #include "BLI_vector.hh"
 
 #include "view_tree.hh"
@@ -104,6 +105,24 @@ struct ViewType {
 void view_type_add(ViewType type);
 /** Build the views of a type again, for a change no notifier tells of. */
 void view_type_dirty(std::string_view name);
+
+/**
+ * Write \a value, a dictionary as JSON describes it, as a canvas's records, see
+ * `protocol::Record`: a record of its values keyed \a key, under \a parent, or as the view's top
+ * node without one. A value that is a dictionary is a record of its own, and one that is a list of
+ * anything but numbers or texts a group, each as a child labelled with the value's name; the items
+ * of such a list are its children in turn, keyed by their own `key` or `id` where they have one,
+ * as they then keep it when others come and go, or else by their place.
+ */
+NodeId records_add(ViewBuilder &builder,
+                   std::optional<NodeId> parent,
+                   const std::string &key,
+                   const io::serialize::DictionaryValue &value);
+
+/** A command's parameters as a dictionary, as the records of #records_add take them: a value of a
+ * dictionary in it is named by both, as `properties.type`. */
+std::unique_ptr<io::serialize::DictionaryValue> params_dictionary(
+    const flatbuffers::Vector<flatbuffers::Offset<protocol::Param>> *params);
 
 /**
  * Run an operator by its name, in Python's or C's form, with properties set from \a params,

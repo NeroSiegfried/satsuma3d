@@ -232,11 +232,6 @@ std::string bridge_nodes_json;
 std::chrono::steady_clock::time_point bridge_nodes_next_check;
 /** The tree the Add Node list was sent for, sent again only for another. */
 std::string bridge_nodes_add_for;
-/** The native curve editor's state, curves and whether they need reading again. */
-std::string bridge_graph_state = "{}";
-bool bridge_graph_dirty = true;
-std::string bridge_graph_json;
-std::chrono::steady_clock::time_point bridge_graph_next_check;
 /** The native image editor's state: the image chosen and whether UVs show over it. */
 std::string bridge_image_state = "{}";
 bool bridge_image_dirty = true;
@@ -248,14 +243,11 @@ GHOST_Latest<std::vector<float>> bridge_image_uvs;
 /** The picture changed since it was last sent, which waits a little while painting. */
 bool bridge_image_pixels_pending = true;
 bool bridge_image_uvs_pending = true;
-/* The storyboard: the sequencer scene's shots, see `sequencer_native.cc`. */
-bool bridge_storyboard_dirty = true;
-/* How the native storyboard shows the shots: the frames between their pictures, and their size. */
+/* How the native storyboard shows the shots, see `sequencer_native.cc`: the frames between their
+ * pictures, and their size. */
 std::string bridge_storyboard_state = "{}";
-/* Pictures of shots were still to draw at the last look, or it has not looked yet. */
-bool bridge_storyboard_pending = true;
-std::string bridge_storyboard_json;
-std::chrono::steady_clock::time_point bridge_storyboard_next_check;
+/* Pictures of shots were still to draw when the storyboard was last read. */
+bool bridge_storyboard_pending = false;
 std::string bridge_properties_error;
 int64_t bridge_panels_sequence = 0;
 std::atomic<bool> bridge_navigation_hover_active{false};
@@ -1105,55 +1097,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     }
     bridge_panels_next_snapshot = {};
     bridge_properties_error = ed::image::native_image_query(C, command.value, true);
-    return;
-  }
-  if (command.setting == "native_graph_state") {
-    bridge_graph_dirty = true;
-    bridge_graph_state = command.value;
-    bridge_panels_next_snapshot = {};
-    bridge_panels_published.clear();
-    return;
-  }
-  if (command.setting == "native_graph_visible") {
-    bridge_graph_dirty = true;
-    bridge_panels_visible = (bridge_panels_visible & ~16) | (command.value == "1" ? 16 : 0);
-    bridge_panels_next_snapshot = {};
-    bridge_panels_published.clear();
-    return;
-  }
-  if (command.setting == "native_storyboard_visible") {
-    bridge_storyboard_dirty = true;
-    bridge_panels_visible = (bridge_panels_visible & ~64) | (command.value == "1" ? 64 : 0);
-    bridge_panels_next_snapshot = {};
-    bridge_panels_published.clear();
-    return;
-  }
-  if (command.setting == "native_storyboard_state") {
-    bridge_storyboard_dirty = true;
-    bridge_storyboard_state = command.value;
-    bridge_panels_next_snapshot = {};
-    return;
-  }
-  if (command.setting == "native_storyboard_edit") {
-    bridge_storyboard_dirty = true;
-    std::istringstream stream(command.value);
-    auto value = io::serialize::JsonFormatter().deserialize(stream);
-    if (const auto *request = value ? value->as_dictionary_value() : nullptr) {
-      bridge_panels_sequence = request->lookup_int("sequence").value_or(bridge_panels_sequence);
-    }
-    bridge_panels_next_snapshot = {};
-    bridge_properties_error = ed::vse::native_storyboard_query(C, command.value, true);
-    return;
-  }
-  if (command.setting == "native_graph_edit") {
-    bridge_graph_dirty = true;
-    std::istringstream stream(command.value);
-    auto value = io::serialize::JsonFormatter().deserialize(stream);
-    if (const auto *request = value ? value->as_dictionary_value() : nullptr) {
-      bridge_panels_sequence = request->lookup_int("sequence").value_or(bridge_panels_sequence);
-    }
-    bridge_panels_next_snapshot = {};
-    bridge_properties_error = ed::graph::native_graph_query(C, command.value, true);
     return;
   }
   if (command.setting == "native_nodes_create") {
@@ -2102,16 +2045,6 @@ void bridge_panels_build(bContext *C)
         /* Spliced in as it is below, rather than read and written again: it is large. */
         merged.append_str("nodes", BRIDGE_PLACEHOLDER("nodes"));
       }
-      if (bridge_panels_visible & 16) {
-        if (bridge_graph_dirty || now >= bridge_graph_next_check) {
-          bridge_graph_dirty = false;
-          bridge_graph_next_check = now + std::chrono::seconds(2);
-          bridge_graph_json = bridge_timed("panels.graph", [&] {
-            return ed::graph::native_graph_query(C, bridge_graph_state, false);
-          });
-        }
-        merged.append_str("graph", BRIDGE_PLACEHOLDER("graph"));
-      }
       if (bridge_panels_visible & 128) {
         if (bridge_image_dirty || now >= bridge_image_next_check) {
           bridge_image_dirty = false;
@@ -2125,42 +2058,9 @@ void bridge_panels_build(bContext *C)
           merged.append("image", std::move(image));
         }
       }
-      if (bridge_panels_visible & 64) {
-        /* Soon again while shots still need their pictures drawn, one at a time. */
-        if (bridge_storyboard_dirty || now >= bridge_storyboard_next_check) {
-          bridge_storyboard_dirty = false;
-          /* Only what is there: the pictures still to draw are drawn as the window draws, see
-           * #WM_native_ui_storyboard_draw. */
-          bridge_storyboard_json = bridge_timed("panels.storyboard", [&] {
-            return ed::vse::native_storyboard_query(C, bridge_storyboard_state, false);
-          });
-          const bool pending = bridge_storyboard_json.find("\"pending\":1") != std::string::npos;
-          bridge_storyboard_pending = pending;
-          bridge_storyboard_next_check = now + std::chrono::milliseconds(pending ? 100 : 1000);
-          if (pending) {
-            /* The pictures still to draw arrive a few at a time, sooner than other changes. */
-            bridge_panels_next_snapshot = std::min(bridge_panels_next_snapshot,
-                                                now + std::chrono::milliseconds(100));
-          }
-        }
-        merged.append_str("storyboard", BRIDGE_PLACEHOLDER("storyboard"));
-      }
       std::ostringstream merged_stream;
       JsonFormatter().serialize(merged_stream, merged);
       bridge_panels_json = merged_stream.str();
-      if (bridge_panels_visible & 16) {
-        const std::string placeholder = BRIDGE_PLACEHOLDER_JSON("graph");
-        if (const size_t at = bridge_panels_json.find(placeholder); at != std::string::npos) {
-          bridge_panels_json.replace(at, placeholder.size(), bridge_graph_json.empty() ? "null" : bridge_graph_json);
-        }
-      }
-      if (bridge_panels_visible & 64) {
-        const std::string placeholder = BRIDGE_PLACEHOLDER_JSON("storyboard");
-        if (const size_t at = bridge_panels_json.find(placeholder); at != std::string::npos) {
-          bridge_panels_json.replace(at, placeholder.size(),
-                                  bridge_storyboard_json.empty() ? "null" : bridge_storyboard_json);
-        }
-      }
       if (bridge_panels_visible & 8) {
         const std::string placeholder = BRIDGE_PLACEHOLDER_JSON("nodes");
         if (const size_t at = bridge_panels_json.find(placeholder); at != std::string::npos) {
@@ -3812,6 +3712,116 @@ views::CommandResult bridge_volume_view_command(bContext *C,
 /** \} */
 
 /* -------------------------------------------------------------------- */
+/** \name Canvas Views
+ *
+ * Editors an interface draws as canvases of its own, such as the curve editor, read as JSON by
+ * their `native_*_query` and sent as records, see #wm::native_ui::records_add: the top record,
+ * keyed by the view's name, as the query reads it, with `ack`, the `sequence` of the last edit,
+ * and `error`, why it failed. `Set` of `state` with parameters says what to show, as the query
+ * takes it; `Invoke` of `edit` with parameters makes an edit, the state added as `state`.
+ * \{ */
+
+using CanvasQuery = std::string (*)(bContext *C, const std::string &request, bool execute);
+
+struct CanvasData : views::ViewData {
+  std::unique_ptr<io::serialize::DictionaryValue> state =
+      std::make_unique<io::serialize::DictionaryValue>();
+  int64_t ack = 0;
+  std::string error;
+};
+
+std::string bridge_json_encode(const io::serialize::Value &value)
+{
+  std::ostringstream stream;
+  io::serialize::JsonFormatter().serialize(stream, value);
+  return stream.str();
+}
+
+/** The records of what \a query reads for \a state, as a canvas view's top. */
+void bridge_canvas_records(views::ViewBuilder &builder,
+                           const char *name,
+                           const std::string &json,
+                           const CanvasData &data)
+{
+  using namespace io::serialize;
+  std::istringstream stream(json);
+  const std::shared_ptr<Value> value = JsonFormatter().deserialize(stream);
+  DictionaryValue root;
+  if (const DictionaryValue *read = value ? value->as_dictionary_value() : nullptr) {
+    for (const DictionaryValue::Item &item : read->elements()) {
+      root.append(item.first, item.second);
+    }
+  }
+  root.append_int("ack", data.ack);
+  root.append_str("error", data.error);
+  views::records_add(builder, std::nullopt, name, root);
+}
+
+std::unique_ptr<views::ViewData> bridge_canvas_create()
+{
+  return std::make_unique<CanvasData>();
+}
+
+/** A command to a canvas view, see above. The query's answer to an edit is why it failed. */
+template<CanvasQuery query>
+views::CommandResult bridge_canvas_command(bContext *C,
+                                           const views::Params & /*params*/,
+                                           views::ViewData *view_data,
+                                           const views::protocol::Command &command,
+                                           std::string &r_error)
+{
+  CanvasData &data = static_cast<CanvasData &>(*view_data);
+  const std::string_view target = command.target()->string_view();
+  if (target == "state" && command.op() == views::protocol::Op::Set) {
+    data.state = views::params_dictionary(command.params());
+    return views::CommandResult::Done;
+  }
+  if (target != "edit" || command.op() != views::protocol::Op::Invoke) {
+    r_error = "Not something the canvas does";
+    return views::CommandResult::Failed;
+  }
+  std::unique_ptr<io::serialize::DictionaryValue> request = views::params_dictionary(
+      command.params());
+  data.ack = request->lookup_int("sequence").value_or(data.ack);
+  auto state = request->append_dict("state");
+  for (const io::serialize::DictionaryValue::Item &item : data.state->elements()) {
+    state->append(item.first, item.second);
+  }
+  data.error = query(C, bridge_json_encode(*request), true);
+  if (!data.error.empty()) {
+    r_error = data.error;
+    return views::CommandResult::Failed;
+  }
+  return views::CommandResult::Done;
+}
+
+void bridge_graph_view_build(bContext *C,
+                             const views::Params & /*params*/,
+                             views::ViewData *view_data,
+                             views::ViewBuilder &builder)
+{
+  const CanvasData &data = static_cast<const CanvasData &>(*view_data);
+  bridge_canvas_records(
+      builder, "graph", ed::graph::native_graph_query(C, bridge_json_encode(*data.state), false), data);
+}
+
+/** The storyboard's shots, as `native_storyboard_query` reads them. Their pictures are drawn as
+ * the window draws, a few at a time, see #WM_native_ui_storyboard_draw, which builds it again. */
+void bridge_storyboard_view_build(bContext *C,
+                                  const views::Params & /*params*/,
+                                  views::ViewData *view_data,
+                                  views::ViewBuilder &builder)
+{
+  const CanvasData &data = static_cast<const CanvasData &>(*view_data);
+  bridge_storyboard_state = bridge_json_encode(*data.state);
+  const std::string json = ed::vse::native_storyboard_query(C, bridge_storyboard_state, false);
+  bridge_storyboard_pending = json.find("\"pending\":1") != std::string::npos;
+  bridge_canvas_records(builder, "storyboard", json, data);
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
 /** \name The Settings and Render Views
  *
  * `settings`: the interface's own settings that Blender keeps, which it sets as it starts and as
@@ -4124,6 +4134,25 @@ void WM_native_ui_views_register()
   volume.command = bridge_volume_view_command;
   view_type_add(std::move(volume));
 
+  ViewType graph;
+  graph.name = "graph";
+  /* Read four times a second at most, as during playback. */
+  graph.min_interval = 0.25;
+  graph.notifiers = {NC_ANIMATION, NC_OBJECT, NC_SCENE, NC_WM, NC_SPACE};
+  graph.create = bridge_canvas_create;
+  graph.build = bridge_graph_view_build;
+  graph.command = bridge_canvas_command<ed::graph::native_graph_query>;
+  view_type_add(std::move(graph));
+
+  ViewType storyboard;
+  storyboard.name = "storyboard";
+  storyboard.min_interval = 0.1;
+  storyboard.notifiers = {NC_SCENE, NC_SPACE, NC_WM, NC_IMAGE};
+  storyboard.create = bridge_canvas_create;
+  storyboard.build = bridge_storyboard_view_build;
+  storyboard.command = bridge_canvas_command<ed::vse::native_storyboard_query>;
+  view_type_add(std::move(storyboard));
+
   ViewType render;
   render.name = "render";
   render.notifiers = {NC_SCENE, NC_WM, NC_IMAGE};
@@ -4324,7 +4353,6 @@ extern "C" void WM_native_ui_view_roll_enqueue(float angle)
 void WM_native_ui_tag_changed()
 {
   bridge_nodes_dirty = true;
-  bridge_graph_dirty = true;
   bridge_image_dirty = true;
   bridge_image_pixels_pending = true;
   bridge_image_uvs_pending = true;
@@ -4778,7 +4806,7 @@ void WM_native_ui_storyboard_draw(bContext *C)
   /* Just before the window draws, with its GPU context: the window is then drawn whole, so
    * nothing the pictures' drawing leaves behind is ever shown. */
   wmWindowManager *wm = CTX_wm_manager(C);
-  if (!(bridge_panels_visible & 64) || !bridge_storyboard_pending || !wm) {
+  if (!bridge_storyboard_pending || !wm) {
     return;
   }
   /* In the window's context, as the storyboard's snapshot is read. */
@@ -4793,8 +4821,7 @@ void WM_native_ui_storyboard_draw(bContext *C)
   }
   bridge_context_pop(C, context_store);
   /* The new pictures, to the native interface at once. */
-  bridge_storyboard_dirty = true;
-  bridge_panels_next_snapshot = {};
+  wm::native_ui::view_type_dirty("storyboard");
 }
 
 void WM_native_ui_image_update(bContext *C)
@@ -4886,7 +4913,7 @@ double WM_native_ui_engine_idle_seconds(bContext *C)
   if (wm == nullptr || bridge_changed || !BLI_listbase_is_empty(&wm->runtime->notifier_queue)) {
     return 0.0;
   }
-  if ((bridge_panels_visible & 64) && bridge_storyboard_pending) {
+  if (bridge_storyboard_pending) {
     /* The storyboard's pictures still to draw, a few each pass. */
     return 0.1;
   }

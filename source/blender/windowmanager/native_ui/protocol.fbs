@@ -299,6 +299,13 @@ table Asset {
   preview: string;
 }
 
+/// An item of a canvas, such as a node of a node tree or a curve of an animation, by its values:
+/// `params`, each a value by its name, as the canvas's view describes them. Lists of items in it,
+/// such as a node's sockets, are its children.
+table Record {
+  params: [Param];
+}
+
 /// A value an interface uses as it sees fit, rather than a control: such as where Blender draws
 /// the navigation gizmo, for an interface to keep clear of it.
 table Data {
@@ -379,6 +386,7 @@ union Content {
   Operator,
   Data,
   Asset,
+  Record,
 }
 
 /* -------------------------------------------------------------------- */

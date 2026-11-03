@@ -141,7 +141,15 @@ final class StoryboardModel {
   func setShown(_ shown: Bool) {
     guard shown != self.shown else { return }
     self.shown = shown
-    Engine.setting("native_storyboard_visible", shown ? "1" : "0")
+    canvas.setShown(shown)
+  }
+
+  /** Blender's shots, from its `storyboard` view while the storyboard shows. */
+  let canvas = NativeCanvas("storyboard")
+
+  /** Take Blender's shots, if they changed. */
+  func pull() {
+    if shown, let snapshot = canvas.take() { update(snapshot) }
   }
 
   func update(_ snapshot: JSON) {
@@ -217,14 +225,14 @@ final class StoryboardModel {
     let state = [step, height]
     guard state != pictureState else { return }
     pictureState = state
-    Engine.setting("native_storyboard_state", json: ["step": step, "height": height])
+    canvas.setState(["step": step, "height": height])
   }
 
   func send(_ action: String, _ extra: JSON = [:]) {
     sequence += 1
     var request: JSON = ["action": action, "sequence": NSNumber(value: sequence)]
     request.merge(extra) { $1 }
-    Engine.setting("native_storyboard_edit", json: request)
+    canvas.edit(request)
   }
 
   /** Moves the playhead, the window following the shot under it. */

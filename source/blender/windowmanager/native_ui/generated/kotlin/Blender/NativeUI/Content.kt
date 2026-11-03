@@ -28,5 +28,6 @@ class Content private constructor() {
         const val Operator: UByte = 17u
         const val Data: UByte = 18u
         const val Asset: UByte = 19u
+        const val Record: UByte = 20u
     }
 }

@@ -50,6 +50,8 @@ final class NativeView {
   private(set) var top: NativeNode?
   @ObservationIgnored private var nodes: [String: NativeNode] = [:]
   @ObservationIgnored private var version: UInt32 = 0
+  /** Counts the updates applied, to tell whether anything changed since. */
+  @ObservationIgnored private(set) var revision = 0
   /** Why its latest command failed, until another works. */
   private(set) var error: String?
   /** Commands Blender has yet to answer. */
@@ -83,6 +85,7 @@ final class NativeView {
       return
     }
     version = update.version
+    revision += 1
     for index in 0..<update.nodesCount {
       guard let buffer = update.nodes(at: index) else { continue }
       /* Copied into a buffer of its own, which outlives the batch it came in. */
@@ -108,6 +111,58 @@ final class NativeView {
   }
 }
 
+/** A canvas's records as Foundation values, as JSON would read them, see `records_add`: a record
+ * as a dictionary of its values and its children by their labels, a group as a list, data as its
+ * value. */
+extension NativeView {
+  func foundation(_ node: NativeNode) -> Any {
+    switch node.kind {
+      case .record:
+        var result: [String: Any] = [:]
+        if let record = node.content(Blender_NativeUI_Record.self) {
+          for index in 0..<record.paramsCount {
+            guard let param = record.params(at: index), let key = param.key else { continue }
+            result[key] = Self.foundation(param)
+          }
+        }
+        for child in children(of: node) { result[child.label] = foundation(child) }
+        return result
+      case .group:
+        return children(of: node).map(foundation)
+      default:
+        guard let data = node.content(Blender_NativeUI_Data.self) else { return NSNull() }
+        return Self.foundation(data) ?? NSNull()
+    }
+  }
+
+  private static func foundation(_ holder: some NativeValueHolder) -> Any? {
+    switch holder.valueType {
+      case .boolvalue: return holder.value(type: Blender_NativeUI_BoolValue.self).map { NSNumber(value: $0.value) }
+      case .intvalue: return holder.value(type: Blender_NativeUI_IntValue.self).map { NSNumber(value: $0.value) }
+      case .floatvalue: return holder.value(type: Blender_NativeUI_FloatValue.self).map { NSNumber(value: $0.value) }
+      case .textvalue: return holder.value(type: Blender_NativeUI_TextValue.self)?.value ?? ""
+      case .floatsvalue:
+        guard let values = holder.value(type: Blender_NativeUI_FloatsValue.self) else { return nil }
+        return (0..<values.valueCount).map { NSNumber(value: values.value(at: $0)) }
+      case .intsvalue:
+        guard let values = holder.value(type: Blender_NativeUI_IntsValue.self) else { return nil }
+        return (0..<values.valueCount).map { NSNumber(value: values.value(at: $0)) }
+      case .textsvalue:
+        guard let values = holder.value(type: Blender_NativeUI_TextsValue.self) else { return nil }
+        return (0..<values.valueCount).compactMap { values.value(at: $0) }
+      default: return nil
+    }
+  }
+}
+
+/** What holds a value: a parameter, or a node of data. */
+protocol NativeValueHolder {
+  var valueType: Blender_NativeUI_Value { get }
+  func value<T: FlatbuffersInitializable>(type: T.Type) -> T?
+}
+extension Blender_NativeUI_Param: NativeValueHolder {}
+extension Blender_NativeUI_Data: NativeValueHolder {}
+
 /** A value for a view's parameter or a command. */
 enum NativeValue {
   case bool(Bool)
@@ -115,7 +170,38 @@ enum NativeValue {
   case float(Double)
   case text(String)
   case floats([Double])
+  case ints([Int64])
   case texts([String])
+
+  /** A Foundation value, such as JSON reads: a number, a text, or a list of them. */
+  init?(foundation value: Any) {
+    switch value {
+      case let number as NSNumber where CFGetTypeID(number) == CFBooleanGetTypeID(): self = .bool(number.boolValue)
+      case let number as NSNumber where CFNumberIsFloatType(number): self = .float(number.doubleValue)
+      case let number as NSNumber: self = .int(number.int64Value)
+      case let text as String: self = .text(text)
+      case let texts as [String]: self = .texts(texts)
+      case let numbers as [NSNumber] where numbers.allSatisfy({ !CFNumberIsFloatType($0) }):
+        self = .ints(numbers.map(\.int64Value))
+      case let numbers as [NSNumber]: self = .floats(numbers.map(\.doubleValue))
+      default: return nil
+    }
+  }
+
+  /** A dictionary of Foundation values as parameters, those of a dictionary in it named by both,
+   * as `properties.type`, see `params_dictionary`. */
+  static func params(_ dictionary: [String: Any], prefix: String = "") -> [String: NativeValue] {
+    var result: [String: NativeValue] = [:]
+    for (key, value) in dictionary {
+      if let nested = value as? [String: Any] {
+        result.merge(params(nested, prefix: prefix + key + ".")) { $1 }
+      }
+      else if let value = NativeValue(foundation: value) {
+        result[prefix + key] = value
+      }
+    }
+    return result
+  }
 
   fileprivate func write(_ builder: inout FlatBufferBuilder) -> (Blender_NativeUI_Value, Offset) {
     switch self {
@@ -131,6 +217,9 @@ enum NativeValue {
       case .floats(let values):
         let vector = builder.createVector(values)
         return (.floatsvalue, Blender_NativeUI_FloatsValue.createFloatsValue(&builder, valueVectorOffset: vector))
+      case .ints(let values):
+        let vector = builder.createVector(values)
+        return (.intsvalue, Blender_NativeUI_IntsValue.createIntsValue(&builder, valueVectorOffset: vector))
       case .texts(let values):
         let vector = builder.createVector(ofStrings: values)
         return (.textsvalue, Blender_NativeUI_TextsValue.createTextsValue(&builder, valueVectorOffset: vector))
@@ -268,6 +357,42 @@ final class NativeViews {
       }
       writeCheckedViews()
     }
+  }
+}
+
+/**
+ * A canvas Blender sends as records while it shows, such as the curve editor, see
+ * `bridge_canvas_command`: what it shows as JSON would read it, its state, and its edits.
+ */
+@MainActor
+final class NativeCanvas {
+  let view: NativeView
+  private var taken = -1
+
+  init(_ name: String) {
+    view = NativeViews.shared.subscribe(name)
+    NativeViews.shared.pause(view)
+  }
+
+  /** Blender reads it only while it shows. */
+  func setShown(_ shown: Bool) {
+    if shown { NativeViews.shared.resume(view) } else { NativeViews.shared.pause(view) }
+  }
+
+  /** What to show, as the canvas's query takes it. */
+  func setState(_ state: [String: Any]) {
+    NativeViews.shared.send(view, target: "state", params: NativeValue.params(state))
+  }
+
+  func edit(_ request: [String: Any]) {
+    NativeViews.shared.send(view, target: "edit", op: .invoke, params: NativeValue.params(request))
+  }
+
+  /** What Blender shows now as JSON, if it changed since last taken. */
+  func take() -> JSON? {
+    guard let top = view.top, view.revision != taken else { return nil }
+    taken = view.revision
+    return view.foundation(top) as? JSON
   }
 }
 
@@ -448,6 +573,11 @@ extension NativeViews {
       case .textfield: line += " = \(content.content(type: Blender_NativeUI_TextField.self)?.value ?? "")"
       case .reference: line += " = \(content.content(type: Blender_NativeUI_Reference.self)?.name ?? "")"
       case .panel: line += (content.content(type: Blender_NativeUI_Panel.self)?.expanded ?? true) ? " (open)" : " (closed)"
+      case .data: line += " = \(view.foundation(node))"
+      case .record:
+        /* Its values, briefly. */
+        let values = (view.foundation(node) as? JSON ?? [:]).filter { !($0.value is JSON || $0.value is [Any]) }
+        line += " " + values.keys.sorted().map { "\($0)=\(values[$0]!)" }.joined(separator: " ").prefix(200)
       default: break
     }
     if !content.enabled { line += " [disabled]" }

@@ -150,8 +150,9 @@ public enum Blender_NativeUI_Content: UInt8, UnionEnum {
   case operator_ = 17
   case data = 18
   case asset = 19
+  case record = 20
 
-  public static var max: Blender_NativeUI_Content { return .asset }
+  public static var max: Blender_NativeUI_Content { return .record }
   public static var min: Blender_NativeUI_Content { return .none_ }
 }
 
@@ -1478,6 +1479,46 @@ public struct Blender_NativeUI_Asset: FlatBufferObject, Verifiable {
   }
 }
 
+///  An item of a canvas, such as a node of a node tree or a curve of an animation, by its values:
+///  `params`, each a value by its name, as the canvas's view describes them. Lists of items in it,
+///  such as a node's sockets, are its children.
+public struct Blender_NativeUI_Record: FlatBufferObject, Verifiable {
+
+  static func validateVersion() { FlatBuffersVersion_25_2_10() }
+  public var __buffer: ByteBuffer! { return _accessor.bb }
+  private var _accessor: Table
+
+  private init(_ t: Table) { _accessor = t }
+  public init(_ bb: ByteBuffer, o: Int32) { _accessor = Table(bb: bb, position: o) }
+
+  private enum VTOFFSET: VOffset {
+    case params = 4
+    var v: Int32 { Int32(self.rawValue) }
+    var p: VOffset { self.rawValue }
+  }
+
+  public var hasParams: Bool { let o = _accessor.offset(VTOFFSET.params.v); return o == 0 ? false : true }
+  public var paramsCount: Int32 { let o = _accessor.offset(VTOFFSET.params.v); return o == 0 ? 0 : _accessor.vector(count: o) }
+  public func params(at index: Int32) -> Blender_NativeUI_Param? { let o = _accessor.offset(VTOFFSET.params.v); return o == 0 ? nil : Blender_NativeUI_Param(_accessor.bb, o: _accessor.indirect(_accessor.vector(at: o) + index * 4)) }
+  public static func startRecord(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 1) }
+  public static func addVectorOf(params: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: params, at: VTOFFSET.params.p) }
+  public static func endRecord(_ fbb: inout FlatBufferBuilder, start: UOffset) -> Offset { let end = Offset(offset: fbb.endTable(at: start)); return end }
+  public static func createRecord(
+    _ fbb: inout FlatBufferBuilder,
+    paramsVectorOffset params: Offset = Offset()
+  ) -> Offset {
+    let __start = Blender_NativeUI_Record.startRecord(&fbb)
+    Blender_NativeUI_Record.addVectorOf(params: params, &fbb)
+    return Blender_NativeUI_Record.endRecord(&fbb, start: __start)
+  }
+
+  public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
+    var _v = try verifier.visitTable(at: position)
+    try _v.visit(field: VTOFFSET.params.p, fieldName: "params", required: false, type: ForwardOffset<Vector<ForwardOffset<Blender_NativeUI_Param>, Blender_NativeUI_Param>>.self)
+    _v.finish()
+  }
+}
+
 ///  A value an interface uses as it sees fit, rather than a control: such as where Blender draws
 ///  the navigation gizmo, for an interface to keep clear of it.
 public struct Blender_NativeUI_Data: FlatBufferObject, Verifiable {
@@ -1977,6 +2018,8 @@ public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable {
         try ForwardOffset<Blender_NativeUI_Data>.verify(&verifier, at: pos, of: Blender_NativeUI_Data.self)
       case .asset:
         try ForwardOffset<Blender_NativeUI_Asset>.verify(&verifier, at: pos, of: Blender_NativeUI_Asset.self)
+      case .record:
+        try ForwardOffset<Blender_NativeUI_Record>.verify(&verifier, at: pos, of: Blender_NativeUI_Record.self)
       }
     })
     try _v.visit(field: VTOFFSET.label.p, fieldName: "label", required: false, type: ForwardOffset<String>.self)

@@ -24,9 +24,6 @@ final class SwiftScenePanels {
   let nodes = NodeEditorModel()
   /** The native Image Editor, which they feed too. */
   let image = ImageEditorModel()
-  /** The curve editor's curves, which the timeline shows. */
-  var graphSnapshot: ((JSON) -> Void)?
-  var storyboardSnapshot: ((JSON) -> Void)?
   private let shading = PanelsModel(mode: .shading, tab: "SHADING")
   /** The active tool's settings, which the top bar shows. */
   let tools = PanelsModel(mode: .toolStrip, tab: "TOOL")
@@ -157,8 +154,6 @@ final class SwiftScenePanels {
   func updateSnapshot(_ snapshot: Any?) {
     guard let snapshot = snapshot as? JSON else { return }
     let ack = (snapshot["ack"] as? NSNumber)?.uint64Value ?? 0
-    if let graph = snapshot.dict("graph") { graphSnapshot?(graph) }
-    if let storyboard = snapshot.dict("storyboard") { storyboardSnapshot?(storyboard) }
     if let nodesSnapshot = snapshot.dict("nodes"), nodes.shown {
       nodes.update(nodesSnapshot, ack: ack)
     }

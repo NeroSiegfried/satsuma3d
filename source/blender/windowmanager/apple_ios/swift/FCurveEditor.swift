@@ -158,7 +158,7 @@ final class FCurveEditorModel {
       sendState()
       fitRequest += 1
     }
-    Engine.setting("native_graph_visible", shown ? "1" : "0")
+    canvas.setShown(shown)
   }
 
   /** The frames the canvas shows, where curves that need it are sampled; sent now and then as the
@@ -178,7 +178,15 @@ final class FCurveEditorModel {
   }
 
   private func sendState() {
-    Engine.setting("native_graph_state", json: state)
+    canvas.setState(state)
+  }
+
+  /** Blender's curves, from its `graph` view while the editor shows. */
+  let canvas = NativeCanvas("graph")
+
+  /** Take Blender's curves, if they changed. */
+  func pull() {
+    if shown, let snapshot = canvas.take() { update(snapshot) }
   }
 
   func update(_ snapshot: JSON) {
@@ -218,10 +226,10 @@ final class FCurveEditorModel {
 
   func send(_ action: String, _ extra: JSON = [:]) {
     sequence += 1
-    var request: JSON = ["action": action, "state": state, "sequence": NSNumber(value: sequence)]
+    var request: JSON = ["action": action, "sequence": NSNumber(value: sequence)]
     request.merge(extra) { $1 }
     if action == "move", (extra["phase"] as? String) != "update" { pendingEnd = true }
-    Engine.setting("native_graph_edit", json: request)
+    canvas.edit(request)
   }
 
   func runOperator(_ idname: String, _ properties: JSON = [:]) {
