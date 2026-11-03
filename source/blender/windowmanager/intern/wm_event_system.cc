@@ -837,11 +837,6 @@ void wm_event_do_notifiers(bContext *C)
 
   wm_event_do_refresh_wm_and_depsgraph(C);
 
-#ifdef WITH_NATIVE_UI
-  /* Once the depsgraph is evaluated, so views show its results. */
-  WM_native_ui_views_flush(C);
-#endif
-
   RE_FreeUnusedGPUResources();
 
   /* Status bar. */

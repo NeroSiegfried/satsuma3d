@@ -29,9 +29,11 @@ struct wmWindow;
 void WM_native_ui_views_notify(const wmNotifier &note);
 /**
  * Take subscriptions and commands, and send updates of views that changed, on each pass of
- * Blender's loop.
+ * Blender's loop, with the window and its 3D View current, see #WM_native_ui_flush_commands.
  */
 void WM_native_ui_views_flush(bContext *C);
+/** How long Blender's loop may sleep before a view waiting to be built is due. */
+double WM_native_ui_views_idle_seconds();
 
 /** Run the commands the interface queued, on each pass of Blender's loop. */
 void WM_native_ui_flush_commands(bContext *C);

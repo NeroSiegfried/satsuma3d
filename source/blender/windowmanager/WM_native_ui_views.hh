@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -48,6 +49,15 @@ class Params {
   bool flag(std::string_view key) const;
 };
 
+/**
+ * What a view type keeps for each subscription between its builds and the commands that follow
+ * them, such as what each of its nodes edits.
+ */
+class ViewData {
+ public:
+  virtual ~ViewData() = default;
+};
+
 /** The outcome of a command a view type handled. */
 enum class CommandResult {
   /** Not one of its own: the bridge sets the property the node is keyed by. */
@@ -61,10 +71,19 @@ struct ViewType {
   std::string name;
   /** Notifier categories (`NC_*`) that may change it; none to rebuild on any notifier. */
   Vector<uint32_t> notifiers;
-  void (*build)(bContext *C, const Params &params, ViewBuilder &builder) = nullptr;
+  /**
+   * The least time between builds that notifiers ask for, in seconds, for a view costly to build
+   * that changes often, such as during playback. Commands are shown at once all the same, except
+   * the updates of a drag, which the interface shows itself.
+   */
+  double min_interval = 0.0;
+  /** Data of its own for each subscription, see #ViewData, or none. */
+  std::unique_ptr<ViewData> (*create)() = nullptr;
+  void (*build)(bContext *C, const Params &params, ViewData *data, ViewBuilder &builder) = nullptr;
   /** A command aimed at one of its nodes, see #CommandResult. */
   CommandResult (*command)(bContext *C,
                            const Params &params,
+                           ViewData *data,
                            const protocol::Command &command,
                            std::string &r_error) = nullptr;
 

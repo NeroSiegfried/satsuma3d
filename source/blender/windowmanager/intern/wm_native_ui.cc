@@ -4324,7 +4324,9 @@ double WM_native_ui_engine_idle_seconds(bContext *C)
       next = std::min(next, timer.time_next);
     }
   }
-  return std::clamp(next - BLI_time_now_seconds(), 0.0, 0.1);
+  /* Views waiting for their interval are built as it ends. */
+  return std::min(std::clamp(next - BLI_time_now_seconds(), 0.0, 0.1),
+                  WM_native_ui_views_idle_seconds());
 }
 
 /* While a stroke or another modal operator runs, one hand can keep changing things with the
@@ -4615,6 +4617,12 @@ void WM_native_ui_flush_commands(bContext *C)
 
   bridge_toolbar_build(C, handled_commands);
   bridge_volume_build(C);
+  {
+    /* Views are built as Blender's own editors draw: in the window, its 3D View current. */
+    const BridgeContextStore context_store = bridge_context_push_view3d(C);
+    WM_native_ui_views_flush(C);
+    bridge_context_pop(C, context_store);
+  }
 }
 
 }  // namespace blender

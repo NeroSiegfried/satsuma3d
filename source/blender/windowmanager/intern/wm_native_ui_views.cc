@@ -13,6 +13,7 @@
 #include <atomic>
 #include <chrono>
 #include <deque>
+#include <limits>
 #include <variant>
 
 #include "BKE_context.hh"
@@ -116,7 +117,11 @@ struct Subscription {
   /** The interface's `protocol::Subscribe`, which the parameters are read from. */
   std::vector<uint8_t> request;
   ViewState state;
+  std::unique_ptr<ViewData> data;
   bool dirty = true;
+  /** Built on the next pass whatever #ViewType::min_interval says. */
+  bool urgent = false;
+  std::chrono::steady_clock::time_point last_build;
   bool reset = true;
 
   Params params() const
@@ -330,13 +335,18 @@ static void commands_execute(bContext *C,
     else {
       CommandResult result = CommandResult::NotHandled;
       if (subscription->type->command) {
-        result = subscription->type->command(C, subscription->params(), *command, error);
+        result = subscription->type->command(
+            C, subscription->params(), subscription->data.get(), *command, error);
       }
       if (result == CommandResult::NotHandled) {
         property_command(C, *command, error);
       }
-      /* Shown again at once, with what the command did. */
+      /* Shown again with what the command did: at once, but for a drag's updates, which the
+       * interface shows itself, and which then show at the view's pace. */
       subscription->dirty = true;
+      if (!ELEM(command->phase(), protocol::Phase::Begin, protocol::Phase::Update)) {
+        subscription->urgent = true;
+      }
       any_dirty = true;
     }
     if (command->id() != 0) {
@@ -369,6 +379,25 @@ void WM_native_ui_views_notify(const wmNotifier &note)
   }
 }
 
+double WM_native_ui_views_idle_seconds()
+{
+  if (!any_dirty) {
+    return std::numeric_limits<double>::infinity();
+  }
+  /* The soonest a view waiting for its interval may be built. */
+  const auto now = std::chrono::steady_clock::now();
+  double soonest = std::numeric_limits<double>::infinity();
+  for (const Subscription &subscription : subscriptions().values()) {
+    if (subscription.dirty || subscription.reset) {
+      const auto due = subscription.last_build +
+                       std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                           std::chrono::duration<double>(subscription.type->min_interval));
+      soonest = std::min(soonest, std::max(0.0, std::chrono::duration<double>(due - now).count()));
+    }
+  }
+  return soonest;
+}
+
 void WM_native_ui_views_flush(bContext *C)
 {
   /* Nothing to do, as long as no interface shows a view and none sent anything: the only cost on
@@ -389,6 +418,9 @@ void WM_native_ui_views_flush(bContext *C)
       }
       Subscription subscription;
       subscription.type = type;
+      if (type->create) {
+        subscription.data = type->create();
+      }
       subscription.request = std::move(subscribe->request);
       subscriptions().add_overwrite(subscribe->subscription, std::move(subscription));
       any_dirty = true;
@@ -402,15 +434,26 @@ void WM_native_ui_views_flush(bContext *C)
   }
 
   any_dirty = false;
+  const auto now = std::chrono::steady_clock::now();
   std::vector<flatbuffers::Offset<protocol::Update>> updates;
   for (const auto item : subscriptions().items()) {
     Subscription &subscription = item.value;
     if (!subscription.dirty && !subscription.reset) {
       continue;
     }
+    if (!subscription.reset && !subscription.urgent &&
+        now - subscription.last_build <
+            std::chrono::duration<double>(subscription.type->min_interval))
+    {
+      /* Later, still dirty. */
+      any_dirty = true;
+      continue;
+    }
+    subscription.last_build = now;
+    subscription.urgent = false;
     BridgeTimer view_timer(subscription.type->timing_name.c_str());
     ViewBuilder builder(subscription.state, subscription.reset);
-    subscription.type->build(C, subscription.params(), builder);
+    subscription.type->build(C, subscription.params(), subscription.data.get(), builder);
     const auto update = builder.finish(buffer, item.key);
     if (!update.IsNull()) {
       updates.push_back(update);
