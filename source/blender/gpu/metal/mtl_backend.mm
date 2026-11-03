@@ -31,10 +31,10 @@
 
 #ifdef WITH_APPLE_CROSSPLATFORM
 #  include <Foundation/Foundation.h>
-#  include <sys/sysctl.h>
 #else
 #  include <Cocoa/Cocoa.h>
 #endif
+#include <sys/sysctl.h>
 
 #include <Metal/Metal.h>
 #include <QuartzCore/QuartzCore.h>
