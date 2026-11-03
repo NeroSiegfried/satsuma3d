@@ -555,8 +555,45 @@ class VIEW3D_PT_native_brush_settings(bpy.types.Panel):
         _draw_mirror(layout, context)
 
 
+class WM_OT_native_node_tree_new(bpy.types.Operator):
+    """Make a node tree for the native node editor to show, as its own buttons do"""
+    bl_idname = "wm.native_node_tree_new"
+    bl_label = "New Node Tree"
+    bl_options = {'INTERNAL', 'UNDO'}
+    kind: StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
+
+    def execute(self, context):
+        ob = context.active_object
+        if self.kind == 'SHADER':
+            if ob is None:
+                return {'CANCELLED'}
+            material = bpy.data.materials.new("Material")
+            if len(ob.material_slots) and ob.material_slots[ob.active_material_index].material is None:
+                ob.active_material = material
+            else:
+                ob.data.materials.append(material)
+                ob.active_material_index = len(ob.material_slots) - 1
+        elif self.kind == 'GEOMETRY':
+            # A Geometry Nodes modifier without a node group gets one, rather than another modifier.
+            modifier = ob.modifiers.active if ob is not None else None
+            if modifier is not None and modifier.type == 'NODES' and modifier.node_group is None:
+                bpy.ops.node.new_geometry_node_group_assign()
+            else:
+                bpy.ops.node.new_geometry_nodes_modifier()
+        elif self.kind == 'COMPOSITOR':
+            before = set(bpy.data.node_groups)
+            bpy.ops.node.new_compositing_node_group(name="Compositor Nodes")
+            made = [group for group in bpy.data.node_groups if group not in before]
+            if made:
+                context.scene.compositing_node_group = made[0]
+        else:
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
 classes = (
     WM_OT_native_panel_edit,
+    WM_OT_native_node_tree_new,
     VIEW3D_PT_native_sculpt_settings,
     VIEW3D_PT_native_sculpt_remesh_popout_settings,
     VIEW3D_PT_native_brush_settings,

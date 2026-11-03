@@ -36,6 +36,8 @@ void native_properties_describe(bContext *C,
 std::string native_properties_query(bContext *C, const std::string &json, bool execute);
 std::string native_operator_redo_query(bContext *C, const std::string &json, bool execute);
 std::string native_operator_dialog_query(bContext *C, const std::string &json, bool execute);
+std::string native_nodes_query(bContext *C, const std::string &json, bool execute);
+void native_nodes_compositor_job(bContext *C);
 
 namespace {
 
@@ -68,6 +70,7 @@ struct PropertiesData : public ViewData {
   /** The last description, which the nodes below point into. */
   std::unique_ptr<DictionaryValue> described;
   std::deque<DictionaryValue> owned;
+  std::vector<std::shared_ptr<ArrayValue>> owned_arrays;
   /** What each node edits, by its key: a field of a panel. */
   Map<std::string, const DictionaryValue *> edits;
   /** Buttons beside a list or a row, by their key: the control they are beside. */
@@ -86,6 +89,10 @@ struct PropertiesData : public ViewData {
   /** A drag's interaction, which makes one undo step of it. */
   int interaction = 0;
   bool dragging = false;
+
+  /** What edits are made with, and the values added to each, such as the node tree shown. */
+  std::string (*query)(bContext *C, const std::string &json, bool execute) = nullptr;
+  std::unique_ptr<DictionaryValue> context;
 
   /** The tab's open panels: those open now, the first time one is opened or closed. */
   std::set<std::string> &expanded_panels()
@@ -199,29 +206,136 @@ class Converter {
                                             uint32_t(number(described, "show")));
     });
     if (const ArrayValue *properties = described.lookup_array("properties")) {
-      /* A vector's components in a row of their own, as in Properties. */
-      std::unordered_map<std::string, NodeId> rows;
-      for (const std::shared_ptr<Value> &property : properties->elements()) {
-        const DictionaryValue *field = property->as_dictionary_value();
-        if (field == nullptr) {
-          continue;
-        }
-        const std::string_view group = text(*field, "group_key");
-        if (group.empty()) {
-          this->field(top, *field);
-          continue;
-        }
-        const std::string key = "group:" + std::string(group);
+      fields(top, *properties, "");
+    }
+  }
+
+  /**
+   * Controls of \a properties under \a parent, as a panel lays them out: a vector's components
+   * in a row, toggles drawn together in a group. Keys of groups start with \a prefix.
+   */
+  void fields(const NodeId parent, const ArrayValue &properties, const std::string &prefix)
+  {
+    std::unordered_map<std::string, NodeId> rows;
+    for (const std::shared_ptr<Value> &property : properties.elements()) {
+      const DictionaryValue *field = property->as_dictionary_value();
+      if (field == nullptr) {
+        continue;
+      }
+      if (const std::string_view group = text(*field, "toggle_group"); !group.empty()) {
+        const std::string key = prefix + "toggles:" + std::string(group);
         auto found = rows.find(key);
         if (found == rows.end()) {
-          const NodeId row = builder_.add(
-              top, key, [&](Fields &buffer, NodeFields &fields) {
-                fields.label = text(*field, "group");
-                return protocol::CreateGroup(buffer, protocol::Layout::Row);
-              });
+          const NodeId row = builder_.add(parent, key, [&](Fields &buffer, NodeFields &fields) {
+            const std::string_view caption = text(*field, "toggle_caption");
+            fields.label = caption.empty() ? text(*field, "label") : caption;
+            return protocol::CreateGroup(buffer, protocol::Layout::Joined);
+          });
           found = rows.emplace(key, row).first;
         }
-        this->field(found->second, *field, false);
+        this->field(found->second, *field);
+        continue;
+      }
+      const std::string_view group = text(*field, "group_key");
+      if (group.empty()) {
+        this->field(parent, *field);
+        continue;
+      }
+      const std::string key = prefix + "group:" + std::string(group);
+      auto found = rows.find(key);
+      if (found == rows.end()) {
+        const NodeId row = builder_.add(parent, key, [&](Fields &buffer, NodeFields &fields) {
+          fields.label = text(*field, "group");
+          return protocol::CreateGroup(buffer, protocol::Layout::Row);
+        });
+        found = rows.emplace(key, row).first;
+      }
+      this->field(found->second, *field, false);
+    }
+  }
+
+  /**
+   * The node editor's tree, as `native_nodes_query` reads it, as records, see
+   * #wm::native_ui::records_add. The header's pickers, `header`, and each node's values, are
+   * controls: a node's own under `<node>/fields`, a socket's under `<node>/socket:<id>`.
+   */
+  void nodes_view(const DictionaryValue &described)
+  {
+    DictionaryValue root;
+    for (const DictionaryValue::Item &item : described.elements()) {
+      if (!ELEM(item.first, "nodes", "header_ids")) {
+        root.append(item.first, item.second);
+      }
+    }
+    const NodeId top = records_add(builder_, std::nullopt, "nodes", root);
+    if (const ArrayValue *header = described.lookup_array("header_ids")) {
+      const NodeId group = builder_.add(top, "header", [](Fields &buffer, NodeFields &fields) {
+        fields.label = "header";
+        return protocol::CreateGroup(buffer);
+      });
+      fields(group, *header, "header:");
+    }
+    const ArrayValue *nodes = described.lookup_array("nodes");
+    if (nodes == nullptr) {
+      return;
+    }
+    const NodeId list = builder_.add(top, "nodes/nodes", [](Fields &buffer, NodeFields &fields) {
+      fields.label = "nodes";
+      return protocol::CreateGroup(buffer);
+    });
+    for (const std::shared_ptr<Value> &item : nodes->elements()) {
+      const DictionaryValue *node = item->as_dictionary_value();
+      if (node == nullptr) {
+        continue;
+      }
+      DictionaryValue record;
+      for (const DictionaryValue::Item &value : node->elements()) {
+        if (value.first != "fields") {
+          record.append(value.first, value.second);
+        }
+      }
+      const std::string key = "node:" + std::string(text(*node, "name"));
+      const NodeId node_id = records_add(builder_, list, key, record);
+      const ArrayValue *values = node->lookup_array("fields");
+      if (values == nullptr) {
+        continue;
+      }
+      /* By the socket each belongs to, in order. */
+      std::vector<std::string> groups;
+      std::unordered_map<std::string, std::shared_ptr<ArrayValue>> by_group;
+      for (const std::shared_ptr<Value> &value : values->elements()) {
+        const DictionaryValue *field = value->as_dictionary_value();
+        const std::string_view socket = field ? text(*field, "socket") : std::string_view();
+        const std::string group = socket.empty() ? "fields" : "socket:" + std::string(socket);
+        auto &array = by_group[group];
+        if (!array) {
+          array = std::make_shared<ArrayValue>();
+          groups.push_back(group);
+        }
+        /* A menu several nodes share comes once, by reference: each field gets its options. */
+        const std::string_view ref = field ? text(*field, "options_ref") : std::string_view();
+        const DictionaryValue *sets = described.lookup_dict("option_sets");
+        const std::shared_ptr<Value> *options = sets && !ref.empty() ? sets->lookup(ref) : nullptr;
+        if (options == nullptr) {
+          array->append(value);
+          continue;
+        }
+        auto resolved = std::make_shared<DictionaryValue>();
+        for (const DictionaryValue::Item &item : field->elements()) {
+          resolved->append(item.first, item.second);
+        }
+        resolved->append("options", *options);
+        array->append(resolved);
+      }
+      for (const std::string &group : groups) {
+        const std::string group_key = key + "/" + group;
+        const NodeId parent = builder_.add(node_id, group_key, [&](Fields &buffer, NodeFields &fields) {
+          fields.label = group;
+          return protocol::CreateGroup(buffer);
+        });
+        /* Kept as long as the description they point into. */
+        data_.owned_arrays.push_back(by_group[group]);
+        fields(parent, *by_group[group], group_key + ":");
       }
     }
   }
@@ -991,8 +1105,25 @@ CommandResult properties_command(bContext *C,
   PropertiesData &data = static_cast<PropertiesData &>(*view_data);
   const std::string target = command.target()->str();
   const protocol::Op op = command.op();
-  const auto run = [&](const std::string &request) {
-    r_error = native_properties_query(C, request, true);
+  const auto run = [&](std::string request) {
+    if (data.context) {
+      /* With the values every edit is made with. */
+      std::istringstream stream(request);
+      std::shared_ptr<Value> parsed = JsonFormatter().deserialize(stream);
+      if (const DictionaryValue *dictionary = parsed ? parsed->as_dictionary_value() : nullptr) {
+        DictionaryValue merged;
+        for (const DictionaryValue::Item &item : dictionary->elements()) {
+          merged.append(item.first, item.second);
+        }
+        for (const DictionaryValue::Item &item : data.context->elements()) {
+          if (dictionary->lookup(item.first) == nullptr) {
+            merged.append(item.first, item.second);
+          }
+        }
+        request = encode(merged);
+      }
+    }
+    r_error = (data.query ? data.query : native_properties_query)(C, request, true);
     return r_error.empty() ? CommandResult::Done : CommandResult::Failed;
   };
   const auto text_value = [&]() -> std::string {
@@ -1328,6 +1459,96 @@ CommandResult operator_command(bContext *C,
 
 /** \} */
 
+/* -------------------------------------------------------------------- */
+/** \name The Node Editor
+ *
+ * The `nodes` view, see #Converter::nodes_view. `Set` of `state` with parameters says which tree
+ * to show, as `native_nodes_query` takes it; `Invoke` of `edit` with parameters makes an edit of
+ * the tree, such as moving nodes; its controls take commands as Properties' do. The nodes it can
+ * add come once for each tree.
+ * \{ */
+
+struct NodesData : PropertiesData {
+  /** The `sequence` of the last edit, and why it failed. */
+  int64_t ack = 0;
+  std::string error;
+  /** The tree the nodes to add were sent for. */
+  std::string add_for;
+  /** The compositor's result is drawn behind its nodes, see #native_nodes_compositor_job. */
+  bool composite = false;
+
+  NodesData()
+  {
+    query = native_nodes_query;
+    context = std::make_unique<DictionaryValue>();
+  }
+};
+
+void nodes_build(bContext *C, const Params & /*params*/, ViewData *view_data, ViewBuilder &builder)
+{
+  NodesData &data = static_cast<NodesData &>(*view_data);
+  std::string state = encode(*data.context);
+  const bool with_add = state != data.add_for;
+  std::string request = state;
+  if (with_add && request.size() > 2) {
+    request.insert(request.size() - 1, ",\"with_add\":1");
+  }
+  std::istringstream stream(native_nodes_query(C, request, false));
+  std::shared_ptr<Value> value = JsonFormatter().deserialize(stream);
+  auto described = std::make_unique<DictionaryValue>();
+  if (const DictionaryValue *read = value ? value->as_dictionary_value() : nullptr) {
+    for (const DictionaryValue::Item &item : read->elements()) {
+      described->append(item.first, item.second);
+    }
+  }
+  /* With no tree there is nothing to add to: offered again once there is one. */
+  data.add_for = described->lookup("nodes") ? std::move(state) : "";
+  if (data.composite) {
+    data.composite = false;
+    native_nodes_compositor_job(C);
+  }
+  described->append_int("ack", data.ack);
+  described->append_str("error", data.error);
+  data.edits.clear();
+  data.owners.clear();
+  data.rows.clear();
+  data.panels.clear();
+  data.owned.clear();
+  data.owned_arrays.clear();
+  Converter(builder, data).nodes_view(*described);
+  data.described = std::move(described);
+}
+
+CommandResult nodes_command(bContext *C,
+                            const Params &params,
+                            ViewData *view_data,
+                            const protocol::Command &command,
+                            std::string &r_error)
+{
+  NodesData &data = static_cast<NodesData &>(*view_data);
+  const std::string_view target = command.target()->string_view();
+  if (target == "state" && command.op() == protocol::Op::Set) {
+    data.context = params_dictionary(command.params());
+    data.composite = encode(*data.context).find("COMPOSITOR") != std::string::npos;
+    return CommandResult::Done;
+  }
+  if (target == "edit" && command.op() == protocol::Op::Invoke) {
+    std::unique_ptr<DictionaryValue> request = params_dictionary(command.params());
+    data.ack = request->lookup_int("sequence").value_or(data.ack);
+    for (const DictionaryValue::Item &item : data.context->elements()) {
+      if (request->lookup(item.first) == nullptr) {
+        request->append(item.first, item.second);
+      }
+    }
+    data.error = native_nodes_query(C, encode(*request), true);
+    r_error = data.error;
+    return data.error.empty() ? CommandResult::Done : CommandResult::Failed;
+  }
+  return properties_command(C, params, view_data, command, r_error);
+}
+
+/** \} */
+
 }  // namespace
 
 void native_views_register()
@@ -1365,6 +1586,16 @@ void native_views_register()
   dialog.build = operator_build<native_operator_dialog_query>;
   dialog.command = operator_command<native_operator_dialog_query>;
   view_type_add(std::move(dialog));
+
+  ViewType nodes;
+  nodes.name = "nodes";
+  /* Read four times a second at most, as while a node is dragged. */
+  nodes.min_interval = 0.25;
+  nodes.notifiers = {NC_NODE, NC_MATERIAL, NC_OBJECT, NC_SCENE, NC_WM, NC_SPACE, NC_WORLD, NC_TEXTURE};
+  nodes.create = []() -> std::unique_ptr<ViewData> { return std::make_unique<NodesData>(); };
+  nodes.build = nodes_build;
+  nodes.command = nodes_command;
+  view_type_add(std::move(nodes));
 }
 
 }  // namespace blender::ui

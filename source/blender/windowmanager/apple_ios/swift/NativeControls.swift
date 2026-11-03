@@ -912,10 +912,8 @@ struct PreviewChoiceButton: View {
     .accessibilityValue(current?.label ?? "")
     .accessibilityHint("Shows all choices as previews.")
     .popover(isPresented: $showing) {
-      PreviewGrid(title: node.label,
-                  options: options.map { ["value": $0.value ?? "", "label": $0.label ?? "", "preview": $0.preview ?? ""] },
-                  value: value) { option in
-        model.set(node, .text(option.string("value") ?? ""))
+      PreviewGrid(title: node.label, options: options, value: value) { option in
+        model.set(node, .text(option))
         showing = false
       }
       .frame(minWidth: 400, minHeight: 440)
@@ -1105,6 +1103,147 @@ struct NativeToggleGroup: View {
       .background(PanelStyle.field, in: RoundedRectangle(cornerRadius: compact ? 9 : 10, style: .continuous))
     }
     .frame(minHeight: compact ? 40 : 44)
+  }
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Shared
+ * \{ */
+
+/** A label beside a control given a fraction of the row's width, as Blender's split rows. */
+struct FractionRow: Layout {
+  var fraction: CGFloat
+  var spacing: CGFloat = 10
+
+  private func widths(_ width: CGFloat) -> (lead: CGFloat, control: CGFloat) {
+    let control = (width * fraction).rounded()
+    return (max(0, width - control - spacing), control)
+  }
+
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    guard subviews.count == 2 else { return .zero }
+    let width = proposal.width ?? 320
+    let (lead, control) = widths(width)
+    let height = max(subviews[0].sizeThatFits(ProposedViewSize(width: lead, height: proposal.height)).height,
+                     subviews[1].sizeThatFits(ProposedViewSize(width: control, height: proposal.height)).height)
+    return CGSize(width: width, height: height)
+  }
+
+  func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    guard subviews.count == 2 else { return }
+    let (lead, control) = widths(bounds.width)
+    subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
+                      proposal: ProposedViewSize(width: lead, height: bounds.height))
+    subviews[1].place(at: CGPoint(x: bounds.maxX, y: bounds.midY), anchor: .trailing,
+                      proposal: ProposedViewSize(width: control, height: nil))
+  }
+}
+
+struct PreviewThumbnail: View {
+  var path: String?
+  var fallback: UIImage? = nil
+  var size: CGFloat
+  var cornerRadius: CGFloat? = nil
+
+  var body: some View {
+    Group {
+      if let image = PreviewCache.image(path) {
+        Image(uiImage: image).resizable().scaledToFill()
+      }
+      else {
+        ZStack {
+          PanelStyle.thumbnail
+          if let fallback {
+            Image(uiImage: fallback)
+              .resizable()
+              .scaledToFit()
+              .padding(size * 0.26)
+              .foregroundStyle(.secondary)
+          }
+        }
+      }
+    }
+    .frame(width: size, height: size)
+    .clipShape(RoundedRectangle(cornerRadius: cornerRadius ?? size * 0.22, style: .continuous))
+  }
+}
+
+/** A choice's options as a grid of their previews, such as MatCaps. */
+struct PreviewGrid: View {
+  let title: String
+  let options: [Blender_NativeUI_Option]
+  let value: String
+  let choose: (String) -> Void
+
+  var body: some View {
+    NavigationStack {
+      ScrollView {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 84), spacing: 8)], spacing: 8) {
+          ForEach(Array(options.enumerated()), id: \.offset) { _, option in
+            let current = option.value == value
+            Button {
+              choose(option.value ?? "")
+            } label: {
+              VStack(spacing: 4) {
+                PreviewThumbnail(path: option.preview, size: 80)
+                Text(option.label ?? "")
+                  .font(.caption2)
+                  .lineLimit(1)
+                  .foregroundStyle(current ? PanelStyle.tint : .secondary)
+              }
+              .padding(4)
+              .overlay(RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(current ? Color.accentColor : .clear, lineWidth: 2))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(option.label ?? "")
+            .accessibilityAddTraits(current ? .isSelected : [])
+          }
+        }
+        .padding(16)
+      }
+      .navigationTitle(title)
+      .navigationBarTitleDisplayMode(.inline)
+    }
+  }
+}
+
+/** A name prompt shared by data-blocks and list items. */
+struct RenameRequest: Identifiable {
+  let id = UUID()
+  let title: String
+  let name: String
+  let commit: (String) -> Void
+}
+
+struct RenamePrompt: ViewModifier {
+  @Binding var request: RenameRequest?
+  @State private var text = ""
+
+  func body(content: Content) -> some View {
+    content.alert(request?.title ?? "Rename", isPresented: Binding(
+      get: { request != nil }, set: { if !$0 { request = nil } }))
+    {
+      TextField("Name", text: $text)
+        .autocorrectionDisabled()
+        .textInputAutocapitalization(.never)
+      Button("Cancel", role: .cancel) { request = nil }
+      Button("Rename") {
+        let name = text.trimmingCharacters(in: .whitespaces)
+        if let request, !name.isEmpty, name != request.name { request.commit(name) }
+        request = nil
+      }
+      .keyboardShortcut(.defaultAction)
+    }
+    .onChange(of: request?.id) { _, _ in text = request?.name ?? "" }
+  }
+}
+
+extension View {
+  func renamePrompt(_ request: Binding<RenameRequest?>) -> some View {
+    modifier(RenamePrompt(request: request))
   }
 }
 

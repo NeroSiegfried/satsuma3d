@@ -134,8 +134,6 @@
 namespace blender::ui {
 std::string native_menu_query(bContext *C, const std::string &request, bool execute);
 std::string native_properties_query(bContext *C, const std::string &request, bool execute);
-std::string native_nodes_query(bContext *C, const std::string &request, bool execute);
-void native_nodes_compositor_job(bContext *C);
 }  // namespace blender::ui
 namespace blender::ed::graph {
 std::string native_graph_query(bContext *C, const std::string &request, bool execute);
@@ -986,51 +984,6 @@ static std::atomic<bool> bridge_navigation_left = false;
 
 void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
 {
-  if (command.setting == "native_nodes_create") {
-    /* A material, Geometry Nodes or compositor nodes for the node editor to show, as their own
-     * buttons make them. */
-    const char *imports[] = {"bpy", nullptr};
-    std::string script;
-    if (command.value == "SHADER") {
-      script =
-          "ob = bpy.context.active_object\n"
-          "if ob is not None:\n"
-          "    m = bpy.data.materials.new('Material')\n"
-          "    if len(ob.material_slots) and ob.material_slots[ob.active_material_index].material is None:\n"
-          "        ob.active_material = m\n"
-          "    else:\n"
-          "        ob.data.materials.append(m)\n"
-          "        ob.active_material_index = len(ob.material_slots) - 1\n";
-    }
-    else if (command.value == "GEOMETRY") {
-      /* A Geometry Nodes modifier without a node group gets one, rather than another modifier. */
-      script =
-          "ob = bpy.context.active_object\n"
-          "md = ob.modifiers.active if ob is not None else None\n"
-          "if md is not None and md.type == 'NODES' and md.node_group is None:\n"
-          "    bpy.ops.node.new_geometry_node_group_assign()\n"
-          "else:\n"
-          "    bpy.ops.node.new_geometry_nodes_modifier()\n";
-    }
-    else if (command.value == "COMPOSITOR") {
-      script =
-          "before = set(bpy.data.node_groups)\n"
-          "bpy.ops.node.new_compositing_node_group(name='Compositor Nodes')\n"
-          "made = [g for g in bpy.data.node_groups if g not in before]\n"
-          "if made:\n"
-          "    bpy.context.scene.compositing_node_group = made[0]\n";
-    }
-#ifdef WITH_PYTHON
-    if (!script.empty()) {
-      BPY_run_string_exec(C, imports, script.c_str());
-      ED_undo_push(C, "New Node Tree");
-      WM_main_add_notifier(NC_NODE | NA_ADDED, nullptr);
-    }
-#else
-    UNUSED_VARS(imports);
-#endif
-    return;
-  }
 #ifdef WITH_PYTHON
   if (command.setting == "keymap") {
     /* From the iPad's Settings, see `bl_ui.native_settings`. */
@@ -3552,60 +3505,6 @@ void bridge_image_view_shown(const bool shown)
   bridge_image_uvs_pending = true;
 }
 
-/** The node editor's tree, as `native_nodes_query` reads it: with the nodes it can add, `add`, once
- * for each tree. `Invoke` of `create` with a tree's kind as its value makes one, as the editor's
- * own buttons do. */
-struct NodesData : CanvasData {
-  /** The state the nodes to add were sent for, sent again only for another. */
-  std::string add_for;
-  /** The compositor's result is drawn behind its nodes, see #native_nodes_compositor_job. */
-  bool composite = false;
-};
-
-void bridge_nodes_view_build(bContext *C,
-                             const views::Params & /*params*/,
-                             views::ViewData *view_data,
-                             views::ViewBuilder &builder)
-{
-  NodesData &data = static_cast<NodesData &>(*view_data);
-  std::string state = bridge_json_encode(*data.state);
-  const bool with_add = state != data.add_for;
-  std::string request = state;
-  if (with_add && request.size() > 2) {
-    request.insert(request.size() - 1, ",\"with_add\":1");
-  }
-  const std::string json = ui::native_nodes_query(C, request, false);
-  /* With no tree there is nothing to add to: offered again once there is one. */
-  data.add_for = json.find("\"nodes\":") != std::string::npos ? std::move(state) : "";
-  if (data.composite) {
-    data.composite = false;
-    ui::native_nodes_compositor_job(C);
-  }
-  bridge_canvas_records(builder, "nodes", json, data);
-}
-
-views::CommandResult bridge_nodes_view_command(bContext *C,
-                                               const views::Params &params,
-                                               views::ViewData *view_data,
-                                               const views::protocol::Command &command,
-                                               std::string &r_error)
-{
-  NodesData &data = static_cast<NodesData &>(*view_data);
-  if (command.target()->string_view() == "create") {
-    const views::protocol::TextValue *kind = command.value_as_TextValue();
-    bridge_setting_execute(
-        C, BridgeSettingCommand{"native_nodes_create", kind && kind->value() ? kind->value()->str() : ""});
-    data.add_for.clear();
-    return views::CommandResult::Done;
-  }
-  const views::CommandResult result = bridge_canvas_command<ui::native_nodes_query>(
-      C, params, view_data, command, r_error);
-  if (command.target()->string_view() == "state") {
-    data.composite = bridge_json_encode(*data.state).find("COMPOSITOR") != std::string::npos;
-  }
-  return result;
-}
-
 /** \} */
 
 /* -------------------------------------------------------------------- */
@@ -3957,16 +3856,6 @@ void WM_native_ui_views_register()
     return bridge_canvas_command<ed::image::native_image_query>(C, params, data, command, r_error);
   };
   view_type_add(std::move(image));
-
-  ViewType nodes;
-  nodes.name = "nodes";
-  /* Read four times a second at most, as while a node is dragged. */
-  nodes.min_interval = 0.25;
-  nodes.notifiers = {NC_NODE, NC_MATERIAL, NC_OBJECT, NC_SCENE, NC_WM, NC_SPACE, NC_WORLD, NC_TEXTURE};
-  nodes.create = []() -> std::unique_ptr<ViewData> { return std::make_unique<NodesData>(); };
-  nodes.build = bridge_nodes_view_build;
-  nodes.command = bridge_nodes_view_command;
-  view_type_add(std::move(nodes));
 
   ViewType render;
   render.name = "render";

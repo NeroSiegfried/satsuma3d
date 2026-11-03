@@ -27,6 +27,15 @@ extension Dictionary where Key == String, Value == Any {
   func dict(_ key: String) -> JSON? { self[key] as? JSON }
 }
 
+/** Records read as new dictionaries even when nothing changed: their contents compared. */
+func jsonListEqual(_ a: [JSON], _ b: [JSON]) -> Bool {
+  a.count == b.count && zip(a, b).allSatisfy { ($0 as NSDictionary).isEqual($1 as NSDictionary) }
+}
+
+func jsonDictEqual(_ a: JSON, _ b: JSON) -> Bool {
+  (a as NSDictionary).isEqual(b as NSDictionary)
+}
+
 /** Compares snapshot values, which are Foundation property lists. */
 func jsonEqual(_ a: Any?, _ b: Any?) -> Bool {
   switch (a, b) {

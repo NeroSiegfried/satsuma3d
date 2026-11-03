@@ -357,34 +357,33 @@ final class AnchorBox {
   }
 }
 
-/** The system color picker, with Blender's interaction phases: continuous changes preview, and
- * the picker closing or a discrete choice commits one undo step. */
+/** The system color picker for a color control, with Blender's interaction phases: continuous
+ * changes are a drag's updates, and the picker closing or a discrete choice ends it, one undo step. */
 @MainActor
 final class ColorPickerSession: NSObject, UIColorPickerViewControllerDelegate,
   UIPopoverPresentationControllerDelegate, UIAdaptivePresentationControllerDelegate
 {
   static var active: ColorPickerSession?
 
-  let property: JSON
-  let alpha: Bool
-  weak var store: InspectorStore?
-  private var interaction: String?
+  let model: PanelsModel
+  let node: NativeNode
+  private let alpha: Bool
+  private var dragging = false
   private var lastPreview: CFTimeInterval = 0
   private var pending: [Double]?
   private let picker = UIColorPickerViewController()
 
-  init(property: JSON, store: InspectorStore) {
-    self.property = property
-    self.alpha = property.bool("alpha")
-    self.store = store
+  init(model: PanelsModel, node: NativeNode) {
+    self.model = model
+    self.node = node
+    alpha = node.content(Blender_NativeUI_Color.self)?.alpha ?? false
   }
 
-  func present(from anchor: AnchorBox, color: UIColor) {
+  func present(from anchor: AnchorBox) {
     ColorPickerSession.active?.close()
-    picker.title = property.string("label")
+    picker.title = node.label
     picker.supportsAlpha = alpha
-    picker.maximumLinearExposure = max(1, property.double("exposure") ?? 1)
-    picker.selectedColor = color
+    picker.selectedColor = blenderColor(model.floats(node).map { NSNumber(value: $0) })
     picker.delegate = self
     anchor.present(picker)
     picker.popoverPresentationController?.delegate = self
@@ -395,29 +394,24 @@ final class ColorPickerSession: NSObject, UIColorPickerViewControllerDelegate,
   func colorPickerViewController(_ picker: UIColorPickerViewController, didSelect color: UIColor,
                                  continuously: Bool)
   {
-    guard let components = colorComponents(color, alpha: alpha), let store else { return }
+    guard let components = colorComponents(color, alpha: alpha) else { return }
     pending = components
     if !continuously {
       commit()
       return
     }
-    if interaction == nil { interaction = UUID().uuidString }
     if CACurrentMediaTime() - lastPreview >= 1.0 / 60.0 {
-      store.preview(property, value: components, interaction: interaction!, phase: "update")
+      model.set(node, .floats(components), phase: dragging ? .update : .begin)
+      dragging = true
       lastPreview = CACurrentMediaTime()
     }
   }
 
   private func commit() {
-    guard let components = pending, let store else { return }
+    guard let components = pending else { return }
     pending = nil
-    if let interaction {
-      store.preview(property, value: components, interaction: interaction, phase: "end")
-      self.interaction = nil
-    }
-    else {
-      store.edit(property, value: components)
-    }
+    model.set(node, .floats(components), phase: dragging ? .end : .once)
+    dragging = false
   }
 
   func close() {

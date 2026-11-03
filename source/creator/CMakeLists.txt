@@ -397,7 +397,6 @@ else()
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/BlenderBridge.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/BlenderIntents.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/CompileIndicator.swift
-      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/CompositeControls.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/DocumentWindow.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/FaceControl.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/FCurveEditor.swift
@@ -405,7 +404,6 @@ else()
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/FontPicker.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/HierarchyView.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/ImageEditor.swift
-      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/InspectorStore.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/InspectorView.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/Launcher.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/NativeViews.swift
@@ -415,7 +413,6 @@ else()
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/NativeToolSettings.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/NodeEditor.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/PencilMenu.swift
-      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/PropertyControls.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/QuickActions.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/Rails.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/RedoStrip.swift

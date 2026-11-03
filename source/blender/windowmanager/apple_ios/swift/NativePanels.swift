@@ -87,6 +87,8 @@ final class PanelsModel {
     case redo
     /** An operation's settings, asked for before it runs. */
     case dialog
+    /** Controls of a canvas, such as the node editor's nodes'. */
+    case canvas
   }
 
   let mode: Mode
@@ -96,6 +98,13 @@ final class PanelsModel {
   /** Panels opened or closed here, until Blender has them so. */
   private var expanding: [String: Bool] = [:]
   @ObservationIgnored private var pending: [String: PendingNativeValue] = [:]
+
+  /** The controls of a view subscribed to apart, such as a canvas's. */
+  init(view: NativeView) {
+    mode = .canvas
+    self.view = view
+    view.settled = { [weak self] in self?.settle() }
+  }
 
   init(mode: Mode, tab: String? = nil) {
     self.mode = mode

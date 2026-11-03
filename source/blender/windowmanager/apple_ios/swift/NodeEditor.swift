@@ -44,7 +44,20 @@ final class NodeEditorModel {
   /** Blender's tree, from its `nodes` view while the editor shows. */
   let canvas = NativeCanvas("nodes")
   /** The controls on the nodes, their edits sent to the canvas. */
-  @ObservationIgnored private(set) lazy var store = InspectorStore { [canvas] request in canvas.edit(request) }
+  /** The controls on the nodes, which edit as Properties' do. */
+  @ObservationIgnored private(set) lazy var controls = PanelsModel(view: canvas.view)
+  @ObservationIgnored private var sequence = 0
+
+  /** A node's controls: its own, `fields`, or those of an input, `socket:<id>`. */
+  func fields(_ node: String, _ group: String) -> [NativeNode] {
+    guard let fields = canvas.view.node("node:\(node)/\(group)") else { return [] }
+    return canvas.view.children(of: fields)
+  }
+
+  /** The header's data-block pickers, as the Properties editor shows them. */
+  var header: [NativeNode] {
+    canvas.view.node("header").map { canvas.view.children(of: $0) } ?? []
+  }
 
   /** Take Blender's tree, if it changed. */
   func pull() {
@@ -118,7 +131,6 @@ final class NodeEditorModel {
   }
 
   private func sendState() {
-    store.requestContext = context
     canvas.setState(context)
   }
 
@@ -128,9 +140,8 @@ final class NodeEditorModel {
     let reached = next.array("path").count
     if next["nodes"] != nil, reached < path.count {
       path = Array(path.prefix(reached))
-      store.requestContext = context
+      canvas.setState(context)
     }
-    store.clearPendingValues(ack: ack)
     /* What a key asked of the editor itself, once. */
     if let request = next.dict("key_request"), let sequence = request.int("sequence") {
       if let seen = keyRequestSeen, sequence > seen {
@@ -154,25 +165,8 @@ final class NodeEditorModel {
       [snapshot?.string("name"), snapshot?.string("owner"), snapshot?.string("empty")].map { $0 ?? "" }
     }
     let another = snapshot == nil || tree(snapshot) != tree(next)
-    snapshot = Self.resolvingSharedMenus(next)
+    snapshot = next
     if another { fitRequest += 1 }
-  }
-
-  /** Menus several nodes share come once, by reference: each field gets its own copy back. */
-  private static func resolvingSharedMenus(_ snapshot: JSON) -> JSON {
-    guard let sets = snapshot.dict("option_sets"), !sets.isEmpty else { return snapshot }
-    var resolved = snapshot
-    resolved["nodes"] = snapshot.array("nodes").map { node -> JSON in
-      var node = node
-      node["fields"] = node.array("fields").map { field -> JSON in
-        guard let ref = field.string("options_ref"), let options = sets[ref] else { return field }
-        var field = field
-        field["options"] = options
-        return field
-      }
-      return node
-    }
-    return resolved
   }
 
   /** A hardware key, run as Blender's node editor keymap has it. */
@@ -182,15 +176,16 @@ final class NodeEditorModel {
   }
 
   func send(_ action: String, _ extra: JSON = [:]) {
-    var request: JSON = ["action": action]
+    sequence += 1
+    var request: JSON = ["action": action, "sequence": sequence]
     request.merge(extra) { $1 }
-    store.send(request)
+    canvas.edit(request)
   }
 
   func requestFit() { fitRequest += 1 }
 
   func createTree() {
-    NativeViews.shared.send(canvas.view, target: "create", op: .invoke, value: .text(kind.rawValue))
+    Operators.run("wm.native_node_tree_new", ["kind": .text(kind.rawValue)])
   }
 }
 
@@ -388,8 +383,8 @@ struct NodeEditorPanel: View {
     return ScrollView(.horizontal, showsIndicators: false) {
       HStack(spacing: 4) {
         /* The tree's data-block, chosen as in Properties, while no group is entered. */
-        if path.isEmpty, let header = model.snapshot?.array("header_ids").first {
-          DataPicker(store: model.store, property: header, compact: true)
+        if path.isEmpty, let header = model.header.first(where: { $0.kind == .reference }) {
+          ReferenceRow(model: model.controls, node: header, compact: true)
         }
         else {
           Button(model.snapshot?.string("owner") ?? model.snapshot?.string("name") ?? "") { model.exit(to: 0) }
@@ -2005,7 +2000,7 @@ struct NodeCard: View, Equatable {
   let move: AnyGesture<DragGesture.Value>
 
   private var name: String { node.string("name") ?? "" }
-  private var fields: [JSON] { node.array("fields") }
+  private var ownFields: [NativeNode] { model.fields(name, "fields") }
 
   /** A node's body: raised from the canvas in either appearance. */
   static let background = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .tertiarySystemBackground : .systemBackground })
@@ -2036,9 +2031,9 @@ struct NodeCard: View, Equatable {
             .padding(.horizontal, 14)
             .overlay(alignment: .trailing) { dot(socket, output: true).offset(x: 10) }
           }
-          let own = fields.filter { $0.string("socket") == nil }
+          let own = ownFields
           if !own.isEmpty {
-            NodeCanvasFields(store: model.store, fields: own, native: native)
+            NodeCanvasFields(model: model.controls, fields: own, native: native)
               .padding(.horizontal, 12)
               .padding(.vertical, 4)
           }
@@ -2175,7 +2170,7 @@ struct NodeCard: View, Equatable {
   @ViewBuilder
   private func input(_ socket: JSON) -> some View {
     let id = socket.string("id") ?? ""
-    let values = socket.bool("linked") ? [] : fields.filter { $0.string("socket") == id }
+    let values = socket.bool("linked") ? [] : model.fields(name, "socket:" + id)
     Group {
       if values.isEmpty {
         Text(socket.string("name") ?? "")
@@ -2186,7 +2181,7 @@ struct NodeCard: View, Equatable {
           .overlay(alignment: .leading) { dot(socket, output: false).offset(x: -10) }
       }
       else {
-        NodeCanvasFields(store: model.store, fields: values, native: native)
+        NodeCanvasFields(model: model.controls, fields: values, native: native)
           .padding(.horizontal, 12)
           .overlay(alignment: .topLeading) { dot(socket, output: false).offset(x: -10, y: 12) }
       }
@@ -2236,46 +2231,36 @@ private extension Dictionary where Key == String, Value == Any {
   var socketID: String { string("id") ?? "" }
 }
 
-/** A node's controls, laid out as Properties lays out a panel's. */
 /** A node's values, drawn wholly by SwiftUI: light enough for trees of hundreds of nodes, and
  * bent along with the canvas by its effects, which system controls can't be. Numbers scrub
  * sideways and take a typed value from a tap, switches flip, menus list their choices, and
- * anything else opens its Properties control above the node. */
+ * anything else opens its Properties control above the node. Close enough to read, the
+ * Properties editor's own controls. */
 struct NodeCanvasFields: View {
-  let store: InspectorStore
-  let fields: [JSON]
+  let model: PanelsModel
+  let fields: [NativeNode]
   var native = true
 
   var body: some View {
     if native {
-      /* The Properties editor's own controls, as Blender's node editor uses its buttons. */
-      NodeFieldRows(store: store, fields: fields)
+      VStack(alignment: .leading, spacing: 0) {
+        ForEach(fields) { ControlRow(model: model, node: $0) }
+      }
     }
     else {
-      standIns
-    }
-  }
-
-  /** Drawn alike, without the system's controls, for a node inside an effect. */
-  private var standIns: some View {
-    VStack(alignment: .leading, spacing: 2) {
-      ForEach(NodeFieldRows.rows(fields)) { row in
-        switch row.kind {
-          case .property(let property):
-            NodeCanvasField(store: store, property: property)
-          case .vector(let title, let items):
-            NodeCanvasVector(store: store, title: title, items: items)
-          case .toggles(let caption, let items):
-            if !caption.isEmpty {
-              Text(caption).font(.caption).foregroundStyle(.secondary)
-            }
-            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-              NodeCanvasField(store: store, property: item)
-            }
-          case .composite(let property):
-            NodeCanvasField(store: store, property: property)
-          case .heading:
-            EmptyView()
+      VStack(alignment: .leading, spacing: 2) {
+        ForEach(fields) { field in
+          switch field.group?.layout {
+            case .row?:
+              NodeCanvasVector(model: model, group: field)
+            case .some:
+              if !field.label.isEmpty {
+                Text(field.label).font(.caption).foregroundStyle(.secondary)
+              }
+              ForEach(model.children(of: field)) { NodeCanvasField(model: model, node: $0) }
+            case nil:
+              NodeCanvasField(model: model, node: field)
+          }
         }
       }
     }
@@ -2283,45 +2268,34 @@ struct NodeCanvasFields: View {
 }
 
 /** One value on a node: its name, and the value drawn as a field would show it. */
-struct NodeCanvasField: View, Equatable {
-  let store: InspectorStore
-  let property: JSON
+struct NodeCanvasField: View {
+  let model: PanelsModel
+  let node: NativeNode
   @State private var editing = false
   /** Where the color picker points from; kept across redraws, which the picker outlives. */
   @State private var anchor = AnchorBox()
 
-  static func == (a: NodeCanvasField, b: NodeCanvasField) -> Bool {
-    a.store === b.store && jsonDictEqual(a.property, b.property)
-  }
-
-  private var type: String { property.string("type") ?? "" }
-  private var editable: Bool { property.bool("editable") || type == "ID" }
-
   var body: some View {
     Group {
-      switch type {
-        case "LABEL":
-          Text(propertyLabel(property)).font(.callout).foregroundStyle(.secondary)
-        case "BOOLEAN":
-          labeled { NodeCanvasSwitch(on: store.value(property) as? Bool ?? (numericValue(store.value(property)) != 0)) }
+      switch node.kind {
+        case .label:
+          Text(node.label).font(.callout).foregroundStyle(.secondary)
+        case .toggle:
+          labeled { NodeCanvasSwitch(on: model.bool(node)) }
             .contentShape(Rectangle())
-            .onTapGesture {
-              guard editable else { return }
-              let on = store.value(property) as? Bool ?? (numericValue(store.value(property)) != 0)
-              store.edit(property, value: !on)
-            }
-        case "INT", "FLOAT":
-          labeled { NodeCanvasNumber(store: store, property: property) }
-        case "STRING":
-          labeled { NodeCanvasText(store: store, property: property) }
-        case "ENUM":
-          labeled { valueText(enumLabel, chevron: true) }
+            .onTapGesture { if node.enabled { model.set(node, .bool(!model.bool(node))) } }
+        case .number:
+          labeled { NodeCanvasNumber(model: model, node: node) }
+        case .textfield:
+          labeled { NodeCanvasText(model: model, node: node) }
+        case .choice:
+          labeled { valueText(choiceLabel, chevron: true) }
             .contentShape(Rectangle())
-            .onTapGesture { if editable { editing = true } }
-        case "COLOR":
+            .onTapGesture { if node.enabled { editing = true } }
+        case .color:
           labeled {
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-              .fill(Color(uiColor: blenderColor(store.value(property))))
+              .fill(Color(uiColor: blenderColor(model.floats(node).map { NSNumber(value: $0) })))
               .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(.separator, lineWidth: 0.5))
               .frame(width: 44, height: 20)
               /* Its place on screen: the canvas's effects leave no UIKit view to point from. */
@@ -2330,56 +2304,45 @@ struct NodeCanvasField: View, Equatable {
           .contentShape(Rectangle())
           /* The system's color picker, straight away. */
           .onTapGesture {
-            guard editable else { return }
-            ColorPickerSession(property: property, store: store)
-              .present(from: anchor, color: blenderColor(store.value(property)))
-          }
-          /* A color well: its color drags out, and a color dropped on it is taken. */
-          .onDrag { NSItemProvider(object: blenderColor(store.value(property))) }
-          .onDrop(of: [.data], isTargeted: nil) { providers in
-            guard editable, let provider = providers.first(where: { $0.canLoadObject(ofClass: UIColor.self) })
-            else { return false }
-            _ = provider.loadObject(ofClass: UIColor.self) { color, _ in
-              guard let color = color as? UIColor,
-                    let components = colorComponents(color, alpha: property.bool("alpha")) else { return }
-              DispatchQueue.main.async { store.edit(property, value: components) }
-            }
-            return true
+            guard node.enabled else { return }
+            ColorPickerSession(model: model, node: node).present(from: anchor)
           }
         default:
-          labeled { valueText(summary, chevron: type == "ID" || type == "MENU" || type == "OPERATOR_MENU") }
+          labeled { valueText(summary, chevron: true) }
             .contentShape(Rectangle())
-            .onTapGesture { if editable { editing = true } }
+            .onTapGesture { if node.enabled { editing = true } }
       }
     }
     .frame(minHeight: 28)
-    .opacity(editable ? 1 : 0.5)
+    .opacity(node.enabled ? 1 : 0.5)
     .popover(isPresented: $editing) { editor }
   }
 
-  /** Where the value is changed in full: the Properties control, or the choices of a menu. */
+  /** Where the value is changed in full: the choices of a menu, or the Properties control. */
   @ViewBuilder
   private var editor: some View {
-    if type == "ENUM" {
+    if let choice = node.choice {
       ScrollView {
         VStack(alignment: .leading, spacing: 0) {
-          ForEach(Array(property.array("options").enumerated()), id: \.offset) { _, option in
-            Button {
-              store.edit(property, value: option["value"] ?? "")
-              editing = false
-            } label: {
-              HStack {
-                Text(option.string("label") ?? "")
-                Spacer(minLength: 16)
-                if jsonEqual(option["value"], store.value(property)) {
-                  Image(systemName: "checkmark").foregroundStyle(.tint)
+          ForEach(Array(choice.allOptions.enumerated()), id: \.offset) { _, option in
+            if let value = option.value {
+              Button {
+                model.set(node, .text(value))
+                editing = false
+              } label: {
+                HStack {
+                  Text(option.label ?? "")
+                  Spacer(minLength: 16)
+                  if value == model.text(node) {
+                    Image(systemName: "checkmark").foregroundStyle(.tint)
+                  }
                 }
+                .padding(.horizontal, 16)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
               }
-              .padding(.horizontal, 16)
-              .frame(minHeight: 44)
-              .contentShape(Rectangle())
+              .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
           }
         }
         .padding(.vertical, 6)
@@ -2387,28 +2350,17 @@ struct NodeCanvasField: View, Equatable {
       .frame(minWidth: 240, maxHeight: 420)
       .presentationCompactAdaptation(.popover)
     }
-    else if type == "ID" {
-      DataBrowser(store: store, property: property) { editing = false }
-        .frame(minWidth: 360, minHeight: min(520, 150 + 60 * CGFloat(property.array("options").count)))
-    }
     else {
-      VStack(alignment: .leading) {
-        switch type {
-          case "LIST", "ITEM_ROW", "PREVIEW", "OPERATOR_MENU":
-            CompositeRow(store: store, property: property)
-          default:
-            PropertyRow(store: store, property: property)
-        }
-      }
-      .padding(16)
-      .frame(minWidth: 320)
-      .presentationCompactAdaptation(.popover)
+      ControlRow(model: model, node: node)
+        .padding(16)
+        .frame(minWidth: 320)
+        .presentationCompactAdaptation(.popover)
     }
   }
 
   private func labeled<Control: View>(@ViewBuilder _ control: () -> Control) -> some View {
     HStack(spacing: 8) {
-      Text(propertyLabel(property))
+      Text(node.label)
         .font(.callout)
         .lineLimit(1)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2427,16 +2379,14 @@ struct NodeCanvasField: View, Equatable {
     .foregroundStyle(Color.accentColor)
   }
 
-  private var enumLabel: String {
-    property.array("options").first { jsonEqual($0["value"], store.value(property)) }?.string("label") ?? ""
+  private var choiceLabel: String {
+    let value = model.text(node)
+    return node.choice?.allOptions.first { $0.value == value }?.label ?? ""
   }
 
   private var summary: String {
-    switch type {
-      case "ID": return property.string("name") ?? "None"
-      case "STRING": return (store.value(property) as? String).map { $0.isEmpty ? "—" : $0 } ?? "—"
-      default: return property.string("value_label") ?? ""
-    }
+    if let reference = node.reference { return reference.name ?? "None" }
+    return node.label
   }
 }
 
@@ -2459,27 +2409,28 @@ struct NodeCanvasSwitch: View {
 /** A number on a node: dragged sideways it scrubs, tapped it takes a typed value, as the
  * Properties field does; a slider's share of its range shows as a fill. */
 struct NodeCanvasNumber: View {
-  let store: InspectorStore
-  let property: JSON
+  let model: PanelsModel
+  let node: NativeNode
   var width: CGFloat = 72
-  @State private var scrub: (start: Double, value: Double, interaction: String, last: CFTimeInterval)?
+  @State private var scrub: (start: Double, value: Double, last: CFTimeInterval)?
   /** Its place on screen, where the field typed in shows over it. */
   @State private var anchor = AnchorBox()
-  private var typing: Bool { NodeTyping.shared.isTyping(property) }
+  private var typing: Bool { NodeTyping.shared.isTyping(node) }
+  private var number: Blender_NativeUI_Number? { node.number }
 
-  private var value: Double { scrub?.value ?? numericValue(store.value(property)) }
+  private var value: Double { scrub?.value ?? model.number(node) }
 
   var body: some View {
     let box = RoundedRectangle(cornerRadius: 6, style: .continuous)
     ZStack(alignment: .leading) {
       box.fill(Color(uiColor: .tertiarySystemFill))
-      if property.has("slider") {
+      if let number, number.slider {
         GeometryReader { proxy in
           box.fill(Color.accentColor.opacity(0.35))
-            .frame(width: proxy.size.width * SliderScale(property).fraction(value))
+            .frame(width: proxy.size.width * number.fraction(of: value))
         }
       }
-      Text(formatNumber(value, property: property, significant: 5))
+      Text(number?.format(value, significant: 5) ?? "")
         .font(.callout.monospacedDigit())
         .lineLimit(1)
         .minimumScaleFactor(0.7)
@@ -2494,63 +2445,55 @@ struct NodeCanvasNumber: View {
     .gesture(
       DragGesture(minimumDistance: 4)
         .onChanged { drag in
-          guard property.bool("editable"), !typing else { return }
-          var current = scrub ?? (numericValue(store.value(property)), numericValue(store.value(property)),
-                                  UUID().uuidString, 0)
-          let integer = property.string("type") == "INT"
-          var step = property.double("dragStep") ?? (integer ? 0.5 : 0.01)
-          if property.bool("angle") { step *= 10 * .pi / 180 }
-          var next = current.start + drag.translation.width * scrubSensitivity(drag.translation.height) * step
-          next = min(property.double("max") ?? .greatestFiniteMagnitude,
-                     max(property.double("min") ?? -.greatestFiniteMagnitude, next))
-          if integer { next = next.rounded() }
+          guard let number, node.enabled, !typing else { return }
+          var current = scrub ?? (model.number(node), model.number(node), 0)
+          var step = number.step > 0 ? number.step : (number.integer ? 0.5 : 0.01)
+          if number.isAngle { step *= 10 * .pi / 180 }
+          var next = number.clamp(current.start + drag.translation.width * scrubSensitivity(drag.translation.height) * step)
+          if number.integer { next = next.rounded() }
           current.value = next
           if CACurrentMediaTime() - current.last >= 1.0 / 60.0 {
-            store.preview(property, value: next, interaction: current.interaction, phase: "update")
+            model.set(node, .float(next), phase: scrub == nil ? .begin : .update)
             current.last = CACurrentMediaTime()
           }
           scrub = current
         }
         .onEnded { _ in
           guard let current = scrub else { return }
-          store.preview(property, value: current.value, interaction: current.interaction,
-                        phase: current.value == current.start ? "cancel" : "end")
+          model.set(node, .float(current.value), phase: current.value == current.start ? .cancel : .end)
           scrub = nil
         })
     .accessibilityElement()
-    .accessibilityLabel(propertyLabel(property))
-    .accessibilityValue(formatNumber(value, property: property, significant: 5))
+    .accessibilityLabel(node.label)
+    .accessibilityValue(number?.format(value, significant: 5) ?? "")
   }
 
   private func beginTyping() {
-    guard property.bool("editable"), scrub == nil else { return }
-    NodeTyping.shared.begin(store: store, property: property, frame: anchor.windowRect ?? .zero,
-                            text: formatNumber(numericValue(store.value(property)), property: property,
-                                               significant: 6))
+    guard let number, node.enabled, scrub == nil else { return }
+    NodeTyping.shared.begin(model: model, node: node, frame: anchor.windowRect ?? .zero,
+                            text: number.format(model.number(node), significant: 6))
   }
 }
 
 /** Text on a node, typed where it shows. */
 struct NodeCanvasText: View {
-  let store: InspectorStore
-  let property: JSON
+  let model: PanelsModel
+  let node: NativeNode
   @State private var anchor = AnchorBox()
 
-  private var stored: String { store.value(property) as? String ?? "" }
-
   var body: some View {
-    Text(stored)
+    Text(model.text(node))
       .font(.callout)
       .lineLimit(1)
       .frame(minWidth: 72, maxWidth: 160, minHeight: 24, alignment: .trailing)
       .padding(.horizontal, 6)
       .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-      .opacity(NodeTyping.shared.isTyping(property) ? 0 : 1)
+      .opacity(NodeTyping.shared.isTyping(node) ? 0 : 1)
       .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { anchor.windowRect = $0 }
       .contentShape(Rectangle())
       .onTapGesture {
-        guard property.bool("editable") else { return }
-        NodeTyping.shared.begin(store: store, property: property, frame: anchor.windowRect ?? .zero, text: stored)
+        guard node.enabled else { return }
+        NodeTyping.shared.begin(model: model, node: node, frame: anchor.windowRect ?? .zero, text: model.text(node))
       }
   }
 }
@@ -2564,43 +2507,39 @@ struct NodeCanvasText: View {
 final class NodeTyping {
   static let shared = NodeTyping()
 
-  private(set) var property: JSON?
-  @ObservationIgnored private(set) var store: InspectorStore?
+  private(set) var node: NativeNode?
+  @ObservationIgnored private(set) var model: PanelsModel?
   private(set) var frame: CGRect = .zero
   var text = ""
 
-  var numeric: Bool { ["INT", "FLOAT"].contains(property?.string("type") ?? "") }
+  var numeric: Bool { node?.kind == .number }
+  var typing: Bool { node != nil }
 
-  func isTyping(_ property: JSON) -> Bool {
-    guard let current = self.property else { return false }
-    return propertyKey(current) == propertyKey(property)
-  }
+  func isTyping(_ node: NativeNode) -> Bool { self.node?.key == node.key }
 
-  func begin(store: InspectorStore, property: JSON, frame: CGRect, text: String) {
+  func begin(model: PanelsModel, node: NativeNode, frame: CGRect, text: String) {
     commit()
-    self.store = store
-    self.property = property
+    self.model = model
+    self.node = node
     self.frame = frame
     self.text = text
   }
 
   /** The typed value set, as a field's own is when it's done. */
   func commit() {
-    guard let property, let store else { return }
-    let numeric = self.numeric
-    self.property = nil
-    self.store = nil
-    if numeric {
-      let shown = formatNumber(numericValue(store.value(property)), property: property, significant: 6)
-      guard text != shown else { return }
-      guard let number = parseNumber(text, property: property) else {
-        store.showStatus("Enter a valid number.")
+    guard let node, let model else { return }
+    self.node = nil
+    self.model = nil
+    if let number = node.number {
+      guard text != number.format(model.number(node), significant: 6) else { return }
+      guard let value = number.parse(text) else {
+        UIAccessibility.post(notification: .announcement, argument: "Enter a valid number.")
         return
       }
-      store.edit(property, value: property.string("type") == "INT" ? number.rounded() : number)
+      model.set(node, .float(number.integer ? value.rounded() : number.clamp(value)))
     }
-    else if text != store.value(property) as? String ?? "" {
-      store.edit(property, value: text)
+    else if text != model.text(node) {
+      model.set(node, .text(text))
     }
   }
 }
@@ -2612,7 +2551,7 @@ struct NodeTypingField: View {
 
   var body: some View {
     GeometryReader { proxy in
-      if typing.property != nil {
+      if typing.typing {
         let origin = proxy.frame(in: .global).origin
         let frame = typing.frame
         let scale = max(0.5, frame.height / 24)
@@ -2645,77 +2584,21 @@ struct NodeTypingField: View {
 
 /** A vector's components side by side under its name. */
 struct NodeCanvasVector: View {
-  let store: InspectorStore
-  let title: String
-  let items: [JSON]
+  let model: PanelsModel
+  let group: NativeNode
 
   var body: some View {
     VStack(alignment: .leading, spacing: 3) {
-      if !title.isEmpty {
-        Text(title).font(.caption).foregroundStyle(.secondary)
+      if !group.label.isEmpty {
+        Text(group.label).font(.caption).foregroundStyle(.secondary)
       }
       HStack(spacing: 4) {
-        ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-          NodeCanvasNumber(store: store, property: item, width: 54)
+        ForEach(model.children(of: group).filter { $0.kind == .number }) { item in
+          NodeCanvasNumber(model: model, node: item, width: 54)
         }
       }
     }
     .padding(.vertical, 2)
-  }
-}
-
-struct NodeFieldRows: View {
-  let store: InspectorStore
-  let fields: [JSON]
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      ForEach(Self.rows(fields)) { row in
-        switch row.kind {
-          case .property(let property):
-            PropertyRow(store: store, property: property)
-              .equatable()
-          case .vector(let title, let items):
-            VectorRow(store: store, title: title, items: items)
-              .equatable()
-          case .toggles(let caption, let items):
-            ToggleGroupRow(store: store, caption: caption, items: items)
-              .equatable()
-          case .composite(let property):
-            CompositeRow(store: store, property: property)
-              .equatable()
-          case .heading:
-            EmptyView()
-        }
-      }
-    }
-  }
-
-  /** Fields to rows: a vector's components together under its name. */
-  static func rows(_ fields: [JSON]) -> [InspectorRow] {
-    var rows: [InspectorRow] = []
-    var vectors: [String: Int] = [:]
-    for field in fields {
-      let key = propertyKey(field)
-      if ["ID", "LIST", "ITEM_ROW", "PREVIEW", "OPERATOR_MENU"].contains(field.string("type") ?? "") {
-        rows.append(InspectorRow(id: "composite:" + key, kind: .composite(field)))
-        continue
-      }
-      if let group = field.string("group"), !group.isEmpty {
-        let groupKey = field.string("group_key") ?? group
-        if let index = vectors[groupKey], case .vector(let title, var items) = rows[index].kind {
-          items.append(field)
-          rows[index].kind = .vector(title: title, items: items)
-        }
-        else {
-          rows.append(InspectorRow(id: "vector:" + groupKey, kind: .vector(title: group, items: [field])))
-          vectors[groupKey] = rows.count - 1
-        }
-        continue
-      }
-      rows.append(InspectorRow(id: "property:" + key, kind: .property(field)))
-    }
-    return rows
   }
 }
 

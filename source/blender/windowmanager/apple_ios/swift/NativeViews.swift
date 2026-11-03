@@ -113,7 +113,7 @@ final class NativeView {
 
 /** A canvas's records as Foundation values, as JSON would read them, see `records_add`: a record
  * as a dictionary of its values and its children by their labels, a group as a list, data as its
- * value. */
+ * value. Controls among them are left out. */
 extension NativeView {
   func foundation(_ node: NativeNode) -> Any {
     switch node.kind {
@@ -125,13 +125,18 @@ extension NativeView {
             result[key] = Self.foundation(param)
           }
         }
-        for child in children(of: node) { result[child.label] = foundation(child) }
+        for child in children(of: node) where child.kind == .record || child.kind == .group {
+          result[child.label] = foundation(child)
+        }
         return result
       case .group:
-        return children(of: node).map(foundation)
-      default:
+        /* Controls among them, as a node's, are read as controls. */
+        return children(of: node).filter { [.record, .group, .data].contains($0.kind) }.map(foundation)
+      case .data:
         guard let data = node.content(Blender_NativeUI_Data.self) else { return NSNull() }
         return Self.foundation(data) ?? NSNull()
+      default:
+        return NSNull()
     }
   }
 
@@ -485,7 +490,15 @@ extension NativeViews {
       "keyframe_insert": .keyframeinsert, "keyframe_delete": .keyframedelete, "keyframes_clear": .keyframesclear,
     ]
     for command in (ProcessInfo.processInfo.environment["BLENDER_NATIVE_UI_COMMANDS"] ?? "").split(separator: ";") {
-      let words = command.split(separator: " ", maxSplits: 2).map(String.init)
+      /* The target first, which may have spaces: the op is the last word, or the one before the
+       * value. */
+      var words = command.split(separator: " ").map(String.init)
+      if words.count > 2, ops[words[words.count - 1]] == nil, ops[words[words.count - 2]] != nil {
+        words = [words.dropLast(2).joined(separator: " "), words[words.count - 2], words[words.count - 1]]
+      }
+      else if words.count >= 2, ops[words[words.count - 1]] != nil {
+        words = [words.dropLast().joined(separator: " "), words[words.count - 1]]
+      }
       guard words.count >= 2, let op = ops[words[1]] else { continue }
       /* Aimed at another view as `view>target`; parameters as `key=value,key=value`. */
       let aim = words[0].split(separator: ">", maxSplits: 1).map(String.init)
