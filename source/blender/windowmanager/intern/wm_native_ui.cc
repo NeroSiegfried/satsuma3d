@@ -2988,10 +2988,6 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
   const bool can_redo = has_view3d_context && bridge_undo_available(C, "ED_OT_redo");
   const std::string settings_json = bridge_transform_settings_json(
       scene, CTX_data_active_object(C), mode);
-  const std::string tool_settings_json = has_view3d_context ? bridge_timed("tool_settings", [&] {
-    return ui::native_properties_query(C, "{\"tab\":\"TOOL\"}", false);
-  }) :
-                                                              "{}";
   std::string navigation_json = "null";
   if (has_view3d_context) {
     const wmWindow *win = CTX_wm_window(C);
@@ -3073,9 +3069,6 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
   json += "\"";
   json += ",\"settings\":";
   json += settings_json;
-  json += ",\"toolSettings\":";
-  json += tool_settings_json;
-  json += ",\"propertiesAck\":" + std::to_string(bridge_panels_sequence);
   json += ",\"redo\":";
   json += redo_json;
   json += ",\"dialog\":";

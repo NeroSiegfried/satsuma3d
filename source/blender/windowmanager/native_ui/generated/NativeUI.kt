@@ -227,10 +227,6 @@ data class Toolbar(
   /** The active undo step: menus are asked for again when it changes, and only then. */
   @SerialName("menuState") val menuState: String? = null,
   @SerialName("settings") val settings: TransformSettings? = null,
-  /** The Tool tab of Properties, as the inspector describes it. */
-  @SerialName("toolSettings") val toolSettings: JsonElement? = null,
-  /** The last panel of Properties the interface changed: its edits have arrived. */
-  @SerialName("propertiesAck") val propertiesAck: Int = 0,
   /** The last operator's properties, for Adjust Last Operation. */
   @SerialName("redo") val redo: JsonElement? = null,
   /** An operator's properties asked for before it runs, in place of Blender's dialog. */

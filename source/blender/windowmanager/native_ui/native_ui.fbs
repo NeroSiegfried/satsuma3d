@@ -189,10 +189,6 @@ table Toolbar {
   /// The active undo step: menus are asked for again when it changes, and only then.
   menuState: string;
   settings: TransformSettings;
-  /// The Tool tab of Properties, as the inspector describes it.
-  toolSettings: [ubyte] (flexbuffer);
-  /// The last panel of Properties the interface changed: its edits have arrived.
-  propertiesAck: int;
   /// The last operator's properties, for Adjust Last Operation.
   redo: [ubyte] (flexbuffer);
   /// An operator's properties asked for before it runs, in place of Blender's dialog.

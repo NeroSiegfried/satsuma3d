@@ -295,10 +295,6 @@ enum NativeUI {
     /// The active undo step: menus are asked for again when it changes, and only then.
     var menuState: String?
     var settings: TransformSettings?
-    /// The Tool tab of Properties, as the inspector describes it.
-    var toolSettings: Open
-    /// The last panel of Properties the interface changed: its edits have arrived.
-    var propertiesAck: Int
     /// The last operator's properties, for Adjust Last Operation.
     var redo: Open
     /// An operator's properties asked for before it runs, in place of Blender's dialog.
@@ -343,8 +339,6 @@ enum NativeUI {
       canRedo = flag(json["canRedo"]) ?? false
       menuState = json["menuState"] as? String
       settings = (json["settings"] as? [String: Any]).flatMap(TransformSettings.init(json:))
-      toolSettings = Open(json["toolSettings"])
-      propertiesAck = (json["propertiesAck"] as? NSNumber)?.intValue ?? 0
       redo = Open(json["redo"])
       dialog = Open(json["dialog"])
       textObject = Open(json["textObject"])
