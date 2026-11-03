@@ -158,12 +158,6 @@ final class PanelsModel {
     NativeViews.shared.send(view, target: "tabs", op: .set_, value: .text(tab))
   }
 
-  /** A Preferences section, whose add-ons or keymaps come with the window's panels. */
-  func selectPreferencesTab(_ tab: String) {
-    selectTab(tab)
-    Engine.setting("native_preferences_state", json: ["tab": tab])
-  }
-
   /** \} */
 
   /** \name Panels and rows

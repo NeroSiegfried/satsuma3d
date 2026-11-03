@@ -74,6 +74,7 @@ final class ShellPanels {
   func pullSnapshots() {
     timeline.update()
     assets.update()
+    panels.preferenceLists.update()
     if let snapshot = takeJSON("panels", WM_native_ui_panels_take_json()) {
       InterfaceTimings.measure("panels.apply") { panels.updateSnapshot(snapshot) }
     }

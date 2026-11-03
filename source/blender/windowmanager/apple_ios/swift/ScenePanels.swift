@@ -116,9 +116,6 @@ final class SwiftScenePanels {
 
   func updateSnapshot(_ snapshot: Any?) {
     guard let snapshot = snapshot as? JSON else { return }
-    if let preferencesSnapshot = snapshot.dict("preferences") {
-      preferenceLists.update(preferencesSnapshot)
-    }
     let ack = (snapshot["ack"] as? NSNumber)?.uint64Value ?? 0
     if let graph = snapshot.dict("graph") { graphSnapshot?(graph) }
     if let storyboard = snapshot.dict("storyboard") { storyboardSnapshot?(storyboard) }

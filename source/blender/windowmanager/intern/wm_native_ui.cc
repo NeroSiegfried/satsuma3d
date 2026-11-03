@@ -215,9 +215,7 @@ std::chrono::steady_clock::time_point bridge_panels_next_snapshot;
 std::string bridge_panels_published;
 std::string bridge_panels_json = "null";
 /** Blender's Preferences, a section at a time, in the iPad's Settings, see `SettingsSheet.swift`. */
-std::string bridge_preferences_state = "{\"tab\":\"PREFERENCES_INTERFACE\"}";
 /** The keymaps Settings shows with their items and what it searches for, as JSON. */
-std::string bridge_keymaps_state = "{}";
 /** Changed preferences are saved shortly after, as the iPad may end the app without warning. */
 bool bridge_preferences_save_pending = false;
 std::chrono::steady_clock::time_point bridge_preferences_save_at;
@@ -1055,21 +1053,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     bridge_interface_set(C, command.value == "desktop");
     return;
   }
-  if (command.setting == "native_preferences_state") {
-    bridge_preferences_state = command.value;
-    bridge_panels_next_snapshot = {};
-    bridge_panels_published.clear();
-    return;
-  }
-  if (command.setting == "native_preferences_visible") {
-    bridge_panels_visible = (bridge_panels_visible & ~32) | (command.value == "1" ? 32 : 0);
-    bridge_panels_next_snapshot = {};
-    bridge_panels_published.clear();
-    if (command.value != "1") {
-      bridge_preferences_save(C);
-    }
-    return;
-  }
   if (command.setting == "native_nodes_state") {
     bridge_nodes_dirty = true;
     bridge_nodes_composite = command.value.find("COMPOSITOR") != std::string::npos;
@@ -1273,11 +1256,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     BPY_run_string_eval(C, imports, expression.c_str());
     return;
   }
-  if (command.setting == "native_keymaps_state") {
-    bridge_keymaps_state = command.value;
-    bridge_panels_next_snapshot = {};
-    return;
-  }
   if (command.setting == "native_addon" || command.setting == "native_keymap_item_active") {
     /* Add-ons and keymap items, which Settings lists in its own way, see `bl_ui.native_settings`. */
     const char *imports[] = {"bpy", "bl_ui", nullptr};
@@ -1285,7 +1263,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
                                    command.setting.substr(strlen("native_")) + "\", \"" +
                                    bridge_json_escape(command.value) + "\")";
     BPY_run_string_eval(C, imports, expression.c_str());
-    bridge_panels_next_snapshot = {};
     return;
   }
   if (command.setting == "render" || command.setting == "viewport_toggle") {
@@ -2208,41 +2185,6 @@ void bridge_panels_build(bContext *C)
           }
         }
         merged.append_str("storyboard", BRIDGE_PLACEHOLDER("storyboard"));
-      }
-      if (bridge_panels_visible & 32) {
-        bridge_preferences_save_when_changed(C, now);
-        /* The Preferences' panels are a view of their own: only the sections drawn with lists of
-         * their own, which Settings lists in its own way, come with the panels. */
-        std::istringstream state_stream(bridge_preferences_state);
-        const auto state = JsonFormatter().deserialize(state_stream);
-        const DictionaryValue *state_dictionary = state ? state->as_dictionary_value() : nullptr;
-        auto preferences = std::make_shared<DictionaryValue>();
-        {
-          DictionaryValue *dictionary = preferences.get();
-          const std::string tab = state_dictionary ?
-                                      std::string(state_dictionary->lookup_str("tab").value_or("")) :
-                                      std::string();
-          dictionary->append_str("tab", tab);
-          std::string expression;
-          if (tab == "PREFERENCES_ADDONS") {
-            expression = "bl_ui.native_settings.addons_json(bpy.context)";
-          }
-          else if (tab == "PREFERENCES_KEYMAP") {
-            expression = "bl_ui.native_settings.keymaps_json(bpy.context, \"" +
-                         bridge_json_escape(bridge_keymaps_state) + "\")";
-          }
-          std::string list_json;
-          if (!expression.empty() &&
-              bridge_python(C, "panels.preferences.list", expression.c_str(), list_json))
-          {
-            std::istringstream list_stream(list_json);
-            if (auto list = JsonFormatter().deserialize(list_stream)) {
-              dictionary->append(tab == "PREFERENCES_ADDONS" ? "addons" : "keymaps",
-                                 std::move(list));
-            }
-          }
-        }
-        merged.append("preferences", std::move(preferences));
       }
       std::ostringstream merged_stream;
       JsonFormatter().serialize(merged_stream, merged);
@@ -3604,6 +3546,176 @@ views::CommandResult bridge_popup_view_command(bContext *C,
 /** \} */
 
 /* -------------------------------------------------------------------- */
+/** \name The Preferences List View
+ *
+ * The Preferences' lists, which their sections draw with lists of their own and Settings lists in
+ * its own way, see `bl_ui.native_settings`: with `list` set to `addons`, the add-ons by module,
+ * each with its `<module>:enabled` toggle; with `keymaps`, the keymaps by name, those `expanded`
+ * or all matching `search` with their items, `<keymap>/<id>`, each with its `:active` toggle. Its
+ * `save` button saves the preferences when they changed, as the interface stops showing them;
+ * while it shows, they are saved a moment after each change.
+ * \{ */
+
+void bridge_preferences_list_view_build(bContext *C,
+                                        const views::Params &params,
+                                        views::ViewData * /*data*/,
+                                        views::ViewBuilder &builder)
+{
+  using namespace io::serialize;
+  const NodeId top = builder.top("preferences_list", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return views::protocol::CreateGroup(buffer);
+  });
+  builder.add(top, "save", [](ViewBuffer &buffer, NodeFields &fields) {
+    fields.label = IFACE_("Save Preferences");
+    return views::protocol::CreateButton(buffer);
+  });
+  bridge_preferences_save_when_changed(C, std::chrono::steady_clock::now());
+  if (bridge_preferences_save_pending) {
+    /* Saved a moment after the change. */
+    views::view_type_dirty("preferences_list");
+  }
+  const std::string_view list = params.text("list").value_or("");
+  const auto toggle = [&](const NodeId parent, const std::string &key, const bool value) {
+    builder.add(parent, key, [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      return views::protocol::CreateToggle(buffer, value);
+    });
+  };
+  if (list == "addons") {
+    const std::shared_ptr<Value> addons = bridge_python_value(
+        C, "preferences.addons", "bl_ui.native_settings.addons_json(bpy.context)");
+    const NodeId rows = builder.add(top, "addons", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      return views::protocol::CreateList(buffer);
+    });
+    for (const std::shared_ptr<Value> &item : addons && addons->as_array_value() ?
+                                                   addons->as_array_value()->elements() :
+                                                   Span<std::shared_ptr<Value>>())
+    {
+      const DictionaryValue *addon = item->as_dictionary_value();
+      if (addon == nullptr) {
+        continue;
+      }
+      const std::string module(bridge_text(*addon, "module"));
+      const NodeId row = builder.add(rows, module, [&](ViewBuffer &buffer, NodeFields &fields) {
+        fields.label = bridge_text(*addon, "name");
+        fields.description = bridge_text(*addon, "description");
+        return views::protocol::CreateRowDirect(
+            buffer, 0, false, false, nullptr, bridge_text(*addon, "category").data());
+      });
+      toggle(row, module + ":enabled", bridge_flag(*addon, "enabled"));
+      if (const std::string_view warning = bridge_text(*addon, "warning"); !warning.empty()) {
+        builder.add(row, module + ":warning", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+          return views::protocol::CreateLabelDirect(buffer, std::string(warning).c_str());
+        });
+      }
+    }
+  }
+  else if (list == "keymaps") {
+    /* What to list, as `keymaps_json` takes it. */
+    DictionaryValue state;
+    state.append_str("search", std::string(params.text("search").value_or("")));
+    auto expanded = state.append_array("expanded");
+    if (const views::protocol::Param *param = params.find("expanded")) {
+      if (const views::protocol::TextsValue *names = param->value_as_TextsValue()) {
+        for (const flatbuffers::String *name : *names->value()) {
+          expanded->append_str(name->str());
+        }
+      }
+    }
+    std::ostringstream state_stream;
+    JsonFormatter().serialize(state_stream, state);
+    const std::string expression = "bl_ui.native_settings.keymaps_json(bpy.context, \"" +
+                                   bridge_json_escape(state_stream.str()) + "\")";
+    const std::shared_ptr<Value> keymaps = bridge_python_value(
+        C, "preferences.keymaps", expression.c_str());
+    const NodeId rows = builder.add(top, "keymaps", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      return views::protocol::CreateListDirect(buffer, nullptr, false, false, false, true);
+    });
+    for (const std::shared_ptr<Value> &item : keymaps && keymaps->as_array_value() ?
+                                                  keymaps->as_array_value()->elements() :
+                                                  Span<std::shared_ptr<Value>>())
+    {
+      const DictionaryValue *keymap = item->as_dictionary_value();
+      if (keymap == nullptr) {
+        continue;
+      }
+      const std::string name(bridge_text(*keymap, "name"));
+      const ArrayValue *items = keymap->lookup_array("items");
+      const NodeId row = builder.add(rows, name, [&](ViewBuffer &buffer, NodeFields &fields) {
+        fields.label = bridge_text(*keymap, "title");
+        /* Selected: its items are listed. */
+        return views::protocol::CreateRow(
+            buffer, int32_t(bridge_number(*keymap, "depth", 0.0)), items != nullptr);
+      });
+      if (items == nullptr) {
+        continue;
+      }
+      for (const std::shared_ptr<Value> &entry : items->elements()) {
+        const DictionaryValue *kmi = entry->as_dictionary_value();
+        if (kmi == nullptr) {
+          continue;
+        }
+        const std::string key = name + "/" + std::to_string(int64_t(bridge_number(*kmi, "id", 0.0)));
+        const NodeId item_row = builder.add(row, key, [&](ViewBuffer &buffer, NodeFields &fields) {
+          fields.label = bridge_text(*kmi, "name");
+          /* Its keys, as Blender writes them. */
+          fields.description = bridge_text(*kmi, "keys");
+          return views::protocol::CreateRow(buffer);
+        });
+        toggle(item_row, key + ":active", bridge_flag(*kmi, "active"));
+      }
+    }
+  }
+}
+
+views::CommandResult bridge_preferences_list_view_command(bContext *C,
+                                                          const views::Params & /*params*/,
+                                                          views::ViewData * /*data*/,
+                                                          const views::protocol::Command &command,
+                                                          std::string &r_error)
+{
+  using namespace io::serialize;
+  const std::string target = command.target()->str();
+  if (target == "save" && command.op() == views::protocol::Op::Invoke) {
+    bridge_preferences_save(C);
+    return views::CommandResult::Done;
+  }
+  const views::protocol::BoolValue *on = command.value_as_BoolValue();
+  if (command.op() != views::protocol::Op::Set || on == nullptr) {
+    r_error = "Not something the Preferences' lists do";
+    return views::CommandResult::Failed;
+  }
+  DictionaryValue value;
+  std::string name;
+  if (StringRef(target).endswith(":enabled")) {
+    name = "addon";
+    value.append_str("module", target.substr(0, target.size() - strlen(":enabled")));
+    value.append("enable", std::make_shared<BooleanValue>(on->value()));
+  }
+  else if (StringRef(target).endswith(":active")) {
+    const std::string item = target.substr(0, target.size() - strlen(":active"));
+    const size_t slash = item.rfind('/');
+    if (slash == std::string::npos) {
+      r_error = "No such keymap item";
+      return views::CommandResult::Failed;
+    }
+    name = "keymap_item_active";
+    value.append_str("keymap", item.substr(0, slash));
+    value.append_int("id", std::atoll(item.c_str() + slash + 1));
+    value.append("active", std::make_shared<BooleanValue>(on->value()));
+  }
+  else {
+    r_error = "Not something the Preferences' lists do";
+    return views::CommandResult::Failed;
+  }
+  std::ostringstream stream;
+  JsonFormatter().serialize(stream, value);
+  bridge_setting_execute(C, BridgeSettingCommand{"native_" + name, stream.str()});
+  return views::CommandResult::Done;
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
 /** \name The Settings and Render Views
  *
  * `settings`: the interface's own settings that Blender keeps, which it sets as it starts and as
@@ -3887,6 +3999,15 @@ void WM_native_ui_views_register()
   popup.build = bridge_popup_view_build;
   popup.command = bridge_popup_view_command;
   view_type_add(std::move(popup));
+
+  ViewType preferences_list;
+  preferences_list.name = "preferences_list";
+  /* Listed with Python, four times a second at most. */
+  preferences_list.min_interval = 0.25;
+  preferences_list.notifiers = {NC_WM, NC_SCREEN, NC_SPACE};
+  preferences_list.build = bridge_preferences_list_view_build;
+  preferences_list.command = bridge_preferences_list_view_command;
+  view_type_add(std::move(preferences_list));
 
   ViewType render;
   render.name = "render";

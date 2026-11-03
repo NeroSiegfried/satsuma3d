@@ -91,8 +91,8 @@ final class SettingsModel: ObservableObject {
 }
 
 /** The add-ons and keymaps, which Blender's Preferences draw with lists of their own: Blender
- * sends them with the section's panels, see `bl_ui.native_settings`, and Settings lists them in
- * its own way. */
+ * sends them as a view of their own, see `bl_ui.native_settings`, and Settings lists them in its
+ * own way. */
 @MainActor
 @Observable
 final class PreferencesLists {
@@ -125,27 +125,67 @@ final class PreferencesLists {
   private(set) var expandedKeymaps: Set<String> = []
   /** What the keymaps are searched for. */
   var keymapSearch = "" {
-    didSet { if keymapSearch != oldValue { sendKeymapState() } }
+    didSet { if keymapSearch != oldValue { sendState() } }
   }
 
-  /** The `addons` or `keymaps` the Preferences snapshot carries for their section. */
-  func update(_ preferences: JSON) {
-    if preferences["addons"] != nil {
-      let next = preferences.array("addons").map {
-        Addon(id: $0.string("module") ?? "", name: $0.string("name") ?? "",
-              category: $0.string("category") ?? "", description: $0.string("description") ?? "",
-              warning: $0.string("warning") ?? "", enabled: $0.bool("enabled"))
+  /** Blender's list for the section shown, from its `preferences_list` view while Settings
+   * shows, see `bridge_preferences_list_view_build`. */
+  @ObservationIgnored let view: NativeView = {
+    let view = NativeViews.shared.subscribe("preferences_list")
+    NativeViews.shared.pause(view)
+    return view
+  }()
+  @ObservationIgnored private var list = ""
+  @ObservationIgnored private var shown = false
+
+  /** Settings shows, on a section, whose list Blender sends if it has one. */
+  func show(_ shown: Bool, tab: String) {
+    let list = tab == "PREFERENCES_ADDONS" ? "addons" : tab == "PREFERENCES_KEYMAP" ? "keymaps" : ""
+    guard shown != self.shown || list != self.list else { return }
+    if self.shown && !shown {
+      /* Saved as Settings closes, if they changed. */
+      NativeViews.shared.send(view, target: "save", op: .invoke)
+    }
+    self.shown = shown
+    self.list = list
+    sendState()
+  }
+
+  private func sendState() {
+    NativeViews.shared.pause(view)
+    view.params = ["list": .text(list), "search": .text(keymapSearch), "expanded": .texts(Array(expandedKeymaps))]
+    if shown { NativeViews.shared.resume(view) }
+  }
+
+  private func node(_ key: String) -> NativeNode? {
+    guard let top = view.top else { return nil }
+    _ = top.children
+    return view.node(key)
+  }
+
+  /** Take what Blender's list shows now. */
+  func update() {
+    guard shown else { return }
+    func on(_ node: NativeNode, _ suffix: String) -> Bool {
+      view.children(of: node).first { $0.key == node.key + suffix }?.toggle?.value ?? false
+    }
+    if let list = node("addons") {
+      let next = view.children(of: list).map { row in
+        Addon(id: row.key, name: row.label, category: row.row?.section ?? "",
+              description: row.node.description ?? "",
+              warning: view.children(of: row).first { $0.kind == .label }
+                .flatMap { $0.content(Blender_NativeUI_Label.self)?.value } ?? "",
+              enabled: on(row, ":enabled"))
       }
       if next != addons { addons = next }
     }
-    if preferences["keymaps"] != nil {
-      let next = preferences.array("keymaps").map { keymap in
-        Keymap(name: keymap.string("name") ?? "", title: keymap.string("title") ?? "",
-               depth: keymap.int("depth") ?? 0,
-               items: keymap["items"] == nil ? nil : keymap.array("items").map {
-                 KeymapItem(id: $0.int("id") ?? 0, name: $0.string("name") ?? "",
-                            keys: $0.string("keys") ?? "", active: $0.bool("active"))
-               })
+    if let list = node("keymaps") {
+      let next = view.children(of: list).map { row in
+        Keymap(name: row.key, title: row.label, depth: Int(row.row?.depth ?? 0),
+               items: row.row?.selected == true ? view.children(of: row).filter { $0.kind == .row }.map { item in
+                 KeymapItem(id: Int(item.key.split(separator: "/").last ?? "") ?? 0, name: item.label,
+                            keys: item.node.description ?? "", active: on(item, ":active"))
+               } : nil)
       }
       if next != keymaps { keymaps = next }
     }
@@ -153,7 +193,7 @@ final class PreferencesLists {
 
   func setAddon(_ addon: Addon, enabled: Bool) {
     if let index = addons.firstIndex(where: { $0.id == addon.id }) { addons[index].enabled = enabled }
-    Engine.setting("native_addon", json: ["module": addon.id, "enable": enabled])
+    NativeViews.shared.send(view, target: addon.id + ":enabled", value: .bool(enabled))
   }
 
   func setKeymapItem(_ item: KeymapItem, in keymap: Keymap, active: Bool) {
@@ -162,17 +202,12 @@ final class PreferencesLists {
     {
       keymaps[index].items?[itemIndex].active = active
     }
-    Engine.setting("native_keymap_item_active", json: ["keymap": keymap.name, "id": item.id, "active": active])
+    NativeViews.shared.send(view, target: "\(keymap.name)/\(item.id):active", value: .bool(active))
   }
 
   func setExpanded(_ keymap: Keymap, _ expanded: Bool) {
     if expanded { expandedKeymaps.insert(keymap.name) } else { expandedKeymaps.remove(keymap.name) }
-    sendKeymapState()
-  }
-
-  private func sendKeymapState() {
-    Engine.setting("native_keymaps_state",
-                   json: ["expanded": Array(expandedKeymaps), "search": keymapSearch] as JSON)
+    sendState()
   }
 }
 
@@ -581,7 +616,8 @@ struct SettingsView: View {
   private var selection: Binding<String?> {
     Binding(get: { page }, set: { tab in
       page = tab
-      if let tab, tab != Self.iPadPage { preferences.selectPreferencesTab(tab) }
+      if let tab, tab != Self.iPadPage { preferences.selectTab(tab) }
+      lists.show(true, tab: tab ?? "")
     })
   }
 
@@ -693,9 +729,8 @@ public final class SwiftSettings: NSObject, UIAdaptivePresentationControllerDele
     controller.preferredContentSize = CGSize(width: 860, height: 700)
     controller.presentationController?.delegate = self
     sheet = controller
-    Engine.setting("native_preferences_visible", "1")
     preferences.setShown(true)
-    preferences.selectPreferencesTab(preferences.currentTab)
+    lists.show(true, tab: preferences.currentTab)
     presenter.present(controller, animated: true)
   }
 
@@ -719,7 +754,7 @@ public final class SwiftSettings: NSObject, UIAdaptivePresentationControllerDele
 
   /** Blender stops reading the Preferences, and saves them if they changed. */
   private func preferencesClosed() {
-    Engine.setting("native_preferences_visible", "0")
+    lists.show(false, tab: "")
     preferences.setShown(false)
   }
 }
