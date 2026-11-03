@@ -295,17 +295,7 @@ BridgePencilHoverRequest bridge_hover_request;
 /** One of Blender's menus to show natively where the pointer is, see #bridge_menu_popup. */
 GHOST_Latest<std::string> bridge_menu_popup_snapshot;
 GHOST_Latest<std::string> bridge_panels_snapshot;
-GHOST_Latest<std::string> bridge_timeline_snapshot;
-std::string bridge_timeline_json;
 /* Keyframes shown on the timeline, refreshed on the native cadence while it is open. */
-bool bridge_timeline_visible = false;
-std::string bridge_timeline_keys_json = "[]";
-std::chrono::steady_clock::time_point bridge_timeline_next_keys;
-/* Native asset pane: listed only while shown. */
-bool bridge_assets_visible = false;
-std::string bridge_assets_json;
-std::chrono::steady_clock::time_point bridge_assets_next_snapshot;
-GHOST_Latest<std::string> bridge_assets_snapshot;
 
 /**
  * Where a large JSON value is spliced into the panels' snapshot: a string starting with a control
@@ -1493,99 +1483,8 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     return;
   }
 
-  if (command.setting == "assets") {
-    /* The pane is listed only while shown; showing it publishes a fresh list. */
-    bridge_assets_visible = command.value == "show";
-    bridge_assets_json.clear();
-    bridge_assets_next_snapshot = {};
-    return;
-  }
 
-  if (command.setting == "timeline_visible") {
-    bridge_timeline_visible = command.value == "1";
-    bridge_timeline_next_keys = {};
-    return;
-  }
 
-#ifdef WITH_PYTHON
-  if (command.setting == "timeline_key_select" || command.setting == "timeline_key_move" ||
-      command.setting == "timeline_key_delete")
-  {
-    /* Select "frames|extend" (frames comma separated), move the selected keys by a delta, or
-     * delete the selected keys. Values are parsed here so nothing but numbers reaches Python. */
-    std::string expression;
-    if (command.setting == "timeline_key_select") {
-      const size_t bar = command.value.find('|');
-      std::string frames;
-      const std::string list = command.value.substr(0, bar);
-      for (size_t begin = 0; begin < list.size();) {
-        const size_t comma = std::min(list.find(',', begin), list.size());
-        if (comma > begin) {
-          frames += (frames.empty() ? "" : ",") +
-                    std::to_string(std::atoi(list.substr(begin, comma - begin).c_str()));
-        }
-        begin = comma + 1;
-      }
-      const bool extend = bar != std::string::npos && command.value.substr(bar + 1) == "1";
-      expression = "bpy.ops.anim.native_key_select(frames=\"" + frames +
-                   "\", extend=" + (extend ? "True" : "False") + ")";
-    }
-    else if (command.setting == "timeline_key_move") {
-      expression = "bpy.ops.anim.native_key_move(delta=" +
-                   std::to_string(std::atoi(command.value.c_str())) + ")";
-    }
-    else {
-      expression = "bpy.ops.anim.native_key_delete()";
-    }
-    const char *imports[] = {"bpy", nullptr};
-    BPY_run_string_eval(C, imports, expression.c_str());
-    bridge_timeline_next_keys = {};
-    return;
-  }
-#endif
-
-  if (command.setting == "timeline_frame") {
-    /* Scene.frame_current, as the timeline's own playhead sets it: its update clamps, moves the
-     * sound and redraws. Like scrubbing in Blender, changing frames adds no undo step. */
-    PointerRNA scene_ptr = RNA_id_pointer_create(&scene->id);
-    PropertyRNA *prop = RNA_struct_find_property(&scene_ptr, "frame_current");
-    RNA_property_int_set(&scene_ptr, prop, std::atoi(command.value.c_str()));
-    RNA_property_update(C, &scene_ptr, prop);
-    ED_areas_do_frame_follow(C, false);
-    return;
-  }
-
-  if (command.setting == "timeline") {
-    if (command.value == "autokey") {
-      /* The timeline's record button: Blender's Auto Keying toggle. */
-      Scene *scene = CTX_data_scene(C);
-      if (scene == nullptr) {
-        return;
-      }
-      PointerRNA ptr = RNA_pointer_create_discrete(
-          &scene->id, RNA_ToolSettings, scene->toolsettings);
-      PropertyRNA *prop = RNA_struct_find_property(&ptr, "use_keyframe_insert_auto");
-      RNA_property_boolean_set(&ptr, prop, !RNA_property_boolean_get(&ptr, prop));
-      RNA_property_update(C, &ptr, prop);
-      bridge_rna_undo_push(C, prop);
-      return;
-    }
-    if (command.value == "play") {
-      bridge_operator_call(C, "SCREEN_OT_animation_play");
-      return;
-    }
-    const bool jump = command.value == "start" || command.value == "end";
-    const char *op_name = jump ? "SCREEN_OT_frame_jump" : "SCREEN_OT_keyframe_jump";
-    wmOperatorType *ot = WM_operatortype_find(op_name, false);
-    if (ot == nullptr || (!jump && command.value != "prev_key" && command.value != "next_key")) {
-      return;
-    }
-    PointerRNA props = WM_operator_properties_create_ptr(ot);
-    RNA_boolean_set(
-        &props, jump ? "end" : "next", command.value == "end" || command.value == "next_key");
-    bridge_operator_call(C, op_name, &props);
-    WM_operator_properties_free(&props);
-  }
 }
 
 /* -------------------------------------------------------------------- */
@@ -1970,82 +1869,76 @@ std::string bridge_asset_library_name(asset_system::AssetLibrary &library)
   }
 }
 
-std::string bridge_assets_build_json(bContext *C)
+/**
+ * The `assets` view: the assets the pane offers, `assets`, a list whose rows are keyed by the
+ * assets' references, and add an asset to the scene when invoked. Previews are written a few at a
+ * time, the list built again soon until all are.
+ */
+void bridge_assets_view_build(bContext *C,
+                              const wm::native_ui::Params & /*params*/,
+                              wm::native_ui::ViewData * /*data*/,
+                              wm::native_ui::ViewBuilder &builder)
 {
+  namespace protocol = wm::native_ui::protocol;
+  using wm::native_ui::NodeFields;
+  const auto top = builder.top("assets", [](flatbuffers::FlatBufferBuilder &buffer, NodeFields &) {
+    return protocol::CreateGroup(buffer);
+  });
   const AssetLibraryReference library_ref = asset_system::all_library_reference();
   ed::asset::list::storage_fetch(&library_ref, C);
-  if (!ed::asset::list::is_loaded(&library_ref)) {
-    /* Keep the previous list while the asset libraries are (re)loading. */
-    return bridge_assets_json.empty() ? "{\"loading\":true,\"items\":[]}" : bridge_assets_json;
-  }
-
-  std::string items;
-  /* Previews load in the background; writing their PNGs is spread over several snapshots. */
+  const bool loaded = ed::asset::list::is_loaded(&library_ref);
+  /* Previews load in the background; writing their pictures is spread over several builds. */
   int preview_budget = 8;
   bool previews_missing = false;
-  ed::asset::list::iterate(library_ref, [&](asset_system::AssetRepresentation &asset) {
-    if (!bridge_asset_listed(asset)) {
-      return true;
-    }
-    const ID_Type type = asset.get_id_type();
-    const std::string key = bridge_brush_key(asset.make_weak_reference());
-    const AssetMetaData &metadata = asset.get_metadata();
-    asset_system::AssetLibrary &library = asset.owner_asset_library();
-    std::string catalog;
-    if (const asset_system::AssetCatalog *found = library.catalog_service().find_catalog(
-            metadata.catalog_id))
-    {
-      catalog = found->path.str();
-    }
-    auto preview = bridge_brush_preview_paths.find(key);
-    if (preview == bridge_brush_preview_paths.end() && preview_budget > 0) {
-      preview_budget--;
-      if (std::optional<std::string> path = bridge_brush_preview_write(C, asset, key)) {
-        preview = bridge_brush_preview_paths.emplace(key, *path).first;
-      }
-    }
-    if (preview == bridge_brush_preview_paths.end()) {
-      previews_missing = true;
-    }
-    std::string tags;
-    for (const AssetTag &tag : metadata.tags) {
-      tags += tags.empty() ? "\"" : ",\"";
-      tags += bridge_json_escape(tag.name) + "\"";
-    }
-    items += items.empty() ? "{" : ",{";
-    items += "\"id\":\"" + bridge_json_escape(key) + "\",\"name\":\"" +
-             bridge_json_escape(asset.get_name()) + "\",\"type\":\"" +
-             bridge_json_escape(bridge_asset_type_name(type)) + "\",\"library\":\"" +
-             bridge_json_escape(bridge_asset_library_name(library)) + "\",\"catalog\":\"" +
-             bridge_json_escape(catalog) + "\",\"description\":\"" +
-             bridge_json_escape(metadata.description ? metadata.description : "") +
-             "\",\"author\":\"" + bridge_json_escape(metadata.author ? metadata.author : "") +
-             "\",\"tags\":[" + tags + "],\"preview\":\"" +
-             bridge_json_escape(preview != bridge_brush_preview_paths.end() ? preview->second : "") +
-             "\"}";
-    return true;
+  const auto list = builder.add(top, "assets", [&](flatbuffers::FlatBufferBuilder &buffer, NodeFields &) {
+    return protocol::CreateListDirect(buffer, nullptr, false, false, false, false, nullptr, !loaded);
   });
-  return std::string("{\"pending\":") + (previews_missing ? "true" : "false") + ",\"items\":[" +
-         items + "]}";
-}
-
-void bridge_assets_build(bContext *C)
-{
-  if (!bridge_assets_visible) {
-    return;
+  if (loaded) {
+    ed::asset::list::iterate(library_ref, [&](asset_system::AssetRepresentation &asset) {
+      if (!bridge_asset_listed(asset)) {
+        return true;
+      }
+      const std::string key = bridge_brush_key(asset.make_weak_reference());
+      const AssetMetaData &metadata = asset.get_metadata();
+      asset_system::AssetLibrary &library = asset.owner_asset_library();
+      std::string catalog;
+      if (const asset_system::AssetCatalog *found = library.catalog_service().find_catalog(
+              metadata.catalog_id))
+      {
+        catalog = found->path.str();
+      }
+      auto preview = bridge_brush_preview_paths.find(key);
+      if (preview == bridge_brush_preview_paths.end() && preview_budget > 0) {
+        preview_budget--;
+        if (std::optional<std::string> path = bridge_brush_preview_write(C, asset, key)) {
+          preview = bridge_brush_preview_paths.emplace(key, *path).first;
+        }
+      }
+      if (preview == bridge_brush_preview_paths.end()) {
+        previews_missing = true;
+      }
+      builder.add(list, key, [&](flatbuffers::FlatBufferBuilder &buffer, NodeFields &fields) {
+        fields.label = asset.get_name();
+        fields.description = metadata.description ? metadata.description : "";
+        std::vector<flatbuffers::Offset<flatbuffers::String>> tags;
+        for (const AssetTag &tag : metadata.tags) {
+          tags.push_back(buffer.CreateString(tag.name));
+        }
+        return protocol::CreateAssetDirect(
+            buffer,
+            bridge_asset_type_name(asset.get_id_type()),
+            bridge_asset_library_name(library).c_str(),
+            catalog.c_str(),
+            metadata.author ? metadata.author : "",
+            &tags,
+            preview != bridge_brush_preview_paths.end() ? preview->second.c_str() : nullptr);
+      });
+      return true;
+    });
   }
-  const auto now = std::chrono::steady_clock::now();
-  if (now < bridge_assets_next_snapshot) {
-    return;
-  }
-  /* Asset lists change rarely; keep loading previews quickly while some are missing. */
-  std::string json = bridge_assets_build_json(C);
-  const bool busy = json.find("\"pending\":true") != std::string::npos ||
-                    json.find("\"loading\":true") != std::string::npos;
-  bridge_assets_next_snapshot = now + std::chrono::milliseconds(busy ? 40 : 500);
-  if (json != bridge_assets_json) {
-    bridge_assets_json = json;
-    bridge_assets_snapshot.publish(std::move(json));
+  if (!loaded || previews_missing) {
+    /* Again soon, until the libraries are loaded and every preview written. */
+    wm::native_ui::view_type_dirty("assets");
   }
 }
 
@@ -2399,55 +2292,6 @@ void bridge_panels_build(bContext *C)
   bridge_context_pop(C, context_store);
 }
 
-void bridge_timeline_build(bContext *C)
-{
-  const Scene *scene = CTX_data_scene(C);
-  const wmWindowManager *wm = CTX_wm_manager(C);
-  if (scene == nullptr || wm == nullptr) {
-    return;
-  }
-#ifdef WITH_PYTHON
-  if (const auto now = std::chrono::steady_clock::now();
-      bridge_timeline_visible && now >= bridge_timeline_next_keys)
-  {
-    bridge_timeline_next_keys = now + std::chrono::milliseconds(250);
-    bridge_python(C,
-                  "timeline.keys",
-                  "bl_ui.native_timeline.keys_json(bpy.context)",
-                  bridge_timeline_keys_json);
-  }
-#endif
-  /* A storyboard: the workspace's sequencer scene has shots, the window following the one under
-   * its playhead. Its frame too, which playback moves. */
-  const Scene *sequencer_scene = CTX_data_sequencer_scene(C);
-  const WorkSpace *workspace = CTX_wm_workspace(C);
-  const bool storyboard = sequencer_scene && workspace &&
-                          (workspace->flags & WORKSPACE_SYNC_SCENE_TIME) &&
-                          sequencer_scene->ed &&
-                          !BLI_listbase_is_empty(seq::active_seqbase_get(sequencer_scene->ed));
-  /* Playback changes the frame every redraw; publish only what the native interface has not seen. */
-  std::string json = "{\"keys\":" + (bridge_timeline_visible ? bridge_timeline_keys_json : "[]") +
-                     ",\"storyboard\":" + (storyboard ? "true" : "false") +
-                     ",\"edit_frame\":" +
-                     std::to_string(sequencer_scene ? sequencer_scene->r.cfra : 0) +
-                     ",\"edit_start\":" +
-                     std::to_string(sequencer_scene ? sequencer_scene->r.sfra : 0) +
-                     ",\"edit_end\":" +
-                     std::to_string(sequencer_scene ? sequencer_scene->r.efra : 0) +
-                     ",\"frame\":" + std::to_string(scene->r.cfra) +
-                     ",\"start\":" + std::to_string(PSFRA) + ",\"end\":" + std::to_string(PEFRA) +
-                     ",\"preview\":" + ((scene->r.flag & SCER_PRV_RANGE) ? "true" : "false") +
-                     ",\"playing\":" + (ED_screen_animation_playing(wm) ? "true" : "false") +
-                     ",\"autokey\":" +
-                     ((scene->toolsettings && (scene->toolsettings->autokey_mode & AUTOKEY_ON)) ?
-                          "true" :
-                          "false") +
-                     "}";
-  if (json != bridge_timeline_json) {
-    bridge_timeline_json = json;
-    bridge_timeline_snapshot.publish(std::move(json));
-  }
-}
 
 /** Set when Blender sent notifiers, see #WM_native_ui_tag_changed. */
 bool bridge_changed = true;
@@ -2469,8 +2313,6 @@ void bridge_toolbar_build(bContext *C, const bool handled_commands)
     next_check = now + std::chrono::seconds(1);
     bridge_panels_build(C);
   }
-  bridge_timed("timeline", [&] { bridge_timeline_build(C); });
-  bridge_timed("assets", [&] { bridge_assets_build(C); });
 }
 
 std::string bridge_json_escape(const std::string &value)
@@ -3391,6 +3233,138 @@ bool bridge_toolbar_view_live(const views::protocol::Command &command)
 /** \} */
 
 /* -------------------------------------------------------------------- */
+/** \name The Timeline Views
+ *
+ * `timeline`: the scene's frame, as `frame`, which `Set` moves to as the playhead does, with its
+ * range; whether it plays and keys automatically, `autokey`; and in a storyboard the edit's frame,
+ * `edit_frame`. `timeline_keys`: the frames with keys, `keys`, and those selected, `selected`, as
+ * the timeline shows them, built only while it does.
+ * \{ */
+
+void bridge_timeline_view_build(bContext *C,
+                                const views::Params & /*params*/,
+                                views::ViewData * /*data*/,
+                                views::ViewBuilder &builder)
+{
+  const Scene *scene = CTX_data_scene(C);
+  const wmWindowManager *wm = CTX_wm_manager(C);
+  const NodeId top = builder.top("timeline", [&](ViewBuffer &buffer, NodeFields &fields) {
+    fields.label = scene ? scene->id.name + 2 : "";
+    return views::protocol::CreateGroup(buffer);
+  });
+  if (scene == nullptr || wm == nullptr) {
+    return;
+  }
+  const auto frame = [&](const char *key, const Scene &scene, const int start, const int end) {
+    builder.add(top, key, [&](ViewBuffer &buffer, NodeFields &fields) {
+      fields.label = IFACE_("Frame");
+      return views::protocol::CreateNumber(buffer,
+                                           scene.r.cfra,
+                                           true,
+                                           views::protocol::NumberKind::Frame,
+                                           MINAFRAMEF,
+                                           MAXFRAMEF,
+                                           start,
+                                           end,
+                                           1.0,
+                                           0);
+    });
+  };
+  frame("frame", *scene, PSFRA, PEFRA);
+  builder.add(top, "preview", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return bridge_data(buffer, (scene->r.flag & SCER_PRV_RANGE) != 0);
+  });
+  builder.add(top, "playing", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return bridge_data(buffer, ED_screen_animation_playing(wm) != nullptr);
+  });
+  builder.add(top, "autokey", [&](ViewBuffer &buffer, NodeFields &fields) {
+    fields.label = IFACE_("Auto Keying");
+    return views::protocol::CreateToggle(
+        buffer, scene->toolsettings && (scene->toolsettings->autokey_mode & AUTOKEY_ON));
+  });
+  /* A storyboard: the workspace's sequencer scene has shots, the window following the one under
+   * its playhead. */
+  const Scene *sequencer_scene = CTX_data_sequencer_scene(C);
+  const WorkSpace *workspace = CTX_wm_workspace(C);
+  if (sequencer_scene && workspace && (workspace->flags & WORKSPACE_SYNC_SCENE_TIME) &&
+      sequencer_scene->ed && !BLI_listbase_is_empty(seq::active_seqbase_get(sequencer_scene->ed)))
+  {
+    frame("edit_frame", *sequencer_scene, sequencer_scene->r.sfra, sequencer_scene->r.efra);
+  }
+}
+
+views::CommandResult bridge_timeline_view_command(bContext *C,
+                                                  const views::Params & /*params*/,
+                                                  views::ViewData * /*data*/,
+                                                  const views::protocol::Command &command,
+                                                  std::string &r_error)
+{
+  Scene *scene = CTX_data_scene(C);
+  const std::string_view target = command.target()->string_view();
+  if (scene == nullptr || command.op() != views::protocol::Op::Set) {
+    r_error = "Not something the timeline does";
+    return views::CommandResult::Failed;
+  }
+  if (target == "frame") {
+    /* As the timeline's own playhead sets it: its update clamps, moves the sound and redraws.
+     * Like scrubbing in Blender, changing frames adds no undo step. */
+    const views::protocol::FloatValue *value = command.value_as_FloatValue();
+    PointerRNA scene_ptr = RNA_id_pointer_create(&scene->id);
+    PropertyRNA *prop = RNA_struct_find_property(&scene_ptr, "frame_current");
+    RNA_property_int_set(&scene_ptr, prop, value ? int(value->value()) : scene->r.cfra);
+    RNA_property_update(C, &scene_ptr, prop);
+    ED_areas_do_frame_follow(C, false);
+    return views::CommandResult::Done;
+  }
+  if (target == "autokey") {
+    const views::protocol::BoolValue *value = command.value_as_BoolValue();
+    PointerRNA ptr = RNA_pointer_create_discrete(&scene->id, RNA_ToolSettings, scene->toolsettings);
+    PropertyRNA *prop = RNA_struct_find_property(&ptr, "use_keyframe_insert_auto");
+    RNA_property_boolean_set(&ptr, prop, value && value->value());
+    RNA_property_update(C, &ptr, prop);
+    bridge_rna_undo_push(C, prop);
+    return views::CommandResult::Done;
+  }
+  r_error = "Not something the timeline does";
+  return views::CommandResult::Failed;
+}
+
+void bridge_timeline_keys_view_build(bContext *C,
+                                     const views::Params & /*params*/,
+                                     views::ViewData * /*data*/,
+                                     views::ViewBuilder &builder)
+{
+  using namespace io::serialize;
+  const NodeId top = builder.top("timeline_keys", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return views::protocol::CreateGroup(buffer);
+  });
+  const std::shared_ptr<Value> keys = bridge_python_value(
+      C, "timeline.keys", "bl_ui.native_timeline.keys_json(bpy.context)");
+  std::vector<int64_t> frames, selected;
+  if (const ArrayValue *array = keys ? keys->as_array_value() : nullptr) {
+    for (const std::shared_ptr<Value> &item : array->elements()) {
+      if (const DictionaryValue *key = item->as_dictionary_value()) {
+        const int64_t frame = int64_t(bridge_number(*key, "f", 0.0));
+        frames.push_back(frame);
+        if (bridge_flag(*key, "s")) {
+          selected.push_back(frame);
+        }
+      }
+    }
+  }
+  for (const auto &[key, values] : {std::pair{"keys", &frames}, std::pair{"selected", &selected}}) {
+    builder.add(top, key, [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      return views::protocol::CreateData(
+          buffer,
+          views::protocol::Value::IntsValue,
+          views::protocol::CreateIntsValue(buffer, buffer.CreateVector(*values)).Union());
+    });
+  }
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
 /** \name The Settings and Render Views
  *
  * `settings`: the interface's own settings that Blender keeps, which it sets as it starts and as
@@ -3616,6 +3590,49 @@ void WM_native_ui_views_register()
   settings.command = bridge_settings_view_command;
   settings.live = [](const protocol::Command & /*command*/) { return true; };
   view_type_add(std::move(settings));
+
+  ViewType timeline;
+  timeline.name = "timeline";
+  timeline.notifiers = {NC_SCENE, NC_SCREEN, NC_WM};
+  timeline.build = bridge_timeline_view_build;
+  timeline.command = bridge_timeline_view_command;
+  timeline.live = [](const protocol::Command &command) {
+    return command.target()->string_view() == "frame";
+  };
+  view_type_add(std::move(timeline));
+
+  ViewType timeline_keys;
+  timeline_keys.name = "timeline_keys";
+  /* Read with Python, four times a second at most. */
+  timeline_keys.min_interval = 0.25;
+  timeline_keys.notifiers = {NC_ANIMATION, NC_OBJECT, NC_SCENE, NC_GPENCIL, NC_WM, NC_GEOM};
+  timeline_keys.wants = [](const wmNotifier &note) {
+    /* Not as the frame changes, as during playback. */
+    return note.category != NC_SCENE || note.data != ND_FRAME;
+  };
+  timeline_keys.build = bridge_timeline_keys_view_build;
+  view_type_add(std::move(timeline_keys));
+
+  ViewType assets;
+  assets.name = "assets";
+  /* Previews are written a few at a time, soon after another. */
+  assets.min_interval = 0.04;
+  assets.notifiers = {NC_ASSET, NC_WM};
+  assets.build = bridge_assets_view_build;
+  assets.command = [](bContext *C,
+                      const Params & /*params*/,
+                      ViewData * /*data*/,
+                      const protocol::Command &command,
+                      std::string &r_error) {
+    if (command.op() != protocol::Op::Invoke) {
+      r_error = "Assets are only added";
+      return CommandResult::Failed;
+    }
+    /* At the 3D cursor, or onto the active object for materials and node groups. */
+    bridge_asset_drag(C, BridgeAssetDragCommand{BRIDGE_ASSET_ADD, command.target()->str(), 0, 0});
+    return CommandResult::Done;
+  };
+  view_type_add(std::move(assets));
 
   ViewType render;
   render.name = "render";
@@ -3941,32 +3958,6 @@ extern "C" char *WM_native_ui_panels_take_json()
 {
   std::string json;
   if (!bridge_panels_snapshot.take(json)) {
-    return nullptr;
-  }
-  char *copy = static_cast<char *>(std::malloc(json.size() + 1));
-  if (copy) {
-    std::memcpy(copy, json.c_str(), json.size() + 1);
-  }
-  return copy;
-}
-
-extern "C" char *WM_native_ui_timeline_take_json()
-{
-  std::string json;
-  if (!bridge_timeline_snapshot.take(json)) {
-    return nullptr;
-  }
-  char *copy = static_cast<char *>(std::malloc(json.size() + 1));
-  if (copy) {
-    std::memcpy(copy, json.c_str(), json.size() + 1);
-  }
-  return copy;
-}
-
-extern "C" char *WM_native_ui_assets_take_json()
-{
-  std::string json;
-  if (!bridge_assets_snapshot.take(json)) {
     return nullptr;
   }
   char *copy = static_cast<char *>(std::malloc(json.size() + 1));

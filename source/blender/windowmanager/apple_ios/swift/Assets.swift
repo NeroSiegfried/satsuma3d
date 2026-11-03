@@ -51,14 +51,14 @@ func assetDropHint(_ type: String?) -> String {
 }
 
 /** Catalogs are browsed by name, merging libraries. */
-private func assetCategory(_ item: JSON) -> String? {
+private func assetCategory(_ item: AssetItem) -> String? {
   guard let catalog = item.string("catalog"), !catalog.isEmpty else { return nil }
   return (catalog as NSString).lastPathComponent
 }
 
 @MainActor
 final class AssetsStore: ObservableObject {
-  @Published var items: [JSON] = []
+  @Published var items: [AssetItem] = []
   @Published var loading = true
   @Published var type = startType
   @Published var category: String? = startCategory
@@ -70,10 +70,10 @@ final class AssetsStore: ObservableObject {
   var paneFrame = CGRect.zero
   var close: () -> Void = {}
   /** The asset being dragged out of the pane, for the viewport's drop interaction. */
-  var dragged: JSON?
+  var dragged: AssetItem?
   /** An asset pulled up out of the pane at once, without the system's hold to lift it: where
    * the finger is, in the window. */
-  var pull: ((AssetPullPhase, JSON, CGPoint) -> Void)?
+  var pull: ((AssetPullPhase, AssetItem, CGPoint) -> Void)?
 
   private var terms: [String] { query.split(whereSeparator: \.isWhitespace).map(String.init) }
 
@@ -93,7 +93,7 @@ final class AssetsStore: ObservableObject {
   /** A search looks through every category of the type. */
   var shownCategory: String? { terms.isEmpty ? category : nil }
 
-  var filtered: [JSON] {
+  var filtered: [AssetItem] {
     let terms = self.terms
     let category = shownCategory
     return items.filter { item in
@@ -107,10 +107,19 @@ final class AssetsStore: ObservableObject {
     }
   }
 
-  func update(_ snapshot: JSON) {
-    loading = snapshot.bool("loading")
-    let next = snapshot.array("items")
-    if !(next as NSArray).isEqual(items as NSArray) { items = next }
+  /** The assets Blender offers, from its `assets` view while the pane shows. */
+  let view: NativeView = {
+    let view = NativeViews.shared.subscribe("assets")
+    NativeViews.shared.pause(view)
+    return view
+  }()
+
+  func update() {
+    guard let top = view.top, let list = view.node("assets") else { return }
+    _ = top.children
+    loading = list.list?.loading ?? false
+    let next = view.children(of: list).map(AssetItem.init)
+    if next != items { items = next }
     /* Nothing of that type: show the first type there is. */
     if !types.isEmpty && !types.contains(type) {
       type = types[0]
@@ -119,8 +128,8 @@ final class AssetsStore: ObservableObject {
     if let category, !items.isEmpty && !categories.contains(category) { self.category = nil }
   }
 
-  func add(_ item: JSON) {
-    WM_native_ui_asset_drag(AssetDragPhase.add.rawValue, item.string("id") ?? "", 0, 0)
+  func add(_ item: AssetItem) {
+    NativeViews.shared.send(view, target: item.id, op: .invoke)
     Haptics.impact()
   }
 }
@@ -218,15 +227,57 @@ struct AssetsPane: View {
   }
 }
 
-private extension Dictionary where Key == String, Value == Any {
-  var assetID: String { string("id") ?? "" }
+/** An asset the pane offers, a row of Blender's `assets` view. */
+struct AssetItem: Equatable {
+  var id = ""
+  var name = ""
+  var type = ""
+  var library = ""
+  var catalog = ""
+  var description = ""
+  var author = ""
+  var tags: [String] = []
+  var preview = ""
+
+  var assetID: String { id }
+
+  @MainActor
+  init(_ node: NativeNode) {
+    id = node.key
+    name = node.label
+    description = node.node.description ?? ""
+    guard let asset = node.content(Blender_NativeUI_Asset.self) else { return }
+    type = asset.type ?? ""
+    library = asset.library ?? ""
+    catalog = asset.catalog ?? ""
+    author = asset.author ?? ""
+    tags = (0..<asset.tagsCount).compactMap { asset.tags(at: $0) }
+    preview = asset.preview ?? ""
+  }
+
+  /** A value by its name, as the pane looks them up. */
+  func string(_ key: String) -> String? {
+    switch key {
+      case "id": id
+      case "name": name
+      case "type": type
+      case "library": library
+      case "catalog": catalog
+      case "description": description
+      case "author": author
+      case "preview": preview
+      default: nil
+    }
+  }
+
+  func strings(_ key: String) -> [String] { key == "tags" ? tags : [] }
 }
 
 enum AssetPullPhase { case begin, move, drop }
 
 struct AssetTile: View {
   @ObservedObject var store: AssetsStore
-  let item: JSON
+  let item: AssetItem
 
   var body: some View {
     Button {
@@ -391,7 +442,7 @@ final class SwiftAssets: NSObject, UIDropInteractionDelegate {
   private var pullPreview: UIView?
   private var pullOverViewport = false
 
-  private func pull(_ phase: AssetPullPhase, _ item: JSON, _ point: CGPoint) {
+  private func pull(_ phase: AssetPullPhase, _ item: AssetItem, _ point: CGPoint) {
     guard let view = dropInteraction.view, let window = view.window else { return }
     let over = !store.paneFrame.contains(point)
     let local = view.convert(point, from: nil)
@@ -434,7 +485,7 @@ final class SwiftAssets: NSObject, UIDropInteractionDelegate {
     pullPreview?.center = CGPoint(x: point.x, y: point.y - (pullOverViewport ? 44 : 0))
   }
 
-  private func showPullPreview(_ item: JSON, over: Bool, in window: UIWindow) {
+  private func showPullPreview(_ item: AssetItem, over: Bool, in window: UIWindow) {
     let center = pullPreview?.center
     pullPreview?.removeFromSuperview()
     let preview: UIView
@@ -465,15 +516,14 @@ final class SwiftAssets: NSObject, UIDropInteractionDelegate {
 
   /** \} */
 
-  func updateSnapshot(_ snapshot: Any?) {
-    /* Blender's JSON may hold null, which arrives as NSNull. */
-    guard let snapshot = snapshot as? JSON else { return }
-    store.update(snapshot)
+  func update() {
+    if store.visible { store.update() }
   }
 
   func toggle() {
     withAnimation(SwiftTimeline.animation) { store.visible.toggle() }
-    Engine.setting("assets", visible ? "show" : "hide")
+    /* Blender lists assets only while the pane shows them. */
+    if visible { NativeViews.shared.resume(store.view) } else { NativeViews.shared.pause(store.view) }
     visibilityDidChange?()
   }
 
@@ -481,7 +531,7 @@ final class SwiftAssets: NSObject, UIDropInteractionDelegate {
   /** \name Dropping into the viewport
    * \{ */
 
-  private func asset(_ session: UIDropSession) -> JSON? {
+  private func asset(_ session: UIDropSession) -> AssetItem? {
     guard session.localDragSession != nil, session.items.count == 1, let item = store.dragged,
           !(item.string("id") ?? "").isEmpty
     else { return nil }
@@ -504,7 +554,7 @@ final class SwiftAssets: NSObject, UIDropInteractionDelegate {
 
   /** Over the viewport the lifted thumbnail becomes a compact pill beside the finger, so the
    * surface under it, and Blender's preview of where the asset lands, stay visible. */
-  private func pillPreview(_ item: JSON) -> UIDragPreview {
+  private func pillPreview(_ item: AssetItem) -> UIDragPreview {
     let pill = UIHostingController(rootView: AssetDropPill(item: item))
     pill.view.backgroundColor = .clear
     let size = pill.sizeThatFits(in: CGSize(width: 320, height: 56))
@@ -524,7 +574,7 @@ final class SwiftAssets: NSObject, UIDropInteractionDelegate {
   }
 
   /** The thumbnail as it was lifted from the pane. */
-  private func thumbnailPreview(_ item: JSON) -> UIDragPreview {
+  private func thumbnailPreview(_ item: AssetItem) -> UIDragPreview {
     let image = UIImageView(image: PreviewCache.image(item.string("preview")) ?? assetTypeIcon(item.string("type")))
     image.frame = CGRect(x: 0, y: 0, width: assetTile, height: assetTile)
     image.contentMode = PreviewCache.image(item.string("preview")) != nil ? .scaleAspectFill : .center
@@ -615,7 +665,7 @@ final class SwiftAssets: NSObject, UIDropInteractionDelegate {
 
 /** The drag preview over the viewport: thumbnail, name and where the drop lands. */
 private struct AssetDropPill: View {
-  let item: JSON
+  let item: AssetItem
 
   var body: some View {
     HStack(spacing: 4) {

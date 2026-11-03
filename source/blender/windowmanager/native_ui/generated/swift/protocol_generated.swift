@@ -149,8 +149,9 @@ public enum Blender_NativeUI_Content: UInt8, UnionEnum {
   case menu = 16
   case operator_ = 17
   case data = 18
+  case asset = 19
 
-  public static var max: Blender_NativeUI_Content { return .data }
+  public static var max: Blender_NativeUI_Content { return .asset }
   public static var min: Blender_NativeUI_Content { return .none_ }
 }
 
@@ -1400,6 +1401,83 @@ public struct Blender_NativeUI_Separator: FlatBufferObject, Verifiable {
   }
 }
 
+///  An asset of a library, such as a material to drag into the scene, as a row of a list: its name
+///  is the node's label, and what it is about its description.
+public struct Blender_NativeUI_Asset: FlatBufferObject, Verifiable {
+
+  static func validateVersion() { FlatBuffersVersion_25_2_10() }
+  public var __buffer: ByteBuffer! { return _accessor.bb }
+  private var _accessor: Table
+
+  private init(_ t: Table) { _accessor = t }
+  public init(_ bb: ByteBuffer, o: Int32) { _accessor = Table(bb: bb, position: o) }
+
+  private enum VTOFFSET: VOffset {
+    case type = 4
+    case library = 6
+    case catalog = 8
+    case author = 10
+    case tags = 12
+    case preview = 14
+    var v: Int32 { Int32(self.rawValue) }
+    var p: VOffset { self.rawValue }
+  }
+
+  ///  What it is, such as "Material" or "Modifier".
+  public var type: String? { let o = _accessor.offset(VTOFFSET.type.v); return o == 0 ? nil : _accessor.string(at: o) }
+  public var typeSegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.type.v) }
+  public var library: String? { let o = _accessor.offset(VTOFFSET.library.v); return o == 0 ? nil : _accessor.string(at: o) }
+  public var librarySegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.library.v) }
+  ///  Its catalog's path, such as "Materials/Metal".
+  public var catalog: String? { let o = _accessor.offset(VTOFFSET.catalog.v); return o == 0 ? nil : _accessor.string(at: o) }
+  public var catalogSegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.catalog.v) }
+  public var author: String? { let o = _accessor.offset(VTOFFSET.author.v); return o == 0 ? nil : _accessor.string(at: o) }
+  public var authorSegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.author.v) }
+  public var hasTags: Bool { let o = _accessor.offset(VTOFFSET.tags.v); return o == 0 ? false : true }
+  public var tagsCount: Int32 { let o = _accessor.offset(VTOFFSET.tags.v); return o == 0 ? 0 : _accessor.vector(count: o) }
+  public func tags(at index: Int32) -> String? { let o = _accessor.offset(VTOFFSET.tags.v); return o == 0 ? nil : _accessor.directString(at: _accessor.vector(at: o) + index * 4) }
+  ///  An image of it.
+  public var preview: String? { let o = _accessor.offset(VTOFFSET.preview.v); return o == 0 ? nil : _accessor.string(at: o) }
+  public var previewSegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.preview.v) }
+  public static func startAsset(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 6) }
+  public static func add(type: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: type, at: VTOFFSET.type.p) }
+  public static func add(library: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: library, at: VTOFFSET.library.p) }
+  public static func add(catalog: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: catalog, at: VTOFFSET.catalog.p) }
+  public static func add(author: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: author, at: VTOFFSET.author.p) }
+  public static func addVectorOf(tags: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: tags, at: VTOFFSET.tags.p) }
+  public static func add(preview: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: preview, at: VTOFFSET.preview.p) }
+  public static func endAsset(_ fbb: inout FlatBufferBuilder, start: UOffset) -> Offset { let end = Offset(offset: fbb.endTable(at: start)); return end }
+  public static func createAsset(
+    _ fbb: inout FlatBufferBuilder,
+    typeOffset type: Offset = Offset(),
+    libraryOffset library: Offset = Offset(),
+    catalogOffset catalog: Offset = Offset(),
+    authorOffset author: Offset = Offset(),
+    tagsVectorOffset tags: Offset = Offset(),
+    previewOffset preview: Offset = Offset()
+  ) -> Offset {
+    let __start = Blender_NativeUI_Asset.startAsset(&fbb)
+    Blender_NativeUI_Asset.add(type: type, &fbb)
+    Blender_NativeUI_Asset.add(library: library, &fbb)
+    Blender_NativeUI_Asset.add(catalog: catalog, &fbb)
+    Blender_NativeUI_Asset.add(author: author, &fbb)
+    Blender_NativeUI_Asset.addVectorOf(tags: tags, &fbb)
+    Blender_NativeUI_Asset.add(preview: preview, &fbb)
+    return Blender_NativeUI_Asset.endAsset(&fbb, start: __start)
+  }
+
+  public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
+    var _v = try verifier.visitTable(at: position)
+    try _v.visit(field: VTOFFSET.type.p, fieldName: "type", required: false, type: ForwardOffset<String>.self)
+    try _v.visit(field: VTOFFSET.library.p, fieldName: "library", required: false, type: ForwardOffset<String>.self)
+    try _v.visit(field: VTOFFSET.catalog.p, fieldName: "catalog", required: false, type: ForwardOffset<String>.self)
+    try _v.visit(field: VTOFFSET.author.p, fieldName: "author", required: false, type: ForwardOffset<String>.self)
+    try _v.visit(field: VTOFFSET.tags.p, fieldName: "tags", required: false, type: ForwardOffset<Vector<ForwardOffset<String>, String>>.self)
+    try _v.visit(field: VTOFFSET.preview.p, fieldName: "preview", required: false, type: ForwardOffset<String>.self)
+    _v.finish()
+  }
+}
+
 ///  A value an interface uses as it sees fit, rather than a control: such as where Blender draws
 ///  the navigation gizmo, for an interface to keep clear of it.
 public struct Blender_NativeUI_Data: FlatBufferObject, Verifiable {
@@ -1897,6 +1975,8 @@ public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable {
         try ForwardOffset<Blender_NativeUI_Operator>.verify(&verifier, at: pos, of: Blender_NativeUI_Operator.self)
       case .data:
         try ForwardOffset<Blender_NativeUI_Data>.verify(&verifier, at: pos, of: Blender_NativeUI_Data.self)
+      case .asset:
+        try ForwardOffset<Blender_NativeUI_Asset>.verify(&verifier, at: pos, of: Blender_NativeUI_Asset.self)
       }
     })
     try _v.visit(field: VTOFFSET.label.p, fieldName: "label", required: false, type: ForwardOffset<String>.self)

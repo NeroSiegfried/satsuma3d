@@ -146,8 +146,6 @@ void WM_native_ui_viewport_trailing_cover_set(float pixels);
 char *WM_NATIVE_UI_NULLABLE WM_native_ui_panels_take_json(void);
 /** One of Blender's menus to show where the pointer is: its name and place. */
 char *WM_NATIVE_UI_NULLABLE WM_native_ui_menu_popup_take_json(void);
-char *WM_NATIVE_UI_NULLABLE WM_native_ui_timeline_take_json(void);
-char *WM_NATIVE_UI_NULLABLE WM_native_ui_assets_take_json(void);
 /** Free a snapshot or menu result. */
 void WM_native_ui_json_free(char *WM_NATIVE_UI_NULLABLE json);
 

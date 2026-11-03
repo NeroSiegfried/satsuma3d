@@ -285,6 +285,20 @@ table Label {
 table Separator {
 }
 
+/// An asset of a library, such as a material to drag into the scene, as a row of a list: its name
+/// is the node's label, and what it is about its description.
+table Asset {
+  /// What it is, such as "Material" or "Modifier".
+  type: string;
+  library: string;
+  /// Its catalog's path, such as "Materials/Metal".
+  catalog: string;
+  author: string;
+  tags: [string];
+  /// An image of it.
+  preview: string;
+}
+
 /// A value an interface uses as it sees fit, rather than a control: such as where Blender draws
 /// the navigation gizmo, for an interface to keep clear of it.
 table Data {
@@ -364,6 +378,7 @@ union Content {
   Menu,
   Operator,
   Data,
+  Asset,
 }
 
 /* -------------------------------------------------------------------- */

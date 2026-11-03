@@ -72,12 +72,8 @@ final class ShellPanels {
 
   /** Blender's panels, timeline and asset snapshots, whichever changed. */
   func pullSnapshots() {
-    if let snapshot = takeJSON("timeline", WM_native_ui_timeline_take_json()) {
-      InterfaceTimings.measure("timeline.apply") { timeline.updateSnapshot(snapshot) }
-    }
-    if let snapshot = takeJSON("assets", WM_native_ui_assets_take_json()) {
-      InterfaceTimings.measure("assets.apply") { assets.updateSnapshot(snapshot) }
-    }
+    timeline.update()
+    assets.update()
     if let snapshot = takeJSON("panels", WM_native_ui_panels_take_json()) {
       InterfaceTimings.measure("panels.apply") { panels.updateSnapshot(snapshot) }
     }

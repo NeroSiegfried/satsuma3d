@@ -79,6 +79,9 @@ struct LabelBuilder;
 struct Separator;
 struct SeparatorBuilder;
 
+struct Asset;
+struct AssetBuilder;
+
 struct Data;
 struct DataBuilder;
 
@@ -444,11 +447,12 @@ enum class Content : uint8_t {
   Menu = 16,
   Operator = 17,
   Data = 18,
+  Asset = 19,
   MIN = NONE,
-  MAX = Data
+  MAX = Asset
 };
 
-inline const Content (&EnumValuesContent())[19] {
+inline const Content (&EnumValuesContent())[20] {
   static const Content values[] = {
     Content::NONE,
     Content::Group,
@@ -468,13 +472,14 @@ inline const Content (&EnumValuesContent())[19] {
     Content::Picture,
     Content::Menu,
     Content::Operator,
-    Content::Data
+    Content::Data,
+    Content::Asset
   };
   return values;
 }
 
 inline const char * const *EnumNamesContent() {
-  static const char * const names[20] = {
+  static const char * const names[21] = {
     "NONE",
     "Group",
     "Panel",
@@ -494,13 +499,14 @@ inline const char * const *EnumNamesContent() {
     "Menu",
     "Operator",
     "Data",
+    "Asset",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameContent(Content e) {
-  if (::flatbuffers::IsOutRange(e, Content::NONE, Content::Data)) return "";
+  if (::flatbuffers::IsOutRange(e, Content::NONE, Content::Asset)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesContent()[index];
 }
@@ -579,6 +585,10 @@ template<> struct ContentTraits<Blender::NativeUI::Operator> {
 
 template<> struct ContentTraits<Blender::NativeUI::Data> {
   static const Content enum_value = Content::Data;
+};
+
+template<> struct ContentTraits<Blender::NativeUI::Asset> {
+  static const Content enum_value = Content::Asset;
 };
 
 bool VerifyContent(::flatbuffers::Verifier &verifier, const void *obj, Content type);
@@ -2652,6 +2662,139 @@ struct Separator::Traits {
   static auto constexpr Create = CreateSeparator;
 };
 
+/// An asset of a library, such as a material to drag into the scene, as a row of a list: its name
+/// is the node's label, and what it is about its description.
+struct Asset FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef AssetBuilder Builder;
+  struct Traits;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_TYPE = 4,
+    VT_LIBRARY = 6,
+    VT_CATALOG = 8,
+    VT_AUTHOR = 10,
+    VT_TAGS = 12,
+    VT_PREVIEW = 14
+  };
+  /// What it is, such as "Material" or "Modifier".
+  const ::flatbuffers::String *type() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_TYPE);
+  }
+  const ::flatbuffers::String *library() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_LIBRARY);
+  }
+  /// Its catalog's path, such as "Materials/Metal".
+  const ::flatbuffers::String *catalog() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_CATALOG);
+  }
+  const ::flatbuffers::String *author() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_AUTHOR);
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *tags() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_TAGS);
+  }
+  /// An image of it.
+  const ::flatbuffers::String *preview() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_PREVIEW);
+  }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_TYPE) &&
+           verifier.VerifyString(type()) &&
+           VerifyOffset(verifier, VT_LIBRARY) &&
+           verifier.VerifyString(library()) &&
+           VerifyOffset(verifier, VT_CATALOG) &&
+           verifier.VerifyString(catalog()) &&
+           VerifyOffset(verifier, VT_AUTHOR) &&
+           verifier.VerifyString(author()) &&
+           VerifyOffset(verifier, VT_TAGS) &&
+           verifier.VerifyVector(tags()) &&
+           verifier.VerifyVectorOfStrings(tags()) &&
+           VerifyOffset(verifier, VT_PREVIEW) &&
+           verifier.VerifyString(preview()) &&
+           verifier.EndTable();
+  }
+};
+
+struct AssetBuilder {
+  typedef Asset Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_type(::flatbuffers::Offset<::flatbuffers::String> type) {
+    fbb_.AddOffset(Asset::VT_TYPE, type);
+  }
+  void add_library(::flatbuffers::Offset<::flatbuffers::String> library) {
+    fbb_.AddOffset(Asset::VT_LIBRARY, library);
+  }
+  void add_catalog(::flatbuffers::Offset<::flatbuffers::String> catalog) {
+    fbb_.AddOffset(Asset::VT_CATALOG, catalog);
+  }
+  void add_author(::flatbuffers::Offset<::flatbuffers::String> author) {
+    fbb_.AddOffset(Asset::VT_AUTHOR, author);
+  }
+  void add_tags(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> tags) {
+    fbb_.AddOffset(Asset::VT_TAGS, tags);
+  }
+  void add_preview(::flatbuffers::Offset<::flatbuffers::String> preview) {
+    fbb_.AddOffset(Asset::VT_PREVIEW, preview);
+  }
+  explicit AssetBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<Asset> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<Asset>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<Asset> CreateAsset(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> type = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> library = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> catalog = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> author = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> tags = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> preview = 0) {
+  AssetBuilder builder_(_fbb);
+  builder_.add_preview(preview);
+  builder_.add_tags(tags);
+  builder_.add_author(author);
+  builder_.add_catalog(catalog);
+  builder_.add_library(library);
+  builder_.add_type(type);
+  return builder_.Finish();
+}
+
+struct Asset::Traits {
+  using type = Asset;
+  static auto constexpr Create = CreateAsset;
+};
+
+inline ::flatbuffers::Offset<Asset> CreateAssetDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *type = nullptr,
+    const char *library = nullptr,
+    const char *catalog = nullptr,
+    const char *author = nullptr,
+    const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *tags = nullptr,
+    const char *preview = nullptr) {
+  auto type__ = type ? _fbb.CreateString(type) : 0;
+  auto library__ = library ? _fbb.CreateString(library) : 0;
+  auto catalog__ = catalog ? _fbb.CreateString(catalog) : 0;
+  auto author__ = author ? _fbb.CreateString(author) : 0;
+  auto tags__ = tags ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*tags) : 0;
+  auto preview__ = preview ? _fbb.CreateString(preview) : 0;
+  return Blender::NativeUI::CreateAsset(
+      _fbb,
+      type__,
+      library__,
+      catalog__,
+      author__,
+      tags__,
+      preview__);
+}
+
 /// A value an interface uses as it sees fit, rather than a control: such as where Blender draws
 /// the navigation gizmo, for an interface to keep clear of it.
 struct Data FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -3310,6 +3453,9 @@ struct Node FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const Blender::NativeUI::Data *content_as_Data() const {
     return content_type() == Blender::NativeUI::Content::Data ? static_cast<const Blender::NativeUI::Data *>(content()) : nullptr;
   }
+  const Blender::NativeUI::Asset *content_as_Asset() const {
+    return content_type() == Blender::NativeUI::Content::Asset ? static_cast<const Blender::NativeUI::Asset *>(content()) : nullptr;
+  }
   const ::flatbuffers::String *label() const {
     return GetPointer<const ::flatbuffers::String *>(VT_LABEL);
   }
@@ -3449,6 +3595,10 @@ template<> inline const Blender::NativeUI::Operator *Node::content_as<Blender::N
 
 template<> inline const Blender::NativeUI::Data *Node::content_as<Blender::NativeUI::Data>() const {
   return content_as_Data();
+}
+
+template<> inline const Blender::NativeUI::Asset *Node::content_as<Blender::NativeUI::Asset>() const {
+  return content_as_Asset();
 }
 
 struct NodeBuilder {
@@ -4477,6 +4627,10 @@ inline bool VerifyContent(::flatbuffers::Verifier &verifier, const void *obj, Co
     }
     case Content::Data: {
       auto ptr = reinterpret_cast<const Blender::NativeUI::Data *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case Content::Asset: {
+      auto ptr = reinterpret_cast<const Blender::NativeUI::Asset *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;

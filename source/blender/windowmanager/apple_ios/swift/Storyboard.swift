@@ -787,7 +787,7 @@ struct StoryboardView: View {
     HStack(spacing: 0) {
       Button {
         timeline.recording.toggle()
-        timeline.send("timeline", "autokey")
+        timeline.setRecording(timeline.recording)
       } label: {
         Image(systemName: timeline.recording ? "record.circle.fill" : "record.circle")
           .foregroundStyle(timeline.recording ? Color.red : .primary)

@@ -84,15 +84,32 @@ final class TimelineStore {
     if self[keyPath: keyPath] != value { self[keyPath: keyPath] = value }
   }
 
-  func send(_ setting: String, _ value: String) {
-    Engine.setting(setting, value)
+  /** Blender's timeline: the frame and its range; and its keys, only while it shows them. */
+  @ObservationIgnored let view = NativeViews.shared.subscribe("timeline")
+  @ObservationIgnored let keysView: NativeView = {
+    let view = NativeViews.shared.subscribe("timeline_keys")
+    NativeViews.shared.pause(view)
+    return view
+  }()
+
+  /** Move Blender's playhead, as scrubbing does. */
+  func setFrame(_ frame: Int) {
+    NativeViews.shared.send(view, target: "frame", value: .float(Double(frame)))
+  }
+
+  func setRecording(_ on: Bool) {
+    NativeViews.shared.send(view, target: "autokey", value: .bool(on))
   }
 
   /** A transport button: in the edit's time the edit plays, the window following its shots, and
    * the previous and next buttons go from cut to cut. */
   func transport(_ command: String) {
     guard editTime else {
-      send("timeline", command)
+      switch command {
+        case "start", "end": Operators.run("SCREEN_OT_frame_jump", ["end": .bool(command == "end")])
+        case "prev_key", "next_key": Operators.run("SCREEN_OT_keyframe_jump", ["next": .bool(command == "next_key")])
+        default: Operators.run("SCREEN_OT_animation_play")
+      }
       return
     }
     let board = storyboard
@@ -108,7 +125,8 @@ final class TimelineStore {
   /* Each edit shows at once; Blender's snapshot confirms it. */
   func select(_ frames: [Int]) {
     keys = keys.map { TimelineKey(frame: $0.frame, selected: frames.contains($0.frame)) }
-    send("timeline_key_select", frames.map(String.init).joined(separator: ",") + "|0")
+    Operators.run("anim.native_key_select",
+                  ["frames": .text(frames.map(String.init).joined(separator: ",")), "extend": .bool(false)])
   }
 
   func moveSelected(by delta: Int) {
@@ -117,12 +135,12 @@ final class TimelineStore {
     for key in keys where !key.selected && result[key.frame] == nil { result[key.frame] = false }
     for key in keys where key.selected { result[key.frame + delta] = true }
     keys = result.keys.sorted().map { TimelineKey(frame: $0, selected: result[$0]!) }
-    send("timeline_key_move", "\(delta)")
+    Operators.run("anim.native_key_move", ["delta": .int(Int64(delta))])
   }
 
   func deleteSelected() {
     keys = keys.filter { !$0.selected }
-    send("timeline_key_delete", "")
+    Operators.run("anim.native_key_delete")
   }
 }
 
@@ -256,7 +274,7 @@ struct Scrubber: View {
     if frame != sent {
       sent = frame
       if store.editTime { store.storyboard.setFrame(frame, final: true) }
-      else { store.send("timeline_frame", "\(frame)") }
+      else { store.setFrame(frame) }
     }
   }
 
@@ -560,7 +578,7 @@ struct TimelineContent: View {
       Button {
         /* Show the new state at once; Blender's snapshot confirms it. */
         store.recording.toggle()
-        store.send("timeline", "autokey")
+        store.setRecording(store.recording)
       } label: {
         Image(systemName: store.recording ? "record.circle.fill" : "record.circle")
           .foregroundStyle(store.recording ? Color.red : .primary)
@@ -717,7 +735,6 @@ struct TimelinePanel: View {
 @MainActor
 final class SwiftTimeline {
   let store = TimelineStore()
-  private var snapshot: NSDictionary?
   var visible: Bool { store.visible }
   var visibilityDidChange: (() -> Void)?
 
@@ -742,7 +759,7 @@ final class SwiftTimeline {
 
   func setWindowOpen(_ open: Bool) {
     store.visible = open
-    Engine.setting("timeline_visible", open ? "1" : "0")
+    keysShown(open)
     visibilityDidChange?()
   }
 
@@ -756,35 +773,84 @@ final class SwiftTimeline {
   /** The curve editor opening, for the node editor to make way. */
   var curvesDidOpen: (() -> Void)?
 
-  func updateSnapshot(_ snapshot: Any?) {
-    guard let snapshot = snapshot as? NSDictionary, !(self.snapshot?.isEqual(snapshot) ?? false),
-          let json = snapshot as? JSON else { return }
-    self.snapshot = snapshot
-    apply(json)
+  /** Blender lists keyframes only while the timeline shows them. */
+  private func keysShown(_ shown: Bool) {
+    if shown { NativeViews.shared.resume(store.keysView) } else { NativeViews.shared.pause(store.keysView) }
   }
 
-  /** Shows the scene's time, or in the storyboard the edit's, from Blender's snapshot. */
-  private func apply(_ json: JSON) {
-    let storyboard = json.bool("storyboard")
-    store.set(\.storyboardAvailable, storyboard)
+  /** Blender's time, as its timeline views have it. */
+  private struct State: Equatable {
+    var storyboard = false
+    var frame = 1, start = 1, end = 1
+    var editFrame: Int?
+    var editStart = 0, editEnd = 0
+    var preview = false, playing = false, autokey = false
+    var keys: [TimelineKey] = []
+  }
+  private var state: State?
+
+  /** Take what Blender's timeline views show now. */
+  func update() {
+    let view = store.view
+    guard let top = view.top else { return }
+    func node(_ key: String) -> NativeNode? {
+      _ = top.children
+      return view.node(key)
+    }
+    func flag(_ key: String) -> Bool {
+      node(key)?.content(Blender_NativeUI_Data.self)?.value(type: Blender_NativeUI_BoolValue.self)?.value ?? false
+    }
+    var next = State()
+    if let frame = node("frame")?.number {
+      next.frame = Int(frame.value)
+      next.start = Int(frame.softMin)
+      next.end = Int(frame.softMax)
+    }
+    if let edit = node("edit_frame")?.number {
+      next.storyboard = true
+      next.editFrame = Int(edit.value)
+      next.editStart = Int(edit.softMin)
+      next.editEnd = Int(edit.softMax)
+    }
+    next.preview = flag("preview")
+    next.playing = flag("playing")
+    next.autokey = node("autokey")?.toggle?.value ?? false
+    if store.visible, let keysTop = store.keysView.top {
+      func ints(_ key: String) -> [Int] {
+        _ = keysTop.children
+        guard let value = store.keysView.node(key)?.content(Blender_NativeUI_Data.self)?
+          .value(type: Blender_NativeUI_IntsValue.self) else { return [] }
+        return (0..<value.valueCount).map { Int(value.value(at: $0)) }
+      }
+      let selected = Set(ints("selected"))
+      next.keys = ints("keys").map { TimelineKey(frame: $0, selected: selected.contains($0)) }
+    }
+    guard next != state else { return }
+    state = next
+    apply(next)
+  }
+
+  /** Shows the scene's time, or in the storyboard the edit's. */
+  private func apply(_ state: State) {
+    store.set(\.storyboardAvailable, state.storyboard)
     let edit = store.editTime
     shownEditTime = edit
     /* Playing, usually only the frame changes: leave the rest untouched so nothing else redraws. */
-    let start = (edit ? json.int("edit_start") : nil) ?? json.int("start") ?? 1
+    let start = edit && state.editFrame != nil ? state.editStart : state.start
     store.set(\.start, start)
-    store.set(\.end, max(start, (edit ? json.int("edit_end") : nil) ?? json.int("end") ?? start))
-    store.set(\.preview, !edit && json.bool("preview"))
-    store.set(\.keys, edit ? [] : json.array("keys").map { TimelineKey(frame: $0.int("f") ?? 0, selected: $0.bool("s")) })
-    let frame = (edit ? json.int("edit_frame") : nil) ?? json.int("frame") ?? start
+    store.set(\.end, max(start, edit && state.editFrame != nil ? state.editEnd : state.end))
+    store.set(\.preview, !edit && state.preview)
+    store.set(\.keys, edit ? [] : state.keys)
+    let frame = (edit ? state.editFrame : nil) ?? state.frame
     if store.frame.blender != frame { store.frame.blender = frame }
-    store.set(\.playing, json.bool("playing"))
-    store.set(\.recording, json.bool("autokey"))
-    if let editFrame = json.int("edit_frame") {
-      store.storyboard.follow(frame: editFrame, sceneFrame: json.int("frame") ?? 0)
+    store.set(\.playing, state.playing)
+    store.set(\.recording, state.autokey)
+    if let editFrame = state.editFrame {
+      store.storyboard.follow(frame: editFrame, sceneFrame: state.frame)
     }
 #if !os(visionOS)
     /* A storyboard opens with its shots showing, once. */
-    if storyboard && !storyboardOpened {
+    if state.storyboard && !storyboardOpened {
       storyboardOpened = true
       setVisible(true)
       setStoryboardShown(true)
@@ -797,8 +863,8 @@ final class SwiftTimeline {
 
   /** The edit's time or the scene's, as the storyboard opens and closes and shots are opened. */
   func timeChanged() {
-    guard store.editTime != shownEditTime, let json = snapshot as? JSON else { return }
-    apply(json)
+    guard store.editTime != shownEditTime, let state else { return }
+    apply(state)
   }
 
   func setStoryboardShown(_ shown: Bool) {
@@ -865,8 +931,7 @@ final class SwiftTimeline {
 #endif
     guard visible != store.visible else { return }
     withAnimation(Self.animation) { store.visible = visible }
-    /* Blender lists keyframes only while the timeline shows them. */
-    Engine.setting("timeline_visible", visible ? "1" : "0")
+    keysShown(visible)
     visibilityDidChange?()
   }
 
