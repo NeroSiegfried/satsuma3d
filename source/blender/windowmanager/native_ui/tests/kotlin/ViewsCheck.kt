@@ -46,7 +46,7 @@ fun update(): ByteBuffer {
         val label = b.createString("X")
         val content = Number.createNumber(b, 1.5, false, NumberKind.Distance, Double.NEGATIVE_INFINITY,
                                           Double.POSITIVE_INFINITY, -10.0, 10.0, 0.1, 3u, false,
-                                          Scale.Linear, 0)
+                                          Scale.Linear, 0, 0.0)
         Node.startNode(b)
         Node.addKey(b, key)
         Node.addContentType(b, Content.Number)
@@ -91,7 +91,7 @@ fun command(): ByteBuffer {
     val builder = FlatBufferBuilder(64)
     val target = builder.createString("location_x")
     val value = FloatValue.createFloatValue(builder, 2.25)
-    val command = Command.createCommand(builder, 7u, 1u, target, Op.Set, Value.FloatValue, value, Phase.End)
+    val command = Command.createCommand(builder, 7u, 1u, target, Op.Set, Value.FloatValue, value, Phase.End, 0)
     builder.finish(Commands.createCommands(builder, Commands.createCommandsVector(builder, intArrayOf(command))))
     return builder.dataBuffer()
 }
