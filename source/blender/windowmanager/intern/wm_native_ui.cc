@@ -313,7 +313,6 @@ std::chrono::steady_clock::time_point bridge_panels_next_snapshot;
 std::string bridge_panels_published;
 std::string bridge_panels_json = "null";
 std::string bridge_properties_state = "{\"tab\":\"OBJECT\"}";
-std::string bridge_shading_state = "{\"tab\":\"SHADING\"}";
 /** Blender's Preferences, a section at a time, in the iPad's Settings, see `SettingsSheet.swift`. */
 std::string bridge_preferences_state = "{\"tab\":\"PREFERENCES_INTERFACE\"}";
 /** The keymaps Settings shows with their items and what it searches for, as JSON. */
@@ -1366,18 +1365,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     bridge_interface_set(C, command.value == "desktop");
     return;
   }
-  if (command.setting == "native_shading_state") {
-    bridge_shading_state = command.value;
-    bridge_panels_next_snapshot = {};
-    bridge_panels_published.clear();
-    return;
-  }
-  if (command.setting == "native_shading_visible") {
-    bridge_panels_visible = (bridge_panels_visible & ~4) | (command.value == "1" ? 4 : 0);
-    bridge_panels_next_snapshot = {};
-    bridge_panels_published.clear();
-    return;
-  }
   if (command.setting == "native_preferences_state") {
     bridge_preferences_state = command.value;
     bridge_panels_next_snapshot = {};
@@ -1587,7 +1574,7 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     bridge_panels_next_snapshot = {};
     bridge_panels_published.clear();
     /* Settings, open over the window, stays as it is. */
-    bridge_panels_visible = (bridge_panels_visible & (4 | 32 | 64 | 128)) | (command.value == "3" ? 3 :
+    bridge_panels_visible = (bridge_panels_visible & (32 | 64 | 128)) | (command.value == "3" ? 3 :
                                                      command.value == "2" ? 2 :
                                                      command.value == "1" ? 1 :
                                                                             0);
@@ -2910,14 +2897,18 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
       }
       if (bridge_panels_visible & 32) {
         bridge_preferences_save_when_changed(C, now);
-        std::istringstream preferences_stream(bridge_timed("panels.preferences", [&] {
-          return ui::native_properties_query(C, bridge_preferences_state, false);
-        }));
-        auto preferences = JsonFormatter().deserialize(preferences_stream);
-        if (preferences && preferences->type() == eValueType::Dictionary) {
-          auto *dictionary = static_cast<DictionaryValue *>(preferences.get());
-          /* Sections drawn with lists of their own, which Settings lists in its own way. */
-          const std::string tab = dictionary->lookup_str("tab").value_or("");
+        /* The Preferences' panels are a view of their own: only the sections drawn with lists of
+         * their own, which Settings lists in its own way, come with the panels. */
+        std::istringstream state_stream(bridge_preferences_state);
+        const auto state = JsonFormatter().deserialize(state_stream);
+        const DictionaryValue *state_dictionary = state ? state->as_dictionary_value() : nullptr;
+        auto preferences = std::make_shared<DictionaryValue>();
+        {
+          DictionaryValue *dictionary = preferences.get();
+          const std::string tab = state_dictionary ?
+                                      std::string(state_dictionary->lookup_str("tab").value_or("")) :
+                                      std::string();
+          dictionary->append_str("tab", tab);
           std::string expression;
           if (tab == "PREFERENCES_ADDONS") {
             expression = "bl_ui.native_settings.addons_json(bpy.context)";
@@ -2937,18 +2928,7 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
             }
           }
         }
-        if (preferences) {
-          merged.append("preferences", std::move(preferences));
-        }
-      }
-      if (bridge_panels_visible & 4) {
-        std::istringstream shading_stream(bridge_timed("panels.shading", [&] {
-          return ui::native_properties_query(C, bridge_shading_state, false);
-        }));
-        auto shading = JsonFormatter().deserialize(shading_stream);
-        if (shading) {
-          merged.append("shading", std::move(shading));
-        }
+        merged.append("preferences", std::move(preferences));
       }
       std::ostringstream merged_stream;
       JsonFormatter().serialize(merged_stream, merged);
@@ -4073,9 +4053,7 @@ static void bridge_dispatch(bContext *C, BridgeMessage &message)
   const auto *menu = std::get_if<BridgeMenuRequest>(&message);
   if ((!menu || menu->execute) && (!setting || (setting->setting != "native_properties_edit" &&
                                                 setting->setting != "native_properties_state" &&
-                                                setting->setting != "native_shading_state" &&
                                                 setting->setting != "native_panels" &&
-                                                setting->setting != "native_shading_visible" &&
                                                 setting->setting != "native_nodes_state" &&
                                                 setting->setting != "native_nodes_visible" &&
                                                 setting->setting != "native_nodes_edit" &&
@@ -4094,8 +4072,6 @@ static void bridge_dispatch(bContext *C, BridgeMessage &message)
     bridge_context_pop(C, context_store);
   }
   const bool panel_message = setting && (setting->setting == "native_panels" ||
-                                         setting->setting == "native_shading_state" ||
-                                         setting->setting == "native_shading_visible" ||
                                          setting->setting == "native_panel_edit" ||
                                          setting->setting == "native_properties_state" ||
                                          setting->setting == "native_properties_edit" ||
