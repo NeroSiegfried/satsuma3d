@@ -98,6 +98,7 @@
 #include "WM_gizmo_api.hh"
 #include "WM_native_interface.hh"
 #include "WM_native_ui.h"
+#include "wm_native_ui_timing.hh"
 #include "WM_native_ui.hh"
 #include "WM_toolsystem.hh"
 #include "WM_types.hh"
@@ -173,52 +174,6 @@ static void bridge_record(const char *table, const std::string &json)
     fwrite(json.data(), 1, json.size(), file);
     fclose(file);
   }
-}
-
-/**
- * How long a part of a snapshot took to build, with `BLENDER_NATIVE_UI_RECORD`: a line of
- * `native_ui_record/timings.jsonl` for each, to find what makes the bridge slow.
- */
-class BridgeTimer {
-  const char *part_;
-  std::chrono::steady_clock::time_point start_ = std::chrono::steady_clock::now();
-
- public:
-  explicit BridgeTimer(const char *part) : part_(part) {}
-  ~BridgeTimer()
-  {
-    static const bool record = getenv("BLENDER_NATIVE_UI_RECORD") != nullptr;
-    static FILE *file = nullptr;
-    static int lines = 0;
-    if (!record || lines >= 1000000) {
-      return;
-    }
-    if (file == nullptr) {
-      char directory[FILE_MAX];
-      BLI_path_join(directory, sizeof(directory), BKE_tempdir_base(), "native_ui_record");
-      BLI_dir_create_recursive(directory);
-      char path[FILE_MAX];
-      BLI_path_join(path, sizeof(path), directory, "timings.jsonl");
-      file = BLI_fopen(path, "wb");
-      if (file == nullptr) {
-        return;
-      }
-    }
-    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
-                                                                start_)
-                          .count();
-    fprintf(file, "{\"part\":\"%s\",\"ms\":%.3f}\n", part_, ms);
-    if (++lines % 100 == 0) {
-      fflush(file);
-    }
-  }
-};
-
-/** Call \a fn, timed as \a part of a snapshot, see #BridgeTimer. */
-template<typename Fn> static auto bridge_timed(const char *part, Fn fn)
-{
-  BridgeTimer timer(part);
-  return fn();
 }
 
 #ifdef WITH_PYTHON
