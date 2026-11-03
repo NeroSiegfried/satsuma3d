@@ -5588,9 +5588,6 @@ static wmEventType wm_event_type_from_ghost_key(GHOST_TKey key)
       /* IOS_FIXME - Event to get multi text edit events from iOS into Blender */
     case GHOST_kKeyTextEdit:
       return EVT_TEXTEDIT;
-
-#else
-    case GHOST_kKeyF24:
 #endif
 
 #if defined(__GNUC__) || defined(__clang__)
