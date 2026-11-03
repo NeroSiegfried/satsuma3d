@@ -529,8 +529,8 @@ struct TextStyleSection: View {
 
   private var font: UIFont? { FontFiles.font(file: style.string("font_file"), size: 17) }
 
-  private func edit(_ command: String) {
-    Engine.setting("text_object_edit", command)
+  private func edit(_ name: String, _ value: NativeValue) {
+    ShellModel.current?.setText(name, value)
   }
 
   private func number(_ key: String) -> Double {
@@ -539,7 +539,7 @@ struct TextStyleSection: View {
 
   private func setNumber(_ key: String, _ value: Double) {
     local[key] = value
-    edit("value:\(key):\(value)")
+    edit(key, .float(value))
   }
 
   var body: some View {
@@ -587,7 +587,7 @@ struct TextStyleSection: View {
         /* The family's bold and italic faces along with it, which Blender's styles use. */
         FontFiles.write(descriptor, family: true) { url, faces in
           let lines = ["font=" + url.path] + faces.map { "\($0.key)=\($0.value.path)" }
-          Engine.setting("text_object_edit", "font:" + lines.joined(separator: "\n"))
+          ShellModel.current?.setText("font", .texts(lines))
         }
       }.present(from: anchor)
     } label: {
@@ -619,7 +619,7 @@ struct TextStyleSection: View {
       Menu {
         Toggle("Small Caps", isOn: Binding(
           get: { style.bool("small_caps") },
-          set: { edit("style:SMALL_CAPS:" + ($0 ? "1" : "0")) }))
+          set: { edit("small_caps", .bool($0)) }))
       } label: {
         Image(systemName: "ellipsis")
           .font(.system(size: 19, weight: .semibold))
@@ -635,7 +635,7 @@ struct TextStyleSection: View {
   private func styleButton(_ name: String, key: String, symbol: String, title: String) -> some View {
     let on = style.bool(key)
     return Button {
-      edit("style:\(name):" + (on ? "0" : "1"))
+      edit(name.lowercased(), .bool(!on))
     } label: {
       Image(systemName: symbol)
         .font(.system(size: 19, weight: .semibold))
@@ -686,7 +686,7 @@ struct TextStyleSection: View {
       ForEach(choices, id: \.0) { value, symbol, title in
         let chosen = value == current
         Button {
-          edit((key == "align_x" ? "align:" : "align_y:") + value)
+          edit(key == "align_x" ? "align" : "align_y", .text(value))
         } label: {
           Image(systemName: symbol)
             .font(.system(size: 19, weight: .medium))

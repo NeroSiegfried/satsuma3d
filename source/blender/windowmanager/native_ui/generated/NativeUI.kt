@@ -42,10 +42,6 @@ object Flag : KSerializer<Boolean> {
 data class Toolbar(
   /** Blender's context mode, such as `objectmode` or `edit_mesh`. */
   @SerialName("mode") val mode: String? = null,
-  /** The text object being edited, with its fonts and style. */
-  @SerialName("textObject") val textObject: JsonElement? = null,
-  /** The brushes the mode offers. */
-  @SerialName("brushes") val brushes: JsonElement? = null,
   /** A render in progress, or its result. */
   @SerialName("render") val render: JsonElement? = null,
   @SerialName("preferences") val preferences: JsonElement? = null,

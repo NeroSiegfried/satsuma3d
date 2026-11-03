@@ -207,10 +207,6 @@ struct BridgeSettingCommand {
   std::string value;
 };
 
-struct BridgeBrushCommand {
-  std::string key;
-};
-
 /** Native asset pane drags; see #bridge_asset_drag. */
 enum BridgeAssetDragPhase {
   BRIDGE_ASSET_DRAG_BEGIN,
@@ -243,7 +239,6 @@ struct BridgeMenuRequest {
 using BridgeMessage = std::variant<BridgeSettingCommand,
                                   float,
                                   BridgeMenuRequest,
-                                  BridgeBrushCommand,
                                   BridgeAssetDragCommand>;
 /* A single inbox preserves ordering across tools, settings, operators and menus. */
 GHOST_MessageQueue<BridgeMessage> bridge_messages;
@@ -600,33 +595,6 @@ static Curve *bridge_text_object_active(bContext *C)
   }
   Object *object = CTX_data_active_object(C);
   return object && object->type == OB_FONT ? id_cast<Curve *>(object->data) : nullptr;
-}
-
-/** The style the system's formatting panel shows: the selection's, else what typing adds. */
-static std::string bridge_text_object_json(bContext *C)
-{
-  Curve *curve = bridge_text_object_edited(C);
-  if (curve == nullptr) {
-    return "null";
-  }
-  int selection_start, selection_end;
-  const short flag = BKE_vfont_select_get(curve, &selection_start, &selection_end) ?
-                         curve->editfont->textbufinfo[selection_start].flag :
-                         curve->curinfo.flag;
-  PointerRNA curve_ptr = RNA_id_pointer_create(&curve->id);
-  PropertyRNA *align_prop = RNA_struct_find_property(&curve_ptr, "align_x");
-  const char *align = "";
-  RNA_property_enum_identifier(
-      C, &curve_ptr, align_prop, RNA_property_enum_get(&curve_ptr, align_prop), &align);
-  std::string json = "{";
-  json += std::string("\"bold\":") + ((flag & CU_CHINFO_BOLD) ? "true" : "false");
-  json += std::string(",\"italic\":") + ((flag & CU_CHINFO_ITALIC) ? "true" : "false");
-  json += std::string(",\"underline\":") + ((flag & CU_CHINFO_UNDERLINE) ? "true" : "false");
-  json += ",\"align\":\"" + std::string(align) + "\"";
-  json += ",\"font_file\":\"" +
-          bridge_json_escape(curve->vfont ? curve->vfont->filepath : "") + "\"";
-  json += "}";
-  return json;
 }
 
 /**
@@ -1453,10 +1421,7 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     return;
   }
 #endif
-  if (command.setting == "text_object_edit") {
-    bridge_text_object_edit(C, command.value);
-    return;
-  }
+
   if (command.setting == "object_mode") {
     bridge_mode_set(C, command.value.c_str());
     return;
@@ -1662,8 +1627,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
  * the same brushes as Blender's own asset shelf popup (without its per-tool filter).
  * \{ */
 
-std::string bridge_brushes_json = "null";
-std::chrono::steady_clock::time_point bridge_brushes_next_snapshot;
 /* Session-lifetime PNG copies of brush previews, keyed like #bridge_brush_key(). An empty path means
  * the asset has no usable preview. */
 std::map<std::string, std::string> bridge_brush_preview_paths;
@@ -1769,90 +1732,109 @@ std::optional<std::string> bridge_brush_preview_write(const bContext *C,
   return saved ? filepath : "";
 }
 
-std::string bridge_brushes_build_json(bContext *C, const eContextObjectMode mode)
+/**
+ * The brushes the mode offers, as its asset shelf lists them, grouped by catalog: `brushes`, a list
+ * whose rows are keyed by the brushes' references and `Activate` them. Previews load in the
+ * background, their pictures written a few at a time, the list built again soon until all are.
+ */
+void bridge_brushes_view_build(bContext *C,
+                               const wm::native_ui::Params & /*params*/,
+                               wm::native_ui::ViewData * /*data*/,
+                               wm::native_ui::ViewBuilder &builder)
 {
-  const AssetShelfType *shelf_type = bridge_brush_shelf_type(mode);
-  Paint *paint = BKE_paint_get_active_from_context(C);
-  if (shelf_type == nullptr || paint == nullptr) {
-    return "null";
-  }
-
-  const AssetLibraryReference library_ref = asset_system::all_library_reference();
-  ed::asset::list::storage_fetch(&library_ref, C);
-  if (!ed::asset::list::is_loaded(&library_ref)) {
-    /* Keep the previous list while the asset libraries are (re)loading. */
-    return bridge_brushes_json == "null" ? "{\"loading\":true,\"items\":[]}" : bridge_brushes_json;
-  }
-
+  namespace protocol = wm::native_ui::protocol;
+  using wm::native_ui::NodeFields;
   struct BrushItem {
     std::string key;
     std::string name;
     std::string catalog;
     std::string preview;
   };
-  std::vector<BrushItem> items;
-  /* Previews load in the background; writing their PNGs is spread over several snapshots. */
-  int preview_budget = 8;
+  /* As last listed, kept while the asset libraries (re)load. */
+  static std::vector<BrushItem> items;
+  const auto top = builder.top("brushes", [](flatbuffers::FlatBufferBuilder &buffer, NodeFields &) {
+    return protocol::CreateGroup(buffer);
+  });
+  const bool has_view3d = CTX_wm_window(C) && CTX_wm_area(C) && CTX_wm_region(C);
+  const AssetShelfType *shelf_type = has_view3d ? bridge_brush_shelf_type(CTX_data_mode_enum(C)) :
+                                                  nullptr;
+  Paint *paint = has_view3d ? BKE_paint_get_active_from_context(C) : nullptr;
+  if (shelf_type == nullptr || paint == nullptr) {
+    items.clear();
+    return;
+  }
+
+  const AssetLibraryReference library_ref = asset_system::all_library_reference();
+  ed::asset::list::storage_fetch(&library_ref, C);
+  const bool loaded = ed::asset::list::is_loaded(&library_ref);
   bool previews_missing = false;
-  ed::asset::list::iterate(library_ref, [&](asset_system::AssetRepresentation &asset) {
-    if (!ed::asset::shelf::type_asset_poll(*shelf_type, asset)) {
-      return true;
-    }
-    BrushItem item;
-    item.key = bridge_brush_key(asset.make_weak_reference());
-    item.name = asset.get_name();
-    if (const asset_system::AssetCatalog *catalog =
-            asset.owner_asset_library().catalog_service().find_catalog(
-                asset.get_metadata().catalog_id))
-    {
-      item.catalog = catalog->path.str();
-    }
-    auto preview = bridge_brush_preview_paths.find(item.key);
-    if (preview == bridge_brush_preview_paths.end() && preview_budget > 0) {
-      preview_budget--;
-      if (std::optional<std::string> path = bridge_brush_preview_write(C, asset, item.key)) {
-        preview = bridge_brush_preview_paths.emplace(item.key, *path).first;
+  if (loaded) {
+    items.clear();
+    /* Writing previews' pictures is spread over several builds. */
+    int preview_budget = 8;
+    ed::asset::list::iterate(library_ref, [&](asset_system::AssetRepresentation &asset) {
+      if (!ed::asset::shelf::type_asset_poll(*shelf_type, asset)) {
+        return true;
       }
-    }
-    if (preview != bridge_brush_preview_paths.end()) {
-      item.preview = preview->second;
-    }
-    else {
-      previews_missing = true;
-    }
-    items.push_back(std::move(item));
-    return true;
-  });
-  /* Group by catalog like the shelf's catalog tabs; uncatalogued brushes go last. */
-  std::stable_sort(items.begin(), items.end(), [](const BrushItem &a, const BrushItem &b) {
-    if (a.catalog.empty() != b.catalog.empty()) {
-      return b.catalog.empty();
-    }
-    return a.catalog < b.catalog;
-  });
+      BrushItem item;
+      item.key = bridge_brush_key(asset.make_weak_reference());
+      item.name = asset.get_name();
+      if (const asset_system::AssetCatalog *catalog =
+              asset.owner_asset_library().catalog_service().find_catalog(
+                  asset.get_metadata().catalog_id))
+      {
+        item.catalog = catalog->path.str();
+      }
+      auto preview = bridge_brush_preview_paths.find(item.key);
+      if (preview == bridge_brush_preview_paths.end() && preview_budget > 0) {
+        preview_budget--;
+        if (std::optional<std::string> path = bridge_brush_preview_write(C, asset, item.key)) {
+          preview = bridge_brush_preview_paths.emplace(item.key, *path).first;
+        }
+      }
+      if (preview != bridge_brush_preview_paths.end()) {
+        item.preview = preview->second;
+      }
+      else {
+        previews_missing = true;
+      }
+      items.push_back(std::move(item));
+      return true;
+    });
+    /* Grouped by catalog, as the shelf's catalog tabs; uncatalogued brushes go last. */
+    std::stable_sort(items.begin(), items.end(), [](const BrushItem &a, const BrushItem &b) {
+      if (a.catalog.empty() != b.catalog.empty()) {
+        return b.catalog.empty();
+      }
+      return a.catalog < b.catalog;
+    });
+  }
 
   const std::string active = paint->brush_asset_reference ?
                                  bridge_brush_key(*paint->brush_asset_reference) :
                                  "";
-  std::string json = "{\"shelf\":\"";
-  json += bridge_json_escape(shelf_type->idname);
-  json += "\",\"active\":\"";
-  json += bridge_json_escape(active);
-  json += "\",\"pending\":";
-  json += previews_missing ? "true" : "false";
-  json += ",\"items\":[";
-  for (size_t i = 0; i < items.size(); i++) {
-    const BrushItem &item = items[i];
-    if (i > 0) {
-      json += ",";
-    }
-    const std::string catalog_name = item.catalog.substr(item.catalog.rfind('/') + 1);
-    json += "{\"id\":\"" + bridge_json_escape(item.key) + "\",\"title\":\"" +
-            bridge_json_escape(item.name) + "\",\"catalog\":\"" + bridge_json_escape(catalog_name) +
-            "\",\"preview\":\"" + bridge_json_escape(item.preview) + "\"}";
+  const bool loading = !loaded || previews_missing;
+  const auto list = builder.add(
+      top, "brushes", [&](flatbuffers::FlatBufferBuilder &buffer, NodeFields &fields) {
+        fields.label = shelf_type->idname;
+        return protocol::CreateListDirect(
+            buffer, active.c_str(), false, false, false, false, nullptr, loading);
+      });
+  for (const BrushItem &item : items) {
+    builder.add(list, item.key, [&](flatbuffers::FlatBufferBuilder &buffer, NodeFields &fields) {
+      fields.label = item.name;
+      return protocol::CreateRowDirect(buffer,
+                                       0,
+                                       item.key == active,
+                                       false,
+                                       item.preview.empty() ? nullptr : item.preview.c_str(),
+                                       item.catalog.substr(item.catalog.rfind('/') + 1).c_str());
+    });
   }
-  json += "]}";
-  return json;
+  if (loading) {
+    /* Again soon, until the libraries are loaded and every preview written. */
+    wm::native_ui::view_type_dirty("brushes");
+  }
 }
 
 /** Modes that stroke brushes, where the + and - pill picks the stroke's direction. */
@@ -1967,8 +1949,6 @@ void bridge_brush_activate(bContext *C, const std::string &key)
     });
   }
   bridge_context_pop(C, context_store);
-  /* Publish the new active brush with the next snapshot. */
-  bridge_brushes_next_snapshot = {};
 }
 
 /** \} */
@@ -2275,7 +2255,6 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
   const BridgeContextStore context_store = bridge_context_push_view3d(C);
   const bool has_view3d_context = CTX_wm_window(C) != nullptr && CTX_wm_area(C) != nullptr &&
                                   CTX_wm_region(C) != nullptr;
-  const eContextObjectMode mode = has_view3d_context ? CTX_data_mode_enum(C) : CTX_MODE_OBJECT;
   const char *mode_string = has_view3d_context ? CTX_data_mode_string(C) : "objectmode";
   std::string render_json = "null";
   std::string preferences_json = "null";
@@ -2454,30 +2433,11 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
     }
   }
 #endif
-  if (!has_view3d_context) {
-    bridge_brushes_json = "null";
-  }
-  else if (const auto now = std::chrono::steady_clock::now(); now >= bridge_brushes_next_snapshot) {
-    /* Asset polling runs Python per brush, so follow the native refresh cadence. */
-    bridge_brushes_next_snapshot = now + std::chrono::milliseconds(250);
-    bridge_brushes_json = bridge_timed("brushes",
-                                       [&] { return bridge_brushes_build_json(C, mode); });
-    if (bridge_brushes_json.find("\"pending\":true") != std::string::npos ||
-        bridge_brushes_json.find("\"loading\":true") != std::string::npos)
-    {
-      /* Keep loading previews without waiting for the native cadence. */
-      bridge_brushes_next_snapshot = now + std::chrono::milliseconds(30);
-    }
-  }
   bridge_context_pop(C, context_store);
 
   std::string json = "{\"mode\":\"";
   json += bridge_json_escape(mode_string ? mode_string : "objectmode");
-  json += "\",\"textObject\":";
-  json += has_view3d_context ? bridge_text_object_json(C) : "null";
-  json += ",\"brushes\":";
-  json += bridge_brushes_json;
-  json += ",\"render\":";
+  json += "\",\"render\":";
   json += render_json;
   json += ",\"preferences\":";
   json += preferences_json;
@@ -3073,6 +3033,88 @@ void bridge_actions_build(bContext *C, const char *tool, views::ViewBuilder &bui
   }
 }
 
+/** The text object being typed into: `text`, which `Add` types into and `Remove` deletes from, and
+ * its style where the cursor is, `text:bold` and so on, `text:align` and `text:font`, its file. */
+void bridge_text_object_build(bContext *C, views::ViewBuilder &builder, const NodeId top)
+{
+  Curve *curve = bridge_text_object_edited(C);
+  if (curve == nullptr) {
+    return;
+  }
+  builder.add(top, "text", [&](ViewBuffer &buffer, NodeFields &fields) {
+    fields.label = curve->id.name + 2;
+    return views::protocol::CreateTextFieldDirect(buffer, "", true);
+  });
+  int selection_start, selection_end;
+  const short flag = BKE_vfont_select_get(curve, &selection_start, &selection_end) ?
+                         curve->editfont->textbufinfo[selection_start].flag :
+                         curve->curinfo.flag;
+  for (const auto &[key, bit, label] : {std::tuple{"text:bold", CU_CHINFO_BOLD, "Bold"},
+                                        std::tuple{"text:italic", CU_CHINFO_ITALIC, "Italic"},
+                                        std::tuple{"text:underline", CU_CHINFO_UNDERLINE, "Underline"}})
+  {
+    builder.add(top, key, [&](ViewBuffer &buffer, NodeFields &fields) {
+      fields.label = IFACE_(label);
+      return views::protocol::CreateToggle(buffer, (flag & bit) != 0);
+    });
+  }
+  PointerRNA curve_ptr = RNA_id_pointer_create(&curve->id);
+  PropertyRNA *align_prop = RNA_struct_find_property(&curve_ptr, "align_x");
+  const char *align = "";
+  RNA_property_enum_identifier(
+      C, &curve_ptr, align_prop, RNA_property_enum_get(&curve_ptr, align_prop), &align);
+  builder.add(top, "text:align", [&](ViewBuffer &buffer, NodeFields &fields) {
+    fields.label = IFACE_("Alignment");
+    return views::protocol::CreateChoiceDirect(buffer, align);
+  });
+  builder.add(top, "text:font", [&](ViewBuffer &buffer, NodeFields &fields) {
+    fields.label = IFACE_("Font");
+    return bridge_data(buffer, std::string_view(curve->vfont ? curve->vfont->filepath : ""));
+  });
+}
+
+/** A command to the text object, being typed into or not, see #bridge_text_object_build: as
+ * #bridge_text_object_edit takes it. Also its spacing and size, `text:size` and so on, and its
+ * vertical alignment, `text:align_y`, which Properties shows. */
+std::optional<std::string> bridge_text_object_command(const views::protocol::Command &command)
+{
+  const std::string_view target = command.target()->string_view();
+  const views::protocol::TextValue *text_value = command.value_as_TextValue();
+  const std::string text = text_value && text_value->value() ? text_value->value()->str() : "";
+  if (target == "text") {
+    return command.op() == views::protocol::Op::Add    ? std::optional("insert:" + text) :
+           command.op() == views::protocol::Op::Remove ? std::optional<std::string>("delete") :
+                                                         std::nullopt;
+  }
+  if (command.op() != views::protocol::Op::Set || !StringRef(target).startswith("text:")) {
+    return std::nullopt;
+  }
+  const std::string name(target.substr(5));
+  if (ELEM(name, "bold", "italic", "underline", "small_caps")) {
+    const views::protocol::BoolValue *on = command.value_as_BoolValue();
+    std::string style = name;
+    std::transform(style.begin(), style.end(), style.begin(), ::toupper);
+    return "style:" + style + ":" + (on && on->value() ? "1" : "0");
+  }
+  if (ELEM(name, "align", "align_y")) {
+    return name + ":" + text;
+  }
+  if (name == "font") {
+    const views::protocol::TextsValue *lines = command.value_as_TextsValue();
+    std::string joined;
+    if (lines && lines->value()) {
+      for (const flatbuffers::String *line : *lines->value()) {
+        joined += (joined.empty() ? "" : "\n") + line->str();
+      }
+    }
+    return "font:" + joined;
+  }
+  if (const views::protocol::FloatValue *number = command.value_as_FloatValue()) {
+    return "value:" + name + ":" + bridge_json_number(number->value());
+  }
+  return std::nullopt;
+}
+
 void bridge_toolbar_view_build(bContext *C,
                                const views::Params & /*params*/,
                                views::ViewData * /*data*/,
@@ -3210,6 +3252,7 @@ void bridge_toolbar_view_build(bContext *C,
   }
   if (has_view3d) {
     bridge_actions_build(C, active_tool_id, builder, top);
+    bridge_text_object_build(C, builder, top);
   }
 
   if (has_view3d) {
@@ -3368,6 +3411,29 @@ views::CommandResult bridge_toolbar_view_command(bContext *C,
   if (invoke && StringRef(target).startswith("axis:")) {
     return setting("constraint_axis", std::string(target.substr(5)));
   }
+  if (std::optional<std::string> edit = bridge_text_object_command(command)) {
+    /* Typed text: each line inserted, and a line break between. */
+    if (StringRef(*edit).startswith("insert:")) {
+      const std::string typed = edit->substr(7);
+      size_t start = 0;
+      while (true) {
+        const size_t end = typed.find('\n', start);
+        const std::string line = typed.substr(start, end - start);
+        if (!line.empty()) {
+          bridge_text_object_edit(C, "insert:" + line);
+        }
+        if (end == std::string::npos) {
+          break;
+        }
+        bridge_text_object_edit(C, "line_break");
+        start = end + 1;
+      }
+    }
+    else {
+      bridge_text_object_edit(C, *edit);
+    }
+    return views::CommandResult::Done;
+  }
   r_error = "Not something the toolbar does";
   return views::CommandResult::Failed;
 }
@@ -3396,6 +3462,29 @@ void WM_native_ui_views_register()
   toolbar.command = bridge_toolbar_view_command;
   toolbar.live = bridge_toolbar_view_live;
   view_type_add(std::move(toolbar));
+
+  ViewType brushes;
+  brushes.name = "brushes";
+  /* Previews are written a few at a time, soon after another. */
+  brushes.min_interval = 0.03;
+  brushes.notifiers = {NC_BRUSH, NC_ASSET, NC_SCENE, NC_WM};
+  brushes.wants = [](const wmNotifier &note) {
+    return note.category != NC_SCENE || ELEM(note.data, ND_MODE, ND_TOOLSETTINGS);
+  };
+  brushes.build = bridge_brushes_view_build;
+  brushes.command = [](bContext *C,
+                       const Params & /*params*/,
+                       ViewData * /*data*/,
+                       const protocol::Command &command,
+                       std::string &r_error) {
+    if (command.op() != protocol::Op::Activate) {
+      r_error = "Brushes are only chosen";
+      return CommandResult::Failed;
+    }
+    bridge_brush_activate(C, command.target()->str());
+    return CommandResult::Done;
+  };
+  view_type_add(std::move(brushes));
 }
 
 void WM_native_ui_starter_library_ensure()
@@ -3471,15 +3560,6 @@ extern "C" void WM_native_ui_setting_enqueue(const char *setting, const char *va
   }
 
   bridge_messages.push(BridgeSettingCommand{setting, value});
-}
-
-extern "C" void WM_native_ui_brush_activate(const char *brush_id)
-{
-  if (brush_id == nullptr || brush_id[0] == '\0') {
-    return;
-  }
-
-  bridge_messages.push(BridgeBrushCommand{brush_id});
 }
 
 /* -------------------------------------------------------------------- */
@@ -4208,9 +4288,6 @@ static void bridge_dispatch(bContext *C, BridgeMessage &message)
         using T = std::decay_t<decltype(command)>;
         if constexpr (std::is_same_v<T, BridgeMenuRequest>) {
           bridge_dispatch_menu(C, command);
-        }
-        else if constexpr (std::is_same_v<T, BridgeBrushCommand>) {
-          bridge_brush_activate(C, command.key);
         }
         else if constexpr (std::is_same_v<T, BridgeAssetDragCommand>) {
           bridge_asset_drag(C, command);

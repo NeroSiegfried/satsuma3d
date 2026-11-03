@@ -29,6 +29,7 @@
 
 namespace blender {
 struct bContext;
+struct wmNotifier;
 }
 
 namespace blender::wm::native_ui {
@@ -71,6 +72,8 @@ struct ViewType {
   std::string name;
   /** Notifier categories (`NC_*`) that may change it; none to rebuild on any notifier. */
   Vector<uint32_t> notifiers;
+  /** Of those, the notifiers that may change it, by what else they say, or all without this. */
+  bool (*wants)(const wmNotifier &note) = nullptr;
   /**
    * The least time between builds that notifiers ask for, in seconds, for a view costly to build
    * that changes often, such as during playback. Commands are shown at once all the same, except

@@ -54,6 +54,16 @@ struct DragHint: Equatable {
   let done: Bool
 }
 
+/** The style of a text object's text where the cursor is. */
+struct TextObjectStyle: Equatable {
+  var bold = false
+  var italic = false
+  var underline = false
+  /** Its alignment, such as `LEFT`. */
+  var align = ""
+  var fontFile = ""
+}
+
 /** One of the brush's values, such as its size. */
 struct BrushValue: Equatable {
   var value: Double
@@ -131,7 +141,19 @@ final class ShellModel {
   /** Changes when what Blender's menus show may have: the active undo step moves with every
    * change an operator makes, once per action. */
   var menuContext: String { "\(objectMode)|\(text("menu_state") ?? "")" }
-  private(set) var brushes: JSON?
+  /** The brushes the mode offers, from Blender's `brushes` view: the rows of its list. */
+  @ObservationIgnored let brushesView = NativeViews.shared.subscribe("brushes")
+  private var brushList: NativeNode? {
+    guard let top = brushesView.top else { return nil }
+    _ = top.children
+    return brushesView.node("brushes")
+  }
+  var brushes: [NativeNode] { brushList.map { brushesView.children(of: $0) } ?? [] }
+  var activeBrush: String { brushList?.list?.active ?? "" }
+  /** Their libraries or previews are still loading. */
+  var brushesLoading: Bool { brushList?.list?.loading ?? false }
+  /** Paint with another brush, by its key. */
+  func activateBrush(_ key: String) { NativeViews.shared.send(brushesView, target: key, op: .activate) }
   /** The brush's size, strength, weight and color, see `bl_ui.native_brush`. */
   var brush: BrushSettings? {
     var settings = BrushSettings()
@@ -182,7 +204,22 @@ final class ShellModel {
   var canUndo: Bool { node("undo")?.enabled ?? false }
   var canRedo: Bool { node("redo")?.enabled ?? false }
   /** The text object being typed into: its style where the cursor is, alignment and font file. */
-  private(set) var textObject: JSON?
+  var textObject: TextObjectStyle? {
+    guard node("text") != nil else { return nil }
+    return TextObjectStyle(bold: node("text:bold")?.toggle?.value ?? false,
+                           italic: node("text:italic")?.toggle?.value ?? false,
+                           underline: node("text:underline")?.toggle?.value ?? false,
+                           align: node("text:align")?.choice?.value ?? "",
+                           fontFile: data("text:font")?.value(type: Blender_NativeUI_TextValue.self)?.value ?? "")
+  }
+
+  /** Type into the text object, a line break for each new line. */
+  func typeText(_ text: String) { send("text", .add, .text(text)) }
+  /** Delete what is selected, or what is before the cursor. */
+  func deleteText() { send("text", .remove) }
+  /** Set the text object's style, alignment, spacing or size, by name, such as `bold`, `align` or
+   * `size`; or its fonts, each line a face and its file, as `font=<path>`. */
+  func setText(_ name: String, _ value: NativeValue) { send("text:" + name, .set_, value) }
   /** The native node editor shows over the bottom of the viewport. */
   var nodesShown = false
   /** How much of the window's bottom the node editor covers, which the viewport leaves out. */
@@ -297,11 +334,8 @@ final class ShellModel {
     set(keyPath, value, equal: ==)
   }
 
-  /** The parts of the toolbar snapshot still sent as JSON: brushes, the text object, rendering
-   * and preferences. */
+  /** The parts of the toolbar snapshot still sent as JSON: rendering and preferences. */
   func update(toolbar: NativeUI.Toolbar) {
-    set(\.brushes, toolbar.brushes.dictionary, equal: { jsonEqual($0, $1) })
-    set(\.textObject, toolbar.textObject.dictionary, equal: { jsonEqual($0, $1) })
     onRender?(toolbar.render.value)
     onPreferences?(toolbar.preferences.value)
   }

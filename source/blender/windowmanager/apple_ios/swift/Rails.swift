@@ -96,14 +96,14 @@ struct RailItem: Identifiable {
   }
 
   @MainActor
-  static func brushes(_ brushes: JSON?) -> [RailItem] {
+  static func brushes(_ brushes: [NativeNode]) -> [RailItem] {
     var items: [RailItem] = []
     var catalog: String?
-    for brush in brushes?.array("items") ?? [] {
-      guard let id = brush.string("id"), !id.isEmpty, let title = brush.string("title") else { continue }
+    for brush in brushes {
+      let id = brush.key, title = brush.label
       /* Catalogs are separated the way the tool rail separates groups. */
-      let brushCatalog = brush.string("catalog") ?? ""
-      let image = wm_apple_ios_brush_image(brush.string("preview") ?? "", brushPreviewSize)
+      let brushCatalog = brush.row?.section ?? ""
+      let image = wm_apple_ios_brush_image(brush.row?.preview ?? "", brushPreviewSize)
       items.append(RailItem(id: id, title: title, image: image, selectedImage: image,
                             gapBefore: catalog != nil && catalog != brushCatalog, group: [],
                             groupBreaks: []))
@@ -930,14 +930,14 @@ struct ToolRails: View {
       }
       ZStack(alignment: .topLeading) {
         if brushesAvailable {
-          Rail(items: brushItems, active: brushes.active(model.brushes?.string("active") ?? ""),
+          Rail(items: brushItems, active: brushes.active(model.activeBrush),
                state: brushes, label: label, width: layout.brushWidth, height: layout.brushHeight,
                brush: true, edge: layout.brushEdge, dockDistance: 0, brushStops: layout.brushStops,
                move: { move in
                  carry(move, .brushes, center: layout.brushCenter, edge: layout.brushEdge, safe: safe,
                        local: local) { brushEdgeName = $0.rawValue }
                }) { item in
-            WM_native_ui_brush_activate(item.id)
+            model.activateBrush(item.id)
           }
           .position(carriedCenter(.brushes, size: CGSize(width: layout.brushWidth, height: layout.brushHeight)) ??
                     layout.brushCenter)
@@ -1040,7 +1040,7 @@ struct ToolRails: View {
       .onChange(of: brushItems.map { $0.image.map(ObjectIdentifier.init) }) { _, _ in
         updateSqueezePalette(toolItems: toolItems, brushItems: brushItems)
       }
-      .onChange(of: model.brushes?.string("active")) { _, _ in
+      .onChange(of: model.activeBrush) { _, _ in
         updateSqueezePalette(toolItems: toolItems, brushItems: brushItems)
       }
       .onChange(of: [model.canUndo, model.canRedo]) { _, _ in
@@ -1067,10 +1067,8 @@ struct ToolRails: View {
         SqueezePalette.start()
 #endif
       }
-      .onChange(of: model.brushes.map { $0 as NSDictionary }, initial: true) { _, snapshot in
-        let brushes = snapshot as? JSON
-        let loading = brushes?.bool("loading") ?? false
-        let available = !(brushes?.array("items").isEmpty ?? true) || (loading && brushesAvailable)
+      .onChange(of: [model.brushes.isEmpty, model.brushesLoading], initial: true) { _, _ in
+        let available = !model.brushes.isEmpty || (model.brushesLoading && brushesAvailable)
         if available != brushesAvailable {
           if !available {
             self.brushes.expanded = false
@@ -1088,11 +1086,11 @@ struct ToolRails: View {
    * them, with their settings. */
   private func updateSqueezePalette(toolItems: [RailItem], brushItems: [RailItem]) {
 #if !os(visionOS)
-    RollDial.shared.activeBrush = model.brushes?.string("active")
+    RollDial.shared.activeBrush = model.activeBrush.isEmpty ? nil : model.activeBrush
     let strokes = model.direction?.hidden == true ? nil : intent.strokes
     let palette = SqueezePalette.shared
     palette.update(tools: toolItems, activeTool: tools.active(model.activeTool), brushes: brushItems,
-                   activeBrush: brushes.active(model.brushes?.string("active") ?? ""),
+                   activeBrush: brushes.active(model.activeBrush),
                    direction: strokes.map { .init(inverted: $0.inverted, add: $0.addName, subtract: $0.subtractName,
                                                   addSymbol: $0.addSymbol, subtractSymbol: $0.subtractSymbol) },
                    canUndo: model.canUndo, canRedo: model.canRedo)
@@ -1103,7 +1101,7 @@ struct ToolRails: View {
     }
     palette.chooseBrush = { [brushes] item in
       brushes.choose(item.id)
-      WM_native_ui_brush_activate(item.id)
+      ShellModel.current?.activateBrush(item.id)
     }
     palette.setDirection = { [intent] inverted in intent.choose(inverted ? .subtract : .add) }
     palette.runAction = { [model] action in action.run(in: model) }

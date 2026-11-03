@@ -20,10 +20,6 @@ attribute "nullable_elements";
 table Toolbar {
   /// Blender's context mode, such as `objectmode` or `edit_mesh`.
   mode: string (required);
-  /// The text object being edited, with its fonts and style.
-  textObject: [ubyte] (flexbuffer);
-  /// The brushes the mode offers.
-  brushes: [ubyte] (flexbuffer);
   /// A render in progress, or its result.
   render: [ubyte] (flexbuffer);
   preferences: [ubyte] (flexbuffer);

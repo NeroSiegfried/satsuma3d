@@ -38,10 +38,6 @@ enum NativeUI {
   struct Toolbar: Equatable, @unchecked Sendable {
     /// Blender's context mode, such as `objectmode` or `edit_mesh`.
     var mode: String
-    /// The text object being edited, with its fonts and style.
-    var textObject: Open
-    /// The brushes the mode offers.
-    var brushes: Open
     /// A render in progress, or its result.
     var render: Open
     var preferences: Open
@@ -52,8 +48,6 @@ enum NativeUI {
         return nil
       }
       self.mode = mode
-      textObject = Open(json["textObject"])
-      brushes = Open(json["brushes"])
       render = Open(json["render"])
       preferences = Open(json["preferences"])
     }

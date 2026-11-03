@@ -119,8 +119,8 @@ extension View {
     .ornament(visibility: shown && !brushes.isEmpty ? .visible : .hidden, attachmentAnchor: .scene(.trailing),
               contentAlignment: .leading)
     {
-      RailOrnament(items: brushes, active: model.brushes?.string("active") ?? "", brush: true,
-                   title: "Brushes") { WM_native_ui_brush_activate($0.id) }
+      RailOrnament(items: brushes, active: model.activeBrush, brush: true,
+                   title: "Brushes") { model.activateBrush($0.id) }
     }
     .ornament(visibility: shown ? .visible : .hidden, attachmentAnchor: .scene(.bottom), contentAlignment: .top) {
       ActionsOrnament(model: model)

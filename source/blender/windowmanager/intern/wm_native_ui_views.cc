@@ -584,8 +584,10 @@ using namespace wm::native_ui;
 void WM_native_ui_views_notify(const wmNotifier &note)
 {
   for (Subscription &subscription : subscriptions().values()) {
-    const Vector<uint32_t> &notifiers = subscription.type->notifiers;
-    if (notifiers.is_empty() || notifiers.contains(note.category)) {
+    const ViewType &type = *subscription.type;
+    if ((type.notifiers.is_empty() || type.notifiers.contains(note.category)) &&
+        (type.wants == nullptr || type.wants(note)))
+    {
       subscription.dirty = true;
       any_dirty = true;
     }
@@ -682,6 +684,8 @@ void WM_native_ui_views_flush(bContext *C)
     }
     subscription.last_build = now;
     subscription.urgent = false;
+    /* Before it is built, which may ask to be built again soon. */
+    subscription.dirty = false;
     BridgeTimer view_timer(subscription.type->timing_name.c_str());
     ViewBuilder builder(subscription.state, subscription.reset);
     subscription.type->build(C, subscription.params(), subscription.data.get(), builder);
@@ -689,7 +693,6 @@ void WM_native_ui_views_flush(bContext *C)
     if (!update.IsNull()) {
       updates.push_back(update);
     }
-    subscription.dirty = false;
     subscription.reset = false;
   }
 

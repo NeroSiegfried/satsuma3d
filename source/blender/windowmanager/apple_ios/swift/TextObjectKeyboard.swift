@@ -62,7 +62,7 @@ struct TextObjectKeyboard: View {
 private struct TextObjectInput: UIViewRepresentable {
   let active: Bool
   let focusRequest: Int
-  let textObject: JSON?
+  let textObject: TextObjectStyle?
   @Binding var shown: Bool
 
   func makeUIView(context: Context) -> TextObjectInputView {
@@ -118,20 +118,12 @@ final class TextObjectInputView: UIView, UIKeyInput, UITextFormattingViewControl
   var hasText: Bool { true }
 
   func insertText(_ text: String) {
-    /* New lines are Blender's line breaks; the rest is inserted as typed. */
-    let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-    for (index, line) in lines.enumerated() {
-      if index > 0 {
-        Engine.setting("text_object_edit", "line_break")
-      }
-      if !line.isEmpty {
-        Engine.setting("text_object_edit", "insert:" + line)
-      }
-    }
+    /* New lines are Blender's line breaks. */
+    ShellModel.current?.typeText(text)
   }
 
   func deleteBackward() {
-    Engine.setting("text_object_edit", "delete")
+    ShellModel.current?.deleteText()
   }
 
   var autocorrectionType: UITextAutocorrectionType = .no
@@ -145,10 +137,10 @@ final class TextObjectInputView: UIView, UIKeyInput, UITextFormattingViewControl
   /* Formatting */
 
   /** The text's style where the cursor is, from Blender's snapshot. */
-  var textObject: JSON? {
+  var textObject: TextObjectStyle? {
     didSet {
       /* The open panel follows the text, as the cursor moves or a change applies. */
-      if let formatting, !jsonEqual(textObject.map { $0 as NSDictionary }, oldValue.map { $0 as NSDictionary }) {
+      if let formatting, textObject != oldValue {
         formatting.formattingDescriptor = formattingDescriptor
       }
     }
@@ -198,20 +190,20 @@ final class TextObjectInputView: UIView, UIKeyInput, UITextFormattingViewControl
 
   private var formattingDescriptor: UITextFormattingViewController.FormattingDescriptor {
     var descriptor = UITextFormattingViewController.FormattingDescriptor()
-    let text = textObject ?? [:]
-    var font = FontFiles.font(file: text.string("font_file"), size: 17) ?? UIFont.systemFont(ofSize: 17)
+    let text = textObject ?? TextObjectStyle()
+    var font = FontFiles.font(file: text.fontFile, size: 17) ?? UIFont.systemFont(ofSize: 17)
     var traits = font.fontDescriptor.symbolicTraits
-    if text.bool("bold") { traits.insert(.traitBold) }
-    if text.bool("italic") { traits.insert(.traitItalic) }
+    if text.bold { traits.insert(.traitBold) }
+    if text.italic { traits.insert(.traitItalic) }
     if let styled = font.fontDescriptor.withSymbolicTraits(traits) {
       font = UIFont(descriptor: styled, size: 17)
     }
     descriptor.fonts = [font]
-    descriptor.underlinePresent = text.bool("underline")
+    descriptor.underlinePresent = text.underline
     let alignments: [String: UITextFormattingViewController.TextAlignment] = [
       "LEFT": .left, "CENTER": .center, "RIGHT": .right, "JUSTIFY": .justified, "FLUSH": .justified,
     ]
-    if let alignment = alignments[text.string("align") ?? ""] {
+    if let alignment = alignments[text.align] {
       descriptor.textAlignments = [alignment]
     }
     return descriptor
@@ -221,19 +213,19 @@ final class TextObjectInputView: UIView, UIKeyInput, UITextFormattingViewControl
                                     didChangeValue changeValue: UITextFormattingViewController.ChangeValue)
   {
     switch changeValue {
-      case .bold(let on): Engine.setting("text_object_edit", "style:BOLD:" + (on ? "1" : "0"))
-      case .italic(let on): Engine.setting("text_object_edit", "style:ITALIC:" + (on ? "1" : "0"))
-      case .underline(let on): Engine.setting("text_object_edit", "style:UNDERLINE:" + (on ? "1" : "0"))
+      case .bold(let on): ShellModel.current?.setText("bold", .bool(on))
+      case .italic(let on): ShellModel.current?.setText("italic", .bool(on))
+      case .underline(let on): ShellModel.current?.setText("underline", .bool(on))
       case .textAlignment(let alignment):
         let names: [UITextFormattingViewController.TextAlignment: String] = [
           .left: "LEFT", .center: "CENTER", .right: "RIGHT", .justified: "JUSTIFY", .natural: "LEFT",
         ]
-        if let name = names[alignment] { Engine.setting("text_object_edit", "align:" + name) }
+        if let name = names[alignment] { ShellModel.current?.setText("align", .text(name)) }
       case .font(let font):
         /* A family sets Blender's bold and italic fonts too, which its styles then use. */
         FontFiles.write(font.fontDescriptor as CTFontDescriptor, family: true) { url, faces in
           let lines = ["font=" + url.path] + faces.map { "\($0.key)=\($0.value.path)" }
-          Engine.setting("text_object_edit", "font:" + lines.joined(separator: "\n"))
+          ShellModel.current?.setText("font", .texts(lines))
         }
       default:
         break
