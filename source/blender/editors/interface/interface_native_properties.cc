@@ -5120,21 +5120,6 @@ void native_nodes_compositor_job(bContext *C)
   }
 }
 
-/** Which tree the node editor would show, cheap to tell apart: the native editor reads the tree
- * again as soon as this changes, such as when another object or material is chosen. */
-std::string native_nodes_identity(bContext *C, const std::string &json)
-{
-  auto query_value = decode(json);
-  const auto *query = query_value ? query_value->as_dictionary_value() : nullptr;
-  if (!query || !CTX_data_scene(C)) {
-    return "";
-  }
-  const NativeNodeTree shown = native_node_tree(C, *query);
-  return std::to_string(reinterpret_cast<uintptr_t>(shown.tree)) + "|" +
-         std::to_string(reinterpret_cast<uintptr_t>(shown.id)) + "|" + shown.owner + "|" +
-         shown.empty;
-}
-
 std::string native_nodes_query(bContext *C, const std::string &json, const bool execute)
 {
   auto query_value = decode(json);
