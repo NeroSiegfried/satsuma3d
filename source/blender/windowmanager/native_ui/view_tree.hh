@@ -44,9 +44,13 @@ struct NodeFields {
   std::string_view icon;
   std::string_view description;
   std::string_view property;
+  std::string_view short_label;
+  std::string_view leading_icon;
   bool enabled = true;
   bool mixed = false;
+  bool animatable = false;
   protocol::Animation animation = protocol::Animation::None;
+  protocol::Role role = protocol::Role::None;
 };
 
 /** A view as an interface has it, as far as updates need: a hash of each node it was sent. */

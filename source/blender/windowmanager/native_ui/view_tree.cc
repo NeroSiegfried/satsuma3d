@@ -33,6 +33,8 @@ void ViewBuilder::finish_node(const NodeId parent,
   const auto icon = text(fields.icon);
   const auto description = text(fields.description);
   const auto property = text(fields.property);
+  const auto short_label = text(fields.short_label);
+  const auto leading_icon = text(fields.leading_icon);
   buffer.Finish(protocol::CreateNode(buffer,
                                      key_offset,
                                      type,
@@ -43,7 +45,11 @@ void ViewBuilder::finish_node(const NodeId parent,
                                      fields.enabled,
                                      fields.mixed,
                                      fields.animation,
-                                     property));
+                                     fields.animatable,
+                                     property,
+                                     fields.role,
+                                     short_label,
+                                     leading_icon));
 
   const uint8_t *bytes = buffer.GetBufferPointer();
   const size_t size = buffer.GetSize();
