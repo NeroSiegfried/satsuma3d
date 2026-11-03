@@ -187,11 +187,21 @@ if(WITH_NATIVE_UI)
   # The bridge to a platform's own interface: the commands it sends Blender, and the snapshots of
   # Blender it shows, as JSON.
   add_definitions(-DWITH_NATIVE_UI)
+  list(APPEND INC
+    native_ui
+    native_ui/generated/cpp
+  )
   list(APPEND SRC
     intern/wm_native_ui.cc
     intern/wm_apple_ios_volume.cc
+    native_ui/view_tree.cc
 
     intern/wm_apple_ios_volume.h
+    native_ui/generated/cpp/protocol_generated.h
+    native_ui/view_tree.hh
+  )
+  list(APPEND LIB
+    PRIVATE bf::extern::flatbuffers
   )
 endif()
 
@@ -251,5 +261,10 @@ if(WITH_GTESTS)
   set(TEST_SRC
     intern/wm_dragdrop_test.cc
   )
+  if(WITH_NATIVE_UI)
+    list(APPEND TEST_SRC
+      native_ui/tests/view_tree_test.cc
+    )
+  endif()
   blender_add_test_suite_lib(windowmanager "${TEST_SRC}" "${INC};${TEST_INC}" "${INC_SYS}" "${LIB}")
 endif()
