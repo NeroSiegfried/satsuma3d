@@ -133,7 +133,6 @@
 
 namespace blender::ui {
 std::string native_menu_query(bContext *C, const std::string &request, bool execute);
-std::string native_properties_query(bContext *C, const std::string &request, bool execute);
 }  // namespace blender::ui
 namespace blender::ed::graph {
 std::string native_graph_query(bContext *C, const std::string &request, bool execute);
