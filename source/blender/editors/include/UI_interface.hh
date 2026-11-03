@@ -290,5 +290,11 @@ AbstractTreeView *block_add_view(Block &block,
 
 void alert(bContext *C, StringRef title, StringRef message, AlertIcon icon, bool compact);
 
+/**
+ * Make Blender's panels available as views to a platform's own interface, see
+ * `WM_native_ui_views.hh`. Only with `WITH_NATIVE_UI`.
+ */
+void native_views_register();
+
 }  // namespace ui
 }  // namespace blender

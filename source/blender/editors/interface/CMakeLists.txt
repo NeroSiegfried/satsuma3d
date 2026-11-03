@@ -140,7 +140,7 @@ set(LIB
 )
 
 if(WITH_NATIVE_UI)
-  list(APPEND SRC interface_native_menu.cc interface_native_properties.cc)
+  list(APPEND SRC interface_native_menu.cc interface_native_properties.cc interface_native_view.cc)
 endif()
 
 if(WITH_INTERNATIONAL)

@@ -227,6 +227,9 @@ void WM_init(bContext *C, int argc, const char **argv)
   DEG_editors_set_update_cb(ED_render_id_flush_update, ED_render_scene_update);
 
   ED_spacetypes_init();
+#ifdef WITH_NATIVE_UI
+  ui::native_views_register();
+#endif
 
   ED_node_init_butfuncs();
 
