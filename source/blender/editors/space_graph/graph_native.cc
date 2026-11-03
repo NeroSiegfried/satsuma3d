@@ -23,6 +23,7 @@
 #include "BLI_serialize.hh"
 #include "BLI_string.h"
 #include "BLI_string_ref.hh"
+#include "BLI_string_utf8.h"
 
 #include "DNA_anim_types.h"
 #include "DNA_curve_types.h"
@@ -298,6 +299,8 @@ std::string read_curves(bContext *C, const DictionaryValue &state)
     if (acf && acf->name) {
       acf->name(ale, name);
     }
+    /* Cut to fit, maybe in the middle of a character, which JSON cannot hold. */
+    BLI_str_utf8_invalid_strip(name, strlen(name));
     item->append_str("name", name);
     item->append_str("owner", ale->id ? ale->id->name + 2 : "");
     auto color = item->append_array("color");
@@ -338,7 +341,9 @@ std::string read_curves(bContext *C, const DictionaryValue &state)
         if (ale->adt) {
           frame = BKE_nla_tweakedit_remap(ale->adt, frame, NLATIME_CONVERT_UNMAP);
         }
-        samples->append_double((evaluate_fcurve(&fcu, frame) + mapping.offset) * mapping.scale);
+        const float value = (evaluate_fcurve(&fcu, frame) + mapping.offset) * mapping.scale;
+        /* JSON has no infinity or NaN, as a curve dividing by zero gives. */
+        samples->append_double(std::isfinite(value) ? value : 0.0);
       }
     }
   }
