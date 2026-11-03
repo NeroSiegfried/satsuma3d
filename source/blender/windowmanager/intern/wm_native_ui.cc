@@ -115,6 +115,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -126,6 +127,8 @@
 #include <type_traits>
 #include <variant>
 #include <vector>
+
+#include <fmt/format.h>
 
 namespace blender::ui {
 std::string native_menu_query(bContext *C, const std::string &request, bool execute);
@@ -405,7 +408,15 @@ GHOST_Latest<std::string> bridge_assets_snapshot;
 std::string bridge_toolbar_json =
     "{\"mode\":\"objectmode\",\"active\":\"builtin.select_box\",\"tools\":[]}";
 
+/**
+ * Where a large JSON value is spliced into the panels' snapshot: a string starting with a control
+ * character, which every string written is escaped of, so no name can be taken for it.
+ */
+#define BRIDGE_PLACEHOLDER(name) "\x01native_" name
+#define BRIDGE_PLACEHOLDER_JSON(name) "\"\\u0001native_" name "\""
+
 std::string bridge_json_escape(const std::string &value);
+std::string bridge_json_number(double value);
 void bridge_brush_direction_set(bContext *C, bool add);
 
 void bridge_action_add_key(std::vector<BridgeActionItem> &items,
@@ -2784,9 +2795,11 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
       BridgeTimer panels_timer("panels");
       const std::string expression = "bl_ui.native_panels.snapshot_json(bpy.context, " +
                                      std::to_string(bridge_panels_visible & 2) + ")";
-      bridge_python(C, "panels.hierarchy", expression.c_str(), bridge_panels_json);
+      /* Read anew each time: should Python fail, nothing of the last snapshot stays. */
+      std::string base_json;
+      bridge_python(C, "panels.hierarchy", expression.c_str(), base_json);
       using namespace io::serialize;
-      std::istringstream base_stream(bridge_panels_json);
+      std::istringstream base_stream(base_json);
       auto base = JsonFormatter().deserialize(base_stream);
       DictionaryValue merged;
       if (const auto *dictionary = base ? base->as_dictionary_value() : nullptr) {
@@ -2820,7 +2833,7 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
           bridge_nodes_json = bridge_timed(
               "panels.nodes", [&] { return ui::native_nodes_query(C, state, false); });
           /* With no tree there is nothing to add to: offered again once there is one. */
-          const bool has_tree = bridge_nodes_json.find("\"nodes\"") != std::string::npos;
+          const bool has_tree = bridge_nodes_json.find("\"nodes\":") != std::string::npos;
           bridge_nodes_add_for = has_tree ? (with_add ? bridge_nodes_state : bridge_nodes_add_for) : "";
           CLOG_DEBUG(&LOG,
                      "Nodes read in %lld ms, %zu bytes: %s",
@@ -2834,7 +2847,7 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
           }
         }
         /* Spliced in as it is below, rather than read and written again: it is large. */
-        merged.append_str("nodes", "@native_nodes_json@");
+        merged.append_str("nodes", BRIDGE_PLACEHOLDER("nodes"));
       }
       if (bridge_panels_visible & 16) {
         if (bridge_graph_dirty || now >= bridge_graph_next_check) {
@@ -2844,7 +2857,7 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
             return ed::graph::native_graph_query(C, bridge_graph_state, false);
           });
         }
-        merged.append_str("graph", "@native_graph_json@");
+        merged.append_str("graph", BRIDGE_PLACEHOLDER("graph"));
       }
       if (bridge_panels_visible & 128) {
         if (bridge_image_dirty || now >= bridge_image_next_check) {
@@ -2877,7 +2890,7 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
                                                 now + std::chrono::milliseconds(100));
           }
         }
-        merged.append_str("storyboard", "@native_storyboard_json@");
+        merged.append_str("storyboard", BRIDGE_PLACEHOLDER("storyboard"));
       }
       if (bridge_panels_visible & 32) {
         bridge_preferences_save_when_changed(C, now);
@@ -2918,20 +2931,20 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
       JsonFormatter().serialize(merged_stream, merged);
       bridge_panels_json = merged_stream.str();
       if (bridge_panels_visible & 16) {
-        const std::string placeholder = "\"@native_graph_json@\"";
+        const std::string placeholder = BRIDGE_PLACEHOLDER_JSON("graph");
         if (const size_t at = bridge_panels_json.find(placeholder); at != std::string::npos) {
           bridge_panels_json.replace(at, placeholder.size(), bridge_graph_json.empty() ? "null" : bridge_graph_json);
         }
       }
       if (bridge_panels_visible & 64) {
-        const std::string placeholder = "\"@native_storyboard_json@\"";
+        const std::string placeholder = BRIDGE_PLACEHOLDER_JSON("storyboard");
         if (const size_t at = bridge_panels_json.find(placeholder); at != std::string::npos) {
           bridge_panels_json.replace(at, placeholder.size(),
                                   bridge_storyboard_json.empty() ? "null" : bridge_storyboard_json);
         }
       }
       if (bridge_panels_visible & 8) {
-        const std::string placeholder = "\"@native_nodes_json@\"";
+        const std::string placeholder = BRIDGE_PLACEHOLDER_JSON("nodes");
         if (const size_t at = bridge_panels_json.find(placeholder); at != std::string::npos) {
           bridge_panels_json.replace(at, placeholder.size(), bridge_nodes_json.empty() ? "null" : bridge_nodes_json);
         }
@@ -2972,9 +2985,10 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
       /* In whichever corner Settings has it. */
       const float x = bridge_navigation_left ? visible.xmin + inset : visible.xmax - inset;
       const float y = bridge_navigation_top ? visible.ymax - inset : visible.ymin + inset;
-      navigation_json = "[" + std::to_string((region->winrct.xmin + x) / width) + "," +
-                        std::to_string(1.0f - (region->winrct.ymin + y - cover) / (height - cover)) +
-                        "," + std::to_string(radius / width) + "]";
+      navigation_json = "[" + bridge_json_number((region->winrct.xmin + x) / width) + "," +
+                        bridge_json_number(1.0f - (region->winrct.ymin + y - cover) /
+                                                      (height - cover)) +
+                        "," + bridge_json_number(radius / width) + "]";
     }
   }
   const std::string redo_json = has_view3d_context ? bridge_timed("redo", [&] {
@@ -3215,11 +3229,23 @@ std::string bridge_json_escape(const std::string &value)
         escaped += "\\t";
         break;
       default:
-        escaped += c;
+        if (uchar(c) < 0x20) {
+          /* Any other control character, which JSON only takes escaped. */
+          escaped += fmt::format("\\u{:04x}", int(c));
+        }
+        else {
+          escaped += c;
+        }
         break;
     }
   }
   return escaped;
+}
+
+/** A number as JSON writes it, whatever the locale: shortest, and 0 for one that is not finite. */
+std::string bridge_json_number(const double value)
+{
+  return std::isfinite(value) ? fmt::format("{}", value) : "0";
 }
 
 }  // namespace
@@ -3525,7 +3551,7 @@ bool bridge_menu_popup(bContext *C, const char *menu)
     }
   }
   bridge_menu_popup_snapshot.publish("{\"menu\":\"" + bridge_json_escape(menu) + "\",\"x\":" +
-                                  std::to_string(x) + ",\"y\":" + std::to_string(y) + "}");
+                                  bridge_json_number(x) + ",\"y\":" + bridge_json_number(y) + "}");
   return true;
 }
 
@@ -3542,7 +3568,7 @@ static std::string bridge_popup_position(bContext *C)
       y = 1.0f - win->runtime->eventstate->xy[1] / height;
     }
   }
-  return "\"x\":" + std::to_string(x) + ",\"y\":" + std::to_string(y);
+  return "\"x\":" + bridge_json_number(x) + ",\"y\":" + bridge_json_number(y);
 }
 
 /**
