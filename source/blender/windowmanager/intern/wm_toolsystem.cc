@@ -671,6 +671,10 @@ void WM_toolsystem_ref_set_from_runtime(bContext *C,
     wmMsgBus *mbus = CTX_wm_message_bus(C);
     WM_msg_publish_rna_prop(mbus, &workspace->id, workspace, WorkSpace, tools);
   }
+#ifdef WITH_NATIVE_UI
+  /* For a platform's own interface, which shows the active tool. */
+  WM_event_add_notifier(C, NC_WORKSPACE, workspace);
+#endif
 }
 
 void WM_toolsystem_ref_sync_from_context(Main *bmain, WorkSpace *workspace, bToolRef *tref)

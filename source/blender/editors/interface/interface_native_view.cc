@@ -1346,7 +1346,8 @@ void native_views_register()
   ViewType tool_settings = properties;
   tool_settings.name = "tool_settings";
   tool_settings.min_interval = 0.0;
-  tool_settings.notifiers = {NC_WM, NC_SCENE, NC_BRUSH, NC_TEXTURE, NC_MATERIAL, NC_SPACE};
+  tool_settings.notifiers = {
+      NC_WM, NC_SCENE, NC_BRUSH, NC_TEXTURE, NC_MATERIAL, NC_SPACE, NC_WORKSPACE};
   view_type_add(std::move(tool_settings));
 
   ViewType redo;

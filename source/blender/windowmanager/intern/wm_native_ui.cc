@@ -3808,7 +3808,7 @@ void WM_native_ui_views_register()
   brushes.name = "brushes";
   /* Previews are written a few at a time, soon after another. */
   brushes.min_interval = 0.03;
-  brushes.notifiers = {NC_BRUSH, NC_ASSET, NC_SCENE, NC_WM};
+  brushes.notifiers = {NC_BRUSH, NC_ASSET, NC_SCENE, NC_WM, NC_WORKSPACE};
   brushes.wants = [](const wmNotifier &note) {
     return note.category != NC_SCENE || ELEM(note.data, ND_MODE, ND_TOOLSETTINGS);
   };
