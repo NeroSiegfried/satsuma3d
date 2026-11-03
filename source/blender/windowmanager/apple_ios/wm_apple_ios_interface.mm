@@ -160,16 +160,33 @@ UIImage *blenderIOSMenuIcon(NSDictionary *item)
   return WMIOSBlenderIcon(name, NO);
 }
 
-NSArray *blenderIOSMenuResult(uint64_t identifier)
+/* Blender's menus, from the Swift interface, see `SwiftMenus` in `BlenderMenus.swift`. */
+@interface NSObject (WMIOSSwiftMenus)
++ (void)itemsWithRoute:(NSString *)route
+                     x:(double)x
+                     y:(double)y
+            positioned:(BOOL)positioned
+            completion:(void (^)(NSArray<NSDictionary *> *))completion;
++ (void)runWithRoute:(NSString *)route x:(double)x y:(double)y positioned:(BOOL)positioned;
+@end
+
+void blenderIOSMenuItems(NSString *route,
+                         const CGPoint *position,
+                         void (^completion)(NSArray *_Nullable items))
 {
-  char *json = WM_native_ui_menu_take_result(identifier);
-  if (!json) {
-    return nil;
-  }
-  NSData *data = [NSData dataWithBytes:json length:strlen(json)];
-  free(json);
-  id items = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-  return [items isKindOfClass:[NSArray class]] ? items : @[];
+  [(id)blenderIOSSwiftClass(@"WMIOSSwiftMenus") itemsWithRoute:route
+                                                             x:position ? position->x : 0
+                                                             y:position ? position->y : 0
+                                                    positioned:position != nullptr
+                                                    completion:completion];
+}
+
+void blenderIOSMenuRun(NSString *route, const CGPoint *position)
+{
+  [(id)blenderIOSSwiftClass(@"WMIOSSwiftMenus") runWithRoute:route
+                                                           x:position ? position->x : 0
+                                                           y:position ? position->y : 0
+                                                  positioned:position != nullptr];
 }
 
 /* Menu items with shortcuts are key commands, which UIKit sends along the responder chain. The
@@ -178,7 +195,7 @@ NSArray *blenderIOSMenuResult(uint64_t identifier)
 - (void)blenderMenuCommand:(UIKeyCommand *)command
 {
   if ([command.propertyList isKindOfClass:NSString.class]) {
-    WM_native_ui_menu_request([command.propertyList UTF8String], true);
+    blenderIOSMenuRun(command.propertyList, nullptr);
   }
 }
 @end
@@ -187,34 +204,23 @@ UIMenu *blenderIOSNativeSubmenu(NSDictionary *item, NSString *identifier)
 {
   NSString *route = blenderIOSMenuRoute(item[@"route"]);
   /* Uncached providers refresh dynamic menus (recent files, undo, add-ons) on open.
-   * The engine fills the request in its event pump; UIKit never calls into Python. */
+   * Blender builds them on its loop; UIKit never calls into Python. */
   UIDeferredMenuElement *content = [UIDeferredMenuElement
       elementWithUncachedProvider:^(void (^completion)(NSArray<UIMenuElement *> *)) {
-        const uint64_t request = WM_native_ui_menu_request(route.UTF8String, false);
-        const CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + 60.0;
-        NSTimer *poll = [NSTimer
-            timerWithTimeInterval:0.025
-                          repeats:YES
-                            block:^(NSTimer *timer) {
-                              NSArray *result = blenderIOSMenuResult(request);
-                              if (result || CFAbsoluteTimeGetCurrent() >= deadline) {
-                                [timer invalidate];
-                                NSArray *elements = blenderIOSNativeMenuElements(result);
-                                if (elements.count == 0) {
-                                  UIAction *empty = [UIAction
-                                      actionWithTitle:result ? @"No Available Commands" :
-                                                               @"Blender Is Busy"
-                                                image:nil
-                                           identifier:nil
-                                              handler:^(__kindof UIAction *){
-                                              }];
-                                  empty.attributes = UIMenuElementAttributesDisabled;
-                                  elements = @[ empty ];
-                                }
-                                completion(elements);
-                              }
-                            }];
-        [NSRunLoop.mainRunLoop addTimer:poll forMode:NSRunLoopCommonModes];
+        blenderIOSMenuItems(route, nullptr, ^(NSArray *result) {
+          NSArray *elements = blenderIOSNativeMenuElements(result);
+          if (elements.count == 0) {
+            UIAction *empty = [UIAction actionWithTitle:result ? @"No Available Commands" :
+                                                                 @"Blender Is Busy"
+                                                  image:nil
+                                             identifier:nil
+                                                handler:^(__kindof UIAction *) {
+                                                }];
+            empty.attributes = UIMenuElementAttributesDisabled;
+            elements = @[ empty ];
+          }
+          completion(elements);
+        });
       }];
   return [UIMenu menuWithTitle:item[@"title"]
                          image:blenderIOSMenuIcon(item)
@@ -363,7 +369,7 @@ NSArray<UIMenuElement *> *blenderIOSNativeMenuElements(NSArray *items)
                                            image:icon
                                       identifier:nil
                                          handler:^(__kindof UIAction *) {
-                                           WM_native_ui_menu_request(route.UTF8String, true);
+                                           blenderIOSMenuRun(route, nullptr);
                                          }];
     action.attributes = [item[@"disabled"] boolValue] ? UIMenuElementAttributesDisabled : 0;
     action.state = [item[@"checked"] boolValue] ? UIMenuElementStateOn : UIMenuElementStateOff;

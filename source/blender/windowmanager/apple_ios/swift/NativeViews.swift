@@ -306,7 +306,8 @@ enum BlenderSettings {
 /* -------------------------------------------------------------------- */
 /** \name Checking views
  *
- * With `BLENDER_NATIVE_UI_VIEWS` in the environment, such as `properties:OBJECT,properties:TOOL`,
+ * With `BLENDER_NATIVE_UI_VIEWS` in the environment, such as `properties:OBJECT,properties:TOOL`
+ * (a view and its tab, or `menu:VIEW3D_MT_add` for a menu by its name),
  * those views are shown to no one but written as text to `native_ui_record/views/` in the
  * temporary folder whenever they change, to check what Blender sends.
  *
@@ -321,7 +322,9 @@ extension NativeViews {
     guard let names = ProcessInfo.processInfo.environment["BLENDER_NATIVE_UI_VIEWS"] else { return }
     for entry in names.split(separator: ",") {
       let parts = entry.split(separator: ":", maxSplits: 1).map(String.init)
-      let params: [String: NativeValue] = parts.count > 1 ? ["tab": .text(parts[1])] : [:]
+      /* A tab, or for a menu its name. */
+      var params: [String: NativeValue] = parts.count > 1 ? ["tab": .text(parts[1])] : [:]
+      if parts[0] == "menu", parts.count > 1 { params = ["route": .text(BlenderMenus.route(parts[1]))] }
       checked.append((String(entry), subscribe(parts[0], params: params)))
     }
     let ops: [String: Blender_NativeUI_Op] = [

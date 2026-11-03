@@ -200,24 +200,11 @@ struct BridgeAssetDragCommand {
   int x = 0, y = 0;
 };
 
-struct BridgeMenuRequest {
-  uint64_t identifier;
-  std::string route;
-  bool execute;
-  bool has_position = false;
-  int x = 0, y = 0;
-  int retries = 0;
-};
 using BridgeMessage = std::variant<BridgeSettingCommand,
                                   float,
-                                  BridgeMenuRequest,
                                   BridgeAssetDragCommand>;
 /* A single inbox preserves ordering across tools, settings, operators and menus. */
 GHOST_MessageQueue<BridgeMessage> bridge_messages;
-GHOST_MessageQueue<std::pair<uint64_t, std::string>> bridge_menu_completed;
-/* Results the native interface has yet to take. */
-std::map<uint64_t, std::string> bridge_menu_results;
-std::atomic<uint64_t> bridge_menu_next_identifier{0};
 bool bridge_layout_ready = false;
 bool bridge_gizmo_refresh_pending = true;
 /** Blender's own interface instead of the native one: normal screens, no native controls. */
@@ -292,8 +279,6 @@ GHOST_Latest<std::string> bridge_hover_snapshot;
 int2 bridge_asset_drag_xy(0);
 BridgePencilHoverRequest bridge_hover_request;
 
-/** One of Blender's menus to show natively where the pointer is, see #bridge_menu_popup. */
-GHOST_Latest<std::string> bridge_menu_popup_snapshot;
 GHOST_Latest<std::string> bridge_panels_snapshot;
 /* Keyframes shown on the timeline, refreshed on the native cadence while it is open. */
 
@@ -3365,6 +3350,260 @@ void bridge_timeline_keys_view_build(bContext *C,
 /** \} */
 
 /* -------------------------------------------------------------------- */
+/** \name The Menu and Popup Views
+ *
+ * `menu`: one of Blender's menus, subscribed to with its `route`, as `native_menu_query` takes
+ * it. Its items are keyed by their own routes: buttons, which `Invoke` runs (where the pointer is
+ * with `x` and `y` parameters, for operators that follow it from there), and menu buttons, the
+ * routes of their submenus. Built once for each subscription: a menu shows what Blender has as
+ * it opens.
+ *
+ * `popup`: what Blender asks the interface to show where the pointer is, in place of its own popup:
+ * a menu, an operator's choice of an enum, or Rename Active Item. Keyed by a number that grows
+ * with each, so the interface shows each once.
+ * \{ */
+
+std::string bridge_menu_shortcut(const io::serialize::DictionaryValue &key)
+{
+  std::string result;
+  for (const char *modifier : {"ctrl", "alt", "shift", "oskey"}) {
+    if (bridge_number(key, modifier, 0.0) != 0.0) {
+      result += std::string(modifier) + "+";
+    }
+  }
+  return result + std::string(bridge_text(key, "type"));
+}
+
+/** Blender's cursor where the pointer is, at the `x` and `y` of \a params in the window's pixels,
+ * for menus that list and operators that follow the pointer from there, as Bevel. */
+void bridge_menu_cursor_set(bContext *C, const views::Params &params)
+{
+  wmWindow *win = CTX_wm_window(C);
+  const std::optional<double> x = params.number("x"), y = params.number("y");
+  if (win && x && y && win->runtime->eventstate) {
+    int position[2] = {int(*x), int(*y)};
+    wm_cursor_position_from_ghost_client_coords(win, &position[0], &position[1]);
+    win->runtime->eventstate->xy[0] = position[0];
+    win->runtime->eventstate->xy[1] = position[1];
+  }
+}
+
+void bridge_menu_view_build(bContext *C,
+                            const views::Params &params,
+                            views::ViewData * /*data*/,
+                            views::ViewBuilder &builder)
+{
+  using namespace io::serialize;
+  const std::optional<std::string_view> route = params.text("route");
+  std::shared_ptr<Value> items;
+  std::string heading;
+  bridge_menu_cursor_set(C, params);
+  if (route && CTX_wm_window(C) && CTX_wm_area(C) && CTX_wm_region(C)) {
+    std::istringstream stream(ui::native_properties_menu_query(C, std::string(*route), false));
+    items = JsonFormatter().deserialize(stream);
+  }
+  const ArrayValue *array = items ? items->as_array_value() : nullptr;
+  if (array) {
+    for (const std::shared_ptr<Value> &item : array->elements()) {
+      if (const DictionaryValue *entry = item->as_dictionary_value()) {
+        heading = std::string(bridge_text(*entry, "heading"));
+        if (!heading.empty()) {
+          break;
+        }
+      }
+    }
+  }
+  const NodeId top = builder.top("menu", [&](ViewBuffer &buffer, NodeFields &fields) {
+    fields.label = heading;
+    return views::protocol::CreateMenu(buffer);
+  });
+  if (array == nullptr) {
+    return;
+  }
+  int separators = 0;
+  for (const std::shared_ptr<Value> &item : array->elements()) {
+    const DictionaryValue *entry = item->as_dictionary_value();
+    if (entry == nullptr || !bridge_text(*entry, "heading").empty()) {
+      continue;
+    }
+    if (bridge_number(*entry, "separator", 0.0) != 0.0) {
+      builder.add(top,
+                  "separator:" + std::to_string(separators++),
+                  [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+                    return views::protocol::CreateSeparator(buffer);
+                  });
+      continue;
+    }
+    const DictionaryValue *item_route = entry->lookup_dict("route");
+    if (item_route == nullptr) {
+      continue;
+    }
+    std::ostringstream route_stream;
+    JsonFormatter().serialize(route_stream, *item_route);
+    const std::string key = route_stream.str();
+    const auto common = [&](NodeFields &fields) {
+      fields.label = bridge_text(*entry, "title");
+      fields.icon = bridge_text(*entry, "icon");
+      fields.enabled = bridge_number(*entry, "disabled", 0.0) == 0.0;
+    };
+    if (bridge_number(*entry, "submenu", 0.0) != 0.0) {
+      builder.add(top, key, [&](ViewBuffer &buffer, NodeFields &fields) {
+        common(fields);
+        /* Its route, and the submenu's name, such as `TOPBAR_MT_file_new`. */
+        std::vector<flatbuffers::Offset<views::protocol::Param>> menu_params;
+        for (const auto &[name, value] :
+             {std::pair{"route", std::string_view(key)}, std::pair{"menu", bridge_text(*entry, "menu")}})
+        {
+          menu_params.push_back(views::protocol::CreateParamDirect(
+              buffer,
+              name,
+              views::protocol::Value::TextValue,
+              views::protocol::CreateTextValueDirect(buffer, std::string(value).c_str()).Union()));
+        }
+        return views::protocol::CreateMenuButtonDirect(buffer, "menu", &menu_params);
+      });
+      continue;
+    }
+    builder.add(top, key, [&](ViewBuffer &buffer, NodeFields &fields) {
+      common(fields);
+      const DictionaryValue *shortcut = entry->lookup_dict("key");
+      const std::string shortcut_text = shortcut ? bridge_menu_shortcut(*shortcut) : "";
+      const std::string_view op_name = bridge_text(*entry, "operator");
+      return views::protocol::CreateButtonDirect(
+          buffer,
+          views::protocol::ButtonStyle::Normal,
+          op_name.empty() ? nullptr : op_name.data(),
+          nullptr,
+          shortcut_text.empty() ? nullptr : shortcut_text.c_str(),
+          bridge_number(*entry, "checked", 0.0) != 0.0);
+    });
+  }
+}
+
+views::CommandResult bridge_menu_view_command(bContext *C,
+                                              const views::Params & /*params*/,
+                                              views::ViewData * /*data*/,
+                                              const views::protocol::Command &command,
+                                              std::string &r_error)
+{
+  if (command.op() != views::protocol::Op::Invoke) {
+    r_error = "Menu items are only run";
+    return views::CommandResult::Failed;
+  }
+  wmWindow *win = CTX_wm_window(C);
+  if (win == nullptr || CTX_wm_area(C) == nullptr || CTX_wm_region(C) == nullptr) {
+    r_error = "No window to run it in";
+    return views::CommandResult::Failed;
+  }
+  bridge_menu_cursor_set(C, views::Params(command.params()));
+  ui::native_properties_menu_query(C, command.target()->str(), true);
+  return views::CommandResult::Done;
+}
+
+/** What Blender last asked the interface to show, see #bridge_menu_popup. */
+struct BridgePopup {
+  uint64_t number = 0;
+  std::string menu;
+  /** An enum's choice: the operator and its property, its title and items. */
+  std::string op_name;
+  std::string prop_name;
+  std::string title;
+  struct Item {
+    std::string label, value, icon;
+  };
+  std::vector<Item> items;
+  bool rename = false;
+  float x = 0.5f, y = 0.5f;
+};
+BridgePopup bridge_popup;
+
+/** Show \a popup, where the pointer is in \a C's window. */
+void bridge_popup_show(bContext *C, BridgePopup popup)
+{
+  wmWindow *win = CTX_wm_window(C);
+  if (win && win->runtime->eventstate) {
+    const float width = WM_window_native_pixel_x(win);
+    const float height = WM_window_native_pixel_y(win);
+    if (width > 0 && height > 0) {
+      popup.x = win->runtime->eventstate->xy[0] / width;
+      popup.y = 1.0f - win->runtime->eventstate->xy[1] / height;
+    }
+  }
+  popup.number = bridge_popup.number + 1;
+  bridge_popup = std::move(popup);
+  views::view_type_dirty("popup");
+}
+
+void bridge_popup_view_build(bContext * /*C*/,
+                             const views::Params & /*params*/,
+                             views::ViewData * /*data*/,
+                             views::ViewBuilder &builder)
+{
+  const BridgePopup &popup = bridge_popup;
+  const NodeId top = builder.top("popup:" + std::to_string(popup.number),
+                                 [&](ViewBuffer &buffer, NodeFields &fields) {
+                                   fields.label = popup.title;
+                                   return views::protocol::CreateGroup(buffer);
+                                 });
+  if (popup.number == 0) {
+    return;
+  }
+  /* Where the pointer is, as fractions of the window from its top left. */
+  const double position[2] = {popup.x, popup.y};
+  builder.add(top, "position", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return bridge_data(buffer, Span<double>(position, 2));
+  });
+  if (!popup.menu.empty()) {
+    builder.add(top, "menu", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      return bridge_data(buffer, std::string_view(popup.menu));
+    });
+  }
+  if (popup.rename) {
+    builder.add(top, "rename", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      return bridge_data(buffer, true);
+    });
+  }
+  if (!popup.op_name.empty()) {
+    /* Its items, with headings without a value between groups of them. */
+    builder.add(top, "choice", [&](ViewBuffer &buffer, NodeFields &fields) {
+      fields.label = popup.title;
+      OptionOffsets options;
+      for (const BridgePopup::Item &item : popup.items) {
+        options.push_back(views::protocol::CreateOptionDirect(buffer,
+                                                              item.value.empty() ? nullptr :
+                                                                                   item.value.c_str(),
+                                                              item.label.c_str(),
+                                                              item.icon.c_str()));
+      }
+      return views::protocol::CreateChoiceDirect(
+          buffer, nullptr, &options, views::protocol::ChoiceStyle::Actions);
+    });
+  }
+}
+
+views::CommandResult bridge_popup_view_command(bContext *C,
+                                               const views::Params & /*params*/,
+                                               views::ViewData * /*data*/,
+                                               const views::protocol::Command &command,
+                                               std::string &r_error)
+{
+  const views::protocol::TextValue *value = command.value_as_TextValue();
+  if (command.target()->string_view() != "choice" || command.op() != views::protocol::Op::Set ||
+      value == nullptr || value->value() == nullptr || bridge_popup.op_name.empty())
+  {
+    r_error = "Not something the popup does";
+    return views::CommandResult::Failed;
+  }
+  bridge_operator_call_with_enum_property(C,
+                                          bridge_popup.op_name.c_str(),
+                                          bridge_popup.prop_name.c_str(),
+                                          value->value()->c_str());
+  return views::CommandResult::Done;
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
 /** \name The Settings and Render Views
  *
  * `settings`: the interface's own settings that Blender keeps, which it sets as it starts and as
@@ -3634,6 +3873,21 @@ void WM_native_ui_views_register()
   };
   view_type_add(std::move(assets));
 
+  ViewType menu;
+  menu.name = "menu";
+  /* As it is when it opens: built once. */
+  menu.notifiers = {0};
+  menu.build = bridge_menu_view_build;
+  menu.command = bridge_menu_view_command;
+  view_type_add(std::move(menu));
+
+  ViewType popup;
+  popup.name = "popup";
+  popup.notifiers = {0};
+  popup.build = bridge_popup_view_build;
+  popup.command = bridge_popup_view_command;
+  view_type_add(std::move(popup));
+
   ViewType render;
   render.name = "render";
   render.notifiers = {NC_SCENE, NC_WM, NC_IMAGE};
@@ -3859,43 +4113,12 @@ bool bridge_menu_popup(bContext *C, const char *menu)
   if (WM_native_ui_desktop_mode() || WM_menutype_find(menu, true) == nullptr) {
     return false;
   }
-  /* Where the pointer is, as fractions of the window from its top left. */
-  float x = 0.5f, y = 0.5f;
-  wmWindow *win = CTX_wm_window(C);
-  if (win && win->runtime->eventstate) {
-    const float width = WM_window_native_pixel_x(win);
-    const float height = WM_window_native_pixel_y(win);
-    if (width > 0 && height > 0) {
-      x = win->runtime->eventstate->xy[0] / width;
-      y = 1.0f - win->runtime->eventstate->xy[1] / height;
-    }
-  }
-  bridge_menu_popup_snapshot.publish("{\"menu\":\"" + bridge_json_escape(menu) + "\",\"x\":" +
-                                  bridge_json_number(x) + ",\"y\":" + bridge_json_number(y) + "}");
+  BridgePopup popup;
+  popup.menu = menu;
+  bridge_popup_show(C, std::move(popup));
   return true;
 }
 
-/** Where the pointer is, as fractions of the window from its top left, for a popup there. */
-static std::string bridge_popup_position(bContext *C)
-{
-  float x = 0.5f, y = 0.5f;
-  wmWindow *win = CTX_wm_window(C);
-  if (win && win->runtime->eventstate) {
-    const float width = WM_window_native_pixel_x(win);
-    const float height = WM_window_native_pixel_y(win);
-    if (width > 0 && height > 0) {
-      x = win->runtime->eventstate->xy[0] / width;
-      y = 1.0f - win->runtime->eventstate->xy[1] / height;
-    }
-  }
-  return "\"x\":" + bridge_json_number(x) + ",\"y\":" + bridge_json_number(y);
-}
-
-/**
- * An operator's choice of its enum items, such as Add Constraint's, shown natively where the
- * pointer is in place of Blender's popup menu, its headings as sections. The native side runs the
- * operator with the one chosen.
- */
 bool bridge_enum_popup(bContext *C, wmOperator *op, PropertyRNA *prop)
 {
   if (WM_native_ui_desktop_mode()) {
@@ -3908,11 +4131,10 @@ bool bridge_enum_popup(bContext *C, wmOperator *op, PropertyRNA *prop)
   if (!items || count == 0) {
     return false;
   }
-  std::string json = "{\"title\":\"" + bridge_json_escape(WM_operatortype_name(op->type, op->ptr)) +
-                     "\",\"operator\":\"" + bridge_json_escape(op->type->idname) +
-                     "\",\"property\":\"" + bridge_json_escape(RNA_property_identifier(prop)) +
-                     "\",\"items\":[";
-  bool first = true;
+  BridgePopup popup;
+  popup.title = WM_operatortype_name(op->type, op->ptr);
+  popup.op_name = op->type->idname;
+  popup.prop_name = RNA_property_identifier(prop);
   for (int i = 0; i < count; i++) {
     const EnumPropertyItem &item = items[i];
     if (!item.name && !item.identifier[0]) {
@@ -3922,36 +4144,24 @@ bool bridge_enum_popup(bContext *C, wmOperator *op, PropertyRNA *prop)
     if (item.icon) {
       RNA_enum_identifier(rna_enum_icon_items, item.icon, &icon);
     }
-    json += std::string(first ? "" : ",") + "{\"title\":\"" + bridge_json_escape(item.name ? item.name : "") +
-            "\",\"value\":\"" + bridge_json_escape(item.identifier) + "\",\"heading\":" +
-            (item.identifier[0] ? "0" : "1") + ",\"icon\":\"" + bridge_json_escape(icon ? icon : "") +
-            "\"}";
-    first = false;
+    popup.items.push_back({item.name ? item.name : "", item.identifier, icon ? icon : ""});
   }
   if (free) {
     MEM_delete(items);
   }
-  bridge_menu_popup_snapshot.publish(json + "]," + bridge_popup_position(C) + "}");
+  bridge_popup_show(C, std::move(popup));
   return true;
 }
 
-/** Rename Active Item's panel, as a native field; the other panels are Blender's own. */
 bool bridge_panel_popup(bContext *C, const char *panel)
 {
   if (WM_native_ui_desktop_mode() || !STREQ(panel, "TOPBAR_PT_name")) {
     return false;
   }
-  bridge_menu_popup_snapshot.publish("{\"rename\":1," + bridge_popup_position(C) + "}");
+  BridgePopup popup;
+  popup.rename = true;
+  bridge_popup_show(C, std::move(popup));
   return true;
-}
-
-extern "C" char *WM_native_ui_menu_popup_take_json()
-{
-  std::string json;
-  if (!bridge_menu_popup_snapshot.take(json)) {
-    return nullptr;
-  }
-  return strdup(json.c_str());
 }
 
 extern "C" char *WM_native_ui_panels_take_json()
@@ -4187,41 +4397,6 @@ void WM_native_ui_ensure_layout(bContext *C)
   bridge_apply_viewport_preferences(C);
 }
 
-extern "C" uint64_t WM_native_ui_menu_request(const char *route, bool execute)
-{
-  const uint64_t identifier = ++bridge_menu_next_identifier;
-  bridge_messages.push(BridgeMenuRequest{identifier, route ? route : "{}", execute});
-  return identifier;
-}
-
-extern "C" uint64_t WM_native_ui_menu_at_position_request(const char *route,
-                                                             bool execute,
-                                                             int x,
-                                                             int y)
-{
-  const uint64_t identifier = ++bridge_menu_next_identifier;
-  bridge_messages.push(BridgeMenuRequest{identifier, route ? route : "{}", execute, true, x, y});
-  return identifier;
-}
-
-/* The native interface only exchanges owned JSON with the engine, never live Blender UI pointers. */
-extern "C" char *WM_native_ui_menu_take_result(uint64_t identifier)
-{
-  for (auto &result : bridge_menu_completed.take()) {
-    bridge_menu_results.emplace(result.first, std::move(result.second));
-  }
-  while (bridge_menu_results.size() > 128) {
-    bridge_menu_results.erase(bridge_menu_results.begin());
-  }
-  const auto found = bridge_menu_results.find(identifier);
-  if (found == bridge_menu_results.end()) {
-    return nullptr;
-  }
-  char *result = strdup(found->second.c_str());
-  bridge_menu_results.erase(found);
-  return result;
-}
-
 extern "C" void WM_native_ui_navigation_hover_set(bool active)
 {
   if (bridge_navigation_hover_active.exchange(active) != active) {
@@ -4305,47 +4480,11 @@ int WM_native_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region)
   return int(bridge_bottom_tray.load() * WM_window_native_pixel_y(win)) - region->winrct.ymin;
 }
 
-static void bridge_dispatch_menu(bContext *C, BridgeMenuRequest &request)
-{
-  const BridgeContextStore context_store = bridge_context_push_view3d(C);
-  std::string result = "[]";
-  wmWindow *win = CTX_wm_window(C);
-  bool ready = true;
-  if (win && request.has_position) {
-    for (wmEventHandler &handler_item : win->runtime->modalhandlers) {
-      wmEventHandler *handler = &handler_item;
-      if (handler->type == WM_HANDLER_TYPE_OP) {
-        ready = false;
-        break;
-      }
-    }
-    if (!ready && request.retries++ < 2) {
-      bridge_messages.push(request);
-      bridge_context_pop(C, context_store);
-      return;
-    }
-    if (ready && win->runtime->eventstate) {
-      int x = request.x, y = request.y;
-      wm_cursor_position_from_ghost_client_coords(win, &x, &y);
-      win->runtime->eventstate->xy[0] = x;
-      win->runtime->eventstate->xy[1] = y;
-    }
-  }
-  if (ready && win && CTX_wm_area(C) && CTX_wm_region(C)) {
-    result = blender::ui::native_properties_menu_query(C, request.route, request.execute);
-  }
-  bridge_context_pop(C, context_store);
-  if (!request.execute) {
-    bridge_menu_completed.push({request.identifier, std::move(result)});
-  }
-}
-
 static void bridge_dispatch(bContext *C, BridgeMessage &message)
 {
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
   const auto *setting = std::get_if<BridgeSettingCommand>(&message);
-  const auto *menu = std::get_if<BridgeMenuRequest>(&message);
-  if ((!menu || menu->execute) && (!setting || (setting->setting != "native_properties_edit" &&
+  if ((!setting || (setting->setting != "native_properties_edit" &&
                                                 setting->setting != "native_panels" &&
                                                 setting->setting != "native_nodes_state" &&
                                                 setting->setting != "native_nodes_visible" &&
@@ -4380,21 +4519,13 @@ static void bridge_dispatch(bContext *C, BridgeMessage &message)
                                          setting->setting == "native_storyboard_edit" ||
                                          setting->setting == "native_storyboard_state");
   if (WM_apple_ios_dialog_active(CTX_wm_window(C)) && !panel_message) {
-    if (const auto *request = std::get_if<BridgeMenuRequest>(&message)) {
-      if (!request->execute) {
-        bridge_menu_completed.push({request->identifier, "[]"});
-      }
-    }
     return;
   }
 #endif
   std::visit(
       [&](auto &command) {
         using T = std::decay_t<decltype(command)>;
-        if constexpr (std::is_same_v<T, BridgeMenuRequest>) {
-          bridge_dispatch_menu(C, command);
-        }
-        else if constexpr (std::is_same_v<T, BridgeAssetDragCommand>) {
+        if constexpr (std::is_same_v<T, BridgeAssetDragCommand>) {
           bridge_asset_drag(C, command);
         }
         else {
@@ -4632,9 +4763,6 @@ static bool bridge_message_live(const BridgeMessage &message)
 {
   if (std::holds_alternative<float>(message)) {
     return true;
-  }
-  if (const auto *menu = std::get_if<BridgeMenuRequest>(&message)) {
-    return !menu->execute;
   }
   const auto *setting = std::get_if<BridgeSettingCommand>(&message);
   if (setting == nullptr) {

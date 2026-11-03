@@ -34,7 +34,11 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
    * menu a right-click opens, Shift-A's Add menu, a pie, as on a Mac. */
   private var blenderMenu: UIMenu?
   private var menuBarItems: NSArray = []
-  private var menuBarRequest: UInt64 = 0
+  private var menuBarRequested = false
+  /** What Blender asks to show where the pointer is, in place of its own popup: from its `popup`
+   * view, each once. */
+  private let popupView = NativeViews.shared.subscribe("popup")
+  private var popupShown: String?
   private var menuBarMode: String?
   private var menuBarTime = Date.distantPast
   private var touchSettingsApplied = false
@@ -207,18 +211,20 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
   /** Projecting all of Blender's menus is costly and they change with the mode, rarely
    * otherwise: ask again when the mode changes, and every few seconds for the rest. */
   private func refreshMenuBar() {
-    if menuBarRequest != 0 {
-      guard let items = wm_apple_ios_menu_result(menuBarRequest) else { return }
-      menuBarRequest = 0
-      if !(items as NSArray).isEqual(to: menuBarItems as! [Any]) {
-        menuBarItems = items as NSArray
+    guard !menuBarRequested,
+          menuBarMode != model.objectMode || Date().timeIntervalSince(menuBarTime) >= 3 else { return }
+    menuBarTime = Date()
+    menuBarMode = model.objectMode
+    menuBarRequested = true
+    wm_apple_ios_menu_bar_request { [weak self] items in
+      MainActor.assumeIsolated {
+        guard let self else { return }
+        self.menuBarRequested = false
+        guard let items, !(items as NSArray).isEqual(to: self.menuBarItems as! [Any]) else { return }
+        self.menuBarItems = items as NSArray
         UIMenuSystem.main.setNeedsRebuild()
       }
     }
-    if menuBarMode == model.objectMode && Date().timeIntervalSince(menuBarTime) < 3 { return }
-    menuBarTime = Date()
-    menuBarMode = model.objectMode
-    menuBarRequest = wm_apple_ios_menu_bar_request()
   }
 
   override public func buildMenu(with builder: any UIMenuBuilder) {
@@ -251,37 +257,47 @@ extension DocumentController: UIEditMenuInteractionDelegate, UIGestureRecognizer
   }
 
   private func pullMenuPopup() {
-    guard let json = WM_native_ui_menu_popup_take_json() else { return }
-    let data = Data(bytes: json, count: strlen(json))
-    free(json)
-    guard let request = (try? JSONSerialization.jsonObject(with: data)) as? JSON else { return }
+    guard let top = popupView.top, top.key != popupShown else { return }
+    let first = popupShown == nil
+    popupShown = top.key
+    /* What was asked before this window opened is not shown. */
+    guard !first, top.key != "popup:0" else { return }
+    let children = popupView.children(of: top)
+    func node(_ key: String) -> NativeNode? { children.first { $0.key == key } }
+    func data(_ key: String) -> Blender_NativeUI_Data? { node(key)?.content(Blender_NativeUI_Data.self) }
     let bounds = metalView.bounds
-    let point = CGPoint(x: bounds.width * CGFloat(request.double("x") ?? 0.5),
-                        y: bounds.height * CGFloat(request.double("y") ?? 0.5))
-    if request.bool("rename") {
+    var point = CGPoint(x: bounds.midX, y: bounds.midY)
+    if let position = data("position")?.value(type: Blender_NativeUI_FloatsValue.self), position.valueCount == 2 {
+      point = CGPoint(x: bounds.width * position.value(at: 0), y: bounds.height * position.value(at: 1))
+    }
+    if node("rename") != nil {
       BlenderMenus.presentRename(from: self, title: "Rename Active Item", current: model.activeName)
       return
     }
-    if BlenderMenus.enumSections(request).contains(where: { !$0.heading.isEmpty }) {
-      /* Its headings would be lost on an edit menu's strip. */
-      var top: UIViewController = self
-      while let presented = top.presentedViewController { top = presented }
-      weak var list: UIViewController?
-      let host = UIHostingController(rootView: EnumChoiceList(request: request) { list?.dismiss(animated: true) })
-      list = host
-      host.modalPresentationStyle = .popover
-      host.preferredContentSize = CGSize(width: 340, height: 520)
-      host.popoverPresentationController?.sourceView = metalView
-      host.popoverPresentationController?.sourceRect = CGRect(origin: point, size: CGSize(width: 1, height: 1))
-      top.present(host, animated: true)
+    if let choice = node("choice") {
+      let request = EnumChoice(node: choice) { [popupView] value in
+        NativeViews.shared.send(popupView, target: "choice", value: .text(value))
+      }
+      if request.sections.contains(where: { !$0.heading.isEmpty }) {
+        /* Its headings would be lost on an edit menu's strip. */
+        var top: UIViewController = self
+        while let presented = top.presentedViewController { top = presented }
+        weak var list: UIViewController?
+        let host = UIHostingController(rootView: EnumChoiceList(request: request) { list?.dismiss(animated: true) })
+        list = host
+        host.modalPresentationStyle = .popover
+        host.preferredContentSize = CGSize(width: 340, height: 520)
+        host.popoverPresentationController?.sourceView = metalView
+        host.popoverPresentationController?.sourceRect = CGRect(origin: point, size: CGSize(width: 1, height: 1))
+        top.present(host, animated: true)
+      }
+      else if let menu = BlenderMenus.enumMenu(request) {
+        blenderMenu = menu
+        contextMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+      }
       return
     }
-    if let choice = BlenderMenus.enumMenu(request) {
-      blenderMenu = choice
-      contextMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
-      return
-    }
-    guard let menu = request.string("menu") else { return }
+    guard let menu = data("menu")?.value(type: Blender_NativeUI_TextValue.self)?.value else { return }
     Task { @MainActor in
       guard let items = await BlenderMenus.shared.fetch(BlenderMenus.route(menu)), !items.isEmpty else { return }
       blenderMenu = BlenderMenus.uiMenu(items)

@@ -252,20 +252,9 @@ extern "C" void wm_apple_ios_window_drop_files(void *window,
     return;
   }
   const CGPoint pixels = [self pixels:point from:menu];
-  const uint64_t request = WM_native_ui_menu_at_position_request(
-      blenderIOSMenuRoute(route).UTF8String, false, pixels.x, pixels.y);
-  const CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + 60.0;
-  NSTimer *poll = [NSTimer timerWithTimeInterval:0.025
-                                         repeats:YES
-                                           block:^(NSTimer *timer) {
-                                             NSArray *result = blenderIOSMenuResult(request);
-                                             if (result || CFAbsoluteTimeGetCurrent() >= deadline)
-                                             {
-                                               [timer invalidate];
-                                               completion([self radialItems:result]);
-                                             }
-                                           }];
-  [NSRunLoop.mainRunLoop addTimer:poll forMode:NSRunLoopCommonModes];
+  blenderIOSMenuItems(blenderIOSMenuRoute(route), &pixels, ^(NSArray *result) {
+    completion([self radialItems:result]);
+  });
 }
 
 - (void)pencilMenu:(UIView<GHOSTIOSPencilMenu> *)menu
@@ -278,8 +267,7 @@ extern "C" void wm_apple_ios_window_drop_files(void *window,
     return;
   }
   const CGPoint pixels = [self pixels:point from:menu];
-  WM_native_ui_menu_at_position_request(
-      blenderIOSMenuRoute(item[@"route"]).UTF8String, true, pixels.x, pixels.y);
+  blenderIOSMenuRun(blenderIOSMenuRoute(item[@"route"]), &pixels);
 }
 
 @end
@@ -357,15 +345,10 @@ extern "C" void wm_apple_ios_build_menu_bar(id<UIMenuBuilder> builder, NSArray *
   }
 }
 
-/** Ask Blender for its menu bar's menus; the answer comes later, see the next function. */
-extern "C" uint64_t wm_apple_ios_menu_bar_request()
+/** Ask Blender for its menu bar's menus, given to \a completion once it built them. */
+extern "C" void wm_apple_ios_menu_bar_request(void (^completion)(NSArray *_Nullable items))
 {
-  return WM_native_ui_menu_request("{\"root\":\"menubar\",\"path\":[]}", false);
-}
-
-extern "C" NSArray *wm_apple_ios_menu_result(uint64_t request)
-{
-  return blenderIOSMenuResult(request);
+  blenderIOSMenuItems(@"{\"path\":[],\"root\":\"menubar\"}", nullptr, completion);
 }
 
 /** \} */

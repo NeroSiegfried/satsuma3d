@@ -135,50 +135,14 @@ final class BlenderMenus {
    * An operator's choice of its enum items, as Blender would show in a popup menu: its headings
    * begin sections, and choosing one runs the operator with it, see `bridge_enum_popup`.
    */
-  static func enumMenu(_ request: JSON) -> UIMenu? {
-    guard let op = request.string("operator"), let property = request.string("property") else { return nil }
-    var sections: [UIMenu] = []
-    var children: [UIMenuElement] = []
-    var heading = ""
-    func flush() {
-      if !children.isEmpty { sections.append(UIMenu(title: heading, options: .displayInline, children: children)) }
-      children = []
-    }
-    for item in request.array("items") {
-      let title = item.string("title") ?? ""
-      if item.bool("heading") {
-        flush()
-        heading = title
-        continue
-      }
-      guard let value = item.string("value"), !title.isEmpty else { continue }
-      let icon = item.string("icon") ?? ""
-      let image = ["", "NONE", "BLANK1"].contains(icon) ? nil : BlenderIcon.image(icon)
-      children.append(UIAction(title: title, image: image) { _ in
-        Operators.run(op, [property: .text(value)])
+  static func enumMenu(_ request: EnumChoice) -> UIMenu? {
+    let sections = request.sections.map { section in
+      UIMenu(title: section.heading, options: .displayInline, children: section.items.map { item in
+        let image = ["", "NONE", "BLANK1"].contains(item.icon) ? nil : BlenderIcon.image(item.icon)
+        return UIAction(title: item.title, image: image) { _ in request.choose(item.value) }
       })
     }
-    flush()
-    return sections.isEmpty ? nil : UIMenu(title: request.string("title") ?? "", children: sections)
-  }
-
-  /** An enum choice's sections, as `enumMenu` reads them: a heading, then its choices. */
-  static func enumSections(_ request: JSON) -> [(heading: String, items: [JSON])] {
-    var sections: [(heading: String, items: [JSON])] = []
-    var heading = ""
-    var items: [JSON] = []
-    for item in request.array("items") {
-      if item.bool("heading") {
-        if !items.isEmpty { sections.append((heading, items)) }
-        heading = item.string("title") ?? ""
-        items = []
-      }
-      else if item.string("value") != nil, !(item.string("title") ?? "").isEmpty {
-        items.append(item)
-      }
-    }
-    if !items.isEmpty { sections.append((heading, items)) }
-    return sections
+    return sections.isEmpty ? nil : UIMenu(title: request.title, children: sections)
   }
 
   /** Rename Active Item: the active object's name, or the active bone's, in a native field. */
@@ -199,45 +163,60 @@ final class BlenderMenus {
     top.present(alert, animated: true)
   }
 
-  /** Run an item in Blender. */
-  func run(_ item: BlenderMenuItem) {
-    _ = item.route.withCString { WM_native_ui_menu_request($0, true) }
+
+  /** Ask Blender for a menu: its `menu` view, built once, read as it arrives. */
+  private static func request(_ route: String) async -> [BlenderMenuItem]? {
+    await menu(route).map { items($0.nodes) }
   }
 
-  private static func request(_ route: String) async -> [BlenderMenuItem]? {
-    let request = route.withCString { WM_native_ui_menu_request($0, false) }
+  /** A menu's nodes as Blender built them, with Blender's cursor at a window position in pixels
+   * for menus that list what is there, and its heading. */
+  static func menu(_ route: String, at position: CGPoint? = nil) async -> (heading: String, nodes: [NativeNode])? {
+    var params: [String: NativeValue] = ["route": .text(route)]
+    if let position {
+      params["x"] = .float(Double(position.x))
+      params["y"] = .float(Double(position.y))
+    }
+    let view = NativeViews.shared.subscribe("menu", params: params)
+    defer { NativeViews.shared.unsubscribe(view) }
     /* Blender answers between frames; it may be busy for a while, as when compiling shaders. */
     for _ in 0..<2400 {
-      if let json = WM_native_ui_menu_take_result(request) {
-        let data = Data(bytes: json, count: strlen(json))
-        free(json)
-        let list = (try? JSONSerialization.jsonObject(with: data)) as? [Any] ?? []
-        return parse(list)
-      }
+      if let top = view.top { return (top.label, view.children(of: top)) }
       try? await Task.sleep(for: .milliseconds(25))
     }
     return nil
   }
 
-  private static func parse(_ list: [Any]) -> [BlenderMenuItem] {
+  private static func items(_ nodes: [NativeNode]) -> [BlenderMenuItem] {
     var result: [BlenderMenuItem] = []
     var sectionStart = false
-    for entry in list {
-      guard let item = entry as? JSON else { continue }
-      if item.bool("separator") {
+    for node in nodes {
+      if node.kind == .separator {
         sectionStart = !result.isEmpty
         continue
       }
-      guard let title = item.string("title"), !title.isEmpty, let route = item["route"] as? JSON else { continue }
-      result.append(BlenderMenuItem(title: title, icon: item.string("icon") ?? "",
-                                    route: encode(route), submenu: item.bool("submenu"),
-                                    disabled: item.bool("disabled"), checked: item.bool("checked"),
-                                    sectionStart: sectionStart,
-                                    destructive: isDestructive(operator: item.string("operator").flatMap { $0.isEmpty ? nil : $0 },
-                                                               title: title)))
+      guard !node.label.isEmpty else { continue }
+      let button = node.content(Blender_NativeUI_Button.self)
+      result.append(BlenderMenuItem(title: node.label, icon: node.icon ?? "", route: node.key,
+                                    submenu: node.kind == .menubutton, disabled: !node.enabled,
+                                    checked: button?.pressed ?? false, sectionStart: sectionStart,
+                                    destructive: isDestructive(operator: button?.operator_, title: node.label)))
       sectionStart = false
     }
     return result
+  }
+
+  /** Where items are run, by their routes. */
+  @ObservationIgnored private let runner = NativeViews.shared.subscribe("menu")
+
+  /** Run an item in Blender, with its cursor at a window position in pixels, for operators that
+   * follow the pointer from there, such as Bevel. */
+  func run(_ item: BlenderMenuItem, at position: CGPoint? = nil) {
+    var params: [String: NativeValue] = [:]
+    if let position {
+      params = ["x": .float(Double(position.x)), "y": .float(Double(position.y))]
+    }
+    NativeViews.shared.send(runner, target: item.route, op: .invoke, params: params)
   }
 }
 
@@ -371,26 +350,56 @@ struct ContextMenuButton: View {
  * A long enum choice with headings, such as Add Constraint's, as a popover list where the pointer
  * is: an edit menu's horizontal strip leaves out section titles.
  */
+/** An operator's choice of its enum items, from the `choice` of Blender's `popup` view. */
+struct EnumChoice {
+  struct Item {
+    let title: String
+    let value: String
+    let icon: String
+  }
+
+  let title: String
+  /** Its items, a heading before each group of them. */
+  var sections: [(heading: String, items: [Item])] = []
+  let choose: (String) -> Void
+
+  @MainActor
+  init(node: NativeNode, choose: @escaping (String) -> Void) {
+    title = node.label
+    self.choose = choose
+    var heading = ""
+    var items: [Item] = []
+    for option in node.choice?.allOptions ?? [] {
+      guard let value = option.value else {
+        if !items.isEmpty { sections.append((heading, items)) }
+        heading = option.label ?? ""
+        items = []
+        continue
+      }
+      if let label = option.label, !label.isEmpty { items.append(Item(title: label, value: value, icon: option.icon ?? "")) }
+    }
+    if !items.isEmpty { sections.append((heading, items)) }
+  }
+}
+
 struct EnumChoiceList: View {
-  let request: JSON
+  let request: EnumChoice
   let dismiss: () -> Void
 
   var body: some View {
-    let op = request.string("operator") ?? "", property = request.string("property") ?? ""
     NavigationStack {
       List {
-        ForEach(Array(BlenderMenus.enumSections(request).enumerated()), id: \.offset) { _, section in
+        ForEach(Array(request.sections.enumerated()), id: \.offset) { _, section in
           Section(section.heading) {
             ForEach(Array(section.items.enumerated()), id: \.offset) { _, item in
               Button {
-                Operators.run(op, [property: .text(item.string("value") ?? "")])
+                request.choose(item.value)
                 dismiss()
               } label: {
                 Label {
-                  Text(item.string("title") ?? "")
+                  Text(item.title)
                 } icon: {
-                  let icon = item.string("icon") ?? ""
-                  if !["", "NONE", "BLANK1"].contains(icon), let image = BlenderIcon.image(icon) {
+                  if !["", "NONE", "BLANK1"].contains(item.icon), let image = BlenderIcon.image(item.icon) {
                     Image(uiImage: image)
                   }
                 }
@@ -401,9 +410,71 @@ struct EnumChoiceList: View {
         }
       }
       .listStyle(.insetGrouped)
-      .navigationTitle(request.string("title") ?? "")
+      .navigationTitle(request.title)
       .navigationBarTitleDisplayMode(.inline)
     }
     .frame(idealWidth: 340, idealHeight: 520)
+  }
+}
+
+/**
+ * Blender's menus for the window's Objective-C code, which builds the menu bar, the viewport's
+ * context menu and the Pencil's radial menu from them: each item as a dictionary of its `title`,
+ * `route`, `icon`, whether it is a `submenu` (and of which `menu`), an `action`, `disabled` or
+ * `checked`, its `operator` and shortcut `key`; or a `separator`, or the menu's `heading`.
+ */
+@MainActor
+@objc(WMIOSSwiftMenus)
+final class SwiftMenus: NSObject {
+  /** The menu at a route, or nil should Blender not answer; with `positioned`, with Blender's
+   * cursor at \a x, \a y in the window's pixels. */
+  @objc static func items(route: String, x: Double, y: Double, positioned: Bool,
+                          completion: @escaping ([NSDictionary]?) -> Void)
+  {
+    Task { @MainActor in
+      guard let menu = await BlenderMenus.menu(route, at: positioned ? CGPoint(x: x, y: y) : nil) else {
+        completion(nil)
+        return
+      }
+      var result: [NSDictionary] = menu.heading.isEmpty ? [] : [["heading": menu.heading]]
+      result += menu.nodes.compactMap(dictionary)
+      completion(result)
+    }
+  }
+
+  /** Run the item at a route, with Blender's cursor at \a x, \a y with `positioned`. */
+  @objc static func run(route: String, x: Double, y: Double, positioned: Bool) {
+    BlenderMenus.shared.run(BlenderMenuItem(title: "", icon: "", route: route, submenu: false, disabled: false,
+                                            checked: false, sectionStart: false, destructive: false),
+                            at: positioned ? CGPoint(x: x, y: y) : nil)
+  }
+
+  private static func dictionary(_ node: NativeNode) -> NSDictionary? {
+    if node.kind == .separator { return ["separator": 1] }
+    guard let data = node.key.data(using: .utf8),
+          let route = try? JSONSerialization.jsonObject(with: data) as? NSDictionary
+    else { return nil }
+    let item: NSMutableDictionary = [
+      "title": node.label, "route": route, "icon": node.icon ?? "",
+      "disabled": node.enabled ? 0 : 1, "submenu": node.kind == .menubutton ? 1 : 0,
+      "action": node.kind == .button ? 1 : 0,
+    ]
+    if let button = node.content(Blender_NativeUI_Button.self) {
+      item["checked"] = button.pressed ? 1 : 0
+      item["operator"] = button.operator_ ?? ""
+      if let key = button.key, !key.isEmpty {
+        /* Modifiers before the key, joined by `+`, as `bridge_menu_shortcut` writes them. */
+        var parts = key.split(separator: "+").map(String.init)
+        let type = parts.removeLast()
+        item["key"] = ["type": type, "ctrl": parts.contains("ctrl") ? 1 : 0, "alt": parts.contains("alt") ? 1 : 0,
+                       "shift": parts.contains("shift") ? 1 : 0, "oskey": parts.contains("oskey") ? 1 : 0]
+      }
+    }
+    if let button = node.content(Blender_NativeUI_MenuButton.self) {
+      let menu = (0..<button.paramsCount).compactMap { button.params(at: $0) }
+        .first { $0.key == "menu" }?.value(type: Blender_NativeUI_TextValue.self)?.value
+      if let menu, !menu.isEmpty { item["menu"] = menu }
+    }
+    return item
   }
 }

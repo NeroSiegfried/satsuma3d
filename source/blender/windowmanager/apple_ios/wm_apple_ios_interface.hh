@@ -33,7 +33,13 @@ UIImage *blenderIOSActionIcon(NSString *opName, NSString *propertyName, NSString
 Class blenderIOSSwiftClass(NSString *name);
 NSString *blenderIOSMenuRoute(NSDictionary *route);
 UIImage *blenderIOSMenuIcon(NSDictionary *item);
-NSArray *blenderIOSMenuResult(uint64_t identifier);
+/** A Blender menu's items, given once Blender built them, or nil should it not; with \a position,
+ * Blender's cursor there in the window's pixels. */
+void blenderIOSMenuItems(NSString *route,
+                         const CGPoint *position,
+                         void (^completion)(NSArray *_Nullable items));
+/** Run a menu's item by its route, with Blender's cursor at \a position if any. */
+void blenderIOSMenuRun(NSString *route, const CGPoint *position);
 UIMenu *blenderIOSNativeSubmenu(NSDictionary *item, NSString *identifier);
 NSArray<UIMenuElement *> *blenderIOSNativeMenuElements(NSArray *items);
 

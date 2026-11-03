@@ -77,8 +77,7 @@ bool wm_apple_ios_shader_compilation(int *_Nonnull finished,
                                      double *_Nonnull busy_seconds);
 /** Blender's menus in the iPadOS menu bar. */
 void wm_apple_ios_build_menu_bar(id<UIMenuBuilder> _Nonnull builder, NSArray *_Nonnull items);
-uint64_t wm_apple_ios_menu_bar_request(void);
-NSArray *_Nullable wm_apple_ios_menu_result(uint64_t request);
+void wm_apple_ios_menu_bar_request(void (^_Nonnull completion)(NSArray *_Nullable items));
 /** The document window's controller is closing. */
 void wm_apple_ios_document_controller_closed(id _Nonnull controller);
 /** Ask Blender to carry out one of the app's intents, see `bl_ui.native_intents`: `request` is

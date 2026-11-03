@@ -144,8 +144,6 @@ void WM_native_ui_viewport_trailing_cover_set(float pixels);
 
 /** Properties, the Outliner, and the editors the interface shows natively. */
 char *WM_NATIVE_UI_NULLABLE WM_native_ui_panels_take_json(void);
-/** One of Blender's menus to show where the pointer is: its name and place. */
-char *WM_NATIVE_UI_NULLABLE WM_native_ui_menu_popup_take_json(void);
 /** Free a snapshot or menu result. */
 void WM_native_ui_json_free(char *WM_NATIVE_UI_NULLABLE json);
 
@@ -160,21 +158,6 @@ bool WM_native_ui_image_take_pixels(char *WM_NATIVE_UI_NULLABLE *WM_NATIVE_UI_NO
 /** The UV edges over it when they changed, two points each, freed with `free`. */
 bool WM_native_ui_image_take_uvs(float *WM_NATIVE_UI_NULLABLE *WM_NATIVE_UI_NONNULL r_segments,
                                  int *r_count);
-
-/** \} */
-
-/* -------------------------------------------------------------------- */
-/** \name Menus
- * \{ */
-
-/** Ask for one of Blender's menus by its JSON route, or run its item when \a execute; the answer
- * is taken with #WM_native_ui_menu_take_result. */
-uint64_t WM_native_ui_menu_request(const char *route, bool execute);
-/** As #WM_native_ui_menu_request, with Blender's cursor at \a x, \a y in the window's pixels,
- * for operators that follow the pointer from there, such as Bevel. */
-uint64_t WM_native_ui_menu_at_position_request(const char *route, bool execute, int x, int y);
-/** The menu as JSON once Blender answered the request, until then null. */
-char *WM_NATIVE_UI_NULLABLE WM_native_ui_menu_take_result(uint64_t identifier);
 
 /** \} */
 
