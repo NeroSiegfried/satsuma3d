@@ -36,6 +36,32 @@ func jsonEqual(_ a: Any?, _ b: Any?) -> Bool {
   }
 }
 
+/**
+ * How long the interface takes to read and show what Blender sends, with `BLENDER_NATIVE_UI_RECORD`
+ * in the environment: a line of `native_ui_record/interface_timings.jsonl` in the temporary folder
+ * for each, beside Blender's own `timings.jsonl`.
+ */
+enum InterfaceTimings {
+  @MainActor private static let file: FileHandle? = {
+    guard ProcessInfo.processInfo.environment["BLENDER_NATIVE_UI_RECORD"] != nil else { return nil }
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("native_ui_record")
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let url = folder.appendingPathComponent("interface_timings.jsonl")
+    FileManager.default.createFile(atPath: url.path, contents: nil)
+    return try? FileHandle(forWritingTo: url)
+  }()
+
+  /** Time `body` as `part`, of a snapshot `bytes` long. */
+  @MainActor static func measure<Result>(_ part: String, bytes: Int = 0, _ body: () -> Result) -> Result {
+    guard let file else { return body() }
+    let start = DispatchTime.now().uptimeNanoseconds
+    let result = body()
+    let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+    file.write(Data("{\"part\":\"\(part)\",\"ms\":\(ms),\"bytes\":\(bytes)}\n".utf8))
+    return result
+  }
+}
+
 enum Engine {
   /** Queue a setting for the engine; `value` is usually JSON. */
   static func setting(_ name: String, _ value: String) {

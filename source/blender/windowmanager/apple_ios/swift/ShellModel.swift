@@ -195,10 +195,11 @@ final class ShellModel {
     else { return }
     let data = Data(bytes: json, count: strlen(json))
     WM_native_ui_json_free(json)
-    guard let object = try? JSONSerialization.jsonObject(with: data) as? JSON,
-          let toolbar = NativeUI.Toolbar(json: object)
+    guard let toolbar = InterfaceTimings.measure("toolbar.decode", bytes: data.count, {
+      (try? JSONSerialization.jsonObject(with: data) as? JSON).flatMap(NativeUI.Toolbar.init(json:))
+    })
     else { return }
-    update(toolbar: toolbar)
+    InterfaceTimings.measure("toolbar.apply") { update(toolbar: toolbar) }
   }
 
   /** Read without waiting for Blender: the presentation mailbox and the launcher. */

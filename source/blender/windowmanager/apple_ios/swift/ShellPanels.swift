@@ -72,16 +72,24 @@ final class ShellPanels {
 
   /** Blender's panels, timeline and asset snapshots, whichever changed. */
   func pullSnapshots() {
-    if let timelineSnapshot = takeJSON(WM_native_ui_timeline_take_json()) { timeline.updateSnapshot(timelineSnapshot) }
-    if let assetsSnapshot = takeJSON(WM_native_ui_assets_take_json()) { assets.updateSnapshot(assetsSnapshot) }
-    if let panelsSnapshot = takeJSON(WM_native_ui_panels_take_json()) { panels.updateSnapshot(panelsSnapshot) }
+    if let snapshot = takeJSON("timeline", WM_native_ui_timeline_take_json()) {
+      InterfaceTimings.measure("timeline.apply") { timeline.updateSnapshot(snapshot) }
+    }
+    if let snapshot = takeJSON("assets", WM_native_ui_assets_take_json()) {
+      InterfaceTimings.measure("assets.apply") { assets.updateSnapshot(snapshot) }
+    }
+    if let snapshot = takeJSON("panels", WM_native_ui_panels_take_json()) {
+      InterfaceTimings.measure("panels.apply") { panels.updateSnapshot(snapshot) }
+    }
     panels.image.pullPixels()
   }
 
-  private func takeJSON(_ json: UnsafeMutablePointer<CChar>?) -> Any? {
+  private func takeJSON(_ name: String, _ json: UnsafeMutablePointer<CChar>?) -> Any? {
     guard let json else { return nil }
     let data = Data(bytes: json, count: strlen(json))
     WM_native_ui_json_free(json)
-    return try? JSONSerialization.jsonObject(with: data)
+    return InterfaceTimings.measure(name + ".decode", bytes: data.count) {
+      try? JSONSerialization.jsonObject(with: data)
+    }
   }
 }
