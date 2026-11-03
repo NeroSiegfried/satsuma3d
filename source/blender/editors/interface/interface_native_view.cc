@@ -1208,7 +1208,15 @@ void native_views_register()
   properties.create = properties_create;
   properties.build = properties_build;
   properties.command = properties_command;
-  view_type_add(std::move(properties));
+  view_type_add(properties);
+
+  /* The tool's settings, which the top bar shows: at once when the tool, its brush or the mode
+   * changes, and not as the scene does, as while sculpting. */
+  ViewType tool_settings = properties;
+  tool_settings.name = "tool_settings";
+  tool_settings.min_interval = 0.0;
+  tool_settings.notifiers = {NC_WM, NC_SCENE, NC_BRUSH, NC_TEXTURE, NC_MATERIAL, NC_SPACE};
+  view_type_add(std::move(tool_settings));
 }
 
 }  // namespace blender::ui
