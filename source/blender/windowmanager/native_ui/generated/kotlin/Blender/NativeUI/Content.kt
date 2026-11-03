@@ -25,5 +25,6 @@ class Content private constructor() {
         const val Row: UByte = 14u
         const val Picture: UByte = 15u
         const val Menu: UByte = 16u
+        const val Operator: UByte = 17u
     }
 }

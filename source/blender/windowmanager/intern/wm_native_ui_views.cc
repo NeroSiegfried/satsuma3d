@@ -33,6 +33,9 @@
 #include "RNA_prototypes.hh"
 
 #include "WM_api.hh"
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+#  include "WM_apple_ios.hh"
+#endif
 #include "WM_native_ui.h"
 #include "WM_native_ui.hh"
 #include "WM_native_ui_views.hh"
@@ -41,6 +44,15 @@
 #include "wm_native_ui_timing.hh"
 
 static CLG_LogRef LOG = {"wm.native.views"};
+
+namespace blender {
+/* The old bridge's handling of undo while an operator runs, which commands share. */
+extern bool bridge_dispatching;
+void bridge_undo_push_pending(bContext *C);
+namespace ui {
+void native_properties_interaction_finish(bContext *C);
+}
+}  // namespace blender
 
 namespace blender::wm::native_ui {
 
@@ -101,9 +113,11 @@ bool Params::flag(const std::string_view key) const
  * thread only queues them and takes updates, and everything else happens on Blender's loop.
  * \{ */
 
+static Map<std::string, ViewType> builtin_view_types();
+
 static Map<std::string, ViewType> &view_types()
 {
-  static Map<std::string, ViewType> types;
+  static Map<std::string, ViewType> types = builtin_view_types();
   return types;
 }
 
@@ -173,12 +187,13 @@ bool subscriptions_dirty()
 /** \name Commands
  * \{ */
 
-/** Set a property to a command's value, as the property's type takes it. */
+/** Set a property to the value of a command or a parameter, as the property's type takes it. */
+template<typename Holder>
 static bool property_set(bContext *C,
                          PointerRNA &ptr,
                          PropertyRNA *prop,
                          const int index,
-                         const protocol::Command &command,
+                         const Holder &command,
                          std::string &r_error)
 {
   const auto number = [&]() -> std::optional<double> {
@@ -321,52 +336,227 @@ static bool property_command(bContext *C, const protocol::Command &command, std:
   return true;
 }
 
-static void commands_execute(bContext *C,
-                             const std::vector<uint8_t> &bytes,
-                             flatbuffers::FlatBufferBuilder &buffer,
-                             std::vector<flatbuffers::Offset<protocol::Ack>> &acks)
+/** Commands that wait for a stroke or other modal operator to end, in the order they came. */
+struct WaitingCommand {
+  std::shared_ptr<std::vector<uint8_t>> bytes;
+  const protocol::Command *command;
+};
+static std::deque<WaitingCommand> waiting;
+
+static bool command_live(const Subscription *subscription, const protocol::Command &command)
 {
-  const auto *commands = flatbuffers::GetRoot<protocol::Commands>(bytes.data());
-  if (commands->commands() == nullptr) {
-    return;
+  if (subscription && subscription->type->live) {
+    return subscription->type->live(command);
   }
-  for (const protocol::Command *command : *commands->commands()) {
-    CLOG_DEBUG(&LOG,
-               "Command %u to %s: %s %s",
-               command->id(),
-               command->target()->c_str(),
-               protocol::EnumNameOp(command->op()),
-               protocol::EnumNamePhase(command->phase()));
-    std::string error;
-    Subscription *subscription = subscriptions().lookup_ptr(command->subscription());
-    if (subscription == nullptr) {
-      error = "No such view";
+  return ELEM(command.op(), protocol::Op::Set, protocol::Op::Open, protocol::Op::Close);
+}
+
+/** Answers to commands, sent with the views showing what they did. */
+static std::vector<std::pair<uint32_t, std::string>> answers;
+
+static void command_execute(bContext *C, const protocol::Command &command)
+{
+  CLOG_DEBUG(&LOG,
+             "Command %u to %s: %s %s",
+             command.id(),
+             command.target()->c_str(),
+             protocol::EnumNameOp(command.op()),
+             protocol::EnumNamePhase(command.phase()));
+  std::string error;
+  Subscription *subscription = subscriptions().lookup_ptr(command.subscription());
+  if (subscription == nullptr) {
+    error = "No such view";
+  }
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  else if (WM_apple_ios_dialog_active(CTX_wm_window(C)) &&
+           !ELEM(command.op(), protocol::Op::Open, protocol::Op::Close))
+  {
+    error = "Finish the current dialog first";
+  }
+#endif
+  else {
+    if (command.op() != protocol::Op::Set) {
+      /* A drag of a value in Properties ends with anything else. */
+      ui::native_properties_interaction_finish(C);
     }
-    else {
-      CommandResult result = CommandResult::NotHandled;
-      if (subscription->type->command) {
-        result = subscription->type->command(
-            C, subscription->params(), subscription->data.get(), *command, error);
-      }
-      if (result == CommandResult::NotHandled) {
-        property_command(C, *command, error);
-      }
-      /* Shown again with what the command did: at once, but for a drag's updates, which the
-       * interface shows itself, and which then show at the view's pace. */
-      subscription->dirty = true;
-      if (!ELEM(command->phase(), protocol::Phase::Begin, protocol::Phase::Update)) {
-        subscription->urgent = true;
-      }
-      any_dirty = true;
+    /* Undo steps it pushes while an operator runs wait for the operator to end. */
+    bridge_dispatching = true;
+    CommandResult result = CommandResult::NotHandled;
+    if (subscription->type->command) {
+      result = subscription->type->command(
+          C, subscription->params(), subscription->data.get(), command, error);
     }
-    if (!error.empty()) {
-      CLOG_DEBUG(&LOG, "Command %u failed: %s", command->id(), error.c_str());
+    if (result == CommandResult::NotHandled) {
+      property_command(C, command, error);
     }
-    if (command->id() != 0) {
-      acks.push_back(protocol::CreateAck(
-          buffer, command->id(), error.empty() ? 0 : buffer.CreateString(error)));
+    bridge_dispatching = false;
+    /* Shown again with what the command did: at once, but for a drag's updates, which the
+     * interface shows itself, and which then show at the view's pace. */
+    subscription->dirty = true;
+    if (!ELEM(command.phase(), protocol::Phase::Begin, protocol::Phase::Update)) {
+      subscription->urgent = true;
+    }
+    any_dirty = true;
+  }
+  if (!error.empty()) {
+    CLOG_DEBUG(&LOG, "Command %u failed: %s", command.id(), error.c_str());
+  }
+  if (command.id() != 0) {
+    answers.emplace_back(command.id(), std::move(error));
+  }
+}
+
+/**
+ * Run commands, those waiting first. While a stroke or another modal operator runs, one hand can
+ * keep changing things with the other: values change at once, but what would change data under
+ * the operator waits for it to end, see #ViewType::live.
+ */
+static bool commands_execute(bContext *C, std::vector<std::vector<uint8_t>> received)
+{
+  bool executed = false;
+  std::deque<WaitingCommand> commands = std::move(waiting);
+  waiting.clear();
+  for (std::vector<uint8_t> &bytes : received) {
+    auto shared = std::make_shared<std::vector<uint8_t>>(std::move(bytes));
+    const auto *list = flatbuffers::GetRoot<protocol::Commands>(shared->data())->commands();
+    if (list) {
+      for (const protocol::Command *command : *list) {
+        commands.push_back({shared, command});
+      }
     }
   }
+  for (WaitingCommand &item : commands) {
+    const bool running = WM_native_ui_engine_busy(C);
+    if (!running) {
+      bridge_undo_push_pending(C);
+    }
+    const Subscription *subscription = subscriptions().lookup_ptr(item.command->subscription());
+    if ((running || !waiting.empty()) && !command_live(subscription, *item.command)) {
+      waiting.push_back(std::move(item));
+      continue;
+    }
+    command_execute(C, *item.command);
+    executed = true;
+  }
+  if (!WM_native_ui_engine_busy(C)) {
+    bridge_undo_push_pending(C);
+  }
+  return executed;
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Operators
+ *
+ * The `operators` view, which shows nothing: `Invoke` runs the operator its target names, with
+ * the command's parameters as its properties, see #operator_run.
+ * \{ */
+
+/** Operators that animate the view when invoked, and change nothing an operator holds. */
+static bool operator_navigates(const std::string_view idname)
+{
+  return ELEM(idname,
+              "VIEW3D_OT_view_selected",
+              "VIEW3D_OT_view_all",
+              "VIEW3D_OT_view_camera",
+              "VIEW3D_OT_view_persportho",
+              "VIEW3D_OT_view_axis",
+              "VIEW3D_OT_view_orbit",
+              "VIEW3D_OT_view_roll");
+}
+
+static std::string operator_idname(const std::string_view name)
+{
+  char idname[OP_MAX_TYPENAME];
+  WM_operator_bl_idname(idname, std::string(name).c_str());
+  return idname;
+}
+
+bool operator_run(bContext *C,
+                  const std::string_view name,
+                  const flatbuffers::Vector<flatbuffers::Offset<protocol::Param>> *params,
+                  std::string &r_error)
+{
+  const std::string idname = operator_idname(name);
+  wmOperatorType *ot = WM_operatortype_find(idname.c_str(), true);
+  if (ot == nullptr) {
+    r_error = "No operator " + std::string(name);
+    return false;
+  }
+  if (!WM_operator_poll(C, ot)) {
+    r_error = "It cannot run here";
+    return false;
+  }
+  PointerRNA ptr = WM_operator_properties_create_ptr(ot);
+  bool valid = true;
+  if (params) {
+    for (const protocol::Param *param : *params) {
+      PropertyRNA *prop = RNA_struct_find_property(&ptr, param->key()->c_str());
+      if (prop == nullptr) {
+        r_error = "No property " + param->key()->str();
+        valid = false;
+        break;
+      }
+      if (!property_set(C, ptr, prop, -1, *param, r_error)) {
+        valid = false;
+        break;
+      }
+    }
+  }
+  if (valid) {
+    /* Navigation is invoked, so it animates; anything else runs as a button runs it. */
+    WM_operator_name_call_ptr(C,
+                              ot,
+                              operator_navigates(idname) ? OpCallContext::InvokeRegionWin :
+                                                           OpCallContext::ExecRegionWin,
+                              &ptr,
+                              nullptr);
+  }
+  WM_operator_properties_free(&ptr);
+  return valid;
+}
+
+static void operators_build(bContext * /*C*/,
+                            const Params & /*params*/,
+                            ViewData * /*data*/,
+                            ViewBuilder &builder)
+{
+  builder.top("operators", [](auto &buffer, NodeFields & /*fields*/) {
+    return protocol::CreateGroup(buffer);
+  });
+}
+
+static CommandResult operators_command(bContext *C,
+                                       const Params & /*params*/,
+                                       ViewData * /*data*/,
+                                       const protocol::Command &command,
+                                       std::string &r_error)
+{
+  if (command.op() != protocol::Op::Invoke) {
+    r_error = "Operators are only run";
+    return CommandResult::Failed;
+  }
+  return operator_run(C, command.target()->string_view(), command.params(), r_error) ?
+             CommandResult::Done :
+             CommandResult::Failed;
+}
+
+static Map<std::string, ViewType> builtin_view_types()
+{
+  Map<std::string, ViewType> types;
+  ViewType operators;
+  operators.name = "operators";
+  operators.timing_name = "view.operators";
+  /* It shows nothing, which nothing changes. */
+  operators.notifiers = {0};
+  operators.build = operators_build;
+  operators.command = operators_command;
+  operators.live = [](const protocol::Command &command) {
+    return operator_navigates(operator_idname(command.target()->string_view()));
+  };
+  types.add("operators", std::move(operators));
+  return types;
 }
 
 /** \} */
@@ -394,6 +584,9 @@ void WM_native_ui_views_notify(const wmNotifier &note)
 
 double WM_native_ui_views_idle_seconds()
 {
+  if (!answers.empty()) {
+    return 0.0;
+  }
   if (!any_dirty) {
     return std::numeric_limits<double>::infinity();
   }
@@ -401,7 +594,10 @@ double WM_native_ui_views_idle_seconds()
   const auto now = std::chrono::steady_clock::now();
   double soonest = std::numeric_limits<double>::infinity();
   for (const Subscription &subscription : subscriptions().values()) {
-    if (subscription.dirty || subscription.reset) {
+    if (subscription.urgent || subscription.reset) {
+      return 0.0;
+    }
+    if (subscription.dirty) {
       const auto due = subscription.last_build +
                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                            std::chrono::duration<double>(subscription.type->min_interval));
@@ -416,12 +612,11 @@ void WM_native_ui_views_flush(bContext *C)
   /* Nothing to do, as long as no interface shows a view and none sent anything: the only cost on
    * a platform without an interface, or between changes. */
   std::vector<Message> messages = inbox.take();
-  if (messages.empty() && !subscriptions_dirty()) {
+  if (messages.empty() && !subscriptions_dirty() && waiting.empty()) {
     return;
   }
   BridgeTimer timer("views");
-  flatbuffers::FlatBufferBuilder buffer;
-  std::vector<flatbuffers::Offset<protocol::Ack>> acks;
+  std::vector<std::vector<uint8_t>> received;
   for (Message &message : messages) {
     if (auto *subscribe = std::get_if<SubscribeMessage>(&message)) {
       const auto *request = flatbuffers::GetRoot<protocol::Subscribe>(subscribe->request.data());
@@ -442,11 +637,24 @@ void WM_native_ui_views_flush(bContext *C)
       subscriptions().remove(unsubscribe->subscription);
     }
     else if (auto *commands = std::get_if<CommandsMessage>(&message)) {
-      commands_execute(C, commands->commands, buffer, acks);
+      received.push_back(std::move(commands->commands));
     }
   }
+  /* Views show what commands did once Blender handled it, as the notifiers they sent, on the
+   * next pass; but at least every other pass, so a drag's stream of commands does not hold them
+   * back. */
+  static bool deferred = false;
+  if ((!received.empty() || !waiting.empty()) && commands_execute(C, std::move(received)) &&
+      !deferred)
+  {
+    deferred = true;
+    any_dirty = true;
+    return;
+  }
+  deferred = false;
 
   any_dirty = false;
+  flatbuffers::FlatBufferBuilder buffer;
   const auto now = std::chrono::steady_clock::now();
   std::vector<flatbuffers::Offset<protocol::Update>> updates;
   for (const auto item : subscriptions().items()) {
@@ -475,6 +683,11 @@ void WM_native_ui_views_flush(bContext *C)
     subscription.reset = false;
   }
 
+  std::vector<flatbuffers::Offset<protocol::Ack>> acks;
+  for (const auto &[id, error] : answers) {
+    acks.push_back(protocol::CreateAck(buffer, id, error.empty() ? 0 : buffer.CreateString(error)));
+  }
+  answers.clear();
   if (updates.empty() && acks.empty()) {
     return;
   }

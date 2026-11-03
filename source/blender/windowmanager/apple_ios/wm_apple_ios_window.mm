@@ -139,11 +139,6 @@ extern "C" void wm_apple_ios_window_cancel_pencil_stroke(void *window)
   }
 }
 
-extern "C" UIImage *wm_apple_ios_command_icon(int command, NSString *symbol)
-{
-  return blenderIOSCommandIcon(command, symbol);
-}
-
 extern "C" UIImage *wm_apple_ios_icon(NSString *key, NSString *symbol)
 {
   return blenderIOSIcon(key, symbol);

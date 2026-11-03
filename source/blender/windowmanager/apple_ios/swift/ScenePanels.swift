@@ -32,6 +32,9 @@ final class SwiftScenePanels {
   private let shading = PanelsModel(mode: .shading, tab: "SHADING")
   /** The active tool's settings, which the top bar shows. */
   let tools = PanelsModel(mode: .toolStrip, tab: "TOOL")
+  /** The last operation's settings, which the actions row shows, and a dialog's. */
+  let redo = PanelsModel(mode: .redo)
+  let dialog = PanelsModel(mode: .dialog)
   /** Blender's Preferences, which Settings shows. */
   let preferences = PanelsModel(mode: .preferences, tab: "PREFERENCES_INTERFACE")
   let preferenceLists = PreferencesLists()

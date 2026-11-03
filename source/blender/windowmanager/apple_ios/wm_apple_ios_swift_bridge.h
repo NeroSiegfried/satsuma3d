@@ -46,8 +46,6 @@ void wm_apple_ios_window_navigation_tap(void *_Nullable window,
                                         UITapGestureRecognizer *_Nonnull tap);
 /** End the Pencil's stroke, cancelling its tool, when a control takes the touch. */
 void wm_apple_ios_window_cancel_pencil_stroke(void *_Nullable window);
-/** A view command's icon: Blender's, or the symbol. */
-UIImage *_Nullable wm_apple_ios_command_icon(int command, NSString *_Nonnull symbol);
 /** One of Blender's icons by key (such as `tool.object.builtin.move`), or the symbol. */
 UIImage *_Nullable wm_apple_ios_icon(NSString *_Nonnull key, NSString *_Nullable symbol);
 /** A brush's preview, round, at a diameter in points. */

@@ -155,7 +155,7 @@ final class BlenderMenus {
       let icon = item.string("icon") ?? ""
       let image = ["", "NONE", "BLANK1"].contains(icon) ? nil : BlenderIcon.image(icon)
       children.append(UIAction(title: title, image: image) { _ in
-        WM_native_ui_operator_enum_enqueue(op, property, value)
+        Operators.run(op, [property: .text(value)])
       })
     }
     flush()
@@ -386,7 +386,7 @@ struct EnumChoiceList: View {
           Section(section.heading) {
             ForEach(Array(section.items.enumerated()), id: \.offset) { _, item in
               Button {
-                WM_native_ui_operator_enum_enqueue(op, property, item.string("value") ?? "")
+                Operators.run(op, [property: .text(item.string("value") ?? "")])
                 dismiss()
               } label: {
                 Label {

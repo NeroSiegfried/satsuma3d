@@ -82,7 +82,7 @@ struct QuickAction: Identifiable, Equatable {
       wm_apple_ios_window_send_key(model.window, key)
     }
     else {
-      WM_native_ui_operator_enum_enqueue(operatorName, property, value)
+      Operators.run(operatorName, property.isEmpty || value.isEmpty ? [:] : [property: .text(value)])
     }
   }
 
@@ -229,14 +229,13 @@ struct QuickActionPressStyle<S: Shape>: ButtonStyle {
 
 struct QuickActionsRow: View {
   let model: ShellModel
-  @StateObject private var redo = RedoStore()
+  let redo: PanelsModel
   @State private var actionsOpen = false
   /** The operation the user opened the strip for; another operation arrives folded. */
   @State private var redoOpenID: String?
   /** Blender's count of requests to open the strip (F9, the Edit menu), to open it for a new one. */
-  @State private var redoShowRequests: Int?
+  @State private var redoShowRequests: UInt32?
   @State private var redoError: String?
-  @State private var shownError: String?
   /** The strip hugs its settings, measured as they lay out. */
   @State private var redoContentWidth: CGFloat = 0
   /** The actions' own width in the bar, measured ahead of opening it. */
@@ -253,13 +252,13 @@ struct QuickActionsRow: View {
   }
 
   private var redoOpen: Bool {
-    redoOpenID != nil && redoOpenID == redo.operation && !redo.properties.isEmpty
+    redoOpenID != nil && redoOpenID == redo.operationKey && !redo.operationColumns.isEmpty
   }
 
   /** The last operation's short name, while it has settings to adjust. */
   private var redoTitle: String? {
-    guard let snapshot = redo.snapshot, !redo.properties.isEmpty else { return nil }
-    return RedoStore.shortNames[snapshot.string("operator") ?? ""] ?? snapshot.string("title")
+    guard let operation = redo.operation, !redo.operationColumns.isEmpty else { return nil }
+    return operationShortNames[operation.idname ?? ""] ?? redo.title
   }
 
   private var redoPillTitle: String? {
@@ -323,43 +322,28 @@ struct QuickActionsRow: View {
       .ignoresSafeArea(edges: .bottom)
     }
     .ignoresSafeArea(edges: .horizontal)
-    .onChange(of: model.redo.map { $0 as NSDictionary }, initial: true) { _, snapshot in
-      update(redo: snapshot as? JSON)
+    .onChange(of: redo.operationKey) { _, key in
+      /* Another operation arrives folded. */
+      if redoOpenID != key { redoOpenID = nil }
+    }
+    .onChange(of: redo.operation?.shown, initial: true) { _, requests in
+      /* Asked to open (F9, the Edit menu): open for this operation. */
+      if let requests, let seen = redoShowRequests, requests > seen, !redo.operationColumns.isEmpty {
+        withAnimation(animation) {
+          redoOpenID = redo.operationKey
+          actionsOpen = false
+        }
+      }
+      redoShowRequests = requests ?? redoShowRequests
+    }
+    .onChange(of: redo.operation?.error) { _, error in
+      if let error, !error.isEmpty { redoError = error }
     }
     .alert("Unable to Adjust Operation", isPresented: Binding(
       get: { redoError != nil }, set: { if !$0 { redoError = nil } })) {
       Button("OK", role: .cancel) {}
     } message: {
       Text(redoError ?? "")
-    }
-  }
-
-  private func update(redo snapshot: JSON?) {
-    if snapshot?.string("id") != redo.operation, redoOpenID != snapshot?.string("id") {
-      redoOpenID = nil
-    }
-    redo.update(snapshot)
-    if let requests = (snapshot?["show"] as? NSNumber)?.intValue {
-      if let seen = redoShowRequests, requests > seen, !redo.properties.isEmpty {
-        withAnimation(animation) {
-          redoOpenID = redo.operation
-          actionsOpen = false
-        }
-      }
-      redoShowRequests = requests
-    }
-    redo.close = {
-      withAnimation(animation) { redoOpenID = nil }
-    }
-    redo.contentWidthChanged = {
-      if abs(redo.contentWidth - redoContentWidth) > 0.5 { redoContentWidth = redo.contentWidth }
-    }
-    if let error = snapshot?.string("error"), !error.isEmpty {
-      let identity = "\(snapshot?["id"] ?? ""):\(snapshot?["ack"] ?? ""):\(error)"
-      if shownError != identity {
-        shownError = identity
-        redoError = error
-      }
     }
   }
 
@@ -475,6 +459,14 @@ struct QuickActionsRow: View {
   /* Adjust Last Operation */
 
   /** As wide as the title, from 72 to 136 points with its margins. */
+  private func closeRedo() {
+    withAnimation(animation) { redoOpenID = nil }
+  }
+
+  private func redoWidthChanged(_ width: CGFloat) {
+    if abs(width - redoContentWidth) > 0.5 { redoContentWidth = width }
+  }
+
   private func redoPillWidth(_ title: String) -> CGFloat {
     let measured = ceil((title as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: 17)]).width)
     return min(136 - 24, max(72 - 24, measured)) + 24
@@ -510,7 +502,7 @@ struct QuickActionsRow: View {
                                  style: .continuous)
     return ZStack(alignment: .leading) {
       if redoOpen {
-        RedoContent(store: redo)
+        RedoContent(model: redo, close: closeRedo, widthChanged: redoWidthChanged)
           .frame(width: frame.width, height: frame.height)
           .accessibilityIdentifier("blender.redo.strip")
           .transition(.opacity)
@@ -518,7 +510,7 @@ struct QuickActionsRow: View {
       else {
         Button {
           withAnimation(animation) {
-            redoOpenID = redo.operation
+            redoOpenID = redo.operationKey
             actionsOpen = false
           }
         } label: {
@@ -532,13 +524,13 @@ struct QuickActionsRow: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Adjust \(redo.snapshot?.string("title") ?? "")")
+        .accessibilityLabel("Adjust \(redo.title)")
         .accessibilityHint("Show last operation controls")
         .accessibilityIdentifier("blender.redo.collapsed")
         .transition(.opacity)
         .background {
           /* Measured ahead of opening, so the strip grows straight to its width. */
-          RedoContent(store: redo)
+          RedoContent(model: redo, close: closeRedo, widthChanged: redoWidthChanged)
             .frame(width: 1, height: 1)
             .hidden()
         }

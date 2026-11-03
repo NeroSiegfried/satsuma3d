@@ -29,7 +29,6 @@
 /* Helpers shared by the interface's files. */
 UIImage *blenderIOSIcon(NSString *key, NSString *systemImage);
 UIImage *blenderIOSBrushImage(NSString *previewPath, CGFloat diameter);
-UIImage *blenderIOSCommandIcon(NSInteger command, NSString *systemImage);
 UIImage *blenderIOSActionIcon(NSString *opName, NSString *propertyName, NSString *propertyValue);
 Class blenderIOSSwiftClass(NSString *name);
 NSString *blenderIOSMenuRoute(NSDictionary *route);

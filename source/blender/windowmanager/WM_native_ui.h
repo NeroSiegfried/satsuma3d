@@ -69,44 +69,6 @@ void WM_native_ui_buffer_free(WMNativeUIBuffer *buffer);
 /** \name Commands
  * \{ */
 
-/** Commands of their own, sent with #WM_native_ui_command_enqueue. */
-enum WMNativeUICommand {
-  WM_NATIVE_UI_COMMAND_SET_MODE_OBJECT = 0,
-  WM_NATIVE_UI_COMMAND_SET_MODE_EDIT = 1,
-  WM_NATIVE_UI_COMMAND_SET_MODE_SCULPT = 2,
-  WM_NATIVE_UI_COMMAND_SET_MODE_VERTEX_PAINT = 3,
-  WM_NATIVE_UI_COMMAND_SET_MODE_WEIGHT_PAINT = 4,
-  WM_NATIVE_UI_COMMAND_SET_MODE_TEXTURE_PAINT = 5,
-  WM_NATIVE_UI_COMMAND_SELECT_TOOL_SELECT_BOX = 6,
-  WM_NATIVE_UI_COMMAND_SELECT_TOOL_CURSOR = 7,
-  WM_NATIVE_UI_COMMAND_SELECT_TOOL_MOVE = 8,
-  WM_NATIVE_UI_COMMAND_SELECT_TOOL_ROTATE = 9,
-  WM_NATIVE_UI_COMMAND_SELECT_TOOL_SCALE = 10,
-  WM_NATIVE_UI_COMMAND_SELECT_TOOL_TRANSFORM = 11,
-  WM_NATIVE_UI_COMMAND_SELECT_TOOL_ANNOTATE = 12,
-  WM_NATIVE_UI_COMMAND_SELECT_TOOL_MEASURE = 13,
-  WM_NATIVE_UI_COMMAND_FRAME_SELECTED = 14,
-  WM_NATIVE_UI_COMMAND_RESET_VIEW = 15,
-  WM_NATIVE_UI_COMMAND_ORBIT_LEFT = 16,
-  WM_NATIVE_UI_COMMAND_ORBIT_RIGHT = 17,
-  WM_NATIVE_UI_COMMAND_ORBIT_UP = 18,
-  WM_NATIVE_UI_COMMAND_ORBIT_DOWN = 19,
-  WM_NATIVE_UI_COMMAND_SET_VIEWPORT_WIREFRAME = 20,
-  WM_NATIVE_UI_COMMAND_SET_VIEWPORT_SOLID = 21,
-  WM_NATIVE_UI_COMMAND_SET_VIEWPORT_MATERIAL = 22,
-  WM_NATIVE_UI_COMMAND_SET_VIEWPORT_RENDERED = 23,
-  WM_NATIVE_UI_COMMAND_VIEW_ALL = 24,
-  WM_NATIVE_UI_COMMAND_VIEW_LOCAL = 25,
-  WM_NATIVE_UI_COMMAND_VIEW_CAMERA = 26,
-  WM_NATIVE_UI_COMMAND_VIEW_PERSP_ORTHO = 27,
-  WM_NATIVE_UI_COMMAND_VIEW_FRONT = 28,
-  WM_NATIVE_UI_COMMAND_VIEW_BACK = 29,
-  WM_NATIVE_UI_COMMAND_VIEW_RIGHT = 30,
-  WM_NATIVE_UI_COMMAND_VIEW_LEFT = 31,
-  WM_NATIVE_UI_COMMAND_VIEW_TOP = 32,
-  WM_NATIVE_UI_COMMAND_VIEW_BOTTOM = 33,
-};
-
 /** What held + and - buttons make the next selection or stroke do, see
  * #WM_native_ui_select_intent_set. */
 enum WMNativeUISelectIntent {
@@ -127,14 +89,6 @@ enum WMNativeUIAssetDragPhase {
   WM_NATIVE_UI_ASSET_ADD = 4,
 };
 
-/** A #WMNativeUICommand. */
-void WM_native_ui_command_enqueue(int command);
-/** Run an operator by its Python name, such as `object.duplicate_move`. */
-void WM_native_ui_operator_enqueue(const char *op_name);
-/** Run an operator with one property set, such as an enum's item. */
-void WM_native_ui_operator_enum_enqueue(const char *op_name,
-                                        const char *prop_name,
-                                        const char *prop_value);
 /** Change one of the interface's settings in Blender, see `bridge_setting_execute`. */
 void WM_native_ui_setting_enqueue(const char *setting, const char *value);
 void WM_native_ui_tool_set_by_id(const char *tool_id);

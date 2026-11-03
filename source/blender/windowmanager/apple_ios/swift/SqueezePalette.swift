@@ -874,7 +874,7 @@ final class SqueezePalette {
       case .history:
         let count = steps(delta, on: part, size: Self.rollStep)
         for _ in 0..<abs(count) {
-          Engine.operatorCall(count > 0 ? "ED_OT_redo" : "ED_OT_undo")
+          Operators.run(count > 0 ? "ED_OT_redo" : "ED_OT_undo")
           tick(at: point)
         }
       case .commands:
@@ -1280,12 +1280,12 @@ final class SqueezePalette {
   /* History */
 
   func undo() {
-    Engine.operatorCall("ED_OT_undo")
+    Operators.run("ED_OT_undo")
     Haptics.selection()
   }
 
   func redo() {
-    Engine.operatorCall("ED_OT_redo")
+    Operators.run("ED_OT_redo")
     Haptics.selection()
   }
 }

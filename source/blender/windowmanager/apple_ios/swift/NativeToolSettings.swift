@@ -282,6 +282,7 @@ struct StripPopout: View {
 struct StripColumn: View {
   let model: PanelsModel
   let node: NativeNode
+  var caption: String?
 
   private var width: CGFloat {
     switch node.kind {
@@ -319,7 +320,7 @@ struct StripColumn: View {
     }
     else {
       VStack(spacing: 0) {
-        Text(node.shortLabel)
+        Text(caption ?? node.shortLabel)
           .font(.caption2)
           .foregroundStyle(.secondary)
           .lineLimit(1)

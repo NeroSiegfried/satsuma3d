@@ -91,6 +91,9 @@ struct PictureBuilder;
 struct Menu;
 struct MenuBuilder;
 
+struct Operator;
+struct OperatorBuilder;
+
 struct Node;
 struct NodeBuilder;
 
@@ -436,11 +439,12 @@ enum class Content : uint8_t {
   Row = 14,
   Picture = 15,
   Menu = 16,
+  Operator = 17,
   MIN = NONE,
-  MAX = Menu
+  MAX = Operator
 };
 
-inline const Content (&EnumValuesContent())[17] {
+inline const Content (&EnumValuesContent())[18] {
   static const Content values[] = {
     Content::NONE,
     Content::Group,
@@ -458,13 +462,14 @@ inline const Content (&EnumValuesContent())[17] {
     Content::List,
     Content::Row,
     Content::Picture,
-    Content::Menu
+    Content::Menu,
+    Content::Operator
   };
   return values;
 }
 
 inline const char * const *EnumNamesContent() {
-  static const char * const names[18] = {
+  static const char * const names[19] = {
     "NONE",
     "Group",
     "Panel",
@@ -482,13 +487,14 @@ inline const char * const *EnumNamesContent() {
     "Row",
     "Picture",
     "Menu",
+    "Operator",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameContent(Content e) {
-  if (::flatbuffers::IsOutRange(e, Content::NONE, Content::Menu)) return "";
+  if (::flatbuffers::IsOutRange(e, Content::NONE, Content::Operator)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesContent()[index];
 }
@@ -559,6 +565,10 @@ template<> struct ContentTraits<Blender::NativeUI::Picture> {
 
 template<> struct ContentTraits<Blender::NativeUI::Menu> {
   static const Content enum_value = Content::Menu;
+};
+
+template<> struct ContentTraits<Blender::NativeUI::Operator> {
+  static const Content enum_value = Content::Operator;
 };
 
 bool VerifyContent(::flatbuffers::Verifier &verifier, const void *obj, Content type);
@@ -2865,6 +2875,125 @@ struct Menu::Traits {
   static auto constexpr Create = CreateMenu;
 };
 
+/// An operation's settings, its children: the last one's, to adjust it, or one's asked for before
+/// it runs, as a dialog. Commands: `Invoke` with `dismiss`, `confirm` or `cancel`.
+struct Operator FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef OperatorBuilder Builder;
+  struct Traits;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_IDNAME = 4,
+    VT_CONFIRM = 6,
+    VT_MESSAGE = 8,
+    VT_ERROR = 10,
+    VT_SHOWN = 12
+  };
+  /// The operator, such as `TRANSFORM_OT_translate`.
+  const ::flatbuffers::String *idname() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_IDNAME);
+  }
+  /// What a dialog's button to run it says.
+  const ::flatbuffers::String *confirm() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_CONFIRM);
+  }
+  /// What a dialog says above its settings.
+  const ::flatbuffers::String *message() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_MESSAGE);
+  }
+  /// Why the last change to its settings failed.
+  const ::flatbuffers::String *error() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_ERROR);
+  }
+  /// How often it was asked to show, as Blender's Adjust Last Operation does: an interface shows
+  /// it when this grows.
+  uint32_t shown() const {
+    return GetField<uint32_t>(VT_SHOWN, 0);
+  }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_IDNAME) &&
+           verifier.VerifyString(idname()) &&
+           VerifyOffset(verifier, VT_CONFIRM) &&
+           verifier.VerifyString(confirm()) &&
+           VerifyOffset(verifier, VT_MESSAGE) &&
+           verifier.VerifyString(message()) &&
+           VerifyOffset(verifier, VT_ERROR) &&
+           verifier.VerifyString(error()) &&
+           VerifyField<uint32_t>(verifier, VT_SHOWN, 4) &&
+           verifier.EndTable();
+  }
+};
+
+struct OperatorBuilder {
+  typedef Operator Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_idname(::flatbuffers::Offset<::flatbuffers::String> idname) {
+    fbb_.AddOffset(Operator::VT_IDNAME, idname);
+  }
+  void add_confirm(::flatbuffers::Offset<::flatbuffers::String> confirm) {
+    fbb_.AddOffset(Operator::VT_CONFIRM, confirm);
+  }
+  void add_message(::flatbuffers::Offset<::flatbuffers::String> message) {
+    fbb_.AddOffset(Operator::VT_MESSAGE, message);
+  }
+  void add_error(::flatbuffers::Offset<::flatbuffers::String> error) {
+    fbb_.AddOffset(Operator::VT_ERROR, error);
+  }
+  void add_shown(uint32_t shown) {
+    fbb_.AddElement<uint32_t>(Operator::VT_SHOWN, shown, 0);
+  }
+  explicit OperatorBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<Operator> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<Operator>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<Operator> CreateOperator(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> idname = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> confirm = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> message = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> error = 0,
+    uint32_t shown = 0) {
+  OperatorBuilder builder_(_fbb);
+  builder_.add_shown(shown);
+  builder_.add_error(error);
+  builder_.add_message(message);
+  builder_.add_confirm(confirm);
+  builder_.add_idname(idname);
+  return builder_.Finish();
+}
+
+struct Operator::Traits {
+  using type = Operator;
+  static auto constexpr Create = CreateOperator;
+};
+
+inline ::flatbuffers::Offset<Operator> CreateOperatorDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *idname = nullptr,
+    const char *confirm = nullptr,
+    const char *message = nullptr,
+    const char *error = nullptr,
+    uint32_t shown = 0) {
+  auto idname__ = idname ? _fbb.CreateString(idname) : 0;
+  auto confirm__ = confirm ? _fbb.CreateString(confirm) : 0;
+  auto message__ = message ? _fbb.CreateString(message) : 0;
+  auto error__ = error ? _fbb.CreateString(error) : 0;
+  return Blender::NativeUI::CreateOperator(
+      _fbb,
+      idname__,
+      confirm__,
+      message__,
+      error__,
+      shown);
+}
+
 /// A node of a view: a control, a container of controls, or an item of a canvas. Its children
 /// are sent apart from it, see `Children`, so a change to one does not resend the others.
 struct Node FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -2945,6 +3074,9 @@ struct Node FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const Blender::NativeUI::Menu *content_as_Menu() const {
     return content_type() == Blender::NativeUI::Content::Menu ? static_cast<const Blender::NativeUI::Menu *>(content()) : nullptr;
+  }
+  const Blender::NativeUI::Operator *content_as_Operator() const {
+    return content_type() == Blender::NativeUI::Content::Operator ? static_cast<const Blender::NativeUI::Operator *>(content()) : nullptr;
   }
   const ::flatbuffers::String *label() const {
     return GetPointer<const ::flatbuffers::String *>(VT_LABEL);
@@ -3077,6 +3209,10 @@ template<> inline const Blender::NativeUI::Picture *Node::content_as<Blender::Na
 
 template<> inline const Blender::NativeUI::Menu *Node::content_as<Blender::NativeUI::Menu>() const {
   return content_as_Menu();
+}
+
+template<> inline const Blender::NativeUI::Operator *Node::content_as<Blender::NativeUI::Operator>() const {
+  return content_as_Operator();
 }
 
 struct NodeBuilder {
@@ -3733,7 +3869,8 @@ struct Command FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_OP = 10,
     VT_VALUE_TYPE = 12,
     VT_VALUE = 14,
-    VT_PHASE = 16
+    VT_PHASE = 16,
+    VT_PARAMS = 18
   };
   /// Answered with an `Ack` of the same number; 0 for none.
   uint32_t id() const {
@@ -3780,6 +3917,10 @@ struct Command FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   Blender::NativeUI::Phase phase() const {
     return static_cast<Blender::NativeUI::Phase>(GetField<uint8_t>(VT_PHASE, 0));
   }
+  /// What it is done with, such as the properties of an operator it runs.
+  const ::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Param>> *params() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Param>> *>(VT_PARAMS);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint32_t>(verifier, VT_ID, 4) &&
@@ -3791,6 +3932,9 @@ struct Command FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_VALUE) &&
            VerifyValue(verifier, value(), value_type()) &&
            VerifyField<uint8_t>(verifier, VT_PHASE, 1) &&
+           VerifyOffset(verifier, VT_PARAMS) &&
+           verifier.VerifyVector(params()) &&
+           verifier.VerifyVectorOfTables(params()) &&
            verifier.EndTable();
   }
 };
@@ -3848,6 +3992,9 @@ struct CommandBuilder {
   void add_phase(Blender::NativeUI::Phase phase) {
     fbb_.AddElement<uint8_t>(Command::VT_PHASE, static_cast<uint8_t>(phase), 0);
   }
+  void add_params(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Param>>> params) {
+    fbb_.AddOffset(Command::VT_PARAMS, params);
+  }
   explicit CommandBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -3868,8 +4015,10 @@ inline ::flatbuffers::Offset<Command> CreateCommand(
     Blender::NativeUI::Op op = Blender::NativeUI::Op::Set,
     Blender::NativeUI::Value value_type = Blender::NativeUI::Value::NONE,
     ::flatbuffers::Offset<void> value = 0,
-    Blender::NativeUI::Phase phase = Blender::NativeUI::Phase::Once) {
+    Blender::NativeUI::Phase phase = Blender::NativeUI::Phase::Once,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Param>>> params = 0) {
   CommandBuilder builder_(_fbb);
+  builder_.add_params(params);
   builder_.add_value(value);
   builder_.add_target(target);
   builder_.add_subscription(subscription);
@@ -3893,8 +4042,10 @@ inline ::flatbuffers::Offset<Command> CreateCommandDirect(
     Blender::NativeUI::Op op = Blender::NativeUI::Op::Set,
     Blender::NativeUI::Value value_type = Blender::NativeUI::Value::NONE,
     ::flatbuffers::Offset<void> value = 0,
-    Blender::NativeUI::Phase phase = Blender::NativeUI::Phase::Once) {
+    Blender::NativeUI::Phase phase = Blender::NativeUI::Phase::Once,
+    const std::vector<::flatbuffers::Offset<Blender::NativeUI::Param>> *params = nullptr) {
   auto target__ = target ? _fbb.CreateString(target) : 0;
+  auto params__ = params ? _fbb.CreateVector<::flatbuffers::Offset<Blender::NativeUI::Param>>(*params) : 0;
   return Blender::NativeUI::CreateCommand(
       _fbb,
       id,
@@ -3903,7 +4054,8 @@ inline ::flatbuffers::Offset<Command> CreateCommandDirect(
       op,
       value_type,
       value,
-      phase);
+      phase,
+      params__);
 }
 
 /// Commands sent at once, see `WM_native_ui_send`.
@@ -4081,6 +4233,10 @@ inline bool VerifyContent(::flatbuffers::Verifier &verifier, const void *obj, Co
     }
     case Content::Menu: {
       auto ptr = reinterpret_cast<const Blender::NativeUI::Menu *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case Content::Operator: {
+      auto ptr = reinterpret_cast<const Blender::NativeUI::Operator *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;

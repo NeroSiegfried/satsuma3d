@@ -83,6 +83,10 @@ final class PanelsModel {
     case toolPopover
     /** Blender's Preferences, a section at a time, in Settings. */
     case preferences
+    /** The last operation's settings, to adjust it. */
+    case redo
+    /** An operation's settings, asked for before it runs. */
+    case dialog
   }
 
   let mode: Mode
@@ -99,9 +103,14 @@ final class PanelsModel {
     if let tab { params["tab"] = .text(tab) }
     /* Properties' own Tool tab, not the toolbar's tool settings. */
     if mode == .properties { params["properties"] = .bool(true) }
-    /* The tool's settings follow a change of tool at once. */
-    let tool = mode == .toolStrip || mode == .toolPopover
-    view = NativeViews.shared.subscribe(tool ? "tool_settings" : "properties", params: params)
+    let name = switch mode {
+      /* The tool's settings follow a change of tool at once. */
+      case .toolStrip, .toolPopover: "tool_settings"
+      case .redo: "redo"
+      case .dialog: "dialog"
+      default: "properties"
+    }
+    view = NativeViews.shared.subscribe(name, params: params)
     view.settled = { [weak self] in self?.settle() }
   }
 

@@ -677,7 +677,7 @@ struct ListRows: View {
 
   private func run(_ operatorName: String, on index: Int) {
     select(index)
-    Engine.operatorCall(operatorName)
+    Operators.run(operatorName)
     Haptics.selection()
   }
 

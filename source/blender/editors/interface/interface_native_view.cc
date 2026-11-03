@@ -34,6 +34,8 @@ void native_properties_describe(bContext *C,
                                 const std::string &json,
                                 io::serialize::DictionaryValue &r_result);
 std::string native_properties_query(bContext *C, const std::string &json, bool execute);
+std::string native_operator_redo_query(bContext *C, const std::string &json, bool execute);
+std::string native_operator_dialog_query(bContext *C, const std::string &json, bool execute);
 
 namespace {
 
@@ -173,6 +175,48 @@ class Converter {
   Converter(ViewBuilder &builder, PropertiesData &data)
       : builder_(builder), data_(data), owned_(data.owned)
   {
+  }
+
+  /** An operator's properties, as the last operation's or a dialog's: keyed by which operation,
+   * so another one's controls start again. */
+  void operator_view(const DictionaryValue &described)
+  {
+    const std::string_view id = text(described, "id");
+    const NodeId top = builder_.top(id.empty() ? "none" : id, [&](Fields &buffer, NodeFields &fields) {
+      fields.label = text(described, "title");
+      return protocol::CreateOperatorDirect(buffer,
+                                            text(described, "operator").data(),
+                                            text(described, "confirm").data(),
+                                            text(described, "message").data(),
+                                            text(described, "error").data(),
+                                            uint32_t(number(described, "show")));
+    });
+    if (const ArrayValue *properties = described.lookup_array("properties")) {
+      /* A vector's components in a row of their own, as in Properties. */
+      std::unordered_map<std::string, NodeId> rows;
+      for (const std::shared_ptr<Value> &property : properties->elements()) {
+        const DictionaryValue *field = property->as_dictionary_value();
+        if (field == nullptr) {
+          continue;
+        }
+        const std::string_view group = text(*field, "group_key");
+        if (group.empty()) {
+          this->field(top, *field);
+          continue;
+        }
+        const std::string key = "group:" + std::string(group);
+        auto found = rows.find(key);
+        if (found == rows.end()) {
+          const NodeId row = builder_.add(
+              top, key, [&](Fields &buffer, NodeFields &fields) {
+                fields.label = text(*field, "group");
+                return protocol::CreateGroup(buffer, protocol::Layout::Row);
+              });
+          found = rows.emplace(key, row).first;
+        }
+        this->field(found->second, *field, false);
+      }
+    }
   }
 
   void view(const DictionaryValue &described)
@@ -1197,6 +1241,86 @@ CommandResult properties_command(bContext *C,
 
 /** \} */
 
+/* -------------------------------------------------------------------- */
+/** \name Operators
+ *
+ * The last operation's properties, to adjust it, and an operator's asked for before it runs, in
+ * place of Blender's dialog. The top node, keyed by the operation, takes `Invoke` with `dismiss`,
+ * `confirm` or `cancel`; its controls are set as Properties' are.
+ * \{ */
+
+using OperatorQuery = std::string (*)(bContext *C, const std::string &json, bool execute);
+
+template<OperatorQuery query>
+void operator_build(bContext *C, const Params & /*params*/, ViewData *view_data, ViewBuilder &builder)
+{
+  PropertiesData &data = static_cast<PropertiesData &>(*view_data);
+  std::istringstream stream(query(C, "", false));
+  std::shared_ptr<Value> value = JsonFormatter().deserialize(stream);
+  auto described = std::make_unique<DictionaryValue>();
+  if (const DictionaryValue *dictionary = value ? value->as_dictionary_value() : nullptr) {
+    for (const DictionaryValue::Item &item : dictionary->elements()) {
+      described->append(item.first, item.second);
+    }
+  }
+  data.edits.clear();
+  data.owners.clear();
+  data.rows.clear();
+  data.panels.clear();
+  data.owned.clear();
+  data.identity = text(*described, "id");
+  Converter(builder, data).operator_view(*described);
+  data.described = std::move(described);
+}
+
+template<OperatorQuery query>
+CommandResult operator_command(bContext *C,
+                               const Params & /*params*/,
+                               ViewData *view_data,
+                               const protocol::Command &command,
+                               std::string &r_error)
+{
+  PropertiesData &data = static_cast<PropertiesData &>(*view_data);
+  const protocol::TextValue *text_value = command.value_as_TextValue();
+  DictionaryValue request;
+  request.append_str("id", data.identity);
+  if (command.target()->string_view() == data.identity) {
+    if (command.op() != protocol::Op::Invoke || text_value == nullptr || !text_value->value()) {
+      r_error = "An operation is dismissed, confirmed or cancelled";
+      return CommandResult::Failed;
+    }
+    request.append_str("action", text_value->value()->str());
+  }
+  else {
+    const DictionaryValue *const *field = data.edits.lookup_ptr(command.target()->str());
+    if (field == nullptr || command.op() != protocol::Op::Set) {
+      r_error = "Not something this control does";
+      return CommandResult::Failed;
+    }
+    request.append_str("key", std::string(text(**field, "key")));
+    if (std::shared_ptr<Value> value = value_of(command)) {
+      request.append("value", std::move(value));
+    }
+    if (command.phase() != protocol::Phase::Once) {
+      /* A drag, which adjusts the operation as it goes and is one step to undo. */
+      if (!data.dragging || command.phase() == protocol::Phase::Begin) {
+        data.interaction++;
+        data.dragging = true;
+      }
+      request.append_str("interaction", "native-" + std::to_string(data.interaction));
+      request.append_str("phase",
+                         command.phase() == protocol::Phase::End    ? "end" :
+                         command.phase() == protocol::Phase::Cancel ? "cancel" :
+                                                                      "update");
+      data.dragging = !ELEM(command.phase(), protocol::Phase::End, protocol::Phase::Cancel);
+    }
+  }
+  query(C, encode(request), true);
+  return CommandResult::Done;
+}
+
+/** \} */
+
 }  // namespace
 
 void native_views_register()
@@ -1217,6 +1341,22 @@ void native_views_register()
   tool_settings.min_interval = 0.0;
   tool_settings.notifiers = {NC_WM, NC_SCENE, NC_BRUSH, NC_TEXTURE, NC_MATERIAL, NC_SPACE};
   view_type_add(std::move(tool_settings));
+
+  ViewType redo;
+  redo.name = "redo";
+  redo.create = properties_create;
+  redo.build = operator_build<native_operator_redo_query>;
+  redo.command = operator_command<native_operator_redo_query>;
+  /* As often as the last operation's settings were read before. */
+  redo.min_interval = 0.1;
+  view_type_add(std::move(redo));
+
+  ViewType dialog;
+  dialog.name = "dialog";
+  dialog.create = properties_create;
+  dialog.build = operator_build<native_operator_dialog_query>;
+  dialog.command = operator_command<native_operator_dialog_query>;
+  view_type_add(std::move(dialog));
 }
 
 }  // namespace blender::ui

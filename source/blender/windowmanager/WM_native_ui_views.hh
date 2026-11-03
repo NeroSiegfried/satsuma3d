@@ -80,6 +80,12 @@ struct ViewType {
   /** Data of its own for each subscription, see #ViewData, or none. */
   std::unique_ptr<ViewData> (*create)() = nullptr;
   void (*build)(bContext *C, const Params &params, ViewData *data, ViewBuilder &builder) = nullptr;
+  /**
+   * Whether a command can be carried out while a stroke or other modal operator runs, rather than
+   * waiting for it to end. Without this, only commands that set a value, or open or close
+   * something, can: anything else may change data the operator holds.
+   */
+  bool (*live)(const protocol::Command &command) = nullptr;
   /** A command aimed at one of its nodes, see #CommandResult. */
   CommandResult (*command)(bContext *C,
                            const Params &params,
@@ -93,5 +99,15 @@ struct ViewType {
 
 /** Make a view type available to interfaces, at startup. */
 void view_type_add(ViewType type);
+
+/**
+ * Run an operator by its name, in Python's or C's form, with properties set from \a params,
+ * whose values are given as the properties take them. Views of navigation run invoked, so they
+ * animate; others are executed, as a button runs them. False with the reason when it cannot run.
+ */
+bool operator_run(bContext *C,
+                  std::string_view name,
+                  const flatbuffers::Vector<flatbuffers::Offset<protocol::Param>> *params,
+                  std::string &r_error);
 
 }  // namespace blender::wm::native_ui

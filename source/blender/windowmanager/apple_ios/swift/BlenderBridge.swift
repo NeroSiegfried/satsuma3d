@@ -75,10 +75,6 @@ enum Engine {
     else { return }
     setting(name, text)
   }
-
-  static func operatorCall(_ idname: String) {
-    WM_native_ui_operator_enqueue(idname)
-  }
 }
 
 /* -------------------------------------------------------------------- */

@@ -141,8 +141,6 @@ namespace blender::ed::graph {
 std::string native_graph_query(bContext *C, const std::string &request, bool execute);
 }  // namespace blender::ed::graph
 namespace blender::ui {
-std::string native_operator_redo_query(bContext *C, const std::string &request, bool execute);
-std::string native_operator_dialog_query(bContext *C, const std::string &request, bool execute);
 void native_properties_interaction_finish(bContext *C);
 std::string native_properties_menu_query(bContext *C, const std::string &request, bool execute);
 }  // namespace blender::ui
@@ -203,56 +201,6 @@ void bridge_interface_set(bContext *C, bool desktop);
 
 namespace {
 
-enum class BridgeCommand {
-  SetModeObject = 0,
-  SetModeEdit = 1,
-  SetModeSculpt = 2,
-  SetModeVertexPaint = 3,
-  SetModeWeightPaint = 4,
-  SetModeTexturePaint = 5,
-  SelectToolSelectBox = 6,
-  SelectToolCursor = 7,
-  SelectToolMove = 8,
-  SelectToolRotate = 9,
-  SelectToolScale = 10,
-  SelectToolTransform = 11,
-  SelectToolAnnotate = 12,
-  SelectToolMeasure = 13,
-  FrameSelected = 14,
-  ResetView = 15,
-  OrbitLeft = 16,
-  OrbitRight = 17,
-  OrbitUp = 18,
-  OrbitDown = 19,
-  SetViewportWireframe = 20,
-  SetViewportSolid = 21,
-  SetViewportMaterial = 22,
-  SetViewportRendered = 23,
-  ViewAll = 24,
-  ViewLocal = 25,
-  ViewCamera = 26,
-  ViewPerspOrtho = 27,
-  ViewFront = 28,
-  ViewBack = 29,
-  ViewRight = 30,
-  ViewLeft = 31,
-  ViewTop = 32,
-  ViewBottom = 33,
-};
-static_assert(int(BridgeCommand::SetModeObject) == int(WM_NATIVE_UI_COMMAND_SET_MODE_OBJECT) &&
-                  int(BridgeCommand::ViewBottom) == int(WM_NATIVE_UI_COMMAND_VIEW_BOTTOM),
-              "Commands as WM_native_ui.h numbers them");
-
-struct BridgeOperatorPropertyCommand {
-  std::string op_name;
-  std::string prop_name;
-  std::string prop_value;
-};
-
-struct BridgeOperatorCommand {
-  std::string op_name;
-};
-
 struct BridgeSettingCommand {
   std::string setting;
   std::string value;
@@ -291,10 +239,7 @@ struct BridgeMenuRequest {
   int x = 0, y = 0;
   int retries = 0;
 };
-using BridgeMessage = std::variant<BridgeCommand,
-                                  BridgeOperatorCommand,
-                                  BridgeOperatorPropertyCommand,
-                                  BridgeSettingCommand,
+using BridgeMessage = std::variant<BridgeSettingCommand,
                                   std::string,
                                   float,
                                   BridgeMenuRequest,
@@ -647,19 +592,6 @@ bool bridge_undo_available(bContext *C, const char *op_name = "ED_OT_undo")
   return WM_operator_name_poll(C, op_name);
 }
 
-void bridge_operator_invoke(bContext *C, const char *op_name)
-{
-  if ((STREQ(op_name, "ED_OT_undo") || STREQ(op_name, "ED_OT_redo")) &&
-      !bridge_undo_available(C, op_name))
-  {
-    return;
-  }
-  if (WM_operator_name_poll(C, op_name)) {
-    WM_operator_name_call(
-        C, op_name, blender::wm::OpCallContext::InvokeRegionWin, nullptr, nullptr);
-  }
-}
-
 void bridge_operator_call_with_enum_property(bContext *C,
                                           const char *op_name,
                                           const char *prop_name,
@@ -939,34 +871,6 @@ std::string bridge_object_modes_json(bContext *C)
   return json + "]";
 }
 
-void bridge_view_axis(bContext *C, const char *axis_type)
-{
-  wmOperatorType *ot = WM_operatortype_find("VIEW3D_OT_view_axis", false);
-  if (ot == nullptr) {
-    return;
-  }
-
-  PointerRNA props = WM_operator_properties_create_ptr(ot);
-  RNA_enum_set_identifier(C, &props, "type", axis_type);
-  RNA_boolean_set(&props, "align_active", false);
-  RNA_boolean_set(&props, "relative", false);
-  bridge_operator_call(C, "VIEW3D_OT_view_axis", &props);
-  WM_operator_properties_free(&props);
-}
-
-void bridge_view_orbit(bContext *C, const char *direction)
-{
-  wmOperatorType *ot = WM_operatortype_find("VIEW3D_OT_view_orbit", false);
-  if (ot == nullptr) {
-    return;
-  }
-
-  PointerRNA props = WM_operator_properties_create_ptr(ot);
-  RNA_enum_set_identifier(C, &props, "type", direction);
-  bridge_operator_call(C, "VIEW3D_OT_view_orbit", &props);
-  WM_operator_properties_free(&props);
-}
-
 void bridge_view_roll_angle(bContext *C, const float angle)
 {
   wmOperatorType *ot = WM_operatortype_find("VIEW3D_OT_view_roll", false);
@@ -981,30 +885,6 @@ void bridge_view_roll_angle(bContext *C, const float angle)
     WM_operator_name_call_ptr(C, ot, blender::wm::OpCallContext::ExecRegionWin, &props, nullptr);
   }
   WM_operator_properties_free(&props);
-}
-
-void bridge_viewport_shading_set(bContext *C, const int shading_type)
-{
-  Main *bmain = CTX_data_main(C);
-  ScrArea *area = CTX_wm_area(C);
-  View3D *v3d = area ? static_cast<View3D *>(area->spacedata.first) : nullptr;
-  if (bmain == nullptr || area == nullptr || v3d == nullptr || area->spacetype != SPACE_VIEW3D) {
-    return;
-  }
-
-  if (v3d->shading.type == shading_type) {
-    return;
-  }
-
-  if (shading_type == OB_WIRE) {
-    v3d->shading.prev_type_wire = v3d->shading.type;
-  }
-  else {
-    v3d->shading.prev_type = v3d->shading.type;
-  }
-  v3d->shading.type = shading_type;
-  ED_view3d_shade_update(bmain, v3d, area);
-  WM_event_add_notifier(C, NC_SPACE | ND_SPACE_VIEW3D | NS_VIEW3D_SHADING, v3d);
 }
 
 int bridge_orientation_value_for_id(const std::string &value)
@@ -1361,14 +1241,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
   }
   bool preview = false;
   if (bridge_volume_command(C, command.setting, command.value)) {
-    return;
-  }
-  if (command.setting == "native_redo_edit") {
-    ui::native_operator_redo_query(C, command.value, true);
-    return;
-  }
-  if (command.setting == "native_dialog_edit") {
-    ui::native_operator_dialog_query(C, command.value, true);
     return;
   }
   if (command.setting == "interface") {
@@ -1884,122 +1756,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     bridge_operator_call(C, op_name, &props);
     WM_operator_properties_free(&props);
   }
-}
-
-void bridge_command_execute(bContext *C, BridgeCommand command)
-{
-  const BridgeContextStore context_store = bridge_context_push_view3d(C);
-  if (CTX_wm_window(C) == nullptr || CTX_wm_area(C) == nullptr || CTX_wm_region(C) == nullptr) {
-    bridge_context_pop(C, context_store);
-    return;
-  }
-
-  switch (command) {
-    case BridgeCommand::SetModeObject:
-      bridge_mode_set(C, "OBJECT");
-      break;
-    case BridgeCommand::SetModeEdit:
-      bridge_mode_set(C, "EDIT");
-      break;
-    case BridgeCommand::SetModeSculpt:
-      bridge_mode_set(C, "SCULPT");
-      break;
-    case BridgeCommand::SetModeVertexPaint:
-      bridge_mode_set(C, "VERTEX_PAINT");
-      break;
-    case BridgeCommand::SetModeWeightPaint:
-      bridge_mode_set(C, "WEIGHT_PAINT");
-      break;
-    case BridgeCommand::SetModeTexturePaint:
-      bridge_mode_set(C, "TEXTURE_PAINT");
-      break;
-    case BridgeCommand::SelectToolSelectBox:
-      WM_toolsystem_ref_set_by_id(C, "builtin.select_box");
-      break;
-    case BridgeCommand::SelectToolCursor:
-      WM_toolsystem_ref_set_by_id(C, "builtin.cursor");
-      break;
-    case BridgeCommand::SelectToolMove:
-      WM_toolsystem_ref_set_by_id(C, "builtin.move");
-      break;
-    case BridgeCommand::SelectToolRotate:
-      WM_toolsystem_ref_set_by_id(C, "builtin.rotate");
-      break;
-    case BridgeCommand::SelectToolScale:
-      WM_toolsystem_ref_set_by_id(C, "builtin.scale");
-      break;
-    case BridgeCommand::SelectToolTransform:
-      WM_toolsystem_ref_set_by_id(C, "builtin.transform");
-      break;
-    case BridgeCommand::SelectToolAnnotate:
-      WM_toolsystem_ref_set_by_id(C, "builtin.annotate");
-      break;
-    case BridgeCommand::SelectToolMeasure:
-      WM_toolsystem_ref_set_by_id(C, "builtin.measure");
-      break;
-    case BridgeCommand::FrameSelected:
-      bridge_operator_call(C, "VIEW3D_OT_view_selected");
-      break;
-    case BridgeCommand::ResetView:
-      bridge_view_axis(C, "FRONT");
-      break;
-    case BridgeCommand::OrbitLeft:
-      bridge_view_orbit(C, "ORBITLEFT");
-      break;
-    case BridgeCommand::OrbitRight:
-      bridge_view_orbit(C, "ORBITRIGHT");
-      break;
-    case BridgeCommand::OrbitUp:
-      bridge_view_orbit(C, "ORBITUP");
-      break;
-    case BridgeCommand::OrbitDown:
-      bridge_view_orbit(C, "ORBITDOWN");
-      break;
-    case BridgeCommand::SetViewportWireframe:
-      bridge_viewport_shading_set(C, OB_WIRE);
-      break;
-    case BridgeCommand::SetViewportSolid:
-      bridge_viewport_shading_set(C, OB_SOLID);
-      break;
-    case BridgeCommand::SetViewportMaterial:
-      bridge_viewport_shading_set(C, OB_MATERIAL);
-      break;
-    case BridgeCommand::SetViewportRendered:
-      bridge_viewport_shading_set(C, OB_RENDER);
-      break;
-    case BridgeCommand::ViewAll:
-      bridge_operator_call(C, "VIEW3D_OT_view_all");
-      break;
-    case BridgeCommand::ViewLocal:
-      bridge_operator_call(C, "VIEW3D_OT_localview");
-      break;
-    case BridgeCommand::ViewCamera:
-      bridge_operator_call(C, "VIEW3D_OT_view_camera");
-      break;
-    case BridgeCommand::ViewPerspOrtho:
-      bridge_operator_call(C, "VIEW3D_OT_view_persportho");
-      break;
-    case BridgeCommand::ViewFront:
-      bridge_view_axis(C, "FRONT");
-      break;
-    case BridgeCommand::ViewBack:
-      bridge_view_axis(C, "BACK");
-      break;
-    case BridgeCommand::ViewRight:
-      bridge_view_axis(C, "RIGHT");
-      break;
-    case BridgeCommand::ViewLeft:
-      bridge_view_axis(C, "LEFT");
-      break;
-    case BridgeCommand::ViewTop:
-      bridge_view_axis(C, "TOP");
-      break;
-    case BridgeCommand::ViewBottom:
-      bridge_view_axis(C, "BOTTOM");
-      break;
-  }
-
-  bridge_context_pop(C, context_store);
 }
 
 void bridge_tool_set_by_id(bContext *C, const std::string &tool_id)
@@ -2991,13 +2747,6 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
                         "," + bridge_json_number(radius / width) + "]";
     }
   }
-  const std::string redo_json = has_view3d_context ? bridge_timed("redo", [&] {
-    return ui::native_operator_redo_query(C, "", false);
-  }) :
-                                                     "null";
-  /* An operator's properties asked for before it runs, in place of Blender's dialog. */
-  const std::string dialog_json = bridge_timed(
-      "dialog", [&] { return ui::native_operator_dialog_query(C, "", false); });
   if (!has_view3d_context) {
     bridge_brushes_json = "null";
   }
@@ -3047,10 +2796,6 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
   json += "\"";
   json += ",\"settings\":";
   json += settings_json;
-  json += ",\"redo\":";
-  json += redo_json;
-  json += ",\"dialog\":";
-  json += dialog_json;
   json += ",\"textObject\":";
   json += has_view3d_context ? bridge_text_object_json(C) : "null";
   json += ",\"navigationGizmo\":";
@@ -3270,15 +3015,6 @@ void WM_native_ui_starter_library_ensure()
   library->import_method = ASSET_IMPORT_APPEND_REUSE;
 }
 
-extern "C" void WM_native_ui_command_enqueue(int command)
-{
-  if (command < int(BridgeCommand::SetModeObject) || command > int(BridgeCommand::ViewBottom)) {
-    return;
-  }
-
-  bridge_messages.push(BridgeCommand(command));
-}
-
 extern "C" void WM_native_ui_stylus_hover_set(bool active, int x, int y)
 {
   bridge_hover_requests.publish({active, x, y});
@@ -3323,27 +3059,6 @@ extern "C" char *WM_native_ui_stylus_hover_copy_json()
   static std::string snapshot = "{}";
   bridge_hover_snapshot.take(snapshot);
   return strdup(snapshot.c_str());
-}
-
-extern "C" void WM_native_ui_operator_enqueue(const char *op_name)
-{
-  if (op_name == nullptr || op_name[0] == '\0') {
-    return;
-  }
-
-  bridge_messages.push(BridgeOperatorCommand{op_name});
-}
-
-extern "C" void WM_native_ui_operator_enum_enqueue(const char *op_name,
-                                                      const char *prop_name,
-                                                      const char *prop_value)
-{
-  if (op_name == nullptr || op_name[0] == '\0') {
-    return;
-  }
-
-  bridge_messages.push(BridgeOperatorPropertyCommand{
-      op_name, prop_name ? prop_name : "", prop_value ? prop_value : ""});
 }
 
 extern "C" void WM_native_ui_setting_enqueue(const char *setting, const char *value)
@@ -4011,16 +3726,6 @@ int WM_native_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region)
   return int(bridge_bottom_tray.load() * WM_window_native_pixel_y(win)) - region->winrct.ymin;
 }
 
-static void bridge_dispatch_operator(bContext *C, BridgeOperatorCommand &command)
-{
-  const BridgeContextStore context_store = bridge_context_push_view3d(C);
-  wmWindow *win = CTX_wm_window(C);
-  if (win && CTX_wm_area(C) && CTX_wm_region(C)) {
-    bridge_operator_invoke(C, command.op_name.c_str());
-  }
-  bridge_context_pop(C, context_store);
-}
-
 static void bridge_dispatch_menu(bContext *C, BridgeMenuRequest &request)
 {
   const BridgeContextStore context_store = bridge_context_push_view3d(C);
@@ -4107,14 +3812,8 @@ static void bridge_dispatch(bContext *C, BridgeMessage &message)
   std::visit(
       [&](auto &command) {
         using T = std::decay_t<decltype(command)>;
-        if constexpr (std::is_same_v<T, BridgeCommand>) {
-          bridge_command_execute(C, command);
-        }
-        else if constexpr (std::is_same_v<T, std::string>) {
+        if constexpr (std::is_same_v<T, std::string>) {
           bridge_tool_set_by_id(C, command);
-        }
-        else if constexpr (std::is_same_v<T, BridgeOperatorCommand>) {
-          bridge_dispatch_operator(C, command);
         }
         else if constexpr (std::is_same_v<T, BridgeMenuRequest>) {
           bridge_dispatch_menu(C, command);
@@ -4133,12 +3832,6 @@ static void bridge_dispatch(bContext *C, BridgeMessage &message)
             }
             else if constexpr (std::is_same_v<T, float>) {
               bridge_view_roll_angle(C, command);
-            }
-            else if constexpr (std::is_same_v<T, BridgeOperatorPropertyCommand>) {
-              bridge_operator_call_with_enum_property(C,
-                                                   command.op_name.c_str(),
-                                                   command.prop_name.c_str(),
-                                                   command.prop_value.c_str());
             }
           }
           bridge_context_pop(C, context_store);
@@ -4312,7 +4005,7 @@ double WM_native_ui_engine_idle_seconds(bContext *C)
  * #bridge_message_live. */
 static Vector<BridgeMessage> bridge_messages_waiting;
 /* Set while a native control is handled, so its undo steps wait for the operator too. */
-static bool bridge_dispatching = false;
+bool bridge_dispatching = false;
 /* The undo step held back, pushed when the operator ends; see #WM_native_ui_undo_push_defer. */
 static std::optional<std::string> bridge_undo_pending;
 
@@ -4364,11 +4057,6 @@ static bool bridge_edit_sets_value(const std::string &json)
  */
 static bool bridge_message_live(const BridgeMessage &message)
 {
-  if (const auto *command = std::get_if<BridgeCommand>(&message)) {
-    /* The view and its shading; not Local View, which hides objects. */
-    return *command >= BridgeCommand::FrameSelected && *command <= BridgeCommand::ViewBottom &&
-           *command != BridgeCommand::ViewLocal;
-  }
   if (std::holds_alternative<float>(message)) {
     return true;
   }
@@ -4406,7 +4094,7 @@ static bool bridge_message_live(const BridgeMessage &message)
   return false;
 }
 
-static void bridge_undo_push_pending(bContext *C)
+void bridge_undo_push_pending(bContext *C)
 {
   if (!bridge_undo_pending) {
     return;
@@ -4491,8 +4179,7 @@ void WM_native_ui_flush_commands(bContext *C)
       return true;
     }
     if (!a || !b || a->setting != b->setting ||
-        (a->setting != "native_properties_edit" && a->setting != "native_redo_edit" &&
-         a->setting != "native_dialog_edit"))
+        a->setting != "native_properties_edit")
     {
       return false;
     }

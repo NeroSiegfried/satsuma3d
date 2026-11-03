@@ -112,11 +112,6 @@ UIImage *blenderIOSBrushImage(NSString *previewPath, CGFloat diameter)
   return image;
 }
 
-UIImage *blenderIOSCommandIcon(NSInteger command, NSString *systemImage)
-{
-  return blenderIOSIcon([NSString stringWithFormat:@"command.%ld", (long)command], systemImage);
-}
-
 UIImage *blenderIOSActionIcon(NSString *opName, NSString *propertyName, NSString *propertyValue)
 {
   NSString *key = [@"operator." stringByAppendingString:opName ?: @""];

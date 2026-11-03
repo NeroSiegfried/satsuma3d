@@ -150,7 +150,10 @@ final class NativeViews {
   /** Views written as text, see `checkViews`. */
   fileprivate var checked: [(String, NativeView)] = []
   /** Commands still to send to the first checked view, and how many were sent. */
-  fileprivate var script: [(target: String, op: Blender_NativeUI_Op, value: NativeValue?)] = []
+  fileprivate var script: [(view: String?, target: String, op: Blender_NativeUI_Op, value: NativeValue?,
+                            params: [String: NativeValue])] = []
+  /** Views commands of the script were aimed at, besides the checked ones. */
+  fileprivate var scriptViews: [String: NativeView] = [:]
   fileprivate var scriptSent = 0
   /** What a command answered, by its number, until taken with `outcome(of:)`. */
   private var acks: [UInt32: String?] = [:]
@@ -187,15 +190,19 @@ final class NativeViews {
     views[view.subscription] = view
   }
 
-  private func request(_ name: String, params: [String: NativeValue]) -> UInt32 {
-    var builder = FlatBufferBuilder(initialSize: 128)
-    let paramOffsets = params.map { key, value in
+  private static func write(_ params: [String: NativeValue], _ builder: inout FlatBufferBuilder) -> Offset {
+    let offsets = params.map { key, value in
       let keyOffset = builder.create(string: key)
       let (type, valueOffset) = value.write(&builder)
       return Blender_NativeUI_Param.createParam(&builder, keyOffset: keyOffset, valueType: type, valueOffset: valueOffset)
     }
+    return builder.createVector(ofOffsets: offsets)
+  }
+
+  private func request(_ name: String, params: [String: NativeValue]) -> UInt32 {
+    var builder = FlatBufferBuilder(initialSize: 128)
+    let paramsVector = Self.write(params, &builder)
     let viewOffset = builder.create(string: name)
-    let paramsVector = builder.createVector(ofOffsets: paramOffsets)
     let subscribe = Blender_NativeUI_Subscribe.createSubscribe(&builder, viewOffset: viewOffset,
                                                                paramsVectorOffset: paramsVector)
     builder.finish(offset: subscribe)
@@ -210,7 +217,8 @@ final class NativeViews {
    */
   @discardableResult
   func send(_ view: NativeView, target: String, op: Blender_NativeUI_Op = .set_, value: NativeValue? = nil,
-            phase: Blender_NativeUI_Phase = .once, answer: Bool = false) -> UInt32
+            phase: Blender_NativeUI_Phase = .once, params: [String: NativeValue] = [:],
+            answer: Bool = false) -> UInt32
   {
     lastCommand += 1
     let id = lastCommand
@@ -220,9 +228,11 @@ final class NativeViews {
     var builder = FlatBufferBuilder(initialSize: 128)
     let targetOffset = builder.create(string: target)
     let (valueType, valueOffset) = value?.write(&builder) ?? (.none_, Offset())
+    let paramsVector = params.isEmpty ? Offset() : Self.write(params, &builder)
     let command = Blender_NativeUI_Command.createCommand(&builder, id: id, subscription: view.subscription,
                                                          targetOffset: targetOffset, op: op, valueType: valueType,
-                                                         valueOffset: valueOffset, phase: phase)
+                                                         valueOffset: valueOffset, phase: phase,
+                                                         paramsVectorOffset: paramsVector)
     let commands = builder.createVector(ofOffsets: [command])
     builder.finish(offset: Blender_NativeUI_Commands.createCommands(&builder, commandsVectorOffset: commands))
     builder.sizedByteArray.withUnsafeBufferPointer { bytes in
@@ -261,6 +271,18 @@ final class NativeViews {
   }
 }
 
+/** Blender's operators, run by name, from the `operators` view. */
+@MainActor
+enum Operators {
+  private static let view = NativeViews.shared.subscribe("operators")
+
+  /** Run an operator, such as `VIEW3D_OT_view_axis` or `view3d.view_axis`, with properties set, as
+   * a button runs it. */
+  static func run(_ name: String, _ properties: [String: NativeValue] = [:]) {
+    NativeViews.shared.send(view, target: name, op: .invoke, params: properties)
+  }
+}
+
 /* -------------------------------------------------------------------- */
 /** \name Checking views
  *
@@ -290,7 +312,22 @@ extension NativeViews {
     for command in (ProcessInfo.processInfo.environment["BLENDER_NATIVE_UI_COMMANDS"] ?? "").split(separator: ";") {
       let words = command.split(separator: " ", maxSplits: 2).map(String.init)
       guard words.count >= 2, let op = ops[words[1]] else { continue }
-      script.append((words[0], op, words.count > 2 ? Self.value(words[2]) : nil))
+      /* Aimed at another view as `view>target`; parameters as `key=value,key=value`. */
+      let aim = words[0].split(separator: ">", maxSplits: 1).map(String.init)
+      var value: NativeValue?
+      var params: [String: NativeValue] = [:]
+      if words.count > 2 {
+        if words[2].contains("=") {
+          for pair in words[2].split(separator: ",") {
+            let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
+            if parts.count == 2 { params[parts[0]] = Self.value(parts[1]) }
+          }
+        }
+        else {
+          value = Self.value(words[2])
+        }
+      }
+      script.append((aim.count == 2 ? aim[0] : nil, aim.last!, op, value, params))
     }
   }
 
@@ -315,7 +352,24 @@ extension NativeViews {
     }
     let command = script[scriptSent]
     scriptSent += 1
-    send(view, target: command.target, op: command.op, value: command.value)
+    var target = view
+    if let name = command.view {
+      /* The checked view waits for it to be answered, and for what it changed. */
+      let other = scriptViews[name] ?? subscribe(name)
+      scriptViews[name] = other
+      target = other
+      view.unanswered += 1
+      func wait() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+          guard other.unanswered == 0 else { return wait() }
+          /* Its error shows as the checked view's. */
+          view.answered(other.error)
+          self.writeCheckedViews()
+        }
+      }
+      wait()
+    }
+    send(target, target: command.target, op: command.op, value: command.value, params: command.params)
   }
 
   /** Write the checked views as they are now. */

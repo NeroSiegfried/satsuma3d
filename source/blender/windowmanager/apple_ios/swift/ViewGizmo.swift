@@ -15,11 +15,11 @@ import UIKit
 struct ViewCommand {
   let title: String
   let symbol: String
-  /** `WMNativeUICommand`, or a viewport option to toggle instead. */
-  var command: Int32 = -1
-  var toggle: String?
-  /** Or an operator of Blender's to run in the viewport. */
+  /** An operator of Blender's to run in the viewport, with its properties. */
   var operatorName: String?
+  var properties: [String: NativeValue] = [:]
+  /** Or a viewport option to toggle instead. */
+  var toggle: String?
 
   /** The views, then Lock Camera to View, navigating then moves the camera, and Keep Camera
    * View, navigating then stays in the camera's view without moving the camera. */
@@ -34,30 +34,36 @@ struct ViewCommand {
                                 symbol: kept ? "pin.slash" : "pin", toggle: "keep_camera_view")]
   }
 
-  static let views = [
-    ViewCommand(title: "Frame All", symbol: "rectangle.expand.vertical", command: 24),
-    ViewCommand(title: "Frame Selected", symbol: "viewfinder", command: 14),
-    ViewCommand(title: "Camera", symbol: "camera", command: 26),
-    ViewCommand(title: "Perspective", symbol: "cube.transparent", command: 27),
-    ViewCommand(title: "Local View", symbol: "scope", command: 25),
-    ViewCommand(title: "Front", symbol: "arrow.up.square", command: 28),
-    ViewCommand(title: "Right", symbol: "arrow.right.square", command: 30),
-    ViewCommand(title: "Top", symbol: "arrow.down.to.line.square", command: 32),
-  ]
-
-  var image: UIImage? {
-    (command >= 0 ? wm_apple_ios_command_icon(command, symbol) : nil) ?? UIImage(systemName: symbol)
+  private static func axis(_ title: String, _ symbol: String, _ type: String) -> ViewCommand {
+    ViewCommand(title: title, symbol: symbol, operatorName: "VIEW3D_OT_view_axis", properties: ["type": .text(type)])
   }
 
+  static let views = [
+    ViewCommand(title: "Frame All", symbol: "rectangle.expand.vertical", operatorName: "VIEW3D_OT_view_all"),
+    ViewCommand(title: "Frame Selected", symbol: "viewfinder", operatorName: "VIEW3D_OT_view_selected"),
+    ViewCommand(title: "Camera", symbol: "camera", operatorName: "VIEW3D_OT_view_camera"),
+    ViewCommand(title: "Perspective", symbol: "cube.transparent", operatorName: "VIEW3D_OT_view_persportho"),
+    ViewCommand(title: "Local View", symbol: "scope", operatorName: "VIEW3D_OT_localview"),
+    axis("Front", "arrow.up.square", "FRONT"),
+    axis("Right", "arrow.right.square", "RIGHT"),
+    axis("Top", "arrow.down.to.line.square", "TOP"),
+  ]
+
+  /** Blender's icon for the operator, or the symbol. */
+  var image: UIImage? {
+    guard let operatorName else { return UIImage(systemName: symbol) }
+    var value = ""
+    if case .text(let type)? = properties["type"] { value = type }
+    return wm_apple_ios_action_icon(operatorName, value.isEmpty ? "" : "type", value) ?? UIImage(systemName: symbol)
+  }
+
+  @MainActor
   func run() {
     if let toggle {
       Engine.setting("viewport_toggle", toggle)
     }
     else if let operatorName {
-      Engine.operatorCall(operatorName)
-    }
-    else {
-      WM_native_ui_command_enqueue(command)
+      Operators.run(operatorName, properties)
     }
   }
 }

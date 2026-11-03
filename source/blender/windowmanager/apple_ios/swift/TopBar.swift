@@ -318,7 +318,7 @@ struct DocumentToolbar: ToolbarContent {
   }
 
   private var undoButton: some View {
-    Button { Engine.operatorCall("ED_OT_undo") } label: {
+    Button { Operators.run("ED_OT_undo") } label: {
       Label { Text("Undo") } icon: { iconImage(wm_apple_ios_icon("operator.ED_OT_undo", "arrow.uturn.backward")) }
     }
     .disabled(!model.canUndo)
@@ -763,18 +763,19 @@ struct DocumentToolbar: ToolbarContent {
   }
 
   private var shadingButton: some View {
-    let commands: [String: (Int32, String, String)] = [
-      "wireframe": (20, "Wireframe", "circle.dashed"), "solid": (21, "Solid", "cube"),
-      "material": (22, "Material Preview", "circle.lefthalf.filled"), "rendered": (23, "Rendered", "camera.aperture"),
+    let commands: [String: (String, String)] = [
+      "wireframe": ("Wireframe", "circle.dashed"), "solid": ("Solid", "cube"),
+      "material": ("Material Preview", "circle.lefthalf.filled"), "rendered": ("Rendered", "camera.aperture"),
     ]
-    let current = commands[model.shading] ?? commands["solid"]!
+    let shading = commands[model.shading] == nil ? "solid" : model.shading
+    let current = commands[shading]!
     return Button {
       shell.panels.showShadingTab("SHADING")
       model.shadingOpen = true
     } label: {
-      Label { Text("Viewport Shading") } icon: { iconImage(wm_apple_ios_command_icon(current.0, current.2)) }
+      Label { Text("Viewport Shading") } icon: { iconImage(wm_apple_ios_icon(shading == "solid" ? "control.shading" : "control.shading." + shading, current.1)) }
     }
-    .accessibilityValue(current.1)
+    .accessibilityValue(current.0)
     .accessibilityIdentifier("blender.shading")
     .shadingPopover(model: model, shell: shell)
   }

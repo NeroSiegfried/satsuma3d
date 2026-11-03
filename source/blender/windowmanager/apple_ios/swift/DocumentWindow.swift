@@ -474,16 +474,12 @@ public struct DocumentWindow: View {
 #endif
       .environment(\.blenderMenuContext, model.menuContext)
       /* An operator's settings, asked for before it runs, in place of Blender's dialog. */
-      .sheet(isPresented: Binding(get: { model.dialog != nil && !model.desktop }, set: { shown in
-        if !shown, let id = model.dialog?.string("id") {
-          /* Swiped away: as Cancel. */
-          Engine.setting("native_dialog_edit", json: ["id": id, "action": "cancel"])
-        }
+      .sheet(isPresented: Binding(get: { shell.panels.dialog.operation != nil && !model.desktop }, set: { shown in
+        /* Swiped away: as Cancel. */
+        if !shown { shell.panels.dialog.finishOperation("cancel") }
       })) {
-        if let dialog = model.dialog {
-          OperatorDialog(snapshot: dialog) {}
-            .presentationDetents([.medium, .large])
-        }
+        OperatorDialog(model: shell.panels.dialog)
+          .presentationDetents([.medium, .large])
       }
 #if !os(visionOS)
       /* The scene in the room, through the camera. */
@@ -716,7 +712,7 @@ public struct DocumentWindow: View {
           /* The 3D viewport's own, beside the Image Editor. */
           ZStack {
 #if !os(visionOS) /* Ornaments there. */
-            QuickActionsRow(model: model)
+            QuickActionsRow(model: model, redo: shell.panels.redo)
               /* The Pencil's dial takes over while it shows. */
               .opacity(RollDial.shared.showing ? 0 : 1)
               .animation(.easeOut(duration: 0.18), value: RollDial.shared.showing)

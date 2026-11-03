@@ -54,10 +54,6 @@ final class ShellModel {
   private(set) var dragHint: NativeUI.DragHint?
   private(set) var canUndo = false
   private(set) var canRedo = false
-  /** Adjust Last Operation: the last operator's settings, or none. */
-  private(set) var redo: JSON?
-  /** An operator's settings, asked for before it runs in place of Blender's dialog, or none. */
-  private(set) var dialog: JSON?
   /** The text object being typed into: its style where the cursor is, alignment and font file. */
   private(set) var textObject: JSON?
   /** The native node editor shows over the bottom of the viewport. */
@@ -165,8 +161,6 @@ final class ShellModel {
     set(\.canUndo, toolbar.canUndo)
     set(\.canRedo, toolbar.canRedo)
     set(\.menuContext, "\(toolbar.objectMode.rawValue)|\(toolbar.menuState ?? "")")
-    set(\.redo, toolbar.redo.dictionary, equal: { jsonEqual($0, $1) })
-    set(\.dialog, toolbar.dialog.dictionary, equal: { jsonEqual($0, $1) })
     set(\.textObject, toolbar.textObject.dictionary, equal: { jsonEqual($0, $1) })
     if toolbar.navigationGizmo.count == 3 { set(\.navigationGizmo, toolbar.navigationGizmo.map(Double.init)) }
     if toolbar.viewportBackground.count == 3 {

@@ -147,8 +147,9 @@ public enum Blender_NativeUI_Content: UInt8, UnionEnum {
   case row = 14
   case picture = 15
   case menu = 16
+  case operator_ = 17
 
-  public static var max: Blender_NativeUI_Content { return .menu }
+  public static var max: Blender_NativeUI_Content { return .operator_ }
   public static var min: Blender_NativeUI_Content { return .none_ }
 }
 
@@ -1548,6 +1549,77 @@ public struct Blender_NativeUI_Menu: FlatBufferObject, Verifiable {
   }
 }
 
+///  An operation's settings, its children: the last one's, to adjust it, or one's asked for before
+///  it runs, as a dialog. Commands: `Invoke` with `dismiss`, `confirm` or `cancel`.
+public struct Blender_NativeUI_Operator: FlatBufferObject, Verifiable {
+
+  static func validateVersion() { FlatBuffersVersion_25_2_10() }
+  public var __buffer: ByteBuffer! { return _accessor.bb }
+  private var _accessor: Table
+
+  private init(_ t: Table) { _accessor = t }
+  public init(_ bb: ByteBuffer, o: Int32) { _accessor = Table(bb: bb, position: o) }
+
+  private enum VTOFFSET: VOffset {
+    case idname = 4
+    case confirm = 6
+    case message = 8
+    case error = 10
+    case shown = 12
+    var v: Int32 { Int32(self.rawValue) }
+    var p: VOffset { self.rawValue }
+  }
+
+  ///  The operator, such as `TRANSFORM_OT_translate`.
+  public var idname: String? { let o = _accessor.offset(VTOFFSET.idname.v); return o == 0 ? nil : _accessor.string(at: o) }
+  public var idnameSegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.idname.v) }
+  ///  What a dialog's button to run it says.
+  public var confirm: String? { let o = _accessor.offset(VTOFFSET.confirm.v); return o == 0 ? nil : _accessor.string(at: o) }
+  public var confirmSegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.confirm.v) }
+  ///  What a dialog says above its settings.
+  public var message: String? { let o = _accessor.offset(VTOFFSET.message.v); return o == 0 ? nil : _accessor.string(at: o) }
+  public var messageSegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.message.v) }
+  ///  Why the last change to its settings failed.
+  public var error: String? { let o = _accessor.offset(VTOFFSET.error.v); return o == 0 ? nil : _accessor.string(at: o) }
+  public var errorSegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.error.v) }
+  ///  How often it was asked to show, as Blender's Adjust Last Operation does: an interface shows
+  ///  it when this grows.
+  public var shown: UInt32 { let o = _accessor.offset(VTOFFSET.shown.v); return o == 0 ? 0 : _accessor.readBuffer(of: UInt32.self, at: o) }
+  public static func startOperator(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 5) }
+  public static func add(idname: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: idname, at: VTOFFSET.idname.p) }
+  public static func add(confirm: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: confirm, at: VTOFFSET.confirm.p) }
+  public static func add(message: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: message, at: VTOFFSET.message.p) }
+  public static func add(error: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: error, at: VTOFFSET.error.p) }
+  public static func add(shown: UInt32, _ fbb: inout FlatBufferBuilder) { fbb.add(element: shown, def: 0, at: VTOFFSET.shown.p) }
+  public static func endOperator(_ fbb: inout FlatBufferBuilder, start: UOffset) -> Offset { let end = Offset(offset: fbb.endTable(at: start)); return end }
+  public static func createOperator(
+    _ fbb: inout FlatBufferBuilder,
+    idnameOffset idname: Offset = Offset(),
+    confirmOffset confirm: Offset = Offset(),
+    messageOffset message: Offset = Offset(),
+    errorOffset error: Offset = Offset(),
+    shown: UInt32 = 0
+  ) -> Offset {
+    let __start = Blender_NativeUI_Operator.startOperator(&fbb)
+    Blender_NativeUI_Operator.add(idname: idname, &fbb)
+    Blender_NativeUI_Operator.add(confirm: confirm, &fbb)
+    Blender_NativeUI_Operator.add(message: message, &fbb)
+    Blender_NativeUI_Operator.add(error: error, &fbb)
+    Blender_NativeUI_Operator.add(shown: shown, &fbb)
+    return Blender_NativeUI_Operator.endOperator(&fbb, start: __start)
+  }
+
+  public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
+    var _v = try verifier.visitTable(at: position)
+    try _v.visit(field: VTOFFSET.idname.p, fieldName: "idname", required: false, type: ForwardOffset<String>.self)
+    try _v.visit(field: VTOFFSET.confirm.p, fieldName: "confirm", required: false, type: ForwardOffset<String>.self)
+    try _v.visit(field: VTOFFSET.message.p, fieldName: "message", required: false, type: ForwardOffset<String>.self)
+    try _v.visit(field: VTOFFSET.error.p, fieldName: "error", required: false, type: ForwardOffset<String>.self)
+    try _v.visit(field: VTOFFSET.shown.p, fieldName: "shown", required: false, type: UInt32.self)
+    _v.finish()
+  }
+}
+
 ///  A node of a view: a control, a container of controls, or an item of a canvas. Its children
 ///  are sent apart from it, see `Children`, so a change to one does not resend the others.
 public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable {
@@ -1702,6 +1774,8 @@ public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable {
         try ForwardOffset<Blender_NativeUI_Picture>.verify(&verifier, at: pos, of: Blender_NativeUI_Picture.self)
       case .menu:
         try ForwardOffset<Blender_NativeUI_Menu>.verify(&verifier, at: pos, of: Blender_NativeUI_Menu.self)
+      case .operator_:
+        try ForwardOffset<Blender_NativeUI_Operator>.verify(&verifier, at: pos, of: Blender_NativeUI_Operator.self)
       }
     })
     try _v.visit(field: VTOFFSET.label.p, fieldName: "label", required: false, type: ForwardOffset<String>.self)
@@ -2044,6 +2118,7 @@ public struct Blender_NativeUI_Command: FlatBufferObject, Verifiable {
     case valueType = 12
     case value = 14
     case phase = 16
+    case params = 18
     var v: Int32 { Int32(self.rawValue) }
     var p: VOffset { self.rawValue }
   }
@@ -2058,7 +2133,11 @@ public struct Blender_NativeUI_Command: FlatBufferObject, Verifiable {
   public var valueType: Blender_NativeUI_Value { let o = _accessor.offset(VTOFFSET.valueType.v); return o == 0 ? .none_ : Blender_NativeUI_Value(rawValue: _accessor.readBuffer(of: UInt8.self, at: o)) ?? .none_ }
   public func value<T: FlatbuffersInitializable>(type: T.Type) -> T? { let o = _accessor.offset(VTOFFSET.value.v); return o == 0 ? nil : _accessor.union(o) }
   public var phase: Blender_NativeUI_Phase { let o = _accessor.offset(VTOFFSET.phase.v); return o == 0 ? .once : Blender_NativeUI_Phase(rawValue: _accessor.readBuffer(of: UInt8.self, at: o)) ?? .once }
-  public static func startCommand(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 7) }
+  ///  What it is done with, such as the properties of an operator it runs.
+  public var hasParams: Bool { let o = _accessor.offset(VTOFFSET.params.v); return o == 0 ? false : true }
+  public var paramsCount: Int32 { let o = _accessor.offset(VTOFFSET.params.v); return o == 0 ? 0 : _accessor.vector(count: o) }
+  public func params(at index: Int32) -> Blender_NativeUI_Param? { let o = _accessor.offset(VTOFFSET.params.v); return o == 0 ? nil : Blender_NativeUI_Param(_accessor.bb, o: _accessor.indirect(_accessor.vector(at: o) + index * 4)) }
+  public static func startCommand(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 8) }
   public static func add(id: UInt32, _ fbb: inout FlatBufferBuilder) { fbb.add(element: id, def: 0, at: VTOFFSET.id.p) }
   public static func add(subscription: UInt32, _ fbb: inout FlatBufferBuilder) { fbb.add(element: subscription, def: 0, at: VTOFFSET.subscription.p) }
   public static func add(target: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: target, at: VTOFFSET.target.p) }
@@ -2066,6 +2145,7 @@ public struct Blender_NativeUI_Command: FlatBufferObject, Verifiable {
   public static func add(valueType: Blender_NativeUI_Value, _ fbb: inout FlatBufferBuilder) { fbb.add(element: valueType.rawValue, def: 0, at: VTOFFSET.valueType.p) }
   public static func add(value: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: value, at: VTOFFSET.value.p) }
   public static func add(phase: Blender_NativeUI_Phase, _ fbb: inout FlatBufferBuilder) { fbb.add(element: phase.rawValue, def: 0, at: VTOFFSET.phase.p) }
+  public static func addVectorOf(params: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: params, at: VTOFFSET.params.p) }
   public static func endCommand(_ fbb: inout FlatBufferBuilder, start: UOffset) -> Offset { let end = Offset(offset: fbb.endTable(at: start)); fbb.require(table: end, fields: [8]); return end }
   public static func createCommand(
     _ fbb: inout FlatBufferBuilder,
@@ -2075,7 +2155,8 @@ public struct Blender_NativeUI_Command: FlatBufferObject, Verifiable {
     op: Blender_NativeUI_Op = .set_,
     valueType: Blender_NativeUI_Value = .none_,
     valueOffset value: Offset = Offset(),
-    phase: Blender_NativeUI_Phase = .once
+    phase: Blender_NativeUI_Phase = .once,
+    paramsVectorOffset params: Offset = Offset()
   ) -> Offset {
     let __start = Blender_NativeUI_Command.startCommand(&fbb)
     Blender_NativeUI_Command.add(id: id, &fbb)
@@ -2085,6 +2166,7 @@ public struct Blender_NativeUI_Command: FlatBufferObject, Verifiable {
     Blender_NativeUI_Command.add(valueType: valueType, &fbb)
     Blender_NativeUI_Command.add(value: value, &fbb)
     Blender_NativeUI_Command.add(phase: phase, &fbb)
+    Blender_NativeUI_Command.addVectorOf(params: params, &fbb)
     return Blender_NativeUI_Command.endCommand(&fbb, start: __start)
   }
 
@@ -2115,6 +2197,7 @@ public struct Blender_NativeUI_Command: FlatBufferObject, Verifiable {
       }
     })
     try _v.visit(field: VTOFFSET.phase.p, fieldName: "phase", required: false, type: Blender_NativeUI_Phase.self)
+    try _v.visit(field: VTOFFSET.params.p, fieldName: "params", required: false, type: ForwardOffset<Vector<ForwardOffset<Blender_NativeUI_Param>, Blender_NativeUI_Param>>.self)
     _v.finish()
   }
 }

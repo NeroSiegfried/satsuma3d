@@ -295,10 +295,6 @@ enum NativeUI {
     /// The active undo step: menus are asked for again when it changes, and only then.
     var menuState: String?
     var settings: TransformSettings?
-    /// The last operator's properties, for Adjust Last Operation.
-    var redo: Open
-    /// An operator's properties asked for before it runs, in place of Blender's dialog.
-    var dialog: Open
     /// The text object being edited, with its fonts and style.
     var textObject: Open
     /// The navigation gizmo's center and radius, as fractions of the window from the top left.
@@ -339,8 +335,6 @@ enum NativeUI {
       canRedo = flag(json["canRedo"]) ?? false
       menuState = json["menuState"] as? String
       settings = (json["settings"] as? [String: Any]).flatMap(TransformSettings.init(json:))
-      redo = Open(json["redo"])
-      dialog = Open(json["dialog"])
       textObject = Open(json["textObject"])
       navigationGizmo = (json["navigationGizmo"] as? [Any])?.compactMap { ($0 as? NSNumber)?.floatValue } ?? []
       viewportBackground = (json["viewportBackground"] as? [Any])?.compactMap { ($0 as? NSNumber)?.floatValue } ?? []
