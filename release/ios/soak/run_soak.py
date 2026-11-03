@@ -142,8 +142,8 @@ def main():
     began = time.time()
     target.start(args)
     print("Running for %.0f minutes, seed %d%s." % (args.minutes, args.seed, ", driving the interface" if args.ui else ""))
-    # Blender starts acting ten seconds in; a little more for the last records.
-    deadline = began + args.minutes * 60 + 40
+    # Blender starts acting ten seconds after it started, which a debug build takes a while to do.
+    deadline = began + args.minutes * 60 + 90
     alive = True
     while time.time() < deadline:
         time.sleep(30)
