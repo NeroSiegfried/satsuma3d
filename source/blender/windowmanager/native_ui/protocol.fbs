@@ -1,0 +1,420 @@
+// SPDX-FileCopyrightText: 2026 Blender Authors
+//
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+// The protocol between Blender and a platform's own interface, such as the iPad's SwiftUI one or
+// an Android one: see `WM_native_ui.h` for how it is exchanged, and `README.md` beside this file.
+//
+// Blender describes what an interface shows as views, each a tree of nodes with stable keys. An
+// interface subscribes to the views it shows; Blender sends each one whole once, then only the
+// nodes that changed. The interface sends commands back, aimed at a node of a view.
+//
+// Most views are made of controls (panels, fields, buttons, lists, menus), which an interface
+// draws with its own native controls, the same way for every view. Views with a canvas of their
+// own, such as the node editor, send its contents as data.
+//
+// `flatc` generates each language's code from this file, see `generate.py`.
+
+namespace Blender.NativeUI;
+
+/* -------------------------------------------------------------------- */
+/* Values */
+
+table BoolValue {
+  value: bool;
+}
+
+table IntValue {
+  value: long;
+}
+
+table FloatValue {
+  value: double;
+}
+
+table TextValue {
+  value: string;
+}
+
+table FloatsValue {
+  value: [double];
+}
+
+table IntsValue {
+  value: [long];
+}
+
+/// A value of a field, of a command, or of a view's parameter.
+union Value {
+  BoolValue,
+  IntValue,
+  FloatValue,
+  TextValue,
+  FloatsValue,
+  IntsValue,
+}
+
+/// A named value, such as a view's parameter.
+table Param {
+  key: string (required);
+  value: Value;
+}
+
+/* -------------------------------------------------------------------- */
+/* Controls
+ *
+ * What Blender's interface shows, by meaning rather than by look: an interface draws each kind
+ * with its own native control. What every control has, such as its label and whether it can be
+ * edited, is on the node, see `Node`. */
+
+/// How a container lays out its children.
+enum Layout : ubyte {
+  /// One under another.
+  Column,
+  /// Side by side, such as the X, Y and Z of a location.
+  Row,
+  /// Side by side and joined, as one control, such as a row of toggles.
+  Joined,
+}
+
+/// A group of controls: the whole of a view, a panel's body, or a row.
+table Group {
+  layout: Layout;
+}
+
+/// A panel, which can be opened and closed. Its controls are its children; those of its header
+/// are listed in `header`.
+table Panel {
+  open: bool = true;
+  /// It cannot be closed.
+  fixed: bool;
+  /// Keys of its children drawn in its header, such as a modifier's switches.
+  header: [string];
+}
+
+/// A switch.
+table Toggle {
+  value: bool;
+  /// Drawn as a button that stays pressed, rather than as a switch.
+  button: bool;
+}
+
+/// What a number measures, for its units and how it is edited.
+enum NumberKind : ubyte {
+  Plain,
+  /// Between 0 and 1.
+  Factor,
+  Percentage,
+  /// In radians, shown in degrees.
+  Angle,
+  Distance,
+  Area,
+  Volume,
+  Mass,
+  Time,
+  /// A frame number.
+  Frame,
+  Pixels,
+  Temperature,
+  Wavelength,
+}
+
+/// How a slider's range maps to its length.
+enum Scale : ubyte {
+  Linear,
+  Logarithmic,
+  Cubic,
+}
+
+/// A number.
+table Number {
+  value: double;
+  /// A whole number.
+  integer: bool;
+  kind: NumberKind;
+  /// The hard range, which values are clamped to.
+  min: double = -inf;
+  max: double = inf;
+  /// The soft range, which dragging and sliders cover.
+  soft_min: double = -inf;
+  soft_max: double = inf;
+  /// How much a step of dragging changes it, and how many decimals show.
+  step: double;
+  precision: ubyte = 3;
+  /// Drawn as a slider over the soft range.
+  slider: bool;
+  scale: Scale;
+}
+
+/// Text.
+table TextField {
+  value: string;
+  multiline: bool;
+  /// A file or folder path, which an interface may pick with its own browser.
+  path: bool;
+}
+
+/// One choice of a `Choice`, or a heading between groups of them.
+table Option {
+  /// What the choice sets; none for a heading.
+  value: string;
+  label: string;
+  icon: string;
+  /// An image of it, such as a MatCap's, to show instead of the icon.
+  preview: string;
+  description: string;
+}
+
+/// How a choice is drawn.
+enum ChoiceStyle : ubyte {
+  /// A menu.
+  Menu,
+  /// All its options at once, as a row of buttons.
+  Expanded,
+  /// As tabs.
+  Tabs,
+}
+
+/// A choice of options, such as an enum.
+table Choice {
+  /// The chosen option's value.
+  value: string;
+  options: [Option];
+  style: ChoiceStyle;
+  /// Several options can be chosen at once: `value` lists them, separated by commas.
+  multiple: bool;
+}
+
+/// A color.
+table Color {
+  /// Red, green, blue and maybe alpha, in display space.
+  value: [double];
+  alpha: bool;
+}
+
+/// A data-block chosen for a property, such as an object's material.
+table Reference {
+  /// The data-block's type, such as "Material".
+  type: string;
+  /// The chosen data-block's name, or none.
+  name: string;
+  /// Its stable identifier, to choose it by.
+  value: string;
+  users: int;
+  linked: bool;
+  fake_user: bool;
+  /// What can be done with it: a new one, take it away, or make it single-user.
+  can_new: bool;
+  can_unlink: bool;
+  can_single_user: bool;
+  /// The data-blocks to choose from. Long lists come as a view of their own instead.
+  options: [Option];
+}
+
+/// How a button is drawn.
+enum ButtonStyle : ubyte {
+  Normal,
+  /// The main action of its panel or dialog.
+  Prominent,
+  /// It deletes or removes something.
+  Destructive,
+}
+
+/// A button, which runs something when invoked.
+table Button {
+  style: ButtonStyle;
+}
+
+/// A button that opens a menu, a view of its own named here.
+table MenuButton {
+  /// The menu's view and its parameters, for the interface to subscribe to when it opens.
+  view: string;
+  params: [Param];
+}
+
+/// Text that cannot be edited, such as a property shown for information.
+table Label {
+  value: string;
+}
+
+/// A line between controls.
+table Separator {
+}
+
+/// A list of items, such as material slots or shape keys: its rows are its children, each with
+/// controls of its own.
+table List {
+  /// The active row's key.
+  active: string;
+  can_add: bool;
+  can_remove: bool;
+  can_reorder: bool;
+  /// Its rows nest, as a tree.
+  tree: bool;
+}
+
+/// A row of a list.
+table Row {
+  depth: int;
+  selected: bool;
+  /// Its name can be renamed in place.
+  renamable: bool;
+  /// An image to show instead of the icon.
+  preview: string;
+}
+
+/// A picture, such as a material's rendered preview.
+table Picture {
+  image: string;
+}
+
+/// A menu: its items are its children, controls like any other.
+table Menu {
+}
+
+/// What a node is.
+union Content {
+  Group,
+  Panel,
+  Toggle,
+  Number,
+  TextField,
+  Choice,
+  Color,
+  Reference,
+  Button,
+  MenuButton,
+  Label,
+  Separator,
+  List,
+  Row,
+  Picture,
+  Menu,
+}
+
+/* -------------------------------------------------------------------- */
+/* Nodes */
+
+/// How a property is animated, as Blender colors its control.
+enum Animation : ubyte {
+  None,
+  /// Keyed on this frame.
+  Keyed,
+  Animated,
+  /// Changed from its animated value.
+  Changed,
+  Driven,
+}
+
+/// A node of a view: a control, a container of controls, or an item of a canvas.
+table Node {
+  /// Stable within the view for as long as the node shows the same thing, such as a property's
+  /// data path, so an interface keeps its state, and commands find it.
+  key: string (required);
+  /// Its children's keys, in order.
+  children: [string];
+  content: Content;
+
+  label: string;
+  /// Blender's icon name.
+  icon: string;
+  /// What it does, as Blender's tooltip says.
+  description: string;
+  /// It can be changed or used.
+  enabled: bool = true;
+  /// Several selected items differ in this value.
+  mixed: bool;
+  animation: Animation;
+  /// The Blender property it edits, as a data path, for interfaces that show or copy it.
+  property: string;
+}
+
+/* -------------------------------------------------------------------- */
+/* Updates: Blender to the interface */
+
+/// What changed in a view since its last update.
+table Update {
+  subscription: uint;
+  /// One more than the last update of this subscription, so a gap shows something went missing.
+  version: uint;
+  /// Start again from nothing: the view is sent whole.
+  reset: bool;
+  /// The view's top node, sent with `reset`.
+  top: string;
+  /// New nodes, and nodes that changed in any way, sent whole.
+  nodes: [Node];
+  /// Keys of nodes gone from the view.
+  removed: [string];
+}
+
+/// The outcome of a command.
+table Ack {
+  command: uint;
+  /// Why it failed, or nothing when it worked.
+  error: string;
+}
+
+/// What Blender sends at once, see `WM_native_ui_take_updates`.
+table Updates {
+  updates: [Update];
+  acks: [Ack];
+}
+
+/* -------------------------------------------------------------------- */
+/* Requests: the interface to Blender */
+
+/// Show a view, see `WM_native_ui_subscribe`.
+table Subscribe {
+  /// Such as `properties`, `tool_settings` or `menu`.
+  view: string (required);
+  params: [Param];
+}
+
+/// What a command does to its node.
+enum Op : ubyte {
+  /// Give it `value`.
+  Set,
+  /// Run it: a button, or a menu's item.
+  Invoke,
+  /// Open or close a panel, or a row of a tree.
+  Open,
+  Close,
+  /// Make a row of a list active.
+  Activate,
+  /// Give a row a new name, `value`.
+  Rename,
+  /// Move a row of a list to before the row named by `value`, or to the end without one.
+  Move,
+  Add,
+  Remove,
+  /// Keyframes of its property: insert, delete or clear them, all of an array's with `value` set.
+  KeyframeInsert,
+  KeyframeDelete,
+  KeyframesClear,
+}
+
+/// Where a command is in a continuous change, such as a drag: Blender makes one undo step of it.
+enum Phase : ubyte {
+  /// A change on its own.
+  Once,
+  Begin,
+  Update,
+  End,
+}
+
+/// Something done to a node of a view.
+table Command {
+  /// Answered with an `Ack` of the same number; 0 for none.
+  id: uint;
+  subscription: uint;
+  /// The node's key.
+  target: string (required);
+  op: Op;
+  value: Value;
+  phase: Phase;
+}
+
+/// Commands sent at once, see `WM_native_ui_send`.
+table Commands {
+  commands: [Command];
+}
