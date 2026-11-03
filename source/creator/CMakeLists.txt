@@ -371,6 +371,28 @@ else()
     set(IOS_LAUNCHER_SWIFT
       # The types of what the bridge sends, generated from `native_ui.fbs`.
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/native_ui/generated/NativeUI.swift
+      # The protocol with Blender, generated from `protocol.fbs`, and FlatBuffers' Swift runtime.
+      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/native_ui/generated/swift/protocol_generated.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/ByteBuffer.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Constants.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Enum.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/FlatBufferBuilder.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/FlatBufferObject.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/FlatBuffersUtils.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/FlatbuffersErrors.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Int+extension.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Message.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Mutable.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/NativeObject.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Offset.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Root.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/String+extension.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Struct.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Table.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/TableVerifier.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/VeriferOptions.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Verifiable.swift
+      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Verifier.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/Assets.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/BlenderMenus.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/FileDrop.swift
@@ -388,6 +410,7 @@ else()
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/InspectorStore.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/InspectorView.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/Launcher.swift
+      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/NativeViews.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/NodeEditor.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/PencilMenu.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/PropertyControls.swift

@@ -120,6 +120,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
 
   @objc private func snapshotsPublished() {
     let desktop = model.desktop
+    NativeViews.shared.pull()
     model.pullToolbar()
     shell.pullSnapshots()
     SoakProbe.shared?.snapshotsPublished()
