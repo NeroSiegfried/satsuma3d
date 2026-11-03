@@ -42,20 +42,36 @@ final class NativeNode {
 @Observable
 final class NativeView {
   let name: String
+  /** What it is subscribed with, again when resumed. */
+  @ObservationIgnored var params: [String: NativeValue]
+  /** Subscribed: Blender keeps it up to date. */
   @ObservationIgnored fileprivate(set) var subscription: UInt32 = 0
   /** The view's top node, once it arrived. */
   private(set) var top: NativeNode?
   @ObservationIgnored private var nodes: [String: NativeNode] = [:]
   @ObservationIgnored private var version: UInt32 = 0
+  /** Why its latest command failed, until another works. */
+  private(set) var error: String?
+  /** Commands Blender has yet to answer. */
+  @ObservationIgnored fileprivate var unanswered = 0
+  /** Called once Blender answered every command sent, and the view shows what they did. */
+  @ObservationIgnored var settled: (() -> Void)?
 
-  fileprivate init(name: String) {
+  fileprivate init(name: String, params: [String: NativeValue]) {
     self.name = name
+    self.params = params
   }
 
   func node(_ key: String) -> NativeNode? { nodes[key] }
 
   /** The nodes under `node`, in order. */
   func children(of node: NativeNode) -> [NativeNode] { node.children.compactMap { nodes[$0] } }
+
+  fileprivate func answered(_ failure: String?) {
+    if error != failure { error = failure }
+    unanswered = max(0, unanswered - 1)
+    if unanswered == 0 { settled?() }
+  }
 
   fileprivate func apply(_ update: Blender_NativeUI_Update) {
     if update.reset {
@@ -99,6 +115,7 @@ enum NativeValue {
   case float(Double)
   case text(String)
   case floats([Double])
+  case texts([String])
 
   fileprivate func write(_ builder: inout FlatBufferBuilder) -> (Blender_NativeUI_Value, Offset) {
     switch self {
@@ -114,6 +131,9 @@ enum NativeValue {
       case .floats(let values):
         let vector = builder.createVector(values)
         return (.floatsvalue, Blender_NativeUI_FloatsValue.createFloatsValue(&builder, valueVectorOffset: vector))
+      case .texts(let values):
+        let vector = builder.createVector(ofStrings: values)
+        return (.textsvalue, Blender_NativeUI_TextsValue.createTextsValue(&builder, valueVectorOffset: vector))
     }
   }
 }
@@ -125,28 +145,45 @@ final class NativeViews {
 
   private var views: [UInt32: NativeView] = [:]
   private var lastCommand: UInt32 = 0
+  /** The view each unanswered command was sent to. */
+  private var sentTo: [UInt32: NativeView] = [:]
   /** Views written as text, see `checkViews`. */
   fileprivate var checked: [(String, NativeView)] = []
+  /** Commands still to send to the first checked view, and how many were sent. */
+  fileprivate var script: [(target: String, op: Blender_NativeUI_Op, value: NativeValue?)] = []
+  fileprivate var scriptSent = 0
   /** What a command answered, by its number, until taken with `outcome(of:)`. */
   private var acks: [UInt32: String?] = [:]
+  /** Commands whose answers are kept for `outcome(of:)`. */
+  private var answers = Set<UInt32>()
 
   /** Show a view: it fills in as Blender sends it. */
   func subscribe(_ name: String, params: [String: NativeValue] = [:]) -> NativeView {
-    let view = NativeView(name: name)
+    let view = NativeView(name: name, params: params)
     view.subscription = request(name, params: params)
     views[view.subscription] = view
     return view
   }
 
-  func unsubscribe(_ view: NativeView) {
-    views[view.subscription] = nil
-    WM_native_ui_unsubscribe(view.subscription)
-  }
+  func unsubscribe(_ view: NativeView) { pause(view) }
 
   fileprivate func resubscribe(_ view: NativeView) {
+    pause(view)
+    resume(view)
+  }
+
+  /** Stop Blender building a view while it is hidden; it keeps what it showed. */
+  func pause(_ view: NativeView) {
+    guard view.subscription != 0 else { return }
     views[view.subscription] = nil
     WM_native_ui_unsubscribe(view.subscription)
-    view.subscription = request(view.name, params: [:])
+    view.subscription = 0
+  }
+
+  /** Have Blender build a paused view again, sent whole. */
+  func resume(_ view: NativeView) {
+    guard view.subscription == 0 else { return }
+    view.subscription = request(view.name, params: view.params)
     views[view.subscription] = view
   }
 
@@ -168,17 +205,18 @@ final class NativeViews {
   }
 
   /**
-   * Send a command aimed at a node of `view`. Its number, for `outcome(of:)`, when `answer`.
+   * Send a command aimed at a node of `view`. Its number, for `outcome(of:)` when `answer`; the
+   * view hears how it went either way.
    */
   @discardableResult
   func send(_ view: NativeView, target: String, op: Blender_NativeUI_Op = .set_, value: NativeValue? = nil,
             phase: Blender_NativeUI_Phase = .once, answer: Bool = false) -> UInt32
   {
-    var id: UInt32 = 0
-    if answer {
-      lastCommand += 1
-      id = lastCommand
-    }
+    lastCommand += 1
+    let id = lastCommand
+    sentTo[id] = view
+    view.unanswered += 1
+    if answer { answers.insert(id) }
     var builder = FlatBufferBuilder(initialSize: 128)
     let targetOffset = builder.create(string: target)
     let (valueType, valueOffset) = value?.write(&builder) ?? (.none_, Offset())
@@ -215,7 +253,8 @@ final class NativeViews {
       }
       for index in 0..<updates.acksCount {
         guard let ack = updates.acks(at: index) else { continue }
-        acks[ack.command] = .some(ack.error)
+        sentTo.removeValue(forKey: ack.command)?.answered(ack.error)
+        if answers.remove(ack.command) != nil { acks[ack.command] = .some(ack.error) }
       }
       writeCheckedViews()
     }
@@ -228,6 +267,10 @@ final class NativeViews {
  * With `BLENDER_NATIVE_UI_VIEWS` in the environment, such as `properties:OBJECT,properties:TOOL`,
  * those views are shown to no one but written as text to `native_ui_record/views/` in the
  * temporary folder whenever they change, to check what Blender sends.
+ *
+ * With `BLENDER_NATIVE_UI_COMMANDS` too, such as `panel:OBJECT_PT_relations open;tabs set
+ * MODIFIERS`, those commands are sent to the first of them one at a time, each once Blender
+ * answered the one before: the view as it is after each is written as `<view>.<number>.txt`.
  * \{ */
 
 extension NativeViews {
@@ -239,6 +282,40 @@ extension NativeViews {
       let params: [String: NativeValue] = parts.count > 1 ? ["tab": .text(parts[1])] : [:]
       checked.append((String(entry), subscribe(parts[0], params: params)))
     }
+    let ops: [String: Blender_NativeUI_Op] = [
+      "set": .set_, "invoke": .invoke, "open": .open_, "close": .close, "activate": .activate,
+      "rename": .rename, "move": .move, "add": .add, "remove": .remove,
+      "keyframe_insert": .keyframeinsert, "keyframe_delete": .keyframedelete, "keyframes_clear": .keyframesclear,
+    ]
+    for command in (ProcessInfo.processInfo.environment["BLENDER_NATIVE_UI_COMMANDS"] ?? "").split(separator: ";") {
+      let words = command.split(separator: " ", maxSplits: 2).map(String.init)
+      guard words.count >= 2, let op = ops[words[1]] else { continue }
+      script.append((words[0], op, words.count > 2 ? Self.value(words[2]) : nil))
+    }
+  }
+
+  private static func value(_ text: String) -> NativeValue {
+    if text == "true" || text == "false" { return .bool(text == "true") }
+    if let number = Double(text) { return .float(number) }
+    return .text(text)
+  }
+
+  /** Send the next command once Blender answered the one before, and wrote the view as it left it. */
+  private func continueScript(_ name: String, _ view: NativeView, lines: [String]) {
+    guard view.unanswered == 0, scriptSent <= script.count else { return }
+    if scriptSent > 0 {
+      let folder = FileManager.default.temporaryDirectory.appendingPathComponent("native_ui_record/views")
+      let error = view.error.map { ["error: " + $0] } ?? []
+      try? (error + lines).joined(separator: "\n").write(
+        to: folder.appendingPathComponent("\(name).\(scriptSent).txt"), atomically: true, encoding: .utf8)
+    }
+    guard scriptSent < script.count else {
+      scriptSent += 1
+      return
+    }
+    let command = script[scriptSent]
+    scriptSent += 1
+    send(view, target: command.target, op: command.op, value: command.value)
   }
 
   /** Write the checked views as they are now. */
@@ -252,6 +329,7 @@ extension NativeViews {
       describe(top, in: view, depth: 0, into: &lines)
       try? lines.joined(separator: "\n").write(to: folder.appendingPathComponent(name + ".txt"),
                                                 atomically: true, encoding: .utf8)
+      if !script.isEmpty && view === checked.first?.1 { continueScript(name, view, lines: lines) }
     }
   }
 
@@ -269,6 +347,9 @@ extension NativeViews {
       default: break
     }
     if !content.enabled { line += " [disabled]" }
+    if content.role != .none_ { line += " [\(content.role)]" }
+    if content.mixed { line += " [mixed]" }
+    if content.animation != .none_ { line += " [\(content.animation)]" }
     lines.append(line)
     for child in view.children(of: node) {
       describe(child, in: view, depth: depth + 1, into: &lines)
