@@ -26,12 +26,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCHEMA = os.path.join(HERE, "protocol.fbs")
 GENERATED = os.path.join(HERE, "generated")
 
-# What each language needs. Blender builds views as objects, compares them with the last ones
-# sent, and packs only the nodes that changed; the iPad keeps the nodes it shows as objects, apart
-# from the buffers they came in; Android reads them.
+# Each language reads and writes buffers directly, without objects in between: Blender writes each
+# node straight into its buffer, and interfaces read the nodes they keep where they are.
 LANGUAGES = {
-    "cpp": ["--cpp", "--scoped-enums", "--gen-object-api", "--gen-compare", "--cpp-std", "c++17"],
-    "swift": ["--swift", "--gen-object-api"],
+    "cpp": ["--cpp", "--scoped-enums", "--cpp-std", "c++17"],
+    "swift": ["--swift"],
     "kotlin": ["--kotlin"],
 }
 

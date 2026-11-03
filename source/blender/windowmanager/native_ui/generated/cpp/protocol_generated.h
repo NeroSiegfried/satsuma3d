@@ -18,190 +18,102 @@ namespace NativeUI {
 
 struct BoolValue;
 struct BoolValueBuilder;
-struct BoolValueT;
 
 struct IntValue;
 struct IntValueBuilder;
-struct IntValueT;
 
 struct FloatValue;
 struct FloatValueBuilder;
-struct FloatValueT;
 
 struct TextValue;
 struct TextValueBuilder;
-struct TextValueT;
 
 struct FloatsValue;
 struct FloatsValueBuilder;
-struct FloatsValueT;
 
 struct IntsValue;
 struct IntsValueBuilder;
-struct IntsValueT;
 
 struct Param;
 struct ParamBuilder;
-struct ParamT;
 
 struct Group;
 struct GroupBuilder;
-struct GroupT;
 
 struct Panel;
 struct PanelBuilder;
-struct PanelT;
 
 struct Toggle;
 struct ToggleBuilder;
-struct ToggleT;
 
 struct Number;
 struct NumberBuilder;
-struct NumberT;
 
 struct TextField;
 struct TextFieldBuilder;
-struct TextFieldT;
 
 struct Option;
 struct OptionBuilder;
-struct OptionT;
 
 struct Choice;
 struct ChoiceBuilder;
-struct ChoiceT;
 
 struct Color;
 struct ColorBuilder;
-struct ColorT;
 
 struct Reference;
 struct ReferenceBuilder;
-struct ReferenceT;
 
 struct Button;
 struct ButtonBuilder;
-struct ButtonT;
 
 struct MenuButton;
 struct MenuButtonBuilder;
-struct MenuButtonT;
 
 struct Label;
 struct LabelBuilder;
-struct LabelT;
 
 struct Separator;
 struct SeparatorBuilder;
-struct SeparatorT;
 
 struct List;
 struct ListBuilder;
-struct ListT;
 
 struct Row;
 struct RowBuilder;
-struct RowT;
 
 struct Picture;
 struct PictureBuilder;
-struct PictureT;
 
 struct Menu;
 struct MenuBuilder;
-struct MenuT;
 
 struct Node;
 struct NodeBuilder;
-struct NodeT;
+
+struct NodeBuffer;
+struct NodeBufferBuilder;
+
+struct Children;
+struct ChildrenBuilder;
 
 struct Update;
 struct UpdateBuilder;
-struct UpdateT;
 
 struct Ack;
 struct AckBuilder;
-struct AckT;
 
 struct Updates;
 struct UpdatesBuilder;
-struct UpdatesT;
 
 struct Subscribe;
 struct SubscribeBuilder;
-struct SubscribeT;
 
 struct Command;
 struct CommandBuilder;
-struct CommandT;
 
 struct Commands;
 struct CommandsBuilder;
-struct CommandsT;
-
-bool operator==(const BoolValueT &lhs, const BoolValueT &rhs);
-bool operator!=(const BoolValueT &lhs, const BoolValueT &rhs);
-bool operator==(const IntValueT &lhs, const IntValueT &rhs);
-bool operator!=(const IntValueT &lhs, const IntValueT &rhs);
-bool operator==(const FloatValueT &lhs, const FloatValueT &rhs);
-bool operator!=(const FloatValueT &lhs, const FloatValueT &rhs);
-bool operator==(const TextValueT &lhs, const TextValueT &rhs);
-bool operator!=(const TextValueT &lhs, const TextValueT &rhs);
-bool operator==(const FloatsValueT &lhs, const FloatsValueT &rhs);
-bool operator!=(const FloatsValueT &lhs, const FloatsValueT &rhs);
-bool operator==(const IntsValueT &lhs, const IntsValueT &rhs);
-bool operator!=(const IntsValueT &lhs, const IntsValueT &rhs);
-bool operator==(const ParamT &lhs, const ParamT &rhs);
-bool operator!=(const ParamT &lhs, const ParamT &rhs);
-bool operator==(const GroupT &lhs, const GroupT &rhs);
-bool operator!=(const GroupT &lhs, const GroupT &rhs);
-bool operator==(const PanelT &lhs, const PanelT &rhs);
-bool operator!=(const PanelT &lhs, const PanelT &rhs);
-bool operator==(const ToggleT &lhs, const ToggleT &rhs);
-bool operator!=(const ToggleT &lhs, const ToggleT &rhs);
-bool operator==(const NumberT &lhs, const NumberT &rhs);
-bool operator!=(const NumberT &lhs, const NumberT &rhs);
-bool operator==(const TextFieldT &lhs, const TextFieldT &rhs);
-bool operator!=(const TextFieldT &lhs, const TextFieldT &rhs);
-bool operator==(const OptionT &lhs, const OptionT &rhs);
-bool operator!=(const OptionT &lhs, const OptionT &rhs);
-bool operator==(const ChoiceT &lhs, const ChoiceT &rhs);
-bool operator!=(const ChoiceT &lhs, const ChoiceT &rhs);
-bool operator==(const ColorT &lhs, const ColorT &rhs);
-bool operator!=(const ColorT &lhs, const ColorT &rhs);
-bool operator==(const ReferenceT &lhs, const ReferenceT &rhs);
-bool operator!=(const ReferenceT &lhs, const ReferenceT &rhs);
-bool operator==(const ButtonT &lhs, const ButtonT &rhs);
-bool operator!=(const ButtonT &lhs, const ButtonT &rhs);
-bool operator==(const MenuButtonT &lhs, const MenuButtonT &rhs);
-bool operator!=(const MenuButtonT &lhs, const MenuButtonT &rhs);
-bool operator==(const LabelT &lhs, const LabelT &rhs);
-bool operator!=(const LabelT &lhs, const LabelT &rhs);
-bool operator==(const SeparatorT &lhs, const SeparatorT &rhs);
-bool operator!=(const SeparatorT &lhs, const SeparatorT &rhs);
-bool operator==(const ListT &lhs, const ListT &rhs);
-bool operator!=(const ListT &lhs, const ListT &rhs);
-bool operator==(const RowT &lhs, const RowT &rhs);
-bool operator!=(const RowT &lhs, const RowT &rhs);
-bool operator==(const PictureT &lhs, const PictureT &rhs);
-bool operator!=(const PictureT &lhs, const PictureT &rhs);
-bool operator==(const MenuT &lhs, const MenuT &rhs);
-bool operator!=(const MenuT &lhs, const MenuT &rhs);
-bool operator==(const NodeT &lhs, const NodeT &rhs);
-bool operator!=(const NodeT &lhs, const NodeT &rhs);
-bool operator==(const UpdateT &lhs, const UpdateT &rhs);
-bool operator!=(const UpdateT &lhs, const UpdateT &rhs);
-bool operator==(const AckT &lhs, const AckT &rhs);
-bool operator!=(const AckT &lhs, const AckT &rhs);
-bool operator==(const UpdatesT &lhs, const UpdatesT &rhs);
-bool operator!=(const UpdatesT &lhs, const UpdatesT &rhs);
-bool operator==(const SubscribeT &lhs, const SubscribeT &rhs);
-bool operator!=(const SubscribeT &lhs, const SubscribeT &rhs);
-bool operator==(const CommandT &lhs, const CommandT &rhs);
-bool operator!=(const CommandT &lhs, const CommandT &rhs);
-bool operator==(const CommandsT &lhs, const CommandsT &rhs);
-bool operator!=(const CommandsT &lhs, const CommandsT &rhs);
 
 /// A value of a field, of a command, or of a view's parameter.
 enum class Value : uint8_t {
@@ -276,155 +188,6 @@ template<> struct ValueTraits<Blender::NativeUI::FloatsValue> {
 template<> struct ValueTraits<Blender::NativeUI::IntsValue> {
   static const Value enum_value = Value::IntsValue;
 };
-
-template<typename T> struct ValueUnionTraits {
-  static const Value enum_value = Value::NONE;
-};
-
-template<> struct ValueUnionTraits<Blender::NativeUI::BoolValueT> {
-  static const Value enum_value = Value::BoolValue;
-};
-
-template<> struct ValueUnionTraits<Blender::NativeUI::IntValueT> {
-  static const Value enum_value = Value::IntValue;
-};
-
-template<> struct ValueUnionTraits<Blender::NativeUI::FloatValueT> {
-  static const Value enum_value = Value::FloatValue;
-};
-
-template<> struct ValueUnionTraits<Blender::NativeUI::TextValueT> {
-  static const Value enum_value = Value::TextValue;
-};
-
-template<> struct ValueUnionTraits<Blender::NativeUI::FloatsValueT> {
-  static const Value enum_value = Value::FloatsValue;
-};
-
-template<> struct ValueUnionTraits<Blender::NativeUI::IntsValueT> {
-  static const Value enum_value = Value::IntsValue;
-};
-
-struct ValueUnion {
-  Value type;
-  void *value;
-
-  ValueUnion() : type(Value::NONE), value(nullptr) {}
-  ValueUnion(ValueUnion&& u) FLATBUFFERS_NOEXCEPT :
-    type(Value::NONE), value(nullptr)
-    { std::swap(type, u.type); std::swap(value, u.value); }
-  ValueUnion(const ValueUnion &);
-  ValueUnion &operator=(const ValueUnion &u)
-    { ValueUnion t(u); std::swap(type, t.type); std::swap(value, t.value); return *this; }
-  ValueUnion &operator=(ValueUnion &&u) FLATBUFFERS_NOEXCEPT
-    { std::swap(type, u.type); std::swap(value, u.value); return *this; }
-  ~ValueUnion() { Reset(); }
-
-  void Reset();
-
-  template <typename T>
-  void Set(T&& val) {
-    typedef typename std::remove_reference<T>::type RT;
-    Reset();
-    type = ValueUnionTraits<RT>::enum_value;
-    if (type != Value::NONE) {
-      value = new RT(std::forward<T>(val));
-    }
-  }
-
-  static void *UnPack(const void *obj, Value type, const ::flatbuffers::resolver_function_t *resolver);
-  ::flatbuffers::Offset<void> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr) const;
-
-  Blender::NativeUI::BoolValueT *AsBoolValue() {
-    return type == Value::BoolValue ?
-      reinterpret_cast<Blender::NativeUI::BoolValueT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::BoolValueT *AsBoolValue() const {
-    return type == Value::BoolValue ?
-      reinterpret_cast<const Blender::NativeUI::BoolValueT *>(value) : nullptr;
-  }
-  Blender::NativeUI::IntValueT *AsIntValue() {
-    return type == Value::IntValue ?
-      reinterpret_cast<Blender::NativeUI::IntValueT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::IntValueT *AsIntValue() const {
-    return type == Value::IntValue ?
-      reinterpret_cast<const Blender::NativeUI::IntValueT *>(value) : nullptr;
-  }
-  Blender::NativeUI::FloatValueT *AsFloatValue() {
-    return type == Value::FloatValue ?
-      reinterpret_cast<Blender::NativeUI::FloatValueT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::FloatValueT *AsFloatValue() const {
-    return type == Value::FloatValue ?
-      reinterpret_cast<const Blender::NativeUI::FloatValueT *>(value) : nullptr;
-  }
-  Blender::NativeUI::TextValueT *AsTextValue() {
-    return type == Value::TextValue ?
-      reinterpret_cast<Blender::NativeUI::TextValueT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::TextValueT *AsTextValue() const {
-    return type == Value::TextValue ?
-      reinterpret_cast<const Blender::NativeUI::TextValueT *>(value) : nullptr;
-  }
-  Blender::NativeUI::FloatsValueT *AsFloatsValue() {
-    return type == Value::FloatsValue ?
-      reinterpret_cast<Blender::NativeUI::FloatsValueT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::FloatsValueT *AsFloatsValue() const {
-    return type == Value::FloatsValue ?
-      reinterpret_cast<const Blender::NativeUI::FloatsValueT *>(value) : nullptr;
-  }
-  Blender::NativeUI::IntsValueT *AsIntsValue() {
-    return type == Value::IntsValue ?
-      reinterpret_cast<Blender::NativeUI::IntsValueT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::IntsValueT *AsIntsValue() const {
-    return type == Value::IntsValue ?
-      reinterpret_cast<const Blender::NativeUI::IntsValueT *>(value) : nullptr;
-  }
-};
-
-
-inline bool operator==(const ValueUnion &lhs, const ValueUnion &rhs) {
-  if (lhs.type != rhs.type) return false;
-  switch (lhs.type) {
-    case Value::NONE: {
-      return true;
-    }
-    case Value::BoolValue: {
-      return *(reinterpret_cast<const Blender::NativeUI::BoolValueT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::BoolValueT *>(rhs.value));
-    }
-    case Value::IntValue: {
-      return *(reinterpret_cast<const Blender::NativeUI::IntValueT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::IntValueT *>(rhs.value));
-    }
-    case Value::FloatValue: {
-      return *(reinterpret_cast<const Blender::NativeUI::FloatValueT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::FloatValueT *>(rhs.value));
-    }
-    case Value::TextValue: {
-      return *(reinterpret_cast<const Blender::NativeUI::TextValueT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::TextValueT *>(rhs.value));
-    }
-    case Value::FloatsValue: {
-      return *(reinterpret_cast<const Blender::NativeUI::FloatsValueT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::FloatsValueT *>(rhs.value));
-    }
-    case Value::IntsValue: {
-      return *(reinterpret_cast<const Blender::NativeUI::IntsValueT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::IntsValueT *>(rhs.value));
-    }
-    default: {
-      return false;
-    }
-  }
-}
-
-inline bool operator!=(const ValueUnion &lhs, const ValueUnion &rhs) {
-    return !(lhs == rhs);
-}
 
 bool VerifyValue(::flatbuffers::Verifier &verifier, const void *obj, Value type);
 bool VerifyValueVector(::flatbuffers::Verifier &verifier, const ::flatbuffers::Vector<::flatbuffers::Offset<void>> *values, const ::flatbuffers::Vector<Value> *types);
@@ -784,315 +547,6 @@ template<> struct ContentTraits<Blender::NativeUI::Menu> {
   static const Content enum_value = Content::Menu;
 };
 
-template<typename T> struct ContentUnionTraits {
-  static const Content enum_value = Content::NONE;
-};
-
-template<> struct ContentUnionTraits<Blender::NativeUI::GroupT> {
-  static const Content enum_value = Content::Group;
-};
-
-template<> struct ContentUnionTraits<Blender::NativeUI::PanelT> {
-  static const Content enum_value = Content::Panel;
-};
-
-template<> struct ContentUnionTraits<Blender::NativeUI::ToggleT> {
-  static const Content enum_value = Content::Toggle;
-};
-
-template<> struct ContentUnionTraits<Blender::NativeUI::NumberT> {
-  static const Content enum_value = Content::Number;
-};
-
-template<> struct ContentUnionTraits<Blender::NativeUI::TextFieldT> {
-  static const Content enum_value = Content::TextField;
-};
-
-template<> struct ContentUnionTraits<Blender::NativeUI::ChoiceT> {
-  static const Content enum_value = Content::Choice;
-};
-
-template<> struct ContentUnionTraits<Blender::NativeUI::ColorT> {
-  static const Content enum_value = Content::Color;
-};
-
-template<> struct ContentUnionTraits<Blender::NativeUI::ReferenceT> {
-  static const Content enum_value = Content::Reference;
-};
-
-template<> struct ContentUnionTraits<Blender::NativeUI::ButtonT> {
-  static const Content enum_value = Content::Button;
-};
-
-template<> struct ContentUnionTraits<Blender::NativeUI::MenuButtonT> {
-  static const Content enum_value = Content::MenuButton;
-};
-
-template<> struct ContentUnionTraits<Blender::NativeUI::LabelT> {
-  static const Content enum_value = Content::Label;
-};
-
-template<> struct ContentUnionTraits<Blender::NativeUI::SeparatorT> {
-  static const Content enum_value = Content::Separator;
-};
-
-template<> struct ContentUnionTraits<Blender::NativeUI::ListT> {
-  static const Content enum_value = Content::List;
-};
-
-template<> struct ContentUnionTraits<Blender::NativeUI::RowT> {
-  static const Content enum_value = Content::Row;
-};
-
-template<> struct ContentUnionTraits<Blender::NativeUI::PictureT> {
-  static const Content enum_value = Content::Picture;
-};
-
-template<> struct ContentUnionTraits<Blender::NativeUI::MenuT> {
-  static const Content enum_value = Content::Menu;
-};
-
-struct ContentUnion {
-  Content type;
-  void *value;
-
-  ContentUnion() : type(Content::NONE), value(nullptr) {}
-  ContentUnion(ContentUnion&& u) FLATBUFFERS_NOEXCEPT :
-    type(Content::NONE), value(nullptr)
-    { std::swap(type, u.type); std::swap(value, u.value); }
-  ContentUnion(const ContentUnion &);
-  ContentUnion &operator=(const ContentUnion &u)
-    { ContentUnion t(u); std::swap(type, t.type); std::swap(value, t.value); return *this; }
-  ContentUnion &operator=(ContentUnion &&u) FLATBUFFERS_NOEXCEPT
-    { std::swap(type, u.type); std::swap(value, u.value); return *this; }
-  ~ContentUnion() { Reset(); }
-
-  void Reset();
-
-  template <typename T>
-  void Set(T&& val) {
-    typedef typename std::remove_reference<T>::type RT;
-    Reset();
-    type = ContentUnionTraits<RT>::enum_value;
-    if (type != Content::NONE) {
-      value = new RT(std::forward<T>(val));
-    }
-  }
-
-  static void *UnPack(const void *obj, Content type, const ::flatbuffers::resolver_function_t *resolver);
-  ::flatbuffers::Offset<void> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr) const;
-
-  Blender::NativeUI::GroupT *AsGroup() {
-    return type == Content::Group ?
-      reinterpret_cast<Blender::NativeUI::GroupT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::GroupT *AsGroup() const {
-    return type == Content::Group ?
-      reinterpret_cast<const Blender::NativeUI::GroupT *>(value) : nullptr;
-  }
-  Blender::NativeUI::PanelT *AsPanel() {
-    return type == Content::Panel ?
-      reinterpret_cast<Blender::NativeUI::PanelT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::PanelT *AsPanel() const {
-    return type == Content::Panel ?
-      reinterpret_cast<const Blender::NativeUI::PanelT *>(value) : nullptr;
-  }
-  Blender::NativeUI::ToggleT *AsToggle() {
-    return type == Content::Toggle ?
-      reinterpret_cast<Blender::NativeUI::ToggleT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::ToggleT *AsToggle() const {
-    return type == Content::Toggle ?
-      reinterpret_cast<const Blender::NativeUI::ToggleT *>(value) : nullptr;
-  }
-  Blender::NativeUI::NumberT *AsNumber() {
-    return type == Content::Number ?
-      reinterpret_cast<Blender::NativeUI::NumberT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::NumberT *AsNumber() const {
-    return type == Content::Number ?
-      reinterpret_cast<const Blender::NativeUI::NumberT *>(value) : nullptr;
-  }
-  Blender::NativeUI::TextFieldT *AsTextField() {
-    return type == Content::TextField ?
-      reinterpret_cast<Blender::NativeUI::TextFieldT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::TextFieldT *AsTextField() const {
-    return type == Content::TextField ?
-      reinterpret_cast<const Blender::NativeUI::TextFieldT *>(value) : nullptr;
-  }
-  Blender::NativeUI::ChoiceT *AsChoice() {
-    return type == Content::Choice ?
-      reinterpret_cast<Blender::NativeUI::ChoiceT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::ChoiceT *AsChoice() const {
-    return type == Content::Choice ?
-      reinterpret_cast<const Blender::NativeUI::ChoiceT *>(value) : nullptr;
-  }
-  Blender::NativeUI::ColorT *AsColor() {
-    return type == Content::Color ?
-      reinterpret_cast<Blender::NativeUI::ColorT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::ColorT *AsColor() const {
-    return type == Content::Color ?
-      reinterpret_cast<const Blender::NativeUI::ColorT *>(value) : nullptr;
-  }
-  Blender::NativeUI::ReferenceT *AsReference() {
-    return type == Content::Reference ?
-      reinterpret_cast<Blender::NativeUI::ReferenceT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::ReferenceT *AsReference() const {
-    return type == Content::Reference ?
-      reinterpret_cast<const Blender::NativeUI::ReferenceT *>(value) : nullptr;
-  }
-  Blender::NativeUI::ButtonT *AsButton() {
-    return type == Content::Button ?
-      reinterpret_cast<Blender::NativeUI::ButtonT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::ButtonT *AsButton() const {
-    return type == Content::Button ?
-      reinterpret_cast<const Blender::NativeUI::ButtonT *>(value) : nullptr;
-  }
-  Blender::NativeUI::MenuButtonT *AsMenuButton() {
-    return type == Content::MenuButton ?
-      reinterpret_cast<Blender::NativeUI::MenuButtonT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::MenuButtonT *AsMenuButton() const {
-    return type == Content::MenuButton ?
-      reinterpret_cast<const Blender::NativeUI::MenuButtonT *>(value) : nullptr;
-  }
-  Blender::NativeUI::LabelT *AsLabel() {
-    return type == Content::Label ?
-      reinterpret_cast<Blender::NativeUI::LabelT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::LabelT *AsLabel() const {
-    return type == Content::Label ?
-      reinterpret_cast<const Blender::NativeUI::LabelT *>(value) : nullptr;
-  }
-  Blender::NativeUI::SeparatorT *AsSeparator() {
-    return type == Content::Separator ?
-      reinterpret_cast<Blender::NativeUI::SeparatorT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::SeparatorT *AsSeparator() const {
-    return type == Content::Separator ?
-      reinterpret_cast<const Blender::NativeUI::SeparatorT *>(value) : nullptr;
-  }
-  Blender::NativeUI::ListT *AsList() {
-    return type == Content::List ?
-      reinterpret_cast<Blender::NativeUI::ListT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::ListT *AsList() const {
-    return type == Content::List ?
-      reinterpret_cast<const Blender::NativeUI::ListT *>(value) : nullptr;
-  }
-  Blender::NativeUI::RowT *AsRow() {
-    return type == Content::Row ?
-      reinterpret_cast<Blender::NativeUI::RowT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::RowT *AsRow() const {
-    return type == Content::Row ?
-      reinterpret_cast<const Blender::NativeUI::RowT *>(value) : nullptr;
-  }
-  Blender::NativeUI::PictureT *AsPicture() {
-    return type == Content::Picture ?
-      reinterpret_cast<Blender::NativeUI::PictureT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::PictureT *AsPicture() const {
-    return type == Content::Picture ?
-      reinterpret_cast<const Blender::NativeUI::PictureT *>(value) : nullptr;
-  }
-  Blender::NativeUI::MenuT *AsMenu() {
-    return type == Content::Menu ?
-      reinterpret_cast<Blender::NativeUI::MenuT *>(value) : nullptr;
-  }
-  const Blender::NativeUI::MenuT *AsMenu() const {
-    return type == Content::Menu ?
-      reinterpret_cast<const Blender::NativeUI::MenuT *>(value) : nullptr;
-  }
-};
-
-
-inline bool operator==(const ContentUnion &lhs, const ContentUnion &rhs) {
-  if (lhs.type != rhs.type) return false;
-  switch (lhs.type) {
-    case Content::NONE: {
-      return true;
-    }
-    case Content::Group: {
-      return *(reinterpret_cast<const Blender::NativeUI::GroupT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::GroupT *>(rhs.value));
-    }
-    case Content::Panel: {
-      return *(reinterpret_cast<const Blender::NativeUI::PanelT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::PanelT *>(rhs.value));
-    }
-    case Content::Toggle: {
-      return *(reinterpret_cast<const Blender::NativeUI::ToggleT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::ToggleT *>(rhs.value));
-    }
-    case Content::Number: {
-      return *(reinterpret_cast<const Blender::NativeUI::NumberT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::NumberT *>(rhs.value));
-    }
-    case Content::TextField: {
-      return *(reinterpret_cast<const Blender::NativeUI::TextFieldT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::TextFieldT *>(rhs.value));
-    }
-    case Content::Choice: {
-      return *(reinterpret_cast<const Blender::NativeUI::ChoiceT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::ChoiceT *>(rhs.value));
-    }
-    case Content::Color: {
-      return *(reinterpret_cast<const Blender::NativeUI::ColorT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::ColorT *>(rhs.value));
-    }
-    case Content::Reference: {
-      return *(reinterpret_cast<const Blender::NativeUI::ReferenceT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::ReferenceT *>(rhs.value));
-    }
-    case Content::Button: {
-      return *(reinterpret_cast<const Blender::NativeUI::ButtonT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::ButtonT *>(rhs.value));
-    }
-    case Content::MenuButton: {
-      return *(reinterpret_cast<const Blender::NativeUI::MenuButtonT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::MenuButtonT *>(rhs.value));
-    }
-    case Content::Label: {
-      return *(reinterpret_cast<const Blender::NativeUI::LabelT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::LabelT *>(rhs.value));
-    }
-    case Content::Separator: {
-      return *(reinterpret_cast<const Blender::NativeUI::SeparatorT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::SeparatorT *>(rhs.value));
-    }
-    case Content::List: {
-      return *(reinterpret_cast<const Blender::NativeUI::ListT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::ListT *>(rhs.value));
-    }
-    case Content::Row: {
-      return *(reinterpret_cast<const Blender::NativeUI::RowT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::RowT *>(rhs.value));
-    }
-    case Content::Picture: {
-      return *(reinterpret_cast<const Blender::NativeUI::PictureT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::PictureT *>(rhs.value));
-    }
-    case Content::Menu: {
-      return *(reinterpret_cast<const Blender::NativeUI::MenuT *>(lhs.value)) ==
-             *(reinterpret_cast<const Blender::NativeUI::MenuT *>(rhs.value));
-    }
-    default: {
-      return false;
-    }
-  }
-}
-
-inline bool operator!=(const ContentUnion &lhs, const ContentUnion &rhs) {
-    return !(lhs == rhs);
-}
-
 bool VerifyContent(::flatbuffers::Verifier &verifier, const void *obj, Content type);
 bool VerifyContentVector(::flatbuffers::Verifier &verifier, const ::flatbuffers::Vector<::flatbuffers::Offset<void>> *values, const ::flatbuffers::Vector<Content> *types);
 
@@ -1244,13 +698,7 @@ inline const char *EnumNamePhase(Phase e) {
   return EnumNamesPhase()[index];
 }
 
-struct BoolValueT : public ::flatbuffers::NativeTable {
-  typedef BoolValue TableType;
-  bool value = false;
-};
-
 struct BoolValue FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef BoolValueT NativeTableType;
   typedef BoolValueBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -1264,9 +712,6 @@ struct BoolValue FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_VALUE, 1) &&
            verifier.EndTable();
   }
-  BoolValueT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(BoolValueT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<BoolValue> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const BoolValueT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct BoolValueBuilder {
@@ -1300,15 +745,7 @@ struct BoolValue::Traits {
   static auto constexpr Create = CreateBoolValue;
 };
 
-::flatbuffers::Offset<BoolValue> CreateBoolValue(::flatbuffers::FlatBufferBuilder &_fbb, const BoolValueT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct IntValueT : public ::flatbuffers::NativeTable {
-  typedef IntValue TableType;
-  int64_t value = 0;
-};
-
 struct IntValue FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef IntValueT NativeTableType;
   typedef IntValueBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -1322,9 +759,6 @@ struct IntValue FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<int64_t>(verifier, VT_VALUE, 8) &&
            verifier.EndTable();
   }
-  IntValueT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(IntValueT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<IntValue> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const IntValueT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct IntValueBuilder {
@@ -1358,15 +792,7 @@ struct IntValue::Traits {
   static auto constexpr Create = CreateIntValue;
 };
 
-::flatbuffers::Offset<IntValue> CreateIntValue(::flatbuffers::FlatBufferBuilder &_fbb, const IntValueT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct FloatValueT : public ::flatbuffers::NativeTable {
-  typedef FloatValue TableType;
-  double value = 0.0;
-};
-
 struct FloatValue FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef FloatValueT NativeTableType;
   typedef FloatValueBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -1380,9 +806,6 @@ struct FloatValue FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<double>(verifier, VT_VALUE, 8) &&
            verifier.EndTable();
   }
-  FloatValueT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(FloatValueT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<FloatValue> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const FloatValueT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct FloatValueBuilder {
@@ -1416,15 +839,7 @@ struct FloatValue::Traits {
   static auto constexpr Create = CreateFloatValue;
 };
 
-::flatbuffers::Offset<FloatValue> CreateFloatValue(::flatbuffers::FlatBufferBuilder &_fbb, const FloatValueT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct TextValueT : public ::flatbuffers::NativeTable {
-  typedef TextValue TableType;
-  std::string value{};
-};
-
 struct TextValue FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef TextValueT NativeTableType;
   typedef TextValueBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -1439,9 +854,6 @@ struct TextValue FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyString(value()) &&
            verifier.EndTable();
   }
-  TextValueT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(TextValueT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<TextValue> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TextValueT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct TextValueBuilder {
@@ -1484,15 +896,7 @@ inline ::flatbuffers::Offset<TextValue> CreateTextValueDirect(
       value__);
 }
 
-::flatbuffers::Offset<TextValue> CreateTextValue(::flatbuffers::FlatBufferBuilder &_fbb, const TextValueT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct FloatsValueT : public ::flatbuffers::NativeTable {
-  typedef FloatsValue TableType;
-  std::vector<double> value{};
-};
-
 struct FloatsValue FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef FloatsValueT NativeTableType;
   typedef FloatsValueBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -1507,9 +911,6 @@ struct FloatsValue FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyVector(value()) &&
            verifier.EndTable();
   }
-  FloatsValueT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(FloatsValueT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<FloatsValue> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const FloatsValueT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct FloatsValueBuilder {
@@ -1552,15 +953,7 @@ inline ::flatbuffers::Offset<FloatsValue> CreateFloatsValueDirect(
       value__);
 }
 
-::flatbuffers::Offset<FloatsValue> CreateFloatsValue(::flatbuffers::FlatBufferBuilder &_fbb, const FloatsValueT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct IntsValueT : public ::flatbuffers::NativeTable {
-  typedef IntsValue TableType;
-  std::vector<int64_t> value{};
-};
-
 struct IntsValue FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef IntsValueT NativeTableType;
   typedef IntsValueBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -1575,9 +968,6 @@ struct IntsValue FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyVector(value()) &&
            verifier.EndTable();
   }
-  IntsValueT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(IntsValueT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<IntsValue> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const IntsValueT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct IntsValueBuilder {
@@ -1620,17 +1010,8 @@ inline ::flatbuffers::Offset<IntsValue> CreateIntsValueDirect(
       value__);
 }
 
-::flatbuffers::Offset<IntsValue> CreateIntsValue(::flatbuffers::FlatBufferBuilder &_fbb, const IntsValueT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct ParamT : public ::flatbuffers::NativeTable {
-  typedef Param TableType;
-  std::string key{};
-  Blender::NativeUI::ValueUnion value{};
-};
-
 /// A named value, such as a view's parameter.
 struct Param FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef ParamT NativeTableType;
   typedef ParamBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -1675,9 +1056,6 @@ struct Param FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyValue(verifier, value(), value_type()) &&
            verifier.EndTable();
   }
-  ParamT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(ParamT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Param> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ParamT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 template<> inline const Blender::NativeUI::BoolValue *Param::value_as<Blender::NativeUI::BoolValue>() const {
@@ -1759,16 +1137,8 @@ inline ::flatbuffers::Offset<Param> CreateParamDirect(
       value);
 }
 
-::flatbuffers::Offset<Param> CreateParam(::flatbuffers::FlatBufferBuilder &_fbb, const ParamT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct GroupT : public ::flatbuffers::NativeTable {
-  typedef Group TableType;
-  Blender::NativeUI::Layout layout = Blender::NativeUI::Layout::Column;
-};
-
 /// A group of controls: the whole of a view, a panel's body, or a row.
 struct Group FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef GroupT NativeTableType;
   typedef GroupBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -1782,9 +1152,6 @@ struct Group FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_LAYOUT, 1) &&
            verifier.EndTable();
   }
-  GroupT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(GroupT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Group> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const GroupT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct GroupBuilder {
@@ -1818,19 +1185,9 @@ struct Group::Traits {
   static auto constexpr Create = CreateGroup;
 };
 
-::flatbuffers::Offset<Group> CreateGroup(::flatbuffers::FlatBufferBuilder &_fbb, const GroupT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct PanelT : public ::flatbuffers::NativeTable {
-  typedef Panel TableType;
-  bool open = true;
-  bool fixed = false;
-  std::vector<std::string> header{};
-};
-
 /// A panel, which can be opened and closed. Its controls are its children; those of its header
 /// are listed in `header`.
 struct Panel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef PanelT NativeTableType;
   typedef PanelBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -1858,9 +1215,6 @@ struct Panel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyVectorOfStrings(header()) &&
            verifier.EndTable();
   }
-  PanelT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(PanelT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Panel> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const PanelT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct PanelBuilder {
@@ -1917,17 +1271,8 @@ inline ::flatbuffers::Offset<Panel> CreatePanelDirect(
       header__);
 }
 
-::flatbuffers::Offset<Panel> CreatePanel(::flatbuffers::FlatBufferBuilder &_fbb, const PanelT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct ToggleT : public ::flatbuffers::NativeTable {
-  typedef Toggle TableType;
-  bool value = false;
-  bool button = false;
-};
-
 /// A switch.
 struct Toggle FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef ToggleT NativeTableType;
   typedef ToggleBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -1947,9 +1292,6 @@ struct Toggle FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_BUTTON, 1) &&
            verifier.EndTable();
   }
-  ToggleT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(ToggleT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Toggle> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ToggleT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct ToggleBuilder {
@@ -1988,26 +1330,8 @@ struct Toggle::Traits {
   static auto constexpr Create = CreateToggle;
 };
 
-::flatbuffers::Offset<Toggle> CreateToggle(::flatbuffers::FlatBufferBuilder &_fbb, const ToggleT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct NumberT : public ::flatbuffers::NativeTable {
-  typedef Number TableType;
-  double value = 0.0;
-  bool integer = false;
-  Blender::NativeUI::NumberKind kind = Blender::NativeUI::NumberKind::Plain;
-  double min = -std::numeric_limits<double>::infinity();
-  double max = std::numeric_limits<double>::infinity();
-  double soft_min = -std::numeric_limits<double>::infinity();
-  double soft_max = std::numeric_limits<double>::infinity();
-  double step = 0.0;
-  uint8_t precision = 3;
-  bool slider = false;
-  Blender::NativeUI::Scale scale = Blender::NativeUI::Scale::Linear;
-};
-
 /// A number.
 struct Number FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef NumberT NativeTableType;
   typedef NumberBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -2076,9 +1400,6 @@ struct Number FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_SCALE, 1) &&
            verifier.EndTable();
   }
-  NumberT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(NumberT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Number> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const NumberT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct NumberBuilder {
@@ -2162,18 +1483,8 @@ struct Number::Traits {
   static auto constexpr Create = CreateNumber;
 };
 
-::flatbuffers::Offset<Number> CreateNumber(::flatbuffers::FlatBufferBuilder &_fbb, const NumberT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct TextFieldT : public ::flatbuffers::NativeTable {
-  typedef TextField TableType;
-  std::string value{};
-  bool multiline = false;
-  bool path = false;
-};
-
 /// Text.
 struct TextField FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef TextFieldT NativeTableType;
   typedef TextFieldBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -2199,9 +1510,6 @@ struct TextField FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_PATH, 1) &&
            verifier.EndTable();
   }
-  TextFieldT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(TextFieldT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<TextField> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TextFieldT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct TextFieldBuilder {
@@ -2258,20 +1566,8 @@ inline ::flatbuffers::Offset<TextField> CreateTextFieldDirect(
       path);
 }
 
-::flatbuffers::Offset<TextField> CreateTextField(::flatbuffers::FlatBufferBuilder &_fbb, const TextFieldT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct OptionT : public ::flatbuffers::NativeTable {
-  typedef Option TableType;
-  std::string value{};
-  std::string label{};
-  std::string icon{};
-  std::string preview{};
-  std::string description{};
-};
-
 /// One choice of a `Choice`, or a heading between groups of them.
 struct Option FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef OptionT NativeTableType;
   typedef OptionBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -2312,9 +1608,6 @@ struct Option FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyString(description()) &&
            verifier.EndTable();
   }
-  OptionT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(OptionT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Option> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const OptionT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct OptionBuilder {
@@ -2389,23 +1682,8 @@ inline ::flatbuffers::Offset<Option> CreateOptionDirect(
       description__);
 }
 
-::flatbuffers::Offset<Option> CreateOption(::flatbuffers::FlatBufferBuilder &_fbb, const OptionT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct ChoiceT : public ::flatbuffers::NativeTable {
-  typedef Choice TableType;
-  std::string value{};
-  std::vector<std::unique_ptr<Blender::NativeUI::OptionT>> options{};
-  Blender::NativeUI::ChoiceStyle style = Blender::NativeUI::ChoiceStyle::Menu;
-  bool multiple = false;
-  ChoiceT() = default;
-  ChoiceT(const ChoiceT &o);
-  ChoiceT(ChoiceT&&) FLATBUFFERS_NOEXCEPT = default;
-  ChoiceT &operator=(ChoiceT o) FLATBUFFERS_NOEXCEPT;
-};
-
 /// A choice of options, such as an enum.
 struct Choice FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef ChoiceT NativeTableType;
   typedef ChoiceBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -2439,9 +1717,6 @@ struct Choice FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_MULTIPLE, 1) &&
            verifier.EndTable();
   }
-  ChoiceT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(ChoiceT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Choice> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ChoiceT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct ChoiceBuilder {
@@ -2506,17 +1781,8 @@ inline ::flatbuffers::Offset<Choice> CreateChoiceDirect(
       multiple);
 }
 
-::flatbuffers::Offset<Choice> CreateChoice(::flatbuffers::FlatBufferBuilder &_fbb, const ChoiceT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct ColorT : public ::flatbuffers::NativeTable {
-  typedef Color TableType;
-  std::vector<double> value{};
-  bool alpha = false;
-};
-
 /// A color.
 struct Color FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef ColorT NativeTableType;
   typedef ColorBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -2537,9 +1803,6 @@ struct Color FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_ALPHA, 1) &&
            verifier.EndTable();
   }
-  ColorT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(ColorT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Color> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ColorT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct ColorBuilder {
@@ -2589,29 +1852,8 @@ inline ::flatbuffers::Offset<Color> CreateColorDirect(
       alpha);
 }
 
-::flatbuffers::Offset<Color> CreateColor(::flatbuffers::FlatBufferBuilder &_fbb, const ColorT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct ReferenceT : public ::flatbuffers::NativeTable {
-  typedef Reference TableType;
-  std::string type{};
-  std::string name{};
-  std::string value{};
-  int32_t users = 0;
-  bool linked = false;
-  bool fake_user = false;
-  bool can_new = false;
-  bool can_unlink = false;
-  bool can_single_user = false;
-  std::vector<std::unique_ptr<Blender::NativeUI::OptionT>> options{};
-  ReferenceT() = default;
-  ReferenceT(const ReferenceT &o);
-  ReferenceT(ReferenceT&&) FLATBUFFERS_NOEXCEPT = default;
-  ReferenceT &operator=(ReferenceT o) FLATBUFFERS_NOEXCEPT;
-};
-
 /// A data-block chosen for a property, such as an object's material.
 struct Reference FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef ReferenceT NativeTableType;
   typedef ReferenceBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -2680,9 +1922,6 @@ struct Reference FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyVectorOfTables(options()) &&
            verifier.EndTable();
   }
-  ReferenceT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(ReferenceT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Reference> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ReferenceT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct ReferenceBuilder {
@@ -2791,16 +2030,8 @@ inline ::flatbuffers::Offset<Reference> CreateReferenceDirect(
       options__);
 }
 
-::flatbuffers::Offset<Reference> CreateReference(::flatbuffers::FlatBufferBuilder &_fbb, const ReferenceT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct ButtonT : public ::flatbuffers::NativeTable {
-  typedef Button TableType;
-  Blender::NativeUI::ButtonStyle style = Blender::NativeUI::ButtonStyle::Normal;
-};
-
 /// A button, which runs something when invoked.
 struct Button FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef ButtonT NativeTableType;
   typedef ButtonBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -2814,9 +2045,6 @@ struct Button FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_STYLE, 1) &&
            verifier.EndTable();
   }
-  ButtonT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(ButtonT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Button> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ButtonT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct ButtonBuilder {
@@ -2850,21 +2078,8 @@ struct Button::Traits {
   static auto constexpr Create = CreateButton;
 };
 
-::flatbuffers::Offset<Button> CreateButton(::flatbuffers::FlatBufferBuilder &_fbb, const ButtonT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct MenuButtonT : public ::flatbuffers::NativeTable {
-  typedef MenuButton TableType;
-  std::string view{};
-  std::vector<std::unique_ptr<Blender::NativeUI::ParamT>> params{};
-  MenuButtonT() = default;
-  MenuButtonT(const MenuButtonT &o);
-  MenuButtonT(MenuButtonT&&) FLATBUFFERS_NOEXCEPT = default;
-  MenuButtonT &operator=(MenuButtonT o) FLATBUFFERS_NOEXCEPT;
-};
-
 /// A button that opens a menu, a view of its own named here.
 struct MenuButton FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef MenuButtonT NativeTableType;
   typedef MenuButtonBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -2887,9 +2102,6 @@ struct MenuButton FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyVectorOfTables(params()) &&
            verifier.EndTable();
   }
-  MenuButtonT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(MenuButtonT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<MenuButton> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const MenuButtonT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct MenuButtonBuilder {
@@ -2940,16 +2152,8 @@ inline ::flatbuffers::Offset<MenuButton> CreateMenuButtonDirect(
       params__);
 }
 
-::flatbuffers::Offset<MenuButton> CreateMenuButton(::flatbuffers::FlatBufferBuilder &_fbb, const MenuButtonT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct LabelT : public ::flatbuffers::NativeTable {
-  typedef Label TableType;
-  std::string value{};
-};
-
 /// Text that cannot be edited, such as a property shown for information.
 struct Label FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef LabelT NativeTableType;
   typedef LabelBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -2964,9 +2168,6 @@ struct Label FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyString(value()) &&
            verifier.EndTable();
   }
-  LabelT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(LabelT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Label> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const LabelT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct LabelBuilder {
@@ -3009,24 +2210,14 @@ inline ::flatbuffers::Offset<Label> CreateLabelDirect(
       value__);
 }
 
-::flatbuffers::Offset<Label> CreateLabel(::flatbuffers::FlatBufferBuilder &_fbb, const LabelT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct SeparatorT : public ::flatbuffers::NativeTable {
-  typedef Separator TableType;
-};
-
 /// A line between controls.
 struct Separator FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef SeparatorT NativeTableType;
   typedef SeparatorBuilder Builder;
   struct Traits;
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            verifier.EndTable();
   }
-  SeparatorT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(SeparatorT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Separator> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const SeparatorT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct SeparatorBuilder {
@@ -3055,21 +2246,9 @@ struct Separator::Traits {
   static auto constexpr Create = CreateSeparator;
 };
 
-::flatbuffers::Offset<Separator> CreateSeparator(::flatbuffers::FlatBufferBuilder &_fbb, const SeparatorT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct ListT : public ::flatbuffers::NativeTable {
-  typedef List TableType;
-  std::string active{};
-  bool can_add = false;
-  bool can_remove = false;
-  bool can_reorder = false;
-  bool tree = false;
-};
-
 /// A list of items, such as material slots or shape keys: its rows are its children, each with
 /// controls of its own.
 struct List FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef ListT NativeTableType;
   typedef ListBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -3106,9 +2285,6 @@ struct List FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_TREE, 1) &&
            verifier.EndTable();
   }
-  ListT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(ListT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<List> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ListT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct ListBuilder {
@@ -3179,19 +2355,8 @@ inline ::flatbuffers::Offset<List> CreateListDirect(
       tree);
 }
 
-::flatbuffers::Offset<List> CreateList(::flatbuffers::FlatBufferBuilder &_fbb, const ListT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct RowT : public ::flatbuffers::NativeTable {
-  typedef Row TableType;
-  int32_t depth = 0;
-  bool selected = false;
-  bool renamable = false;
-  std::string preview{};
-};
-
 /// A row of a list.
 struct Row FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef RowT NativeTableType;
   typedef RowBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -3223,9 +2388,6 @@ struct Row FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyString(preview()) &&
            verifier.EndTable();
   }
-  RowT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(RowT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Row> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const RowT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct RowBuilder {
@@ -3289,16 +2451,8 @@ inline ::flatbuffers::Offset<Row> CreateRowDirect(
       preview__);
 }
 
-::flatbuffers::Offset<Row> CreateRow(::flatbuffers::FlatBufferBuilder &_fbb, const RowT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct PictureT : public ::flatbuffers::NativeTable {
-  typedef Picture TableType;
-  std::string image{};
-};
-
 /// A picture, such as a material's rendered preview.
 struct Picture FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef PictureT NativeTableType;
   typedef PictureBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -3313,9 +2467,6 @@ struct Picture FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyString(image()) &&
            verifier.EndTable();
   }
-  PictureT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(PictureT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Picture> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const PictureT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct PictureBuilder {
@@ -3358,24 +2509,14 @@ inline ::flatbuffers::Offset<Picture> CreatePictureDirect(
       image__);
 }
 
-::flatbuffers::Offset<Picture> CreatePicture(::flatbuffers::FlatBufferBuilder &_fbb, const PictureT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct MenuT : public ::flatbuffers::NativeTable {
-  typedef Menu TableType;
-};
-
 /// A menu: its items are its children, controls like any other.
 struct Menu FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef MenuT NativeTableType;
   typedef MenuBuilder Builder;
   struct Traits;
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            verifier.EndTable();
   }
-  MenuT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(MenuT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Menu> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const MenuT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct MenuBuilder {
@@ -3404,48 +2545,27 @@ struct Menu::Traits {
   static auto constexpr Create = CreateMenu;
 };
 
-::flatbuffers::Offset<Menu> CreateMenu(::flatbuffers::FlatBufferBuilder &_fbb, const MenuT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct NodeT : public ::flatbuffers::NativeTable {
-  typedef Node TableType;
-  std::string key{};
-  std::vector<std::string> children{};
-  Blender::NativeUI::ContentUnion content{};
-  std::string label{};
-  std::string icon{};
-  std::string description{};
-  bool enabled = true;
-  bool mixed = false;
-  Blender::NativeUI::Animation animation = Blender::NativeUI::Animation::None;
-  std::string property{};
-};
-
-/// A node of a view: a control, a container of controls, or an item of a canvas.
+/// A node of a view: a control, a container of controls, or an item of a canvas. Its children
+/// are sent apart from it, see `Children`, so a change to one does not resend the others.
 struct Node FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef NodeT NativeTableType;
   typedef NodeBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_KEY = 4,
-    VT_CHILDREN = 6,
-    VT_CONTENT_TYPE = 8,
-    VT_CONTENT = 10,
-    VT_LABEL = 12,
-    VT_ICON = 14,
-    VT_DESCRIPTION = 16,
-    VT_ENABLED = 18,
-    VT_MIXED = 20,
-    VT_ANIMATION = 22,
-    VT_PROPERTY = 24
+    VT_CONTENT_TYPE = 6,
+    VT_CONTENT = 8,
+    VT_LABEL = 10,
+    VT_ICON = 12,
+    VT_DESCRIPTION = 14,
+    VT_ENABLED = 16,
+    VT_MIXED = 18,
+    VT_ANIMATION = 20,
+    VT_PROPERTY = 22
   };
   /// Stable within the view for as long as the node shows the same thing, such as a property's
   /// data path, so an interface keeps its state, and commands find it.
   const ::flatbuffers::String *key() const {
     return GetPointer<const ::flatbuffers::String *>(VT_KEY);
-  }
-  /// Its children's keys, in order.
-  const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *children() const {
-    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_CHILDREN);
   }
   Blender::NativeUI::Content content_type() const {
     return static_cast<Blender::NativeUI::Content>(GetField<uint8_t>(VT_CONTENT_TYPE, 0));
@@ -3532,9 +2652,6 @@ struct Node FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     return VerifyTableStart(verifier) &&
            VerifyOffsetRequired(verifier, VT_KEY) &&
            verifier.VerifyString(key()) &&
-           VerifyOffset(verifier, VT_CHILDREN) &&
-           verifier.VerifyVector(children()) &&
-           verifier.VerifyVectorOfStrings(children()) &&
            VerifyField<uint8_t>(verifier, VT_CONTENT_TYPE, 1) &&
            VerifyOffset(verifier, VT_CONTENT) &&
            VerifyContent(verifier, content(), content_type()) &&
@@ -3551,9 +2668,6 @@ struct Node FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyString(property()) &&
            verifier.EndTable();
   }
-  NodeT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(NodeT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Node> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const NodeT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 template<> inline const Blender::NativeUI::Group *Node::content_as<Blender::NativeUI::Group>() const {
@@ -3627,9 +2741,6 @@ struct NodeBuilder {
   void add_key(::flatbuffers::Offset<::flatbuffers::String> key) {
     fbb_.AddOffset(Node::VT_KEY, key);
   }
-  void add_children(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> children) {
-    fbb_.AddOffset(Node::VT_CHILDREN, children);
-  }
   void add_content_type(Blender::NativeUI::Content content_type) {
     fbb_.AddElement<uint8_t>(Node::VT_CONTENT_TYPE, static_cast<uint8_t>(content_type), 0);
   }
@@ -3672,7 +2783,6 @@ struct NodeBuilder {
 inline ::flatbuffers::Offset<Node> CreateNode(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     ::flatbuffers::Offset<::flatbuffers::String> key = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> children = 0,
     Blender::NativeUI::Content content_type = Blender::NativeUI::Content::NONE,
     ::flatbuffers::Offset<void> content = 0,
     ::flatbuffers::Offset<::flatbuffers::String> label = 0,
@@ -3688,7 +2798,6 @@ inline ::flatbuffers::Offset<Node> CreateNode(
   builder_.add_icon(icon);
   builder_.add_label(label);
   builder_.add_content(content);
-  builder_.add_children(children);
   builder_.add_key(key);
   builder_.add_animation(animation);
   builder_.add_mixed(mixed);
@@ -3705,7 +2814,6 @@ struct Node::Traits {
 inline ::flatbuffers::Offset<Node> CreateNodeDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     const char *key = nullptr,
-    const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *children = nullptr,
     Blender::NativeUI::Content content_type = Blender::NativeUI::Content::NONE,
     ::flatbuffers::Offset<void> content = 0,
     const char *label = nullptr,
@@ -3716,7 +2824,6 @@ inline ::flatbuffers::Offset<Node> CreateNodeDirect(
     Blender::NativeUI::Animation animation = Blender::NativeUI::Animation::None,
     const char *property = nullptr) {
   auto key__ = key ? _fbb.CreateString(key) : 0;
-  auto children__ = children ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*children) : 0;
   auto label__ = label ? _fbb.CreateString(label) : 0;
   auto icon__ = icon ? _fbb.CreateString(icon) : 0;
   auto description__ = description ? _fbb.CreateString(description) : 0;
@@ -3724,7 +2831,6 @@ inline ::flatbuffers::Offset<Node> CreateNodeDirect(
   return Blender::NativeUI::CreateNode(
       _fbb,
       key__,
-      children__,
       content_type,
       content,
       label__,
@@ -3736,25 +2842,148 @@ inline ::flatbuffers::Offset<Node> CreateNodeDirect(
       property__);
 }
 
-::flatbuffers::Offset<Node> CreateNode(::flatbuffers::FlatBufferBuilder &_fbb, const NodeT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct UpdateT : public ::flatbuffers::NativeTable {
-  typedef Update TableType;
-  uint32_t subscription = 0;
-  uint32_t version = 0;
-  bool reset = false;
-  std::string top{};
-  std::vector<std::unique_ptr<Blender::NativeUI::NodeT>> nodes{};
-  std::vector<std::string> removed{};
-  UpdateT() = default;
-  UpdateT(const UpdateT &o);
-  UpdateT(UpdateT&&) FLATBUFFERS_NOEXCEPT = default;
-  UpdateT &operator=(UpdateT o) FLATBUFFERS_NOEXCEPT;
+/// A node as sent: a buffer of its own, which an interface can keep without the rest of the
+/// update it came in.
+struct NodeBuffer FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef NodeBufferBuilder Builder;
+  struct Traits;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_NODE = 4
+  };
+  const ::flatbuffers::Vector<uint8_t> *node() const {
+    return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_NODE);
+  }
+  const Blender::NativeUI::Node *node_nested_root() const {
+    const auto _f = node();
+    return _f ? ::flatbuffers::GetRoot<Blender::NativeUI::Node>(_f->Data())
+              : nullptr;
+  }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffsetRequired(verifier, VT_NODE) &&
+           verifier.VerifyVector(node()) &&
+           verifier.VerifyNestedFlatBuffer<Blender::NativeUI::Node>(node(), nullptr) &&
+           verifier.EndTable();
+  }
 };
+
+struct NodeBufferBuilder {
+  typedef NodeBuffer Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_node(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> node) {
+    fbb_.AddOffset(NodeBuffer::VT_NODE, node);
+  }
+  explicit NodeBufferBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<NodeBuffer> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<NodeBuffer>(end);
+    fbb_.Required(o, NodeBuffer::VT_NODE);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<NodeBuffer> CreateNodeBuffer(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> node = 0) {
+  NodeBufferBuilder builder_(_fbb);
+  builder_.add_node(node);
+  return builder_.Finish();
+}
+
+struct NodeBuffer::Traits {
+  using type = NodeBuffer;
+  static auto constexpr Create = CreateNodeBuffer;
+};
+
+inline ::flatbuffers::Offset<NodeBuffer> CreateNodeBufferDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const std::vector<uint8_t> *node = nullptr) {
+  auto node__ = node ? _fbb.CreateVector<uint8_t>(*node) : 0;
+  return Blender::NativeUI::CreateNodeBuffer(
+      _fbb,
+      node__);
+}
+
+/// The children of a node, in order.
+struct Children FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ChildrenBuilder Builder;
+  struct Traits;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_PARENT = 4,
+    VT_KEYS = 6
+  };
+  const ::flatbuffers::String *parent() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_PARENT);
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *keys() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_KEYS);
+  }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffsetRequired(verifier, VT_PARENT) &&
+           verifier.VerifyString(parent()) &&
+           VerifyOffset(verifier, VT_KEYS) &&
+           verifier.VerifyVector(keys()) &&
+           verifier.VerifyVectorOfStrings(keys()) &&
+           verifier.EndTable();
+  }
+};
+
+struct ChildrenBuilder {
+  typedef Children Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_parent(::flatbuffers::Offset<::flatbuffers::String> parent) {
+    fbb_.AddOffset(Children::VT_PARENT, parent);
+  }
+  void add_keys(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> keys) {
+    fbb_.AddOffset(Children::VT_KEYS, keys);
+  }
+  explicit ChildrenBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<Children> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<Children>(end);
+    fbb_.Required(o, Children::VT_PARENT);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<Children> CreateChildren(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> parent = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> keys = 0) {
+  ChildrenBuilder builder_(_fbb);
+  builder_.add_keys(keys);
+  builder_.add_parent(parent);
+  return builder_.Finish();
+}
+
+struct Children::Traits {
+  using type = Children;
+  static auto constexpr Create = CreateChildren;
+};
+
+inline ::flatbuffers::Offset<Children> CreateChildrenDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *parent = nullptr,
+    const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *keys = nullptr) {
+  auto parent__ = parent ? _fbb.CreateString(parent) : 0;
+  auto keys__ = keys ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*keys) : 0;
+  return Blender::NativeUI::CreateChildren(
+      _fbb,
+      parent__,
+      keys__);
+}
 
 /// What changed in a view since its last update.
 struct Update FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef UpdateT NativeTableType;
   typedef UpdateBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -3763,7 +2992,8 @@ struct Update FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_RESET = 8,
     VT_TOP = 10,
     VT_NODES = 12,
-    VT_REMOVED = 14
+    VT_CHILDREN = 14,
+    VT_REMOVED = 16
   };
   uint32_t subscription() const {
     return GetField<uint32_t>(VT_SUBSCRIPTION, 0);
@@ -3781,10 +3011,14 @@ struct Update FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     return GetPointer<const ::flatbuffers::String *>(VT_TOP);
   }
   /// New nodes, and nodes that changed in any way, sent whole.
-  const ::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Node>> *nodes() const {
-    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Node>> *>(VT_NODES);
+  const ::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::NodeBuffer>> *nodes() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::NodeBuffer>> *>(VT_NODES);
   }
-  /// Keys of nodes gone from the view.
+  /// Nodes whose children are new or changed, or now have none.
+  const ::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Children>> *children() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Children>> *>(VT_CHILDREN);
+  }
+  /// Keys of nodes gone from the view, with their children.
   const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *removed() const {
     return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_REMOVED);
   }
@@ -3798,14 +3032,14 @@ struct Update FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_NODES) &&
            verifier.VerifyVector(nodes()) &&
            verifier.VerifyVectorOfTables(nodes()) &&
+           VerifyOffset(verifier, VT_CHILDREN) &&
+           verifier.VerifyVector(children()) &&
+           verifier.VerifyVectorOfTables(children()) &&
            VerifyOffset(verifier, VT_REMOVED) &&
            verifier.VerifyVector(removed()) &&
            verifier.VerifyVectorOfStrings(removed()) &&
            verifier.EndTable();
   }
-  UpdateT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(UpdateT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Update> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const UpdateT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct UpdateBuilder {
@@ -3824,8 +3058,11 @@ struct UpdateBuilder {
   void add_top(::flatbuffers::Offset<::flatbuffers::String> top) {
     fbb_.AddOffset(Update::VT_TOP, top);
   }
-  void add_nodes(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Node>>> nodes) {
+  void add_nodes(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::NodeBuffer>>> nodes) {
     fbb_.AddOffset(Update::VT_NODES, nodes);
+  }
+  void add_children(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Children>>> children) {
+    fbb_.AddOffset(Update::VT_CHILDREN, children);
   }
   void add_removed(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> removed) {
     fbb_.AddOffset(Update::VT_REMOVED, removed);
@@ -3847,10 +3084,12 @@ inline ::flatbuffers::Offset<Update> CreateUpdate(
     uint32_t version = 0,
     bool reset = false,
     ::flatbuffers::Offset<::flatbuffers::String> top = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Node>>> nodes = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::NodeBuffer>>> nodes = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<Blender::NativeUI::Children>>> children = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> removed = 0) {
   UpdateBuilder builder_(_fbb);
   builder_.add_removed(removed);
+  builder_.add_children(children);
   builder_.add_nodes(nodes);
   builder_.add_top(top);
   builder_.add_version(version);
@@ -3870,10 +3109,12 @@ inline ::flatbuffers::Offset<Update> CreateUpdateDirect(
     uint32_t version = 0,
     bool reset = false,
     const char *top = nullptr,
-    const std::vector<::flatbuffers::Offset<Blender::NativeUI::Node>> *nodes = nullptr,
+    const std::vector<::flatbuffers::Offset<Blender::NativeUI::NodeBuffer>> *nodes = nullptr,
+    const std::vector<::flatbuffers::Offset<Blender::NativeUI::Children>> *children = nullptr,
     const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *removed = nullptr) {
   auto top__ = top ? _fbb.CreateString(top) : 0;
-  auto nodes__ = nodes ? _fbb.CreateVector<::flatbuffers::Offset<Blender::NativeUI::Node>>(*nodes) : 0;
+  auto nodes__ = nodes ? _fbb.CreateVector<::flatbuffers::Offset<Blender::NativeUI::NodeBuffer>>(*nodes) : 0;
+  auto children__ = children ? _fbb.CreateVector<::flatbuffers::Offset<Blender::NativeUI::Children>>(*children) : 0;
   auto removed__ = removed ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*removed) : 0;
   return Blender::NativeUI::CreateUpdate(
       _fbb,
@@ -3882,20 +3123,12 @@ inline ::flatbuffers::Offset<Update> CreateUpdateDirect(
       reset,
       top__,
       nodes__,
+      children__,
       removed__);
 }
 
-::flatbuffers::Offset<Update> CreateUpdate(::flatbuffers::FlatBufferBuilder &_fbb, const UpdateT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct AckT : public ::flatbuffers::NativeTable {
-  typedef Ack TableType;
-  uint32_t command = 0;
-  std::string error{};
-};
-
 /// The outcome of a command.
 struct Ack FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef AckT NativeTableType;
   typedef AckBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -3916,9 +3149,6 @@ struct Ack FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyString(error()) &&
            verifier.EndTable();
   }
-  AckT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(AckT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Ack> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const AckT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct AckBuilder {
@@ -3968,21 +3198,8 @@ inline ::flatbuffers::Offset<Ack> CreateAckDirect(
       error__);
 }
 
-::flatbuffers::Offset<Ack> CreateAck(::flatbuffers::FlatBufferBuilder &_fbb, const AckT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct UpdatesT : public ::flatbuffers::NativeTable {
-  typedef Updates TableType;
-  std::vector<std::unique_ptr<Blender::NativeUI::UpdateT>> updates{};
-  std::vector<std::unique_ptr<Blender::NativeUI::AckT>> acks{};
-  UpdatesT() = default;
-  UpdatesT(const UpdatesT &o);
-  UpdatesT(UpdatesT&&) FLATBUFFERS_NOEXCEPT = default;
-  UpdatesT &operator=(UpdatesT o) FLATBUFFERS_NOEXCEPT;
-};
-
 /// What Blender sends at once, see `WM_native_ui_take_updates`.
 struct Updates FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef UpdatesT NativeTableType;
   typedef UpdatesBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -4005,9 +3222,6 @@ struct Updates FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyVectorOfTables(acks()) &&
            verifier.EndTable();
   }
-  UpdatesT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(UpdatesT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Updates> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const UpdatesT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct UpdatesBuilder {
@@ -4058,21 +3272,8 @@ inline ::flatbuffers::Offset<Updates> CreateUpdatesDirect(
       acks__);
 }
 
-::flatbuffers::Offset<Updates> CreateUpdates(::flatbuffers::FlatBufferBuilder &_fbb, const UpdatesT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct SubscribeT : public ::flatbuffers::NativeTable {
-  typedef Subscribe TableType;
-  std::string view{};
-  std::vector<std::unique_ptr<Blender::NativeUI::ParamT>> params{};
-  SubscribeT() = default;
-  SubscribeT(const SubscribeT &o);
-  SubscribeT(SubscribeT&&) FLATBUFFERS_NOEXCEPT = default;
-  SubscribeT &operator=(SubscribeT o) FLATBUFFERS_NOEXCEPT;
-};
-
 /// Show a view, see `WM_native_ui_subscribe`.
 struct Subscribe FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef SubscribeT NativeTableType;
   typedef SubscribeBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -4095,9 +3296,6 @@ struct Subscribe FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyVectorOfTables(params()) &&
            verifier.EndTable();
   }
-  SubscribeT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(SubscribeT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Subscribe> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const SubscribeT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct SubscribeBuilder {
@@ -4149,21 +3347,8 @@ inline ::flatbuffers::Offset<Subscribe> CreateSubscribeDirect(
       params__);
 }
 
-::flatbuffers::Offset<Subscribe> CreateSubscribe(::flatbuffers::FlatBufferBuilder &_fbb, const SubscribeT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct CommandT : public ::flatbuffers::NativeTable {
-  typedef Command TableType;
-  uint32_t id = 0;
-  uint32_t subscription = 0;
-  std::string target{};
-  Blender::NativeUI::Op op = Blender::NativeUI::Op::Set;
-  Blender::NativeUI::ValueUnion value{};
-  Blender::NativeUI::Phase phase = Blender::NativeUI::Phase::Once;
-};
-
 /// Something done to a node of a view.
 struct Command FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef CommandT NativeTableType;
   typedef CommandBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -4230,9 +3415,6 @@ struct Command FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_PHASE, 1) &&
            verifier.EndTable();
   }
-  CommandT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(CommandT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Command> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const CommandT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 template<> inline const Blender::NativeUI::BoolValue *Command::value_as<Blender::NativeUI::BoolValue>() const {
@@ -4342,20 +3524,8 @@ inline ::flatbuffers::Offset<Command> CreateCommandDirect(
       phase);
 }
 
-::flatbuffers::Offset<Command> CreateCommand(::flatbuffers::FlatBufferBuilder &_fbb, const CommandT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-struct CommandsT : public ::flatbuffers::NativeTable {
-  typedef Commands TableType;
-  std::vector<std::unique_ptr<Blender::NativeUI::CommandT>> commands{};
-  CommandsT() = default;
-  CommandsT(const CommandsT &o);
-  CommandsT(CommandsT&&) FLATBUFFERS_NOEXCEPT = default;
-  CommandsT &operator=(CommandsT o) FLATBUFFERS_NOEXCEPT;
-};
-
 /// Commands sent at once, see `WM_native_ui_send`.
 struct Commands FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef CommandsT NativeTableType;
   typedef CommandsBuilder Builder;
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -4371,9 +3541,6 @@ struct Commands FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyVectorOfTables(commands()) &&
            verifier.EndTable();
   }
-  CommandsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(CommandsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<Commands> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const CommandsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct CommandsBuilder {
@@ -4414,1519 +3581,6 @@ inline ::flatbuffers::Offset<Commands> CreateCommandsDirect(
   return Blender::NativeUI::CreateCommands(
       _fbb,
       commands__);
-}
-
-::flatbuffers::Offset<Commands> CreateCommands(::flatbuffers::FlatBufferBuilder &_fbb, const CommandsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-
-inline bool operator==(const BoolValueT &lhs, const BoolValueT &rhs) {
-  return
-      (lhs.value == rhs.value);
-}
-
-inline bool operator!=(const BoolValueT &lhs, const BoolValueT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline BoolValueT *BoolValue::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<BoolValueT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void BoolValue::UnPackTo(BoolValueT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = value(); _o->value = _e; }
-}
-
-inline ::flatbuffers::Offset<BoolValue> BoolValue::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const BoolValueT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateBoolValue(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<BoolValue> CreateBoolValue(::flatbuffers::FlatBufferBuilder &_fbb, const BoolValueT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const BoolValueT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _value = _o->value;
-  return Blender::NativeUI::CreateBoolValue(
-      _fbb,
-      _value);
-}
-
-
-inline bool operator==(const IntValueT &lhs, const IntValueT &rhs) {
-  return
-      (lhs.value == rhs.value);
-}
-
-inline bool operator!=(const IntValueT &lhs, const IntValueT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline IntValueT *IntValue::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<IntValueT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void IntValue::UnPackTo(IntValueT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = value(); _o->value = _e; }
-}
-
-inline ::flatbuffers::Offset<IntValue> IntValue::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const IntValueT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateIntValue(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<IntValue> CreateIntValue(::flatbuffers::FlatBufferBuilder &_fbb, const IntValueT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const IntValueT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _value = _o->value;
-  return Blender::NativeUI::CreateIntValue(
-      _fbb,
-      _value);
-}
-
-
-inline bool operator==(const FloatValueT &lhs, const FloatValueT &rhs) {
-  return
-      (lhs.value == rhs.value);
-}
-
-inline bool operator!=(const FloatValueT &lhs, const FloatValueT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline FloatValueT *FloatValue::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<FloatValueT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void FloatValue::UnPackTo(FloatValueT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = value(); _o->value = _e; }
-}
-
-inline ::flatbuffers::Offset<FloatValue> FloatValue::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const FloatValueT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateFloatValue(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<FloatValue> CreateFloatValue(::flatbuffers::FlatBufferBuilder &_fbb, const FloatValueT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const FloatValueT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _value = _o->value;
-  return Blender::NativeUI::CreateFloatValue(
-      _fbb,
-      _value);
-}
-
-
-inline bool operator==(const TextValueT &lhs, const TextValueT &rhs) {
-  return
-      (lhs.value == rhs.value);
-}
-
-inline bool operator!=(const TextValueT &lhs, const TextValueT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline TextValueT *TextValue::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<TextValueT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void TextValue::UnPackTo(TextValueT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = value(); if (_e) _o->value = _e->str(); }
-}
-
-inline ::flatbuffers::Offset<TextValue> TextValue::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TextValueT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateTextValue(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<TextValue> CreateTextValue(::flatbuffers::FlatBufferBuilder &_fbb, const TextValueT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const TextValueT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _value = _o->value.empty() ? 0 : _fbb.CreateString(_o->value);
-  return Blender::NativeUI::CreateTextValue(
-      _fbb,
-      _value);
-}
-
-
-inline bool operator==(const FloatsValueT &lhs, const FloatsValueT &rhs) {
-  return
-      (lhs.value == rhs.value);
-}
-
-inline bool operator!=(const FloatsValueT &lhs, const FloatsValueT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline FloatsValueT *FloatsValue::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<FloatsValueT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void FloatsValue::UnPackTo(FloatsValueT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = value(); if (_e) { _o->value.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->value[_i] = _e->Get(_i); } } else { _o->value.resize(0); } }
-}
-
-inline ::flatbuffers::Offset<FloatsValue> FloatsValue::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const FloatsValueT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateFloatsValue(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<FloatsValue> CreateFloatsValue(::flatbuffers::FlatBufferBuilder &_fbb, const FloatsValueT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const FloatsValueT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _value = _o->value.size() ? _fbb.CreateVector(_o->value) : 0;
-  return Blender::NativeUI::CreateFloatsValue(
-      _fbb,
-      _value);
-}
-
-
-inline bool operator==(const IntsValueT &lhs, const IntsValueT &rhs) {
-  return
-      (lhs.value == rhs.value);
-}
-
-inline bool operator!=(const IntsValueT &lhs, const IntsValueT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline IntsValueT *IntsValue::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<IntsValueT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void IntsValue::UnPackTo(IntsValueT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = value(); if (_e) { _o->value.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->value[_i] = _e->Get(_i); } } else { _o->value.resize(0); } }
-}
-
-inline ::flatbuffers::Offset<IntsValue> IntsValue::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const IntsValueT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateIntsValue(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<IntsValue> CreateIntsValue(::flatbuffers::FlatBufferBuilder &_fbb, const IntsValueT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const IntsValueT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _value = _o->value.size() ? _fbb.CreateVector(_o->value) : 0;
-  return Blender::NativeUI::CreateIntsValue(
-      _fbb,
-      _value);
-}
-
-
-inline bool operator==(const ParamT &lhs, const ParamT &rhs) {
-  return
-      (lhs.key == rhs.key) &&
-      (lhs.value == rhs.value);
-}
-
-inline bool operator!=(const ParamT &lhs, const ParamT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline ParamT *Param::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<ParamT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Param::UnPackTo(ParamT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = key(); if (_e) _o->key = _e->str(); }
-  { auto _e = value_type(); _o->value.type = _e; }
-  { auto _e = value(); if (_e) _o->value.value = Blender::NativeUI::ValueUnion::UnPack(_e, value_type(), _resolver); }
-}
-
-inline ::flatbuffers::Offset<Param> Param::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ParamT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateParam(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Param> CreateParam(::flatbuffers::FlatBufferBuilder &_fbb, const ParamT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const ParamT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _key = _fbb.CreateString(_o->key);
-  auto _value_type = _o->value.type;
-  auto _value = _o->value.Pack(_fbb);
-  return Blender::NativeUI::CreateParam(
-      _fbb,
-      _key,
-      _value_type,
-      _value);
-}
-
-
-inline bool operator==(const GroupT &lhs, const GroupT &rhs) {
-  return
-      (lhs.layout == rhs.layout);
-}
-
-inline bool operator!=(const GroupT &lhs, const GroupT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline GroupT *Group::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<GroupT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Group::UnPackTo(GroupT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = layout(); _o->layout = _e; }
-}
-
-inline ::flatbuffers::Offset<Group> Group::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const GroupT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateGroup(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Group> CreateGroup(::flatbuffers::FlatBufferBuilder &_fbb, const GroupT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const GroupT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _layout = _o->layout;
-  return Blender::NativeUI::CreateGroup(
-      _fbb,
-      _layout);
-}
-
-
-inline bool operator==(const PanelT &lhs, const PanelT &rhs) {
-  return
-      (lhs.open == rhs.open) &&
-      (lhs.fixed == rhs.fixed) &&
-      (lhs.header == rhs.header);
-}
-
-inline bool operator!=(const PanelT &lhs, const PanelT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline PanelT *Panel::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<PanelT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Panel::UnPackTo(PanelT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = open(); _o->open = _e; }
-  { auto _e = fixed(); _o->fixed = _e; }
-  { auto _e = header(); if (_e) { _o->header.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->header[_i] = _e->Get(_i)->str(); } } else { _o->header.resize(0); } }
-}
-
-inline ::flatbuffers::Offset<Panel> Panel::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const PanelT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreatePanel(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Panel> CreatePanel(::flatbuffers::FlatBufferBuilder &_fbb, const PanelT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const PanelT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _open = _o->open;
-  auto _fixed = _o->fixed;
-  auto _header = _o->header.size() ? _fbb.CreateVectorOfStrings(_o->header) : 0;
-  return Blender::NativeUI::CreatePanel(
-      _fbb,
-      _open,
-      _fixed,
-      _header);
-}
-
-
-inline bool operator==(const ToggleT &lhs, const ToggleT &rhs) {
-  return
-      (lhs.value == rhs.value) &&
-      (lhs.button == rhs.button);
-}
-
-inline bool operator!=(const ToggleT &lhs, const ToggleT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline ToggleT *Toggle::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<ToggleT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Toggle::UnPackTo(ToggleT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = value(); _o->value = _e; }
-  { auto _e = button(); _o->button = _e; }
-}
-
-inline ::flatbuffers::Offset<Toggle> Toggle::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ToggleT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateToggle(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Toggle> CreateToggle(::flatbuffers::FlatBufferBuilder &_fbb, const ToggleT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const ToggleT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _value = _o->value;
-  auto _button = _o->button;
-  return Blender::NativeUI::CreateToggle(
-      _fbb,
-      _value,
-      _button);
-}
-
-
-inline bool operator==(const NumberT &lhs, const NumberT &rhs) {
-  return
-      (lhs.value == rhs.value) &&
-      (lhs.integer == rhs.integer) &&
-      (lhs.kind == rhs.kind) &&
-      (lhs.min == rhs.min) &&
-      (lhs.max == rhs.max) &&
-      (lhs.soft_min == rhs.soft_min) &&
-      (lhs.soft_max == rhs.soft_max) &&
-      (lhs.step == rhs.step) &&
-      (lhs.precision == rhs.precision) &&
-      (lhs.slider == rhs.slider) &&
-      (lhs.scale == rhs.scale);
-}
-
-inline bool operator!=(const NumberT &lhs, const NumberT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline NumberT *Number::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<NumberT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Number::UnPackTo(NumberT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = value(); _o->value = _e; }
-  { auto _e = integer(); _o->integer = _e; }
-  { auto _e = kind(); _o->kind = _e; }
-  { auto _e = min(); _o->min = _e; }
-  { auto _e = max(); _o->max = _e; }
-  { auto _e = soft_min(); _o->soft_min = _e; }
-  { auto _e = soft_max(); _o->soft_max = _e; }
-  { auto _e = step(); _o->step = _e; }
-  { auto _e = precision(); _o->precision = _e; }
-  { auto _e = slider(); _o->slider = _e; }
-  { auto _e = scale(); _o->scale = _e; }
-}
-
-inline ::flatbuffers::Offset<Number> Number::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const NumberT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateNumber(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Number> CreateNumber(::flatbuffers::FlatBufferBuilder &_fbb, const NumberT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const NumberT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _value = _o->value;
-  auto _integer = _o->integer;
-  auto _kind = _o->kind;
-  auto _min = _o->min;
-  auto _max = _o->max;
-  auto _soft_min = _o->soft_min;
-  auto _soft_max = _o->soft_max;
-  auto _step = _o->step;
-  auto _precision = _o->precision;
-  auto _slider = _o->slider;
-  auto _scale = _o->scale;
-  return Blender::NativeUI::CreateNumber(
-      _fbb,
-      _value,
-      _integer,
-      _kind,
-      _min,
-      _max,
-      _soft_min,
-      _soft_max,
-      _step,
-      _precision,
-      _slider,
-      _scale);
-}
-
-
-inline bool operator==(const TextFieldT &lhs, const TextFieldT &rhs) {
-  return
-      (lhs.value == rhs.value) &&
-      (lhs.multiline == rhs.multiline) &&
-      (lhs.path == rhs.path);
-}
-
-inline bool operator!=(const TextFieldT &lhs, const TextFieldT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline TextFieldT *TextField::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<TextFieldT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void TextField::UnPackTo(TextFieldT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = value(); if (_e) _o->value = _e->str(); }
-  { auto _e = multiline(); _o->multiline = _e; }
-  { auto _e = path(); _o->path = _e; }
-}
-
-inline ::flatbuffers::Offset<TextField> TextField::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TextFieldT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateTextField(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<TextField> CreateTextField(::flatbuffers::FlatBufferBuilder &_fbb, const TextFieldT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const TextFieldT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _value = _o->value.empty() ? 0 : _fbb.CreateString(_o->value);
-  auto _multiline = _o->multiline;
-  auto _path = _o->path;
-  return Blender::NativeUI::CreateTextField(
-      _fbb,
-      _value,
-      _multiline,
-      _path);
-}
-
-
-inline bool operator==(const OptionT &lhs, const OptionT &rhs) {
-  return
-      (lhs.value == rhs.value) &&
-      (lhs.label == rhs.label) &&
-      (lhs.icon == rhs.icon) &&
-      (lhs.preview == rhs.preview) &&
-      (lhs.description == rhs.description);
-}
-
-inline bool operator!=(const OptionT &lhs, const OptionT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline OptionT *Option::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<OptionT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Option::UnPackTo(OptionT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = value(); if (_e) _o->value = _e->str(); }
-  { auto _e = label(); if (_e) _o->label = _e->str(); }
-  { auto _e = icon(); if (_e) _o->icon = _e->str(); }
-  { auto _e = preview(); if (_e) _o->preview = _e->str(); }
-  { auto _e = description(); if (_e) _o->description = _e->str(); }
-}
-
-inline ::flatbuffers::Offset<Option> Option::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const OptionT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateOption(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Option> CreateOption(::flatbuffers::FlatBufferBuilder &_fbb, const OptionT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const OptionT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _value = _o->value.empty() ? 0 : _fbb.CreateString(_o->value);
-  auto _label = _o->label.empty() ? 0 : _fbb.CreateString(_o->label);
-  auto _icon = _o->icon.empty() ? 0 : _fbb.CreateString(_o->icon);
-  auto _preview = _o->preview.empty() ? 0 : _fbb.CreateString(_o->preview);
-  auto _description = _o->description.empty() ? 0 : _fbb.CreateString(_o->description);
-  return Blender::NativeUI::CreateOption(
-      _fbb,
-      _value,
-      _label,
-      _icon,
-      _preview,
-      _description);
-}
-
-
-inline bool operator==(const ChoiceT &lhs, const ChoiceT &rhs) {
-  return
-      (lhs.value == rhs.value) &&
-      (lhs.options.size() == rhs.options.size() && std::equal(lhs.options.cbegin(), lhs.options.cend(), rhs.options.cbegin(), [](std::unique_ptr<Blender::NativeUI::OptionT> const &a, std::unique_ptr<Blender::NativeUI::OptionT> const &b) { return (a == b) || (a && b && *a == *b); })) &&
-      (lhs.style == rhs.style) &&
-      (lhs.multiple == rhs.multiple);
-}
-
-inline bool operator!=(const ChoiceT &lhs, const ChoiceT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline ChoiceT::ChoiceT(const ChoiceT &o)
-      : value(o.value),
-        style(o.style),
-        multiple(o.multiple) {
-  options.reserve(o.options.size());
-  for (const auto &options_ : o.options) { options.emplace_back((options_) ? new Blender::NativeUI::OptionT(*options_) : nullptr); }
-}
-
-inline ChoiceT &ChoiceT::operator=(ChoiceT o) FLATBUFFERS_NOEXCEPT {
-  std::swap(value, o.value);
-  std::swap(options, o.options);
-  std::swap(style, o.style);
-  std::swap(multiple, o.multiple);
-  return *this;
-}
-
-inline ChoiceT *Choice::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<ChoiceT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Choice::UnPackTo(ChoiceT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = value(); if (_e) _o->value = _e->str(); }
-  { auto _e = options(); if (_e) { _o->options.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { if(_o->options[_i]) { _e->Get(_i)->UnPackTo(_o->options[_i].get(), _resolver); } else { _o->options[_i] = std::unique_ptr<Blender::NativeUI::OptionT>(_e->Get(_i)->UnPack(_resolver)); } } } else { _o->options.resize(0); } }
-  { auto _e = style(); _o->style = _e; }
-  { auto _e = multiple(); _o->multiple = _e; }
-}
-
-inline ::flatbuffers::Offset<Choice> Choice::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ChoiceT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateChoice(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Choice> CreateChoice(::flatbuffers::FlatBufferBuilder &_fbb, const ChoiceT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const ChoiceT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _value = _o->value.empty() ? 0 : _fbb.CreateString(_o->value);
-  auto _options = _o->options.size() ? _fbb.CreateVector<::flatbuffers::Offset<Blender::NativeUI::Option>> (_o->options.size(), [](size_t i, _VectorArgs *__va) { return CreateOption(*__va->__fbb, __va->__o->options[i].get(), __va->__rehasher); }, &_va ) : 0;
-  auto _style = _o->style;
-  auto _multiple = _o->multiple;
-  return Blender::NativeUI::CreateChoice(
-      _fbb,
-      _value,
-      _options,
-      _style,
-      _multiple);
-}
-
-
-inline bool operator==(const ColorT &lhs, const ColorT &rhs) {
-  return
-      (lhs.value == rhs.value) &&
-      (lhs.alpha == rhs.alpha);
-}
-
-inline bool operator!=(const ColorT &lhs, const ColorT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline ColorT *Color::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<ColorT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Color::UnPackTo(ColorT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = value(); if (_e) { _o->value.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->value[_i] = _e->Get(_i); } } else { _o->value.resize(0); } }
-  { auto _e = alpha(); _o->alpha = _e; }
-}
-
-inline ::flatbuffers::Offset<Color> Color::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ColorT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateColor(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Color> CreateColor(::flatbuffers::FlatBufferBuilder &_fbb, const ColorT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const ColorT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _value = _o->value.size() ? _fbb.CreateVector(_o->value) : 0;
-  auto _alpha = _o->alpha;
-  return Blender::NativeUI::CreateColor(
-      _fbb,
-      _value,
-      _alpha);
-}
-
-
-inline bool operator==(const ReferenceT &lhs, const ReferenceT &rhs) {
-  return
-      (lhs.type == rhs.type) &&
-      (lhs.name == rhs.name) &&
-      (lhs.value == rhs.value) &&
-      (lhs.users == rhs.users) &&
-      (lhs.linked == rhs.linked) &&
-      (lhs.fake_user == rhs.fake_user) &&
-      (lhs.can_new == rhs.can_new) &&
-      (lhs.can_unlink == rhs.can_unlink) &&
-      (lhs.can_single_user == rhs.can_single_user) &&
-      (lhs.options.size() == rhs.options.size() && std::equal(lhs.options.cbegin(), lhs.options.cend(), rhs.options.cbegin(), [](std::unique_ptr<Blender::NativeUI::OptionT> const &a, std::unique_ptr<Blender::NativeUI::OptionT> const &b) { return (a == b) || (a && b && *a == *b); }));
-}
-
-inline bool operator!=(const ReferenceT &lhs, const ReferenceT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline ReferenceT::ReferenceT(const ReferenceT &o)
-      : type(o.type),
-        name(o.name),
-        value(o.value),
-        users(o.users),
-        linked(o.linked),
-        fake_user(o.fake_user),
-        can_new(o.can_new),
-        can_unlink(o.can_unlink),
-        can_single_user(o.can_single_user) {
-  options.reserve(o.options.size());
-  for (const auto &options_ : o.options) { options.emplace_back((options_) ? new Blender::NativeUI::OptionT(*options_) : nullptr); }
-}
-
-inline ReferenceT &ReferenceT::operator=(ReferenceT o) FLATBUFFERS_NOEXCEPT {
-  std::swap(type, o.type);
-  std::swap(name, o.name);
-  std::swap(value, o.value);
-  std::swap(users, o.users);
-  std::swap(linked, o.linked);
-  std::swap(fake_user, o.fake_user);
-  std::swap(can_new, o.can_new);
-  std::swap(can_unlink, o.can_unlink);
-  std::swap(can_single_user, o.can_single_user);
-  std::swap(options, o.options);
-  return *this;
-}
-
-inline ReferenceT *Reference::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<ReferenceT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Reference::UnPackTo(ReferenceT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = type(); if (_e) _o->type = _e->str(); }
-  { auto _e = name(); if (_e) _o->name = _e->str(); }
-  { auto _e = value(); if (_e) _o->value = _e->str(); }
-  { auto _e = users(); _o->users = _e; }
-  { auto _e = linked(); _o->linked = _e; }
-  { auto _e = fake_user(); _o->fake_user = _e; }
-  { auto _e = can_new(); _o->can_new = _e; }
-  { auto _e = can_unlink(); _o->can_unlink = _e; }
-  { auto _e = can_single_user(); _o->can_single_user = _e; }
-  { auto _e = options(); if (_e) { _o->options.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { if(_o->options[_i]) { _e->Get(_i)->UnPackTo(_o->options[_i].get(), _resolver); } else { _o->options[_i] = std::unique_ptr<Blender::NativeUI::OptionT>(_e->Get(_i)->UnPack(_resolver)); } } } else { _o->options.resize(0); } }
-}
-
-inline ::flatbuffers::Offset<Reference> Reference::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ReferenceT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateReference(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Reference> CreateReference(::flatbuffers::FlatBufferBuilder &_fbb, const ReferenceT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const ReferenceT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _type = _o->type.empty() ? 0 : _fbb.CreateString(_o->type);
-  auto _name = _o->name.empty() ? 0 : _fbb.CreateString(_o->name);
-  auto _value = _o->value.empty() ? 0 : _fbb.CreateString(_o->value);
-  auto _users = _o->users;
-  auto _linked = _o->linked;
-  auto _fake_user = _o->fake_user;
-  auto _can_new = _o->can_new;
-  auto _can_unlink = _o->can_unlink;
-  auto _can_single_user = _o->can_single_user;
-  auto _options = _o->options.size() ? _fbb.CreateVector<::flatbuffers::Offset<Blender::NativeUI::Option>> (_o->options.size(), [](size_t i, _VectorArgs *__va) { return CreateOption(*__va->__fbb, __va->__o->options[i].get(), __va->__rehasher); }, &_va ) : 0;
-  return Blender::NativeUI::CreateReference(
-      _fbb,
-      _type,
-      _name,
-      _value,
-      _users,
-      _linked,
-      _fake_user,
-      _can_new,
-      _can_unlink,
-      _can_single_user,
-      _options);
-}
-
-
-inline bool operator==(const ButtonT &lhs, const ButtonT &rhs) {
-  return
-      (lhs.style == rhs.style);
-}
-
-inline bool operator!=(const ButtonT &lhs, const ButtonT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline ButtonT *Button::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<ButtonT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Button::UnPackTo(ButtonT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = style(); _o->style = _e; }
-}
-
-inline ::flatbuffers::Offset<Button> Button::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ButtonT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateButton(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Button> CreateButton(::flatbuffers::FlatBufferBuilder &_fbb, const ButtonT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const ButtonT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _style = _o->style;
-  return Blender::NativeUI::CreateButton(
-      _fbb,
-      _style);
-}
-
-
-inline bool operator==(const MenuButtonT &lhs, const MenuButtonT &rhs) {
-  return
-      (lhs.view == rhs.view) &&
-      (lhs.params.size() == rhs.params.size() && std::equal(lhs.params.cbegin(), lhs.params.cend(), rhs.params.cbegin(), [](std::unique_ptr<Blender::NativeUI::ParamT> const &a, std::unique_ptr<Blender::NativeUI::ParamT> const &b) { return (a == b) || (a && b && *a == *b); }));
-}
-
-inline bool operator!=(const MenuButtonT &lhs, const MenuButtonT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline MenuButtonT::MenuButtonT(const MenuButtonT &o)
-      : view(o.view) {
-  params.reserve(o.params.size());
-  for (const auto &params_ : o.params) { params.emplace_back((params_) ? new Blender::NativeUI::ParamT(*params_) : nullptr); }
-}
-
-inline MenuButtonT &MenuButtonT::operator=(MenuButtonT o) FLATBUFFERS_NOEXCEPT {
-  std::swap(view, o.view);
-  std::swap(params, o.params);
-  return *this;
-}
-
-inline MenuButtonT *MenuButton::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<MenuButtonT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void MenuButton::UnPackTo(MenuButtonT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = view(); if (_e) _o->view = _e->str(); }
-  { auto _e = params(); if (_e) { _o->params.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { if(_o->params[_i]) { _e->Get(_i)->UnPackTo(_o->params[_i].get(), _resolver); } else { _o->params[_i] = std::unique_ptr<Blender::NativeUI::ParamT>(_e->Get(_i)->UnPack(_resolver)); } } } else { _o->params.resize(0); } }
-}
-
-inline ::flatbuffers::Offset<MenuButton> MenuButton::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const MenuButtonT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateMenuButton(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<MenuButton> CreateMenuButton(::flatbuffers::FlatBufferBuilder &_fbb, const MenuButtonT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const MenuButtonT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _view = _o->view.empty() ? 0 : _fbb.CreateString(_o->view);
-  auto _params = _o->params.size() ? _fbb.CreateVector<::flatbuffers::Offset<Blender::NativeUI::Param>> (_o->params.size(), [](size_t i, _VectorArgs *__va) { return CreateParam(*__va->__fbb, __va->__o->params[i].get(), __va->__rehasher); }, &_va ) : 0;
-  return Blender::NativeUI::CreateMenuButton(
-      _fbb,
-      _view,
-      _params);
-}
-
-
-inline bool operator==(const LabelT &lhs, const LabelT &rhs) {
-  return
-      (lhs.value == rhs.value);
-}
-
-inline bool operator!=(const LabelT &lhs, const LabelT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline LabelT *Label::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<LabelT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Label::UnPackTo(LabelT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = value(); if (_e) _o->value = _e->str(); }
-}
-
-inline ::flatbuffers::Offset<Label> Label::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const LabelT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateLabel(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Label> CreateLabel(::flatbuffers::FlatBufferBuilder &_fbb, const LabelT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const LabelT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _value = _o->value.empty() ? 0 : _fbb.CreateString(_o->value);
-  return Blender::NativeUI::CreateLabel(
-      _fbb,
-      _value);
-}
-
-
-inline bool operator==(const SeparatorT &, const SeparatorT &) {
-  return true;
-}
-
-inline bool operator!=(const SeparatorT &lhs, const SeparatorT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline SeparatorT *Separator::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<SeparatorT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Separator::UnPackTo(SeparatorT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-}
-
-inline ::flatbuffers::Offset<Separator> Separator::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const SeparatorT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateSeparator(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Separator> CreateSeparator(::flatbuffers::FlatBufferBuilder &_fbb, const SeparatorT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const SeparatorT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  return Blender::NativeUI::CreateSeparator(
-      _fbb);
-}
-
-
-inline bool operator==(const ListT &lhs, const ListT &rhs) {
-  return
-      (lhs.active == rhs.active) &&
-      (lhs.can_add == rhs.can_add) &&
-      (lhs.can_remove == rhs.can_remove) &&
-      (lhs.can_reorder == rhs.can_reorder) &&
-      (lhs.tree == rhs.tree);
-}
-
-inline bool operator!=(const ListT &lhs, const ListT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline ListT *List::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<ListT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void List::UnPackTo(ListT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = active(); if (_e) _o->active = _e->str(); }
-  { auto _e = can_add(); _o->can_add = _e; }
-  { auto _e = can_remove(); _o->can_remove = _e; }
-  { auto _e = can_reorder(); _o->can_reorder = _e; }
-  { auto _e = tree(); _o->tree = _e; }
-}
-
-inline ::flatbuffers::Offset<List> List::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ListT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateList(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<List> CreateList(::flatbuffers::FlatBufferBuilder &_fbb, const ListT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const ListT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _active = _o->active.empty() ? 0 : _fbb.CreateString(_o->active);
-  auto _can_add = _o->can_add;
-  auto _can_remove = _o->can_remove;
-  auto _can_reorder = _o->can_reorder;
-  auto _tree = _o->tree;
-  return Blender::NativeUI::CreateList(
-      _fbb,
-      _active,
-      _can_add,
-      _can_remove,
-      _can_reorder,
-      _tree);
-}
-
-
-inline bool operator==(const RowT &lhs, const RowT &rhs) {
-  return
-      (lhs.depth == rhs.depth) &&
-      (lhs.selected == rhs.selected) &&
-      (lhs.renamable == rhs.renamable) &&
-      (lhs.preview == rhs.preview);
-}
-
-inline bool operator!=(const RowT &lhs, const RowT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline RowT *Row::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<RowT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Row::UnPackTo(RowT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = depth(); _o->depth = _e; }
-  { auto _e = selected(); _o->selected = _e; }
-  { auto _e = renamable(); _o->renamable = _e; }
-  { auto _e = preview(); if (_e) _o->preview = _e->str(); }
-}
-
-inline ::flatbuffers::Offset<Row> Row::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const RowT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateRow(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Row> CreateRow(::flatbuffers::FlatBufferBuilder &_fbb, const RowT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const RowT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _depth = _o->depth;
-  auto _selected = _o->selected;
-  auto _renamable = _o->renamable;
-  auto _preview = _o->preview.empty() ? 0 : _fbb.CreateString(_o->preview);
-  return Blender::NativeUI::CreateRow(
-      _fbb,
-      _depth,
-      _selected,
-      _renamable,
-      _preview);
-}
-
-
-inline bool operator==(const PictureT &lhs, const PictureT &rhs) {
-  return
-      (lhs.image == rhs.image);
-}
-
-inline bool operator!=(const PictureT &lhs, const PictureT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline PictureT *Picture::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<PictureT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Picture::UnPackTo(PictureT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = image(); if (_e) _o->image = _e->str(); }
-}
-
-inline ::flatbuffers::Offset<Picture> Picture::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const PictureT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreatePicture(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Picture> CreatePicture(::flatbuffers::FlatBufferBuilder &_fbb, const PictureT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const PictureT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _image = _o->image.empty() ? 0 : _fbb.CreateString(_o->image);
-  return Blender::NativeUI::CreatePicture(
-      _fbb,
-      _image);
-}
-
-
-inline bool operator==(const MenuT &, const MenuT &) {
-  return true;
-}
-
-inline bool operator!=(const MenuT &lhs, const MenuT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline MenuT *Menu::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<MenuT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Menu::UnPackTo(MenuT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-}
-
-inline ::flatbuffers::Offset<Menu> Menu::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const MenuT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateMenu(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Menu> CreateMenu(::flatbuffers::FlatBufferBuilder &_fbb, const MenuT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const MenuT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  return Blender::NativeUI::CreateMenu(
-      _fbb);
-}
-
-
-inline bool operator==(const NodeT &lhs, const NodeT &rhs) {
-  return
-      (lhs.key == rhs.key) &&
-      (lhs.children == rhs.children) &&
-      (lhs.content == rhs.content) &&
-      (lhs.label == rhs.label) &&
-      (lhs.icon == rhs.icon) &&
-      (lhs.description == rhs.description) &&
-      (lhs.enabled == rhs.enabled) &&
-      (lhs.mixed == rhs.mixed) &&
-      (lhs.animation == rhs.animation) &&
-      (lhs.property == rhs.property);
-}
-
-inline bool operator!=(const NodeT &lhs, const NodeT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline NodeT *Node::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<NodeT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Node::UnPackTo(NodeT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = key(); if (_e) _o->key = _e->str(); }
-  { auto _e = children(); if (_e) { _o->children.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->children[_i] = _e->Get(_i)->str(); } } else { _o->children.resize(0); } }
-  { auto _e = content_type(); _o->content.type = _e; }
-  { auto _e = content(); if (_e) _o->content.value = Blender::NativeUI::ContentUnion::UnPack(_e, content_type(), _resolver); }
-  { auto _e = label(); if (_e) _o->label = _e->str(); }
-  { auto _e = icon(); if (_e) _o->icon = _e->str(); }
-  { auto _e = description(); if (_e) _o->description = _e->str(); }
-  { auto _e = enabled(); _o->enabled = _e; }
-  { auto _e = mixed(); _o->mixed = _e; }
-  { auto _e = animation(); _o->animation = _e; }
-  { auto _e = property(); if (_e) _o->property = _e->str(); }
-}
-
-inline ::flatbuffers::Offset<Node> Node::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const NodeT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateNode(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Node> CreateNode(::flatbuffers::FlatBufferBuilder &_fbb, const NodeT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const NodeT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _key = _fbb.CreateString(_o->key);
-  auto _children = _o->children.size() ? _fbb.CreateVectorOfStrings(_o->children) : 0;
-  auto _content_type = _o->content.type;
-  auto _content = _o->content.Pack(_fbb);
-  auto _label = _o->label.empty() ? 0 : _fbb.CreateString(_o->label);
-  auto _icon = _o->icon.empty() ? 0 : _fbb.CreateString(_o->icon);
-  auto _description = _o->description.empty() ? 0 : _fbb.CreateString(_o->description);
-  auto _enabled = _o->enabled;
-  auto _mixed = _o->mixed;
-  auto _animation = _o->animation;
-  auto _property = _o->property.empty() ? 0 : _fbb.CreateString(_o->property);
-  return Blender::NativeUI::CreateNode(
-      _fbb,
-      _key,
-      _children,
-      _content_type,
-      _content,
-      _label,
-      _icon,
-      _description,
-      _enabled,
-      _mixed,
-      _animation,
-      _property);
-}
-
-
-inline bool operator==(const UpdateT &lhs, const UpdateT &rhs) {
-  return
-      (lhs.subscription == rhs.subscription) &&
-      (lhs.version == rhs.version) &&
-      (lhs.reset == rhs.reset) &&
-      (lhs.top == rhs.top) &&
-      (lhs.nodes.size() == rhs.nodes.size() && std::equal(lhs.nodes.cbegin(), lhs.nodes.cend(), rhs.nodes.cbegin(), [](std::unique_ptr<Blender::NativeUI::NodeT> const &a, std::unique_ptr<Blender::NativeUI::NodeT> const &b) { return (a == b) || (a && b && *a == *b); })) &&
-      (lhs.removed == rhs.removed);
-}
-
-inline bool operator!=(const UpdateT &lhs, const UpdateT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline UpdateT::UpdateT(const UpdateT &o)
-      : subscription(o.subscription),
-        version(o.version),
-        reset(o.reset),
-        top(o.top),
-        removed(o.removed) {
-  nodes.reserve(o.nodes.size());
-  for (const auto &nodes_ : o.nodes) { nodes.emplace_back((nodes_) ? new Blender::NativeUI::NodeT(*nodes_) : nullptr); }
-}
-
-inline UpdateT &UpdateT::operator=(UpdateT o) FLATBUFFERS_NOEXCEPT {
-  std::swap(subscription, o.subscription);
-  std::swap(version, o.version);
-  std::swap(reset, o.reset);
-  std::swap(top, o.top);
-  std::swap(nodes, o.nodes);
-  std::swap(removed, o.removed);
-  return *this;
-}
-
-inline UpdateT *Update::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<UpdateT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Update::UnPackTo(UpdateT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = subscription(); _o->subscription = _e; }
-  { auto _e = version(); _o->version = _e; }
-  { auto _e = reset(); _o->reset = _e; }
-  { auto _e = top(); if (_e) _o->top = _e->str(); }
-  { auto _e = nodes(); if (_e) { _o->nodes.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { if(_o->nodes[_i]) { _e->Get(_i)->UnPackTo(_o->nodes[_i].get(), _resolver); } else { _o->nodes[_i] = std::unique_ptr<Blender::NativeUI::NodeT>(_e->Get(_i)->UnPack(_resolver)); } } } else { _o->nodes.resize(0); } }
-  { auto _e = removed(); if (_e) { _o->removed.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->removed[_i] = _e->Get(_i)->str(); } } else { _o->removed.resize(0); } }
-}
-
-inline ::flatbuffers::Offset<Update> Update::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const UpdateT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateUpdate(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Update> CreateUpdate(::flatbuffers::FlatBufferBuilder &_fbb, const UpdateT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const UpdateT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _subscription = _o->subscription;
-  auto _version = _o->version;
-  auto _reset = _o->reset;
-  auto _top = _o->top.empty() ? 0 : _fbb.CreateString(_o->top);
-  auto _nodes = _o->nodes.size() ? _fbb.CreateVector<::flatbuffers::Offset<Blender::NativeUI::Node>> (_o->nodes.size(), [](size_t i, _VectorArgs *__va) { return CreateNode(*__va->__fbb, __va->__o->nodes[i].get(), __va->__rehasher); }, &_va ) : 0;
-  auto _removed = _o->removed.size() ? _fbb.CreateVectorOfStrings(_o->removed) : 0;
-  return Blender::NativeUI::CreateUpdate(
-      _fbb,
-      _subscription,
-      _version,
-      _reset,
-      _top,
-      _nodes,
-      _removed);
-}
-
-
-inline bool operator==(const AckT &lhs, const AckT &rhs) {
-  return
-      (lhs.command == rhs.command) &&
-      (lhs.error == rhs.error);
-}
-
-inline bool operator!=(const AckT &lhs, const AckT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline AckT *Ack::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<AckT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Ack::UnPackTo(AckT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = command(); _o->command = _e; }
-  { auto _e = error(); if (_e) _o->error = _e->str(); }
-}
-
-inline ::flatbuffers::Offset<Ack> Ack::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const AckT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateAck(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Ack> CreateAck(::flatbuffers::FlatBufferBuilder &_fbb, const AckT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const AckT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _command = _o->command;
-  auto _error = _o->error.empty() ? 0 : _fbb.CreateString(_o->error);
-  return Blender::NativeUI::CreateAck(
-      _fbb,
-      _command,
-      _error);
-}
-
-
-inline bool operator==(const UpdatesT &lhs, const UpdatesT &rhs) {
-  return
-      (lhs.updates.size() == rhs.updates.size() && std::equal(lhs.updates.cbegin(), lhs.updates.cend(), rhs.updates.cbegin(), [](std::unique_ptr<Blender::NativeUI::UpdateT> const &a, std::unique_ptr<Blender::NativeUI::UpdateT> const &b) { return (a == b) || (a && b && *a == *b); })) &&
-      (lhs.acks.size() == rhs.acks.size() && std::equal(lhs.acks.cbegin(), lhs.acks.cend(), rhs.acks.cbegin(), [](std::unique_ptr<Blender::NativeUI::AckT> const &a, std::unique_ptr<Blender::NativeUI::AckT> const &b) { return (a == b) || (a && b && *a == *b); }));
-}
-
-inline bool operator!=(const UpdatesT &lhs, const UpdatesT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline UpdatesT::UpdatesT(const UpdatesT &o) {
-  updates.reserve(o.updates.size());
-  for (const auto &updates_ : o.updates) { updates.emplace_back((updates_) ? new Blender::NativeUI::UpdateT(*updates_) : nullptr); }
-  acks.reserve(o.acks.size());
-  for (const auto &acks_ : o.acks) { acks.emplace_back((acks_) ? new Blender::NativeUI::AckT(*acks_) : nullptr); }
-}
-
-inline UpdatesT &UpdatesT::operator=(UpdatesT o) FLATBUFFERS_NOEXCEPT {
-  std::swap(updates, o.updates);
-  std::swap(acks, o.acks);
-  return *this;
-}
-
-inline UpdatesT *Updates::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<UpdatesT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Updates::UnPackTo(UpdatesT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = updates(); if (_e) { _o->updates.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { if(_o->updates[_i]) { _e->Get(_i)->UnPackTo(_o->updates[_i].get(), _resolver); } else { _o->updates[_i] = std::unique_ptr<Blender::NativeUI::UpdateT>(_e->Get(_i)->UnPack(_resolver)); } } } else { _o->updates.resize(0); } }
-  { auto _e = acks(); if (_e) { _o->acks.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { if(_o->acks[_i]) { _e->Get(_i)->UnPackTo(_o->acks[_i].get(), _resolver); } else { _o->acks[_i] = std::unique_ptr<Blender::NativeUI::AckT>(_e->Get(_i)->UnPack(_resolver)); } } } else { _o->acks.resize(0); } }
-}
-
-inline ::flatbuffers::Offset<Updates> Updates::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const UpdatesT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateUpdates(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Updates> CreateUpdates(::flatbuffers::FlatBufferBuilder &_fbb, const UpdatesT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const UpdatesT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _updates = _o->updates.size() ? _fbb.CreateVector<::flatbuffers::Offset<Blender::NativeUI::Update>> (_o->updates.size(), [](size_t i, _VectorArgs *__va) { return CreateUpdate(*__va->__fbb, __va->__o->updates[i].get(), __va->__rehasher); }, &_va ) : 0;
-  auto _acks = _o->acks.size() ? _fbb.CreateVector<::flatbuffers::Offset<Blender::NativeUI::Ack>> (_o->acks.size(), [](size_t i, _VectorArgs *__va) { return CreateAck(*__va->__fbb, __va->__o->acks[i].get(), __va->__rehasher); }, &_va ) : 0;
-  return Blender::NativeUI::CreateUpdates(
-      _fbb,
-      _updates,
-      _acks);
-}
-
-
-inline bool operator==(const SubscribeT &lhs, const SubscribeT &rhs) {
-  return
-      (lhs.view == rhs.view) &&
-      (lhs.params.size() == rhs.params.size() && std::equal(lhs.params.cbegin(), lhs.params.cend(), rhs.params.cbegin(), [](std::unique_ptr<Blender::NativeUI::ParamT> const &a, std::unique_ptr<Blender::NativeUI::ParamT> const &b) { return (a == b) || (a && b && *a == *b); }));
-}
-
-inline bool operator!=(const SubscribeT &lhs, const SubscribeT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline SubscribeT::SubscribeT(const SubscribeT &o)
-      : view(o.view) {
-  params.reserve(o.params.size());
-  for (const auto &params_ : o.params) { params.emplace_back((params_) ? new Blender::NativeUI::ParamT(*params_) : nullptr); }
-}
-
-inline SubscribeT &SubscribeT::operator=(SubscribeT o) FLATBUFFERS_NOEXCEPT {
-  std::swap(view, o.view);
-  std::swap(params, o.params);
-  return *this;
-}
-
-inline SubscribeT *Subscribe::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<SubscribeT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Subscribe::UnPackTo(SubscribeT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = view(); if (_e) _o->view = _e->str(); }
-  { auto _e = params(); if (_e) { _o->params.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { if(_o->params[_i]) { _e->Get(_i)->UnPackTo(_o->params[_i].get(), _resolver); } else { _o->params[_i] = std::unique_ptr<Blender::NativeUI::ParamT>(_e->Get(_i)->UnPack(_resolver)); } } } else { _o->params.resize(0); } }
-}
-
-inline ::flatbuffers::Offset<Subscribe> Subscribe::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const SubscribeT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateSubscribe(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Subscribe> CreateSubscribe(::flatbuffers::FlatBufferBuilder &_fbb, const SubscribeT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const SubscribeT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _view = _fbb.CreateString(_o->view);
-  auto _params = _o->params.size() ? _fbb.CreateVector<::flatbuffers::Offset<Blender::NativeUI::Param>> (_o->params.size(), [](size_t i, _VectorArgs *__va) { return CreateParam(*__va->__fbb, __va->__o->params[i].get(), __va->__rehasher); }, &_va ) : 0;
-  return Blender::NativeUI::CreateSubscribe(
-      _fbb,
-      _view,
-      _params);
-}
-
-
-inline bool operator==(const CommandT &lhs, const CommandT &rhs) {
-  return
-      (lhs.id == rhs.id) &&
-      (lhs.subscription == rhs.subscription) &&
-      (lhs.target == rhs.target) &&
-      (lhs.op == rhs.op) &&
-      (lhs.value == rhs.value) &&
-      (lhs.phase == rhs.phase);
-}
-
-inline bool operator!=(const CommandT &lhs, const CommandT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline CommandT *Command::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<CommandT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Command::UnPackTo(CommandT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = id(); _o->id = _e; }
-  { auto _e = subscription(); _o->subscription = _e; }
-  { auto _e = target(); if (_e) _o->target = _e->str(); }
-  { auto _e = op(); _o->op = _e; }
-  { auto _e = value_type(); _o->value.type = _e; }
-  { auto _e = value(); if (_e) _o->value.value = Blender::NativeUI::ValueUnion::UnPack(_e, value_type(), _resolver); }
-  { auto _e = phase(); _o->phase = _e; }
-}
-
-inline ::flatbuffers::Offset<Command> Command::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const CommandT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateCommand(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Command> CreateCommand(::flatbuffers::FlatBufferBuilder &_fbb, const CommandT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const CommandT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _id = _o->id;
-  auto _subscription = _o->subscription;
-  auto _target = _fbb.CreateString(_o->target);
-  auto _op = _o->op;
-  auto _value_type = _o->value.type;
-  auto _value = _o->value.Pack(_fbb);
-  auto _phase = _o->phase;
-  return Blender::NativeUI::CreateCommand(
-      _fbb,
-      _id,
-      _subscription,
-      _target,
-      _op,
-      _value_type,
-      _value,
-      _phase);
-}
-
-
-inline bool operator==(const CommandsT &lhs, const CommandsT &rhs) {
-  return
-      (lhs.commands.size() == rhs.commands.size() && std::equal(lhs.commands.cbegin(), lhs.commands.cend(), rhs.commands.cbegin(), [](std::unique_ptr<Blender::NativeUI::CommandT> const &a, std::unique_ptr<Blender::NativeUI::CommandT> const &b) { return (a == b) || (a && b && *a == *b); }));
-}
-
-inline bool operator!=(const CommandsT &lhs, const CommandsT &rhs) {
-    return !(lhs == rhs);
-}
-
-
-inline CommandsT::CommandsT(const CommandsT &o) {
-  commands.reserve(o.commands.size());
-  for (const auto &commands_ : o.commands) { commands.emplace_back((commands_) ? new Blender::NativeUI::CommandT(*commands_) : nullptr); }
-}
-
-inline CommandsT &CommandsT::operator=(CommandsT o) FLATBUFFERS_NOEXCEPT {
-  std::swap(commands, o.commands);
-  return *this;
-}
-
-inline CommandsT *Commands::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::make_unique<CommandsT>();
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void Commands::UnPackTo(CommandsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = commands(); if (_e) { _o->commands.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { if(_o->commands[_i]) { _e->Get(_i)->UnPackTo(_o->commands[_i].get(), _resolver); } else { _o->commands[_i] = std::unique_ptr<Blender::NativeUI::CommandT>(_e->Get(_i)->UnPack(_resolver)); } } } else { _o->commands.resize(0); } }
-}
-
-inline ::flatbuffers::Offset<Commands> Commands::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const CommandsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateCommands(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<Commands> CreateCommands(::flatbuffers::FlatBufferBuilder &_fbb, const CommandsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const CommandsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _commands = _o->commands.size() ? _fbb.CreateVector<::flatbuffers::Offset<Blender::NativeUI::Command>> (_o->commands.size(), [](size_t i, _VectorArgs *__va) { return CreateCommand(*__va->__fbb, __va->__o->commands[i].get(), __va->__rehasher); }, &_va ) : 0;
-  return Blender::NativeUI::CreateCommands(
-      _fbb,
-      _commands);
 }
 
 inline bool VerifyValue(::flatbuffers::Verifier &verifier, const void *obj, Value type) {
@@ -5972,137 +3626,6 @@ inline bool VerifyValueVector(::flatbuffers::Verifier &verifier, const ::flatbuf
     }
   }
   return true;
-}
-
-inline void *ValueUnion::UnPack(const void *obj, Value type, const ::flatbuffers::resolver_function_t *resolver) {
-  (void)resolver;
-  switch (type) {
-    case Value::BoolValue: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::BoolValue *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Value::IntValue: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::IntValue *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Value::FloatValue: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::FloatValue *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Value::TextValue: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::TextValue *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Value::FloatsValue: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::FloatsValue *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Value::IntsValue: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::IntsValue *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    default: return nullptr;
-  }
-}
-
-inline ::flatbuffers::Offset<void> ValueUnion::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ::flatbuffers::rehasher_function_t *_rehasher) const {
-  (void)_rehasher;
-  switch (type) {
-    case Value::BoolValue: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::BoolValueT *>(value);
-      return CreateBoolValue(_fbb, ptr, _rehasher).Union();
-    }
-    case Value::IntValue: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::IntValueT *>(value);
-      return CreateIntValue(_fbb, ptr, _rehasher).Union();
-    }
-    case Value::FloatValue: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::FloatValueT *>(value);
-      return CreateFloatValue(_fbb, ptr, _rehasher).Union();
-    }
-    case Value::TextValue: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::TextValueT *>(value);
-      return CreateTextValue(_fbb, ptr, _rehasher).Union();
-    }
-    case Value::FloatsValue: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::FloatsValueT *>(value);
-      return CreateFloatsValue(_fbb, ptr, _rehasher).Union();
-    }
-    case Value::IntsValue: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::IntsValueT *>(value);
-      return CreateIntsValue(_fbb, ptr, _rehasher).Union();
-    }
-    default: return 0;
-  }
-}
-
-inline ValueUnion::ValueUnion(const ValueUnion &u) : type(u.type), value(nullptr) {
-  switch (type) {
-    case Value::BoolValue: {
-      value = new Blender::NativeUI::BoolValueT(*reinterpret_cast<Blender::NativeUI::BoolValueT *>(u.value));
-      break;
-    }
-    case Value::IntValue: {
-      value = new Blender::NativeUI::IntValueT(*reinterpret_cast<Blender::NativeUI::IntValueT *>(u.value));
-      break;
-    }
-    case Value::FloatValue: {
-      value = new Blender::NativeUI::FloatValueT(*reinterpret_cast<Blender::NativeUI::FloatValueT *>(u.value));
-      break;
-    }
-    case Value::TextValue: {
-      value = new Blender::NativeUI::TextValueT(*reinterpret_cast<Blender::NativeUI::TextValueT *>(u.value));
-      break;
-    }
-    case Value::FloatsValue: {
-      value = new Blender::NativeUI::FloatsValueT(*reinterpret_cast<Blender::NativeUI::FloatsValueT *>(u.value));
-      break;
-    }
-    case Value::IntsValue: {
-      value = new Blender::NativeUI::IntsValueT(*reinterpret_cast<Blender::NativeUI::IntsValueT *>(u.value));
-      break;
-    }
-    default:
-      break;
-  }
-}
-
-inline void ValueUnion::Reset() {
-  switch (type) {
-    case Value::BoolValue: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::BoolValueT *>(value);
-      delete ptr;
-      break;
-    }
-    case Value::IntValue: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::IntValueT *>(value);
-      delete ptr;
-      break;
-    }
-    case Value::FloatValue: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::FloatValueT *>(value);
-      delete ptr;
-      break;
-    }
-    case Value::TextValue: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::TextValueT *>(value);
-      delete ptr;
-      break;
-    }
-    case Value::FloatsValue: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::FloatsValueT *>(value);
-      delete ptr;
-      break;
-    }
-    case Value::IntsValue: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::IntsValueT *>(value);
-      delete ptr;
-      break;
-    }
-    default: break;
-  }
-  value = nullptr;
-  type = Value::NONE;
 }
 
 inline bool VerifyContent(::flatbuffers::Verifier &verifier, const void *obj, Content type) {
@@ -6188,307 +3711,6 @@ inline bool VerifyContentVector(::flatbuffers::Verifier &verifier, const ::flatb
     }
   }
   return true;
-}
-
-inline void *ContentUnion::UnPack(const void *obj, Content type, const ::flatbuffers::resolver_function_t *resolver) {
-  (void)resolver;
-  switch (type) {
-    case Content::Group: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::Group *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Content::Panel: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::Panel *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Content::Toggle: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::Toggle *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Content::Number: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::Number *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Content::TextField: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::TextField *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Content::Choice: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::Choice *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Content::Color: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::Color *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Content::Reference: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::Reference *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Content::Button: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::Button *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Content::MenuButton: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::MenuButton *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Content::Label: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::Label *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Content::Separator: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::Separator *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Content::List: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::List *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Content::Row: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::Row *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Content::Picture: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::Picture *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    case Content::Menu: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::Menu *>(obj);
-      return ptr->UnPack(resolver);
-    }
-    default: return nullptr;
-  }
-}
-
-inline ::flatbuffers::Offset<void> ContentUnion::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ::flatbuffers::rehasher_function_t *_rehasher) const {
-  (void)_rehasher;
-  switch (type) {
-    case Content::Group: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::GroupT *>(value);
-      return CreateGroup(_fbb, ptr, _rehasher).Union();
-    }
-    case Content::Panel: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::PanelT *>(value);
-      return CreatePanel(_fbb, ptr, _rehasher).Union();
-    }
-    case Content::Toggle: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::ToggleT *>(value);
-      return CreateToggle(_fbb, ptr, _rehasher).Union();
-    }
-    case Content::Number: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::NumberT *>(value);
-      return CreateNumber(_fbb, ptr, _rehasher).Union();
-    }
-    case Content::TextField: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::TextFieldT *>(value);
-      return CreateTextField(_fbb, ptr, _rehasher).Union();
-    }
-    case Content::Choice: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::ChoiceT *>(value);
-      return CreateChoice(_fbb, ptr, _rehasher).Union();
-    }
-    case Content::Color: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::ColorT *>(value);
-      return CreateColor(_fbb, ptr, _rehasher).Union();
-    }
-    case Content::Reference: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::ReferenceT *>(value);
-      return CreateReference(_fbb, ptr, _rehasher).Union();
-    }
-    case Content::Button: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::ButtonT *>(value);
-      return CreateButton(_fbb, ptr, _rehasher).Union();
-    }
-    case Content::MenuButton: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::MenuButtonT *>(value);
-      return CreateMenuButton(_fbb, ptr, _rehasher).Union();
-    }
-    case Content::Label: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::LabelT *>(value);
-      return CreateLabel(_fbb, ptr, _rehasher).Union();
-    }
-    case Content::Separator: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::SeparatorT *>(value);
-      return CreateSeparator(_fbb, ptr, _rehasher).Union();
-    }
-    case Content::List: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::ListT *>(value);
-      return CreateList(_fbb, ptr, _rehasher).Union();
-    }
-    case Content::Row: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::RowT *>(value);
-      return CreateRow(_fbb, ptr, _rehasher).Union();
-    }
-    case Content::Picture: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::PictureT *>(value);
-      return CreatePicture(_fbb, ptr, _rehasher).Union();
-    }
-    case Content::Menu: {
-      auto ptr = reinterpret_cast<const Blender::NativeUI::MenuT *>(value);
-      return CreateMenu(_fbb, ptr, _rehasher).Union();
-    }
-    default: return 0;
-  }
-}
-
-inline ContentUnion::ContentUnion(const ContentUnion &u) : type(u.type), value(nullptr) {
-  switch (type) {
-    case Content::Group: {
-      value = new Blender::NativeUI::GroupT(*reinterpret_cast<Blender::NativeUI::GroupT *>(u.value));
-      break;
-    }
-    case Content::Panel: {
-      value = new Blender::NativeUI::PanelT(*reinterpret_cast<Blender::NativeUI::PanelT *>(u.value));
-      break;
-    }
-    case Content::Toggle: {
-      value = new Blender::NativeUI::ToggleT(*reinterpret_cast<Blender::NativeUI::ToggleT *>(u.value));
-      break;
-    }
-    case Content::Number: {
-      value = new Blender::NativeUI::NumberT(*reinterpret_cast<Blender::NativeUI::NumberT *>(u.value));
-      break;
-    }
-    case Content::TextField: {
-      value = new Blender::NativeUI::TextFieldT(*reinterpret_cast<Blender::NativeUI::TextFieldT *>(u.value));
-      break;
-    }
-    case Content::Choice: {
-      value = new Blender::NativeUI::ChoiceT(*reinterpret_cast<Blender::NativeUI::ChoiceT *>(u.value));
-      break;
-    }
-    case Content::Color: {
-      value = new Blender::NativeUI::ColorT(*reinterpret_cast<Blender::NativeUI::ColorT *>(u.value));
-      break;
-    }
-    case Content::Reference: {
-      value = new Blender::NativeUI::ReferenceT(*reinterpret_cast<Blender::NativeUI::ReferenceT *>(u.value));
-      break;
-    }
-    case Content::Button: {
-      value = new Blender::NativeUI::ButtonT(*reinterpret_cast<Blender::NativeUI::ButtonT *>(u.value));
-      break;
-    }
-    case Content::MenuButton: {
-      value = new Blender::NativeUI::MenuButtonT(*reinterpret_cast<Blender::NativeUI::MenuButtonT *>(u.value));
-      break;
-    }
-    case Content::Label: {
-      value = new Blender::NativeUI::LabelT(*reinterpret_cast<Blender::NativeUI::LabelT *>(u.value));
-      break;
-    }
-    case Content::Separator: {
-      value = new Blender::NativeUI::SeparatorT(*reinterpret_cast<Blender::NativeUI::SeparatorT *>(u.value));
-      break;
-    }
-    case Content::List: {
-      value = new Blender::NativeUI::ListT(*reinterpret_cast<Blender::NativeUI::ListT *>(u.value));
-      break;
-    }
-    case Content::Row: {
-      value = new Blender::NativeUI::RowT(*reinterpret_cast<Blender::NativeUI::RowT *>(u.value));
-      break;
-    }
-    case Content::Picture: {
-      value = new Blender::NativeUI::PictureT(*reinterpret_cast<Blender::NativeUI::PictureT *>(u.value));
-      break;
-    }
-    case Content::Menu: {
-      value = new Blender::NativeUI::MenuT(*reinterpret_cast<Blender::NativeUI::MenuT *>(u.value));
-      break;
-    }
-    default:
-      break;
-  }
-}
-
-inline void ContentUnion::Reset() {
-  switch (type) {
-    case Content::Group: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::GroupT *>(value);
-      delete ptr;
-      break;
-    }
-    case Content::Panel: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::PanelT *>(value);
-      delete ptr;
-      break;
-    }
-    case Content::Toggle: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::ToggleT *>(value);
-      delete ptr;
-      break;
-    }
-    case Content::Number: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::NumberT *>(value);
-      delete ptr;
-      break;
-    }
-    case Content::TextField: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::TextFieldT *>(value);
-      delete ptr;
-      break;
-    }
-    case Content::Choice: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::ChoiceT *>(value);
-      delete ptr;
-      break;
-    }
-    case Content::Color: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::ColorT *>(value);
-      delete ptr;
-      break;
-    }
-    case Content::Reference: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::ReferenceT *>(value);
-      delete ptr;
-      break;
-    }
-    case Content::Button: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::ButtonT *>(value);
-      delete ptr;
-      break;
-    }
-    case Content::MenuButton: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::MenuButtonT *>(value);
-      delete ptr;
-      break;
-    }
-    case Content::Label: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::LabelT *>(value);
-      delete ptr;
-      break;
-    }
-    case Content::Separator: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::SeparatorT *>(value);
-      delete ptr;
-      break;
-    }
-    case Content::List: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::ListT *>(value);
-      delete ptr;
-      break;
-    }
-    case Content::Row: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::RowT *>(value);
-      delete ptr;
-      break;
-    }
-    case Content::Picture: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::PictureT *>(value);
-      delete ptr;
-      break;
-    }
-    case Content::Menu: {
-      auto ptr = reinterpret_cast<Blender::NativeUI::MenuT *>(value);
-      delete ptr;
-      break;
-    }
-    default: break;
-  }
-  value = nullptr;
-  type = Content::NONE;
 }
 
 }  // namespace NativeUI

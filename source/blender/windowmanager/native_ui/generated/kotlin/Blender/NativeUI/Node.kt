@@ -19,7 +19,8 @@ import java.nio.ByteOrder
 import kotlin.math.sign
 
 /**
- * A node of a view: a control, a container of controls, or an item of a canvas.
+ * A node of a view: a control, a container of controls, or an item of a canvas. Its children
+ * are sent apart from it, see `Children`, so a change to one does not resend the others.
  */
 @Suppress("unused")
 class Node : Table() {
@@ -46,30 +47,29 @@ class Node : Table() {
         }
     val keyAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(4, 1)
     fun keyInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 4, 1)
-    /**
-     * Its children's keys, in order.
-     */
-    fun children(j: Int) : String? {
-        val o = __offset(6)
-        return if (o != 0) {
-            __string(__vector(o) + j * 4)
-        } else {
-            null
-        }
-    }
-    val childrenLength : Int
-        get() {
-            val o = __offset(6); return if (o != 0) __vector_len(o) else 0
-        }
     val contentType : UByte
         get() {
-            val o = __offset(8)
+            val o = __offset(6)
             return if(o != 0) bb.get(o + bb_pos).toUByte() else 0u
         }
     fun content(obj: Table) : Table? {
-        val o = __offset(10); return if (o != 0) __union(obj, o + bb_pos) else null
+        val o = __offset(8); return if (o != 0) __union(obj, o + bb_pos) else null
     }
     val label : String?
+        get() {
+            val o = __offset(10)
+            return if (o != 0) {
+                __string(o + bb_pos)
+            } else {
+                null
+            }
+        }
+    val labelAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(10, 1)
+    fun labelInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 10, 1)
+    /**
+     * Blender's icon name.
+     */
+    val icon : String?
         get() {
             val o = __offset(12)
             return if (o != 0) {
@@ -78,12 +78,12 @@ class Node : Table() {
                 null
             }
         }
-    val labelAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(12, 1)
-    fun labelInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 12, 1)
+    val iconAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(12, 1)
+    fun iconInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 12, 1)
     /**
-     * Blender's icon name.
+     * What it does, as Blender's tooltip says.
      */
-    val icon : String?
+    val description : String?
         get() {
             val o = __offset(14)
             return if (o != 0) {
@@ -92,28 +92,14 @@ class Node : Table() {
                 null
             }
         }
-    val iconAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(14, 1)
-    fun iconInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 14, 1)
-    /**
-     * What it does, as Blender's tooltip says.
-     */
-    val description : String?
-        get() {
-            val o = __offset(16)
-            return if (o != 0) {
-                __string(o + bb_pos)
-            } else {
-                null
-            }
-        }
-    val descriptionAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(16, 1)
-    fun descriptionInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 16, 1)
+    val descriptionAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(14, 1)
+    fun descriptionInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 14, 1)
     /**
      * It can be changed or used.
      */
     val enabled : Boolean
         get() {
-            val o = __offset(18)
+            val o = __offset(16)
             return if(o != 0) 0.toByte() != bb.get(o + bb_pos) else true
         }
     /**
@@ -121,12 +107,12 @@ class Node : Table() {
      */
     val mixed : Boolean
         get() {
-            val o = __offset(20)
+            val o = __offset(18)
             return if(o != 0) 0.toByte() != bb.get(o + bb_pos) else false
         }
     val animation : UByte
         get() {
-            val o = __offset(22)
+            val o = __offset(20)
             return if(o != 0) bb.get(o + bb_pos).toUByte() else 0u
         }
     /**
@@ -134,15 +120,15 @@ class Node : Table() {
      */
     val property : String?
         get() {
-            val o = __offset(24)
+            val o = __offset(22)
             return if (o != 0) {
                 __string(o + bb_pos)
             } else {
                 null
             }
         }
-    val propertyAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(24, 1)
-    fun propertyInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 24, 1)
+    val propertyAsByteBuffer : ByteBuffer get() = __vector_as_bytebuffer(22, 1)
+    fun propertyInByteBuffer(_bb: ByteBuffer) : ByteBuffer = __vector_in_bytebuffer(_bb, 22, 1)
     companion object {
         fun validateVersion() = Constants.FLATBUFFERS_25_2_10()
         fun getRootAsNode(_bb: ByteBuffer): Node = getRootAsNode(_bb, Node())
@@ -150,14 +136,13 @@ class Node : Table() {
             _bb.order(ByteOrder.LITTLE_ENDIAN)
             return (obj.__assign(_bb.getInt(_bb.position()) + _bb.position(), _bb))
         }
-        fun createNode(builder: FlatBufferBuilder, keyOffset: Int, childrenOffset: Int, contentType: UByte, contentOffset: Int, labelOffset: Int, iconOffset: Int, descriptionOffset: Int, enabled: Boolean, mixed: Boolean, animation: UByte, propertyOffset: Int) : Int {
-            builder.startTable(11)
+        fun createNode(builder: FlatBufferBuilder, keyOffset: Int, contentType: UByte, contentOffset: Int, labelOffset: Int, iconOffset: Int, descriptionOffset: Int, enabled: Boolean, mixed: Boolean, animation: UByte, propertyOffset: Int) : Int {
+            builder.startTable(10)
             addProperty(builder, propertyOffset)
             addDescription(builder, descriptionOffset)
             addIcon(builder, iconOffset)
             addLabel(builder, labelOffset)
             addContent(builder, contentOffset)
-            addChildren(builder, childrenOffset)
             addKey(builder, keyOffset)
             addAnimation(builder, animation)
             addMixed(builder, mixed)
@@ -165,26 +150,17 @@ class Node : Table() {
             addContentType(builder, contentType)
             return endNode(builder)
         }
-        fun startNode(builder: FlatBufferBuilder) = builder.startTable(11)
+        fun startNode(builder: FlatBufferBuilder) = builder.startTable(10)
         fun addKey(builder: FlatBufferBuilder, key: Int) = builder.addOffset(0, key, 0)
-        fun addChildren(builder: FlatBufferBuilder, children: Int) = builder.addOffset(1, children, 0)
-        fun createChildrenVector(builder: FlatBufferBuilder, data: IntArray) : Int {
-            builder.startVector(4, data.size, 4)
-            for (i in data.size - 1 downTo 0) {
-                builder.addOffset(data[i])
-            }
-            return builder.endVector()
-        }
-        fun startChildrenVector(builder: FlatBufferBuilder, numElems: Int) = builder.startVector(4, numElems, 4)
-        fun addContentType(builder: FlatBufferBuilder, contentType: UByte) = builder.addByte(2, contentType.toByte(), 0)
-        fun addContent(builder: FlatBufferBuilder, content: Int) = builder.addOffset(3, content, 0)
-        fun addLabel(builder: FlatBufferBuilder, label: Int) = builder.addOffset(4, label, 0)
-        fun addIcon(builder: FlatBufferBuilder, icon: Int) = builder.addOffset(5, icon, 0)
-        fun addDescription(builder: FlatBufferBuilder, description: Int) = builder.addOffset(6, description, 0)
-        fun addEnabled(builder: FlatBufferBuilder, enabled: Boolean) = builder.addBoolean(7, enabled, true)
-        fun addMixed(builder: FlatBufferBuilder, mixed: Boolean) = builder.addBoolean(8, mixed, false)
-        fun addAnimation(builder: FlatBufferBuilder, animation: UByte) = builder.addByte(9, animation.toByte(), 0)
-        fun addProperty(builder: FlatBufferBuilder, property: Int) = builder.addOffset(10, property, 0)
+        fun addContentType(builder: FlatBufferBuilder, contentType: UByte) = builder.addByte(1, contentType.toByte(), 0)
+        fun addContent(builder: FlatBufferBuilder, content: Int) = builder.addOffset(2, content, 0)
+        fun addLabel(builder: FlatBufferBuilder, label: Int) = builder.addOffset(3, label, 0)
+        fun addIcon(builder: FlatBufferBuilder, icon: Int) = builder.addOffset(4, icon, 0)
+        fun addDescription(builder: FlatBufferBuilder, description: Int) = builder.addOffset(5, description, 0)
+        fun addEnabled(builder: FlatBufferBuilder, enabled: Boolean) = builder.addBoolean(6, enabled, true)
+        fun addMixed(builder: FlatBufferBuilder, mixed: Boolean) = builder.addBoolean(7, mixed, false)
+        fun addAnimation(builder: FlatBufferBuilder, animation: UByte) = builder.addByte(8, animation.toByte(), 0)
+        fun addProperty(builder: FlatBufferBuilder, property: Int) = builder.addOffset(9, property, 0)
         fun endNode(builder: FlatBufferBuilder) : Int {
             val o = builder.endTable()
                 builder.required(o, 4)

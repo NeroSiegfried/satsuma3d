@@ -306,13 +306,12 @@ enum Animation : ubyte {
   Driven,
 }
 
-/// A node of a view: a control, a container of controls, or an item of a canvas.
+/// A node of a view: a control, a container of controls, or an item of a canvas. Its children
+/// are sent apart from it, see `Children`, so a change to one does not resend the others.
 table Node {
   /// Stable within the view for as long as the node shows the same thing, such as a property's
   /// data path, so an interface keeps its state, and commands find it.
   key: string (required);
-  /// Its children's keys, in order.
-  children: [string];
   content: Content;
 
   label: string;
@@ -332,6 +331,18 @@ table Node {
 /* -------------------------------------------------------------------- */
 /* Updates: Blender to the interface */
 
+/// A node as sent: a buffer of its own, which an interface can keep without the rest of the
+/// update it came in.
+table NodeBuffer {
+  node: [ubyte] (required, nested_flatbuffer: "Node");
+}
+
+/// The children of a node, in order.
+table Children {
+  parent: string (required);
+  keys: [string];
+}
+
 /// What changed in a view since its last update.
 table Update {
   subscription: uint;
@@ -342,8 +353,10 @@ table Update {
   /// The view's top node, sent with `reset`.
   top: string;
   /// New nodes, and nodes that changed in any way, sent whole.
-  nodes: [Node];
-  /// Keys of nodes gone from the view.
+  nodes: [NodeBuffer];
+  /// Nodes whose children are new or changed, or now have none.
+  children: [Children];
+  /// Keys of nodes gone from the view, with their children.
   removed: [string];
 }
 

@@ -69,8 +69,8 @@ class Update : Table() {
     /**
      * New nodes, and nodes that changed in any way, sent whole.
      */
-    fun nodes(j: Int) : Blender.NativeUI.Node? = nodes(Blender.NativeUI.Node(), j)
-    fun nodes(obj: Blender.NativeUI.Node, j: Int) : Blender.NativeUI.Node? {
+    fun nodes(j: Int) : Blender.NativeUI.NodeBuffer? = nodes(Blender.NativeUI.NodeBuffer(), j)
+    fun nodes(obj: Blender.NativeUI.NodeBuffer, j: Int) : Blender.NativeUI.NodeBuffer? {
         val o = __offset(12)
         return if (o != 0) {
             obj.__assign(__indirect(__vector(o) + j * 4), bb)
@@ -83,10 +83,26 @@ class Update : Table() {
             val o = __offset(12); return if (o != 0) __vector_len(o) else 0
         }
     /**
-     * Keys of nodes gone from the view.
+     * Nodes whose children are new or changed, or now have none.
+     */
+    fun children(j: Int) : Blender.NativeUI.Children? = children(Blender.NativeUI.Children(), j)
+    fun children(obj: Blender.NativeUI.Children, j: Int) : Blender.NativeUI.Children? {
+        val o = __offset(14)
+        return if (o != 0) {
+            obj.__assign(__indirect(__vector(o) + j * 4), bb)
+        } else {
+            null
+        }
+    }
+    val childrenLength : Int
+        get() {
+            val o = __offset(14); return if (o != 0) __vector_len(o) else 0
+        }
+    /**
+     * Keys of nodes gone from the view, with their children.
      */
     fun removed(j: Int) : String? {
-        val o = __offset(14)
+        val o = __offset(16)
         return if (o != 0) {
             __string(__vector(o) + j * 4)
         } else {
@@ -95,7 +111,7 @@ class Update : Table() {
     }
     val removedLength : Int
         get() {
-            val o = __offset(14); return if (o != 0) __vector_len(o) else 0
+            val o = __offset(16); return if (o != 0) __vector_len(o) else 0
         }
     companion object {
         fun validateVersion() = Constants.FLATBUFFERS_25_2_10()
@@ -104,9 +120,10 @@ class Update : Table() {
             _bb.order(ByteOrder.LITTLE_ENDIAN)
             return (obj.__assign(_bb.getInt(_bb.position()) + _bb.position(), _bb))
         }
-        fun createUpdate(builder: FlatBufferBuilder, subscription: UInt, version: UInt, reset: Boolean, topOffset: Int, nodesOffset: Int, removedOffset: Int) : Int {
-            builder.startTable(6)
+        fun createUpdate(builder: FlatBufferBuilder, subscription: UInt, version: UInt, reset: Boolean, topOffset: Int, nodesOffset: Int, childrenOffset: Int, removedOffset: Int) : Int {
+            builder.startTable(7)
             addRemoved(builder, removedOffset)
+            addChildren(builder, childrenOffset)
             addNodes(builder, nodesOffset)
             addTop(builder, topOffset)
             addVersion(builder, version)
@@ -114,7 +131,7 @@ class Update : Table() {
             addReset(builder, reset)
             return endUpdate(builder)
         }
-        fun startUpdate(builder: FlatBufferBuilder) = builder.startTable(6)
+        fun startUpdate(builder: FlatBufferBuilder) = builder.startTable(7)
         fun addSubscription(builder: FlatBufferBuilder, subscription: UInt) = builder.addInt(0, subscription.toInt(), 0)
         fun addVersion(builder: FlatBufferBuilder, version: UInt) = builder.addInt(1, version.toInt(), 0)
         fun addReset(builder: FlatBufferBuilder, reset: Boolean) = builder.addBoolean(2, reset, false)
@@ -128,7 +145,16 @@ class Update : Table() {
             return builder.endVector()
         }
         fun startNodesVector(builder: FlatBufferBuilder, numElems: Int) = builder.startVector(4, numElems, 4)
-        fun addRemoved(builder: FlatBufferBuilder, removed: Int) = builder.addOffset(5, removed, 0)
+        fun addChildren(builder: FlatBufferBuilder, children: Int) = builder.addOffset(5, children, 0)
+        fun createChildrenVector(builder: FlatBufferBuilder, data: IntArray) : Int {
+            builder.startVector(4, data.size, 4)
+            for (i in data.size - 1 downTo 0) {
+                builder.addOffset(data[i])
+            }
+            return builder.endVector()
+        }
+        fun startChildrenVector(builder: FlatBufferBuilder, numElems: Int) = builder.startVector(4, numElems, 4)
+        fun addRemoved(builder: FlatBufferBuilder, removed: Int) = builder.addOffset(6, removed, 0)
         fun createRemovedVector(builder: FlatBufferBuilder, data: IntArray) : Int {
             builder.startVector(4, data.size, 4)
             for (i in data.size - 1 downTo 0) {

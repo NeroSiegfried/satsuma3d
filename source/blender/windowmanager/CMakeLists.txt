@@ -202,6 +202,7 @@ if(WITH_NATIVE_UI)
   )
   list(APPEND LIB
     PRIVATE bf::extern::flatbuffers
+    PRIVATE bf::extern::xxhash
   )
 endif()
 

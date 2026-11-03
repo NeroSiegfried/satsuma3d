@@ -26,37 +26,6 @@ public enum Blender_NativeUI_Value: UInt8, UnionEnum {
 }
 
 
-public struct Blender_NativeUI_ValueUnion {
-  public var type: Blender_NativeUI_Value
-  public var value: NativeObject?
-  public init(_ v: NativeObject?, type: Blender_NativeUI_Value) {
-    self.type = type
-    self.value = v
-  }
-  public func pack(builder: inout FlatBufferBuilder) -> Offset {
-    switch type {
-    case .boolvalue:
-      var __obj = value as? Blender_NativeUI_BoolValueT
-      return Blender_NativeUI_BoolValue.pack(&builder, obj: &__obj)
-    case .intvalue:
-      var __obj = value as? Blender_NativeUI_IntValueT
-      return Blender_NativeUI_IntValue.pack(&builder, obj: &__obj)
-    case .floatvalue:
-      var __obj = value as? Blender_NativeUI_FloatValueT
-      return Blender_NativeUI_FloatValue.pack(&builder, obj: &__obj)
-    case .textvalue:
-      var __obj = value as? Blender_NativeUI_TextValueT
-      return Blender_NativeUI_TextValue.pack(&builder, obj: &__obj)
-    case .floatsvalue:
-      var __obj = value as? Blender_NativeUI_FloatsValueT
-      return Blender_NativeUI_FloatsValue.pack(&builder, obj: &__obj)
-    case .intsvalue:
-      var __obj = value as? Blender_NativeUI_IntsValueT
-      return Blender_NativeUI_IntsValue.pack(&builder, obj: &__obj)
-    default: return Offset()
-    }
-  }
-}
 ///  How a container lays out its children.
 public enum Blender_NativeUI_Layout: UInt8, Enum, Verifiable {
   public typealias T = UInt8
@@ -181,67 +150,6 @@ public enum Blender_NativeUI_Content: UInt8, UnionEnum {
 }
 
 
-public struct Blender_NativeUI_ContentUnion {
-  public var type: Blender_NativeUI_Content
-  public var value: NativeObject?
-  public init(_ v: NativeObject?, type: Blender_NativeUI_Content) {
-    self.type = type
-    self.value = v
-  }
-  public func pack(builder: inout FlatBufferBuilder) -> Offset {
-    switch type {
-    case .group:
-      var __obj = value as? Blender_NativeUI_GroupT
-      return Blender_NativeUI_Group.pack(&builder, obj: &__obj)
-    case .panel:
-      var __obj = value as? Blender_NativeUI_PanelT
-      return Blender_NativeUI_Panel.pack(&builder, obj: &__obj)
-    case .toggle:
-      var __obj = value as? Blender_NativeUI_ToggleT
-      return Blender_NativeUI_Toggle.pack(&builder, obj: &__obj)
-    case .number:
-      var __obj = value as? Blender_NativeUI_NumberT
-      return Blender_NativeUI_Number.pack(&builder, obj: &__obj)
-    case .textfield:
-      var __obj = value as? Blender_NativeUI_TextFieldT
-      return Blender_NativeUI_TextField.pack(&builder, obj: &__obj)
-    case .choice:
-      var __obj = value as? Blender_NativeUI_ChoiceT
-      return Blender_NativeUI_Choice.pack(&builder, obj: &__obj)
-    case .color:
-      var __obj = value as? Blender_NativeUI_ColorT
-      return Blender_NativeUI_Color.pack(&builder, obj: &__obj)
-    case .reference:
-      var __obj = value as? Blender_NativeUI_ReferenceT
-      return Blender_NativeUI_Reference.pack(&builder, obj: &__obj)
-    case .button:
-      var __obj = value as? Blender_NativeUI_ButtonT
-      return Blender_NativeUI_Button.pack(&builder, obj: &__obj)
-    case .menubutton:
-      var __obj = value as? Blender_NativeUI_MenuButtonT
-      return Blender_NativeUI_MenuButton.pack(&builder, obj: &__obj)
-    case .label:
-      var __obj = value as? Blender_NativeUI_LabelT
-      return Blender_NativeUI_Label.pack(&builder, obj: &__obj)
-    case .separator:
-      var __obj = value as? Blender_NativeUI_SeparatorT
-      return Blender_NativeUI_Separator.pack(&builder, obj: &__obj)
-    case .list:
-      var __obj = value as? Blender_NativeUI_ListT
-      return Blender_NativeUI_List.pack(&builder, obj: &__obj)
-    case .row:
-      var __obj = value as? Blender_NativeUI_RowT
-      return Blender_NativeUI_Row.pack(&builder, obj: &__obj)
-    case .picture:
-      var __obj = value as? Blender_NativeUI_PictureT
-      return Blender_NativeUI_Picture.pack(&builder, obj: &__obj)
-    case .menu:
-      var __obj = value as? Blender_NativeUI_MenuT
-      return Blender_NativeUI_Menu.pack(&builder, obj: &__obj)
-    default: return Offset()
-    }
-  }
-}
 ///  How a property is animated, as Blender colors its control.
 public enum Blender_NativeUI_Animation: UInt8, Enum, Verifiable {
   public typealias T = UInt8
@@ -306,7 +214,7 @@ public enum Blender_NativeUI_Phase: UInt8, Enum, Verifiable {
 }
 
 
-public struct Blender_NativeUI_BoolValue: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_BoolValue: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -334,21 +242,6 @@ public struct Blender_NativeUI_BoolValue: FlatBufferObject, Verifiable, ObjectAP
     Blender_NativeUI_BoolValue.add(value: value, &fbb)
     return Blender_NativeUI_BoolValue.endBoolValue(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_BoolValueT {
-    return Blender_NativeUI_BoolValueT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_BoolValueT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_BoolValueT) -> Offset {
-    let __root = Blender_NativeUI_BoolValue.startBoolValue(&builder)
-    Blender_NativeUI_BoolValue.add(value: obj.value, &builder)
-    return Blender_NativeUI_BoolValue.endBoolValue(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -357,22 +250,7 @@ public struct Blender_NativeUI_BoolValue: FlatBufferObject, Verifiable, ObjectAP
   }
 }
 
-public class Blender_NativeUI_BoolValueT: NativeObject {
-
-  public var value: Bool
-
-  public init(_ _t: inout Blender_NativeUI_BoolValue) {
-    value = _t.value
-  }
-
-  public init() {
-    value = false
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_BoolValue.self) }
-
-}
-public struct Blender_NativeUI_IntValue: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_IntValue: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -399,21 +277,6 @@ public struct Blender_NativeUI_IntValue: FlatBufferObject, Verifiable, ObjectAPI
     Blender_NativeUI_IntValue.add(value: value, &fbb)
     return Blender_NativeUI_IntValue.endIntValue(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_IntValueT {
-    return Blender_NativeUI_IntValueT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_IntValueT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_IntValueT) -> Offset {
-    let __root = Blender_NativeUI_IntValue.startIntValue(&builder)
-    Blender_NativeUI_IntValue.add(value: obj.value, &builder)
-    return Blender_NativeUI_IntValue.endIntValue(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -422,22 +285,7 @@ public struct Blender_NativeUI_IntValue: FlatBufferObject, Verifiable, ObjectAPI
   }
 }
 
-public class Blender_NativeUI_IntValueT: NativeObject {
-
-  public var value: Int64
-
-  public init(_ _t: inout Blender_NativeUI_IntValue) {
-    value = _t.value
-  }
-
-  public init() {
-    value = 0
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_IntValue.self) }
-
-}
-public struct Blender_NativeUI_FloatValue: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_FloatValue: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -464,21 +312,6 @@ public struct Blender_NativeUI_FloatValue: FlatBufferObject, Verifiable, ObjectA
     Blender_NativeUI_FloatValue.add(value: value, &fbb)
     return Blender_NativeUI_FloatValue.endFloatValue(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_FloatValueT {
-    return Blender_NativeUI_FloatValueT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_FloatValueT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_FloatValueT) -> Offset {
-    let __root = Blender_NativeUI_FloatValue.startFloatValue(&builder)
-    Blender_NativeUI_FloatValue.add(value: obj.value, &builder)
-    return Blender_NativeUI_FloatValue.endFloatValue(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -487,22 +320,7 @@ public struct Blender_NativeUI_FloatValue: FlatBufferObject, Verifiable, ObjectA
   }
 }
 
-public class Blender_NativeUI_FloatValueT: NativeObject {
-
-  public var value: Double
-
-  public init(_ _t: inout Blender_NativeUI_FloatValue) {
-    value = _t.value
-  }
-
-  public init() {
-    value = 0.0
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_FloatValue.self) }
-
-}
-public struct Blender_NativeUI_TextValue: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_TextValue: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -530,28 +348,6 @@ public struct Blender_NativeUI_TextValue: FlatBufferObject, Verifiable, ObjectAP
     Blender_NativeUI_TextValue.add(value: value, &fbb)
     return Blender_NativeUI_TextValue.endTextValue(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_TextValueT {
-    return Blender_NativeUI_TextValueT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_TextValueT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_TextValueT) -> Offset {
-    let __value: Offset
-    if let s = obj.value {
-      __value = builder.create(string: s)
-    } else {
-      __value = Offset()
-    }
-
-    let __root = Blender_NativeUI_TextValue.startTextValue(&builder)
-    Blender_NativeUI_TextValue.add(value: __value, &builder)
-    return Blender_NativeUI_TextValue.endTextValue(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -560,21 +356,7 @@ public struct Blender_NativeUI_TextValue: FlatBufferObject, Verifiable, ObjectAP
   }
 }
 
-public class Blender_NativeUI_TextValueT: NativeObject {
-
-  public var value: String?
-
-  public init(_ _t: inout Blender_NativeUI_TextValue) {
-    value = _t.value
-  }
-
-  public init() {
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_TextValue.self) }
-
-}
-public struct Blender_NativeUI_FloatsValue: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_FloatsValue: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -604,22 +386,6 @@ public struct Blender_NativeUI_FloatsValue: FlatBufferObject, Verifiable, Object
     Blender_NativeUI_FloatsValue.addVectorOf(value: value, &fbb)
     return Blender_NativeUI_FloatsValue.endFloatsValue(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_FloatsValueT {
-    return Blender_NativeUI_FloatsValueT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_FloatsValueT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_FloatsValueT) -> Offset {
-    let __value = builder.createVector(obj.value)
-    let __root = Blender_NativeUI_FloatsValue.startFloatsValue(&builder)
-    Blender_NativeUI_FloatsValue.addVectorOf(value: __value, &builder)
-    return Blender_NativeUI_FloatsValue.endFloatsValue(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -628,25 +394,7 @@ public struct Blender_NativeUI_FloatsValue: FlatBufferObject, Verifiable, Object
   }
 }
 
-public class Blender_NativeUI_FloatsValueT: NativeObject {
-
-  public var value: [Double]
-
-  public init(_ _t: inout Blender_NativeUI_FloatsValue) {
-    value = []
-    for index in 0..<_t.valueCount {
-        value.append(_t.value(at: index))
-    }
-  }
-
-  public init() {
-    value = []
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_FloatsValue.self) }
-
-}
-public struct Blender_NativeUI_IntsValue: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_IntsValue: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -676,22 +424,6 @@ public struct Blender_NativeUI_IntsValue: FlatBufferObject, Verifiable, ObjectAP
     Blender_NativeUI_IntsValue.addVectorOf(value: value, &fbb)
     return Blender_NativeUI_IntsValue.endIntsValue(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_IntsValueT {
-    return Blender_NativeUI_IntsValueT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_IntsValueT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_IntsValueT) -> Offset {
-    let __value = builder.createVector(obj.value)
-    let __root = Blender_NativeUI_IntsValue.startIntsValue(&builder)
-    Blender_NativeUI_IntsValue.addVectorOf(value: __value, &builder)
-    return Blender_NativeUI_IntsValue.endIntsValue(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -700,26 +432,8 @@ public struct Blender_NativeUI_IntsValue: FlatBufferObject, Verifiable, ObjectAP
   }
 }
 
-public class Blender_NativeUI_IntsValueT: NativeObject {
-
-  public var value: [Int64]
-
-  public init(_ _t: inout Blender_NativeUI_IntsValue) {
-    value = []
-    for index in 0..<_t.valueCount {
-        value.append(_t.value(at: index))
-    }
-  }
-
-  public init() {
-    value = []
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_IntsValue.self) }
-
-}
 ///  A named value, such as a view's parameter.
-public struct Blender_NativeUI_Param: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Param: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -757,28 +471,6 @@ public struct Blender_NativeUI_Param: FlatBufferObject, Verifiable, ObjectAPIPac
     Blender_NativeUI_Param.add(value: value, &fbb)
     return Blender_NativeUI_Param.endParam(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_ParamT {
-    return Blender_NativeUI_ParamT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_ParamT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_ParamT) -> Offset {
-    let __key = builder.create(string: obj.key)
-    let __value = obj.value?.pack(builder: &builder) ?? Offset()
-    let __root = Blender_NativeUI_Param.startParam(&builder)
-    Blender_NativeUI_Param.add(key: __key, &builder)
-    if let o = obj.value?.type {
-      Blender_NativeUI_Param.add(valueType: o, &builder)
-      Blender_NativeUI_Param.add(value: __value, &builder)
-    }
-
-    return Blender_NativeUI_Param.endParam(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -805,45 +497,8 @@ public struct Blender_NativeUI_Param: FlatBufferObject, Verifiable, ObjectAPIPac
   }
 }
 
-public class Blender_NativeUI_ParamT: NativeObject {
-
-  public var key: String
-  public var value: Blender_NativeUI_ValueUnion?
-
-  public init(_ _t: inout Blender_NativeUI_Param) {
-    key = _t.key
-    switch _t.valueType {
-    case .boolvalue:
-      var _v = _t.value(type: Blender_NativeUI_BoolValue.self)
-      value = Blender_NativeUI_ValueUnion(_v?.unpack(), type: .boolvalue)
-    case .intvalue:
-      var _v = _t.value(type: Blender_NativeUI_IntValue.self)
-      value = Blender_NativeUI_ValueUnion(_v?.unpack(), type: .intvalue)
-    case .floatvalue:
-      var _v = _t.value(type: Blender_NativeUI_FloatValue.self)
-      value = Blender_NativeUI_ValueUnion(_v?.unpack(), type: .floatvalue)
-    case .textvalue:
-      var _v = _t.value(type: Blender_NativeUI_TextValue.self)
-      value = Blender_NativeUI_ValueUnion(_v?.unpack(), type: .textvalue)
-    case .floatsvalue:
-      var _v = _t.value(type: Blender_NativeUI_FloatsValue.self)
-      value = Blender_NativeUI_ValueUnion(_v?.unpack(), type: .floatsvalue)
-    case .intsvalue:
-      var _v = _t.value(type: Blender_NativeUI_IntsValue.self)
-      value = Blender_NativeUI_ValueUnion(_v?.unpack(), type: .intsvalue)
-    default: break
-    }
-  }
-
-  public init() {
-    key = ""
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Param.self) }
-
-}
 ///  A group of controls: the whole of a view, a panel's body, or a row.
-public struct Blender_NativeUI_Group: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Group: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -870,21 +525,6 @@ public struct Blender_NativeUI_Group: FlatBufferObject, Verifiable, ObjectAPIPac
     Blender_NativeUI_Group.add(layout: layout, &fbb)
     return Blender_NativeUI_Group.endGroup(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_GroupT {
-    return Blender_NativeUI_GroupT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_GroupT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_GroupT) -> Offset {
-    let __root = Blender_NativeUI_Group.startGroup(&builder)
-    Blender_NativeUI_Group.add(layout: obj.layout, &builder)
-    return Blender_NativeUI_Group.endGroup(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -893,24 +533,9 @@ public struct Blender_NativeUI_Group: FlatBufferObject, Verifiable, ObjectAPIPac
   }
 }
 
-public class Blender_NativeUI_GroupT: NativeObject {
-
-  public var layout: Blender_NativeUI_Layout
-
-  public init(_ _t: inout Blender_NativeUI_Group) {
-    layout = _t.layout
-  }
-
-  public init() {
-    layout = .column
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Group.self) }
-
-}
 ///  A panel, which can be opened and closed. Its controls are its children; those of its header
 ///  are listed in `header`.
-public struct Blender_NativeUI_Panel: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Panel: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -953,24 +578,6 @@ public struct Blender_NativeUI_Panel: FlatBufferObject, Verifiable, ObjectAPIPac
     Blender_NativeUI_Panel.addVectorOf(header: header, &fbb)
     return Blender_NativeUI_Panel.endPanel(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_PanelT {
-    return Blender_NativeUI_PanelT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_PanelT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_PanelT) -> Offset {
-    let __header = builder.createVector(ofStrings: obj.header.compactMap({ $0 }) )
-    let __root = Blender_NativeUI_Panel.startPanel(&builder)
-    Blender_NativeUI_Panel.add(open_: obj.open_, &builder)
-    Blender_NativeUI_Panel.add(fixed: obj.fixed, &builder)
-    Blender_NativeUI_Panel.addVectorOf(header: __header, &builder)
-    return Blender_NativeUI_Panel.endPanel(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -981,32 +588,8 @@ public struct Blender_NativeUI_Panel: FlatBufferObject, Verifiable, ObjectAPIPac
   }
 }
 
-public class Blender_NativeUI_PanelT: NativeObject {
-
-  public var open_: Bool
-  public var fixed: Bool
-  public var header: [String?]
-
-  public init(_ _t: inout Blender_NativeUI_Panel) {
-    open_ = _t.open_
-    fixed = _t.fixed
-    header = []
-    for index in 0..<_t.headerCount {
-        header.append(_t.header(at: index))
-    }
-  }
-
-  public init() {
-    open_ = true
-    fixed = false
-    header = []
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Panel.self) }
-
-}
 ///  A switch.
-public struct Blender_NativeUI_Toggle: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Toggle: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -1041,22 +624,6 @@ public struct Blender_NativeUI_Toggle: FlatBufferObject, Verifiable, ObjectAPIPa
     Blender_NativeUI_Toggle.add(button: button, &fbb)
     return Blender_NativeUI_Toggle.endToggle(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_ToggleT {
-    return Blender_NativeUI_ToggleT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_ToggleT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_ToggleT) -> Offset {
-    let __root = Blender_NativeUI_Toggle.startToggle(&builder)
-    Blender_NativeUI_Toggle.add(value: obj.value, &builder)
-    Blender_NativeUI_Toggle.add(button: obj.button, &builder)
-    return Blender_NativeUI_Toggle.endToggle(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -1066,26 +633,8 @@ public struct Blender_NativeUI_Toggle: FlatBufferObject, Verifiable, ObjectAPIPa
   }
 }
 
-public class Blender_NativeUI_ToggleT: NativeObject {
-
-  public var value: Bool
-  public var button: Bool
-
-  public init(_ _t: inout Blender_NativeUI_Toggle) {
-    value = _t.value
-    button = _t.button
-  }
-
-  public init() {
-    value = false
-    button = false
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Toggle.self) }
-
-}
 ///  A number.
-public struct Blender_NativeUI_Number: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Number: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -1169,31 +718,6 @@ public struct Blender_NativeUI_Number: FlatBufferObject, Verifiable, ObjectAPIPa
     Blender_NativeUI_Number.add(scale: scale, &fbb)
     return Blender_NativeUI_Number.endNumber(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_NumberT {
-    return Blender_NativeUI_NumberT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_NumberT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_NumberT) -> Offset {
-    let __root = Blender_NativeUI_Number.startNumber(&builder)
-    Blender_NativeUI_Number.add(value: obj.value, &builder)
-    Blender_NativeUI_Number.add(integer: obj.integer, &builder)
-    Blender_NativeUI_Number.add(kind: obj.kind, &builder)
-    Blender_NativeUI_Number.add(min: obj.min, &builder)
-    Blender_NativeUI_Number.add(max: obj.max, &builder)
-    Blender_NativeUI_Number.add(softMin: obj.softMin, &builder)
-    Blender_NativeUI_Number.add(softMax: obj.softMax, &builder)
-    Blender_NativeUI_Number.add(step: obj.step, &builder)
-    Blender_NativeUI_Number.add(precision: obj.precision, &builder)
-    Blender_NativeUI_Number.add(slider: obj.slider, &builder)
-    Blender_NativeUI_Number.add(scale: obj.scale, &builder)
-    return Blender_NativeUI_Number.endNumber(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -1212,53 +736,8 @@ public struct Blender_NativeUI_Number: FlatBufferObject, Verifiable, ObjectAPIPa
   }
 }
 
-public class Blender_NativeUI_NumberT: NativeObject {
-
-  public var value: Double
-  public var integer: Bool
-  public var kind: Blender_NativeUI_NumberKind
-  public var min: Double
-  public var max: Double
-  public var softMin: Double
-  public var softMax: Double
-  public var step: Double
-  public var precision: UInt8
-  public var slider: Bool
-  public var scale: Blender_NativeUI_Scale
-
-  public init(_ _t: inout Blender_NativeUI_Number) {
-    value = _t.value
-    integer = _t.integer
-    kind = _t.kind
-    min = _t.min
-    max = _t.max
-    softMin = _t.softMin
-    softMax = _t.softMax
-    step = _t.step
-    precision = _t.precision
-    slider = _t.slider
-    scale = _t.scale
-  }
-
-  public init() {
-    value = 0.0
-    integer = false
-    kind = .plain
-    min = -.infinity
-    max = .infinity
-    softMin = -.infinity
-    softMax = .infinity
-    step = 0.0
-    precision = 3
-    slider = false
-    scale = .linear
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Number.self) }
-
-}
 ///  Text.
-public struct Blender_NativeUI_TextField: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_TextField: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -1299,30 +778,6 @@ public struct Blender_NativeUI_TextField: FlatBufferObject, Verifiable, ObjectAP
     Blender_NativeUI_TextField.add(path: path, &fbb)
     return Blender_NativeUI_TextField.endTextField(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_TextFieldT {
-    return Blender_NativeUI_TextFieldT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_TextFieldT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_TextFieldT) -> Offset {
-    let __value: Offset
-    if let s = obj.value {
-      __value = builder.create(string: s)
-    } else {
-      __value = Offset()
-    }
-
-    let __root = Blender_NativeUI_TextField.startTextField(&builder)
-    Blender_NativeUI_TextField.add(value: __value, &builder)
-    Blender_NativeUI_TextField.add(multiline: obj.multiline, &builder)
-    Blender_NativeUI_TextField.add(path: obj.path, &builder)
-    return Blender_NativeUI_TextField.endTextField(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -1333,28 +788,8 @@ public struct Blender_NativeUI_TextField: FlatBufferObject, Verifiable, ObjectAP
   }
 }
 
-public class Blender_NativeUI_TextFieldT: NativeObject {
-
-  public var value: String?
-  public var multiline: Bool
-  public var path: Bool
-
-  public init(_ _t: inout Blender_NativeUI_TextField) {
-    value = _t.value
-    multiline = _t.multiline
-    path = _t.path
-  }
-
-  public init() {
-    multiline = false
-    path = false
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_TextField.self) }
-
-}
 ///  One choice of a `Choice`, or a heading between groups of them.
-public struct Blender_NativeUI_Option: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Option: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -1408,60 +843,6 @@ public struct Blender_NativeUI_Option: FlatBufferObject, Verifiable, ObjectAPIPa
     Blender_NativeUI_Option.add(description: description, &fbb)
     return Blender_NativeUI_Option.endOption(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_OptionT {
-    return Blender_NativeUI_OptionT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_OptionT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_OptionT) -> Offset {
-    let __value: Offset
-    if let s = obj.value {
-      __value = builder.create(string: s)
-    } else {
-      __value = Offset()
-    }
-
-    let __label: Offset
-    if let s = obj.label {
-      __label = builder.create(string: s)
-    } else {
-      __label = Offset()
-    }
-
-    let __icon: Offset
-    if let s = obj.icon {
-      __icon = builder.create(string: s)
-    } else {
-      __icon = Offset()
-    }
-
-    let __preview: Offset
-    if let s = obj.preview {
-      __preview = builder.create(string: s)
-    } else {
-      __preview = Offset()
-    }
-
-    let __description: Offset
-    if let s = obj.description {
-      __description = builder.create(string: s)
-    } else {
-      __description = Offset()
-    }
-
-    let __root = Blender_NativeUI_Option.startOption(&builder)
-    Blender_NativeUI_Option.add(value: __value, &builder)
-    Blender_NativeUI_Option.add(label: __label, &builder)
-    Blender_NativeUI_Option.add(icon: __icon, &builder)
-    Blender_NativeUI_Option.add(preview: __preview, &builder)
-    Blender_NativeUI_Option.add(description: __description, &builder)
-    return Blender_NativeUI_Option.endOption(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -1474,30 +855,8 @@ public struct Blender_NativeUI_Option: FlatBufferObject, Verifiable, ObjectAPIPa
   }
 }
 
-public class Blender_NativeUI_OptionT: NativeObject {
-
-  public var value: String?
-  public var label: String?
-  public var icon: String?
-  public var preview: String?
-  public var description: String?
-
-  public init(_ _t: inout Blender_NativeUI_Option) {
-    value = _t.value
-    label = _t.label
-    icon = _t.icon
-    preview = _t.preview
-    description = _t.description
-  }
-
-  public init() {
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Option.self) }
-
-}
 ///  A choice of options, such as an enum.
-public struct Blender_NativeUI_Choice: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Choice: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -1545,36 +904,6 @@ public struct Blender_NativeUI_Choice: FlatBufferObject, Verifiable, ObjectAPIPa
     Blender_NativeUI_Choice.add(multiple: multiple, &fbb)
     return Blender_NativeUI_Choice.endChoice(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_ChoiceT {
-    return Blender_NativeUI_ChoiceT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_ChoiceT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_ChoiceT) -> Offset {
-    let __value: Offset
-    if let s = obj.value {
-      __value = builder.create(string: s)
-    } else {
-      __value = Offset()
-    }
-
-    var __options__: [Offset] = []
-    for var i in obj.options {
-      __options__.append(Blender_NativeUI_Option.pack(&builder, obj: &i))
-    }
-    let __options = builder.createVector(ofOffsets: __options__)
-    let __root = Blender_NativeUI_Choice.startChoice(&builder)
-    Blender_NativeUI_Choice.add(value: __value, &builder)
-    Blender_NativeUI_Choice.addVectorOf(options: __options, &builder)
-    Blender_NativeUI_Choice.add(style: obj.style, &builder)
-    Blender_NativeUI_Choice.add(multiple: obj.multiple, &builder)
-    return Blender_NativeUI_Choice.endChoice(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -1586,35 +915,8 @@ public struct Blender_NativeUI_Choice: FlatBufferObject, Verifiable, ObjectAPIPa
   }
 }
 
-public class Blender_NativeUI_ChoiceT: NativeObject {
-
-  public var value: String?
-  public var options: [Blender_NativeUI_OptionT?]
-  public var style: Blender_NativeUI_ChoiceStyle
-  public var multiple: Bool
-
-  public init(_ _t: inout Blender_NativeUI_Choice) {
-    value = _t.value
-    options = []
-    for index in 0..<_t.optionsCount {
-        var __v_ = _t.options(at: index)
-        options.append(__v_?.unpack())
-    }
-    style = _t.style
-    multiple = _t.multiple
-  }
-
-  public init() {
-    options = []
-    style = .menu
-    multiple = false
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Choice.self) }
-
-}
 ///  A color.
-public struct Blender_NativeUI_Color: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Color: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -1651,23 +953,6 @@ public struct Blender_NativeUI_Color: FlatBufferObject, Verifiable, ObjectAPIPac
     Blender_NativeUI_Color.add(alpha: alpha, &fbb)
     return Blender_NativeUI_Color.endColor(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_ColorT {
-    return Blender_NativeUI_ColorT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_ColorT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_ColorT) -> Offset {
-    let __value = builder.createVector(obj.value)
-    let __root = Blender_NativeUI_Color.startColor(&builder)
-    Blender_NativeUI_Color.addVectorOf(value: __value, &builder)
-    Blender_NativeUI_Color.add(alpha: obj.alpha, &builder)
-    return Blender_NativeUI_Color.endColor(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -1677,29 +962,8 @@ public struct Blender_NativeUI_Color: FlatBufferObject, Verifiable, ObjectAPIPac
   }
 }
 
-public class Blender_NativeUI_ColorT: NativeObject {
-
-  public var value: [Double]
-  public var alpha: Bool
-
-  public init(_ _t: inout Blender_NativeUI_Color) {
-    value = []
-    for index in 0..<_t.valueCount {
-        value.append(_t.value(at: index))
-    }
-    alpha = _t.alpha
-  }
-
-  public init() {
-    value = []
-    alpha = false
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Color.self) }
-
-}
 ///  A data-block chosen for a property, such as an object's material.
-public struct Blender_NativeUI_Reference: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Reference: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -1786,56 +1050,6 @@ public struct Blender_NativeUI_Reference: FlatBufferObject, Verifiable, ObjectAP
     Blender_NativeUI_Reference.addVectorOf(options: options, &fbb)
     return Blender_NativeUI_Reference.endReference(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_ReferenceT {
-    return Blender_NativeUI_ReferenceT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_ReferenceT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_ReferenceT) -> Offset {
-    let __type: Offset
-    if let s = obj.type {
-      __type = builder.create(string: s)
-    } else {
-      __type = Offset()
-    }
-
-    let __name: Offset
-    if let s = obj.name {
-      __name = builder.create(string: s)
-    } else {
-      __name = Offset()
-    }
-
-    let __value: Offset
-    if let s = obj.value {
-      __value = builder.create(string: s)
-    } else {
-      __value = Offset()
-    }
-
-    var __options__: [Offset] = []
-    for var i in obj.options {
-      __options__.append(Blender_NativeUI_Option.pack(&builder, obj: &i))
-    }
-    let __options = builder.createVector(ofOffsets: __options__)
-    let __root = Blender_NativeUI_Reference.startReference(&builder)
-    Blender_NativeUI_Reference.add(type: __type, &builder)
-    Blender_NativeUI_Reference.add(name: __name, &builder)
-    Blender_NativeUI_Reference.add(value: __value, &builder)
-    Blender_NativeUI_Reference.add(users: obj.users, &builder)
-    Blender_NativeUI_Reference.add(linked: obj.linked, &builder)
-    Blender_NativeUI_Reference.add(fakeUser: obj.fakeUser, &builder)
-    Blender_NativeUI_Reference.add(canNew: obj.canNew, &builder)
-    Blender_NativeUI_Reference.add(canUnlink: obj.canUnlink, &builder)
-    Blender_NativeUI_Reference.add(canSingleUser: obj.canSingleUser, &builder)
-    Blender_NativeUI_Reference.addVectorOf(options: __options, &builder)
-    return Blender_NativeUI_Reference.endReference(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -1853,51 +1067,8 @@ public struct Blender_NativeUI_Reference: FlatBufferObject, Verifiable, ObjectAP
   }
 }
 
-public class Blender_NativeUI_ReferenceT: NativeObject {
-
-  public var type: String?
-  public var name: String?
-  public var value: String?
-  public var users: Int32
-  public var linked: Bool
-  public var fakeUser: Bool
-  public var canNew: Bool
-  public var canUnlink: Bool
-  public var canSingleUser: Bool
-  public var options: [Blender_NativeUI_OptionT?]
-
-  public init(_ _t: inout Blender_NativeUI_Reference) {
-    type = _t.type
-    name = _t.name
-    value = _t.value
-    users = _t.users
-    linked = _t.linked
-    fakeUser = _t.fakeUser
-    canNew = _t.canNew
-    canUnlink = _t.canUnlink
-    canSingleUser = _t.canSingleUser
-    options = []
-    for index in 0..<_t.optionsCount {
-        var __v_ = _t.options(at: index)
-        options.append(__v_?.unpack())
-    }
-  }
-
-  public init() {
-    users = 0
-    linked = false
-    fakeUser = false
-    canNew = false
-    canUnlink = false
-    canSingleUser = false
-    options = []
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Reference.self) }
-
-}
 ///  A button, which runs something when invoked.
-public struct Blender_NativeUI_Button: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Button: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -1924,21 +1095,6 @@ public struct Blender_NativeUI_Button: FlatBufferObject, Verifiable, ObjectAPIPa
     Blender_NativeUI_Button.add(style: style, &fbb)
     return Blender_NativeUI_Button.endButton(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_ButtonT {
-    return Blender_NativeUI_ButtonT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_ButtonT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_ButtonT) -> Offset {
-    let __root = Blender_NativeUI_Button.startButton(&builder)
-    Blender_NativeUI_Button.add(style: obj.style, &builder)
-    return Blender_NativeUI_Button.endButton(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -1947,23 +1103,8 @@ public struct Blender_NativeUI_Button: FlatBufferObject, Verifiable, ObjectAPIPa
   }
 }
 
-public class Blender_NativeUI_ButtonT: NativeObject {
-
-  public var style: Blender_NativeUI_ButtonStyle
-
-  public init(_ _t: inout Blender_NativeUI_Button) {
-    style = _t.style
-  }
-
-  public init() {
-    style = .normal
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Button.self) }
-
-}
 ///  A button that opens a menu, a view of its own named here.
-public struct Blender_NativeUI_MenuButton: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_MenuButton: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -1999,34 +1140,6 @@ public struct Blender_NativeUI_MenuButton: FlatBufferObject, Verifiable, ObjectA
     Blender_NativeUI_MenuButton.addVectorOf(params: params, &fbb)
     return Blender_NativeUI_MenuButton.endMenuButton(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_MenuButtonT {
-    return Blender_NativeUI_MenuButtonT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_MenuButtonT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_MenuButtonT) -> Offset {
-    let __view: Offset
-    if let s = obj.view {
-      __view = builder.create(string: s)
-    } else {
-      __view = Offset()
-    }
-
-    var __params__: [Offset] = []
-    for var i in obj.params {
-      __params__.append(Blender_NativeUI_Param.pack(&builder, obj: &i))
-    }
-    let __params = builder.createVector(ofOffsets: __params__)
-    let __root = Blender_NativeUI_MenuButton.startMenuButton(&builder)
-    Blender_NativeUI_MenuButton.add(view: __view, &builder)
-    Blender_NativeUI_MenuButton.addVectorOf(params: __params, &builder)
-    return Blender_NativeUI_MenuButton.endMenuButton(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -2036,29 +1149,8 @@ public struct Blender_NativeUI_MenuButton: FlatBufferObject, Verifiable, ObjectA
   }
 }
 
-public class Blender_NativeUI_MenuButtonT: NativeObject {
-
-  public var view: String?
-  public var params: [Blender_NativeUI_ParamT?]
-
-  public init(_ _t: inout Blender_NativeUI_MenuButton) {
-    view = _t.view
-    params = []
-    for index in 0..<_t.paramsCount {
-        var __v_ = _t.params(at: index)
-        params.append(__v_?.unpack())
-    }
-  }
-
-  public init() {
-    params = []
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_MenuButton.self) }
-
-}
 ///  Text that cannot be edited, such as a property shown for information.
-public struct Blender_NativeUI_Label: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Label: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -2086,28 +1178,6 @@ public struct Blender_NativeUI_Label: FlatBufferObject, Verifiable, ObjectAPIPac
     Blender_NativeUI_Label.add(value: value, &fbb)
     return Blender_NativeUI_Label.endLabel(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_LabelT {
-    return Blender_NativeUI_LabelT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_LabelT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_LabelT) -> Offset {
-    let __value: Offset
-    if let s = obj.value {
-      __value = builder.create(string: s)
-    } else {
-      __value = Offset()
-    }
-
-    let __root = Blender_NativeUI_Label.startLabel(&builder)
-    Blender_NativeUI_Label.add(value: __value, &builder)
-    return Blender_NativeUI_Label.endLabel(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -2116,22 +1186,8 @@ public struct Blender_NativeUI_Label: FlatBufferObject, Verifiable, ObjectAPIPac
   }
 }
 
-public class Blender_NativeUI_LabelT: NativeObject {
-
-  public var value: String?
-
-  public init(_ _t: inout Blender_NativeUI_Label) {
-    value = _t.value
-  }
-
-  public init() {
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Label.self) }
-
-}
 ///  A line between controls.
-public struct Blender_NativeUI_Separator: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Separator: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -2142,20 +1198,6 @@ public struct Blender_NativeUI_Separator: FlatBufferObject, Verifiable, ObjectAP
 
   public static func startSeparator(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 0) }
   public static func endSeparator(_ fbb: inout FlatBufferBuilder, start: UOffset) -> Offset { let end = Offset(offset: fbb.endTable(at: start)); return end }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_SeparatorT {
-    return Blender_NativeUI_SeparatorT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_SeparatorT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_SeparatorT) -> Offset {
-    let __root = Blender_NativeUI_Separator.startSeparator(&builder)
-    return Blender_NativeUI_Separator.endSeparator(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -2163,21 +1205,9 @@ public struct Blender_NativeUI_Separator: FlatBufferObject, Verifiable, ObjectAP
   }
 }
 
-public class Blender_NativeUI_SeparatorT: NativeObject {
-
-
-  public init(_ _t: inout Blender_NativeUI_Separator) {
-  }
-
-  public init() {
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Separator.self) }
-
-}
 ///  A list of items, such as material slots or shape keys: its rows are its children, each with
 ///  controls of its own.
-public struct Blender_NativeUI_List: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_List: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -2231,32 +1261,6 @@ public struct Blender_NativeUI_List: FlatBufferObject, Verifiable, ObjectAPIPack
     Blender_NativeUI_List.add(tree: tree, &fbb)
     return Blender_NativeUI_List.endList(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_ListT {
-    return Blender_NativeUI_ListT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_ListT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_ListT) -> Offset {
-    let __active: Offset
-    if let s = obj.active {
-      __active = builder.create(string: s)
-    } else {
-      __active = Offset()
-    }
-
-    let __root = Blender_NativeUI_List.startList(&builder)
-    Blender_NativeUI_List.add(active: __active, &builder)
-    Blender_NativeUI_List.add(canAdd: obj.canAdd, &builder)
-    Blender_NativeUI_List.add(canRemove: obj.canRemove, &builder)
-    Blender_NativeUI_List.add(canReorder: obj.canReorder, &builder)
-    Blender_NativeUI_List.add(tree: obj.tree, &builder)
-    return Blender_NativeUI_List.endList(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -2269,34 +1273,8 @@ public struct Blender_NativeUI_List: FlatBufferObject, Verifiable, ObjectAPIPack
   }
 }
 
-public class Blender_NativeUI_ListT: NativeObject {
-
-  public var active: String?
-  public var canAdd: Bool
-  public var canRemove: Bool
-  public var canReorder: Bool
-  public var tree: Bool
-
-  public init(_ _t: inout Blender_NativeUI_List) {
-    active = _t.active
-    canAdd = _t.canAdd
-    canRemove = _t.canRemove
-    canReorder = _t.canReorder
-    tree = _t.tree
-  }
-
-  public init() {
-    canAdd = false
-    canRemove = false
-    canReorder = false
-    tree = false
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_List.self) }
-
-}
 ///  A row of a list.
-public struct Blender_NativeUI_Row: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Row: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -2343,31 +1321,6 @@ public struct Blender_NativeUI_Row: FlatBufferObject, Verifiable, ObjectAPIPacke
     Blender_NativeUI_Row.add(preview: preview, &fbb)
     return Blender_NativeUI_Row.endRow(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_RowT {
-    return Blender_NativeUI_RowT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_RowT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_RowT) -> Offset {
-    let __preview: Offset
-    if let s = obj.preview {
-      __preview = builder.create(string: s)
-    } else {
-      __preview = Offset()
-    }
-
-    let __root = Blender_NativeUI_Row.startRow(&builder)
-    Blender_NativeUI_Row.add(depth: obj.depth, &builder)
-    Blender_NativeUI_Row.add(selected: obj.selected, &builder)
-    Blender_NativeUI_Row.add(renamable: obj.renamable, &builder)
-    Blender_NativeUI_Row.add(preview: __preview, &builder)
-    return Blender_NativeUI_Row.endRow(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -2379,31 +1332,8 @@ public struct Blender_NativeUI_Row: FlatBufferObject, Verifiable, ObjectAPIPacke
   }
 }
 
-public class Blender_NativeUI_RowT: NativeObject {
-
-  public var depth: Int32
-  public var selected: Bool
-  public var renamable: Bool
-  public var preview: String?
-
-  public init(_ _t: inout Blender_NativeUI_Row) {
-    depth = _t.depth
-    selected = _t.selected
-    renamable = _t.renamable
-    preview = _t.preview
-  }
-
-  public init() {
-    depth = 0
-    selected = false
-    renamable = false
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Row.self) }
-
-}
 ///  A picture, such as a material's rendered preview.
-public struct Blender_NativeUI_Picture: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Picture: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -2431,28 +1361,6 @@ public struct Blender_NativeUI_Picture: FlatBufferObject, Verifiable, ObjectAPIP
     Blender_NativeUI_Picture.add(image: image, &fbb)
     return Blender_NativeUI_Picture.endPicture(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_PictureT {
-    return Blender_NativeUI_PictureT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_PictureT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_PictureT) -> Offset {
-    let __image: Offset
-    if let s = obj.image {
-      __image = builder.create(string: s)
-    } else {
-      __image = Offset()
-    }
-
-    let __root = Blender_NativeUI_Picture.startPicture(&builder)
-    Blender_NativeUI_Picture.add(image: __image, &builder)
-    return Blender_NativeUI_Picture.endPicture(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -2461,22 +1369,8 @@ public struct Blender_NativeUI_Picture: FlatBufferObject, Verifiable, ObjectAPIP
   }
 }
 
-public class Blender_NativeUI_PictureT: NativeObject {
-
-  public var image: String?
-
-  public init(_ _t: inout Blender_NativeUI_Picture) {
-    image = _t.image
-  }
-
-  public init() {
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Picture.self) }
-
-}
 ///  A menu: its items are its children, controls like any other.
-public struct Blender_NativeUI_Menu: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Menu: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -2487,20 +1381,6 @@ public struct Blender_NativeUI_Menu: FlatBufferObject, Verifiable, ObjectAPIPack
 
   public static func startMenu(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 0) }
   public static func endMenu(_ fbb: inout FlatBufferBuilder, start: UOffset) -> Offset { let end = Offset(offset: fbb.endTable(at: start)); return end }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_MenuT {
-    return Blender_NativeUI_MenuT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_MenuT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_MenuT) -> Offset {
-    let __root = Blender_NativeUI_Menu.startMenu(&builder)
-    return Blender_NativeUI_Menu.endMenu(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -2508,20 +1388,9 @@ public struct Blender_NativeUI_Menu: FlatBufferObject, Verifiable, ObjectAPIPack
   }
 }
 
-public class Blender_NativeUI_MenuT: NativeObject {
-
-
-  public init(_ _t: inout Blender_NativeUI_Menu) {
-  }
-
-  public init() {
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Menu.self) }
-
-}
-///  A node of a view: a control, a container of controls, or an item of a canvas.
-public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable, ObjectAPIPacker {
+///  A node of a view: a control, a container of controls, or an item of a canvas. Its children
+///  are sent apart from it, see `Children`, so a change to one does not resend the others.
+public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -2532,16 +1401,15 @@ public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable, ObjectAPIPack
 
   private enum VTOFFSET: VOffset {
     case key = 4
-    case children = 6
-    case contentType = 8
-    case content = 10
-    case label = 12
-    case icon = 14
-    case description = 16
-    case enabled = 18
-    case mixed = 20
-    case animation = 22
-    case property = 24
+    case contentType = 6
+    case content = 8
+    case label = 10
+    case icon = 12
+    case description = 14
+    case enabled = 16
+    case mixed = 18
+    case animation = 20
+    case property = 22
     var v: Int32 { Int32(self.rawValue) }
     var p: VOffset { self.rawValue }
   }
@@ -2550,10 +1418,6 @@ public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable, ObjectAPIPack
   ///  data path, so an interface keeps its state, and commands find it.
   public var key: String! { let o = _accessor.offset(VTOFFSET.key.v); return _accessor.string(at: o) }
   public var keySegmentArray: [UInt8]! { return _accessor.getVector(at: VTOFFSET.key.v) }
-  ///  Its children's keys, in order.
-  public var hasChildren: Bool { let o = _accessor.offset(VTOFFSET.children.v); return o == 0 ? false : true }
-  public var childrenCount: Int32 { let o = _accessor.offset(VTOFFSET.children.v); return o == 0 ? 0 : _accessor.vector(count: o) }
-  public func children(at index: Int32) -> String? { let o = _accessor.offset(VTOFFSET.children.v); return o == 0 ? nil : _accessor.directString(at: _accessor.vector(at: o) + index * 4) }
   public var contentType: Blender_NativeUI_Content { let o = _accessor.offset(VTOFFSET.contentType.v); return o == 0 ? .none_ : Blender_NativeUI_Content(rawValue: _accessor.readBuffer(of: UInt8.self, at: o)) ?? .none_ }
   public func content<T: FlatbuffersInitializable>(type: T.Type) -> T? { let o = _accessor.offset(VTOFFSET.content.v); return o == 0 ? nil : _accessor.union(o) }
   public var label: String? { let o = _accessor.offset(VTOFFSET.label.v); return o == 0 ? nil : _accessor.string(at: o) }
@@ -2572,9 +1436,8 @@ public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable, ObjectAPIPack
   ///  The Blender property it edits, as a data path, for interfaces that show or copy it.
   public var property: String? { let o = _accessor.offset(VTOFFSET.property.v); return o == 0 ? nil : _accessor.string(at: o) }
   public var propertySegmentArray: [UInt8]? { return _accessor.getVector(at: VTOFFSET.property.v) }
-  public static func startNode(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 11) }
+  public static func startNode(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 10) }
   public static func add(key: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: key, at: VTOFFSET.key.p) }
-  public static func addVectorOf(children: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: children, at: VTOFFSET.children.p) }
   public static func add(contentType: Blender_NativeUI_Content, _ fbb: inout FlatBufferBuilder) { fbb.add(element: contentType.rawValue, def: 0, at: VTOFFSET.contentType.p) }
   public static func add(content: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: content, at: VTOFFSET.content.p) }
   public static func add(label: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: label, at: VTOFFSET.label.p) }
@@ -2590,7 +1453,6 @@ public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable, ObjectAPIPack
   public static func createNode(
     _ fbb: inout FlatBufferBuilder,
     keyOffset key: Offset,
-    childrenVectorOffset children: Offset = Offset(),
     contentType: Blender_NativeUI_Content = .none_,
     contentOffset content: Offset = Offset(),
     labelOffset label: Offset = Offset(),
@@ -2603,7 +1465,6 @@ public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable, ObjectAPIPack
   ) -> Offset {
     let __start = Blender_NativeUI_Node.startNode(&fbb)
     Blender_NativeUI_Node.add(key: key, &fbb)
-    Blender_NativeUI_Node.addVectorOf(children: children, &fbb)
     Blender_NativeUI_Node.add(contentType: contentType, &fbb)
     Blender_NativeUI_Node.add(content: content, &fbb)
     Blender_NativeUI_Node.add(label: label, &fbb)
@@ -2615,70 +1476,10 @@ public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable, ObjectAPIPack
     Blender_NativeUI_Node.add(property: property, &fbb)
     return Blender_NativeUI_Node.endNode(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_NodeT {
-    return Blender_NativeUI_NodeT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_NodeT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_NodeT) -> Offset {
-    let __key = builder.create(string: obj.key)
-    let __children = builder.createVector(ofStrings: obj.children.compactMap({ $0 }) )
-    let __content = obj.content?.pack(builder: &builder) ?? Offset()
-    let __label: Offset
-    if let s = obj.label {
-      __label = builder.create(string: s)
-    } else {
-      __label = Offset()
-    }
-
-    let __icon: Offset
-    if let s = obj.icon {
-      __icon = builder.create(string: s)
-    } else {
-      __icon = Offset()
-    }
-
-    let __description: Offset
-    if let s = obj.description {
-      __description = builder.create(string: s)
-    } else {
-      __description = Offset()
-    }
-
-    let __property: Offset
-    if let s = obj.property {
-      __property = builder.create(string: s)
-    } else {
-      __property = Offset()
-    }
-
-    let __root = Blender_NativeUI_Node.startNode(&builder)
-    Blender_NativeUI_Node.add(key: __key, &builder)
-    Blender_NativeUI_Node.addVectorOf(children: __children, &builder)
-    if let o = obj.content?.type {
-      Blender_NativeUI_Node.add(contentType: o, &builder)
-      Blender_NativeUI_Node.add(content: __content, &builder)
-    }
-
-    Blender_NativeUI_Node.add(label: __label, &builder)
-    Blender_NativeUI_Node.add(icon: __icon, &builder)
-    Blender_NativeUI_Node.add(description: __description, &builder)
-    Blender_NativeUI_Node.add(enabled: obj.enabled, &builder)
-    Blender_NativeUI_Node.add(mixed: obj.mixed, &builder)
-    Blender_NativeUI_Node.add(animation: obj.animation, &builder)
-    Blender_NativeUI_Node.add(property: __property, &builder)
-    return Blender_NativeUI_Node.endNode(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
     try _v.visit(field: VTOFFSET.key.p, fieldName: "key", required: true, type: ForwardOffset<String>.self)
-    try _v.visit(field: VTOFFSET.children.p, fieldName: "children", required: false, type: ForwardOffset<Vector<ForwardOffset<String>, String>>.self)
     try _v.visit(unionKey: VTOFFSET.contentType.p, unionField: VTOFFSET.content.p, unionKeyName: "contentType", fieldName: "content", required: false, completion: { (verifier, key: Blender_NativeUI_Content, pos) in
       switch key {
       case .none_:
@@ -2728,98 +1529,93 @@ public struct Blender_NativeUI_Node: FlatBufferObject, Verifiable, ObjectAPIPack
   }
 }
 
-public class Blender_NativeUI_NodeT: NativeObject {
+///  A node as sent: a buffer of its own, which an interface can keep without the rest of the
+///  update it came in.
+public struct Blender_NativeUI_NodeBuffer: FlatBufferObject, Verifiable {
 
-  public var key: String
-  public var children: [String?]
-  public var content: Blender_NativeUI_ContentUnion?
-  public var label: String?
-  public var icon: String?
-  public var description: String?
-  public var enabled: Bool
-  public var mixed: Bool
-  public var animation: Blender_NativeUI_Animation
-  public var property: String?
+  static func validateVersion() { FlatBuffersVersion_25_2_10() }
+  public var __buffer: ByteBuffer! { return _accessor.bb }
+  private var _accessor: Table
 
-  public init(_ _t: inout Blender_NativeUI_Node) {
-    key = _t.key
-    children = []
-    for index in 0..<_t.childrenCount {
-        children.append(_t.children(at: index))
-    }
-    switch _t.contentType {
-    case .group:
-      var _v = _t.content(type: Blender_NativeUI_Group.self)
-      content = Blender_NativeUI_ContentUnion(_v?.unpack(), type: .group)
-    case .panel:
-      var _v = _t.content(type: Blender_NativeUI_Panel.self)
-      content = Blender_NativeUI_ContentUnion(_v?.unpack(), type: .panel)
-    case .toggle:
-      var _v = _t.content(type: Blender_NativeUI_Toggle.self)
-      content = Blender_NativeUI_ContentUnion(_v?.unpack(), type: .toggle)
-    case .number:
-      var _v = _t.content(type: Blender_NativeUI_Number.self)
-      content = Blender_NativeUI_ContentUnion(_v?.unpack(), type: .number)
-    case .textfield:
-      var _v = _t.content(type: Blender_NativeUI_TextField.self)
-      content = Blender_NativeUI_ContentUnion(_v?.unpack(), type: .textfield)
-    case .choice:
-      var _v = _t.content(type: Blender_NativeUI_Choice.self)
-      content = Blender_NativeUI_ContentUnion(_v?.unpack(), type: .choice)
-    case .color:
-      var _v = _t.content(type: Blender_NativeUI_Color.self)
-      content = Blender_NativeUI_ContentUnion(_v?.unpack(), type: .color)
-    case .reference:
-      var _v = _t.content(type: Blender_NativeUI_Reference.self)
-      content = Blender_NativeUI_ContentUnion(_v?.unpack(), type: .reference)
-    case .button:
-      var _v = _t.content(type: Blender_NativeUI_Button.self)
-      content = Blender_NativeUI_ContentUnion(_v?.unpack(), type: .button)
-    case .menubutton:
-      var _v = _t.content(type: Blender_NativeUI_MenuButton.self)
-      content = Blender_NativeUI_ContentUnion(_v?.unpack(), type: .menubutton)
-    case .label:
-      var _v = _t.content(type: Blender_NativeUI_Label.self)
-      content = Blender_NativeUI_ContentUnion(_v?.unpack(), type: .label)
-    case .separator:
-      var _v = _t.content(type: Blender_NativeUI_Separator.self)
-      content = Blender_NativeUI_ContentUnion(_v?.unpack(), type: .separator)
-    case .list:
-      var _v = _t.content(type: Blender_NativeUI_List.self)
-      content = Blender_NativeUI_ContentUnion(_v?.unpack(), type: .list)
-    case .row:
-      var _v = _t.content(type: Blender_NativeUI_Row.self)
-      content = Blender_NativeUI_ContentUnion(_v?.unpack(), type: .row)
-    case .picture:
-      var _v = _t.content(type: Blender_NativeUI_Picture.self)
-      content = Blender_NativeUI_ContentUnion(_v?.unpack(), type: .picture)
-    case .menu:
-      var _v = _t.content(type: Blender_NativeUI_Menu.self)
-      content = Blender_NativeUI_ContentUnion(_v?.unpack(), type: .menu)
-    default: break
-    }
-    label = _t.label
-    icon = _t.icon
-    description = _t.description
-    enabled = _t.enabled
-    mixed = _t.mixed
-    animation = _t.animation
-    property = _t.property
+  private init(_ t: Table) { _accessor = t }
+  public init(_ bb: ByteBuffer, o: Int32) { _accessor = Table(bb: bb, position: o) }
+
+  private enum VTOFFSET: VOffset {
+    case node = 4
+    var v: Int32 { Int32(self.rawValue) }
+    var p: VOffset { self.rawValue }
   }
 
-  public init() {
-    key = ""
-    children = []
-    enabled = true
-    mixed = false
-    animation = .none_
+  public var hasNode: Bool { let o = _accessor.offset(VTOFFSET.node.v); return o == 0 ? false : true }
+  public var nodeCount: Int32 { let o = _accessor.offset(VTOFFSET.node.v); return o == 0 ? 0 : _accessor.vector(count: o) }
+  public func node(at index: Int32) -> UInt8 { let o = _accessor.offset(VTOFFSET.node.v); return o == 0 ? 0 : _accessor.directRead(of: UInt8.self, offset: _accessor.vector(at: o) + index * 1) }
+  public var node: [UInt8] { return _accessor.getVector(at: VTOFFSET.node.v) ?? [] }
+  public static func startNodeBuffer(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 1) }
+  public static func addVectorOf(node: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: node, at: VTOFFSET.node.p) }
+  public static func endNodeBuffer(_ fbb: inout FlatBufferBuilder, start: UOffset) -> Offset { let end = Offset(offset: fbb.endTable(at: start)); fbb.require(table: end, fields: [4]); return end }
+  public static func createNodeBuffer(
+    _ fbb: inout FlatBufferBuilder,
+    nodeVectorOffset node: Offset
+  ) -> Offset {
+    let __start = Blender_NativeUI_NodeBuffer.startNodeBuffer(&fbb)
+    Blender_NativeUI_NodeBuffer.addVectorOf(node: node, &fbb)
+    return Blender_NativeUI_NodeBuffer.endNodeBuffer(&fbb, start: __start)
   }
 
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Node.self) }
-
+  public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
+    var _v = try verifier.visitTable(at: position)
+    try _v.visit(field: VTOFFSET.node.p, fieldName: "node", required: true, type: ForwardOffset<Vector<UInt8, UInt8>>.self)
+    _v.finish()
+  }
 }
+
+///  The children of a node, in order.
+public struct Blender_NativeUI_Children: FlatBufferObject, Verifiable {
+
+  static func validateVersion() { FlatBuffersVersion_25_2_10() }
+  public var __buffer: ByteBuffer! { return _accessor.bb }
+  private var _accessor: Table
+
+  private init(_ t: Table) { _accessor = t }
+  public init(_ bb: ByteBuffer, o: Int32) { _accessor = Table(bb: bb, position: o) }
+
+  private enum VTOFFSET: VOffset {
+    case parent = 4
+    case keys = 6
+    var v: Int32 { Int32(self.rawValue) }
+    var p: VOffset { self.rawValue }
+  }
+
+  public var parent: String! { let o = _accessor.offset(VTOFFSET.parent.v); return _accessor.string(at: o) }
+  public var parentSegmentArray: [UInt8]! { return _accessor.getVector(at: VTOFFSET.parent.v) }
+  public var hasKeys: Bool { let o = _accessor.offset(VTOFFSET.keys.v); return o == 0 ? false : true }
+  public var keysCount: Int32 { let o = _accessor.offset(VTOFFSET.keys.v); return o == 0 ? 0 : _accessor.vector(count: o) }
+  public func keys(at index: Int32) -> String? { let o = _accessor.offset(VTOFFSET.keys.v); return o == 0 ? nil : _accessor.directString(at: _accessor.vector(at: o) + index * 4) }
+  public static func startChildren(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 2) }
+  public static func add(parent: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: parent, at: VTOFFSET.parent.p) }
+  public static func addVectorOf(keys: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: keys, at: VTOFFSET.keys.p) }
+  public static func endChildren(_ fbb: inout FlatBufferBuilder, start: UOffset) -> Offset { let end = Offset(offset: fbb.endTable(at: start)); fbb.require(table: end, fields: [4]); return end }
+  public static func createChildren(
+    _ fbb: inout FlatBufferBuilder,
+    parentOffset parent: Offset,
+    keysVectorOffset keys: Offset = Offset()
+  ) -> Offset {
+    let __start = Blender_NativeUI_Children.startChildren(&fbb)
+    Blender_NativeUI_Children.add(parent: parent, &fbb)
+    Blender_NativeUI_Children.addVectorOf(keys: keys, &fbb)
+    return Blender_NativeUI_Children.endChildren(&fbb, start: __start)
+  }
+
+  public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
+    var _v = try verifier.visitTable(at: position)
+    try _v.visit(field: VTOFFSET.parent.p, fieldName: "parent", required: true, type: ForwardOffset<String>.self)
+    try _v.visit(field: VTOFFSET.keys.p, fieldName: "keys", required: false, type: ForwardOffset<Vector<ForwardOffset<String>, String>>.self)
+    _v.finish()
+  }
+}
+
 ///  What changed in a view since its last update.
-public struct Blender_NativeUI_Update: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Update: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -2834,7 +1630,8 @@ public struct Blender_NativeUI_Update: FlatBufferObject, Verifiable, ObjectAPIPa
     case reset = 8
     case top = 10
     case nodes = 12
-    case removed = 14
+    case children = 14
+    case removed = 16
     var v: Int32 { Int32(self.rawValue) }
     var p: VOffset { self.rawValue }
   }
@@ -2850,18 +1647,23 @@ public struct Blender_NativeUI_Update: FlatBufferObject, Verifiable, ObjectAPIPa
   ///  New nodes, and nodes that changed in any way, sent whole.
   public var hasNodes: Bool { let o = _accessor.offset(VTOFFSET.nodes.v); return o == 0 ? false : true }
   public var nodesCount: Int32 { let o = _accessor.offset(VTOFFSET.nodes.v); return o == 0 ? 0 : _accessor.vector(count: o) }
-  public func nodes(at index: Int32) -> Blender_NativeUI_Node? { let o = _accessor.offset(VTOFFSET.nodes.v); return o == 0 ? nil : Blender_NativeUI_Node(_accessor.bb, o: _accessor.indirect(_accessor.vector(at: o) + index * 4)) }
-  ///  Keys of nodes gone from the view.
+  public func nodes(at index: Int32) -> Blender_NativeUI_NodeBuffer? { let o = _accessor.offset(VTOFFSET.nodes.v); return o == 0 ? nil : Blender_NativeUI_NodeBuffer(_accessor.bb, o: _accessor.indirect(_accessor.vector(at: o) + index * 4)) }
+  ///  Nodes whose children are new or changed, or now have none.
+  public var hasChildren: Bool { let o = _accessor.offset(VTOFFSET.children.v); return o == 0 ? false : true }
+  public var childrenCount: Int32 { let o = _accessor.offset(VTOFFSET.children.v); return o == 0 ? 0 : _accessor.vector(count: o) }
+  public func children(at index: Int32) -> Blender_NativeUI_Children? { let o = _accessor.offset(VTOFFSET.children.v); return o == 0 ? nil : Blender_NativeUI_Children(_accessor.bb, o: _accessor.indirect(_accessor.vector(at: o) + index * 4)) }
+  ///  Keys of nodes gone from the view, with their children.
   public var hasRemoved: Bool { let o = _accessor.offset(VTOFFSET.removed.v); return o == 0 ? false : true }
   public var removedCount: Int32 { let o = _accessor.offset(VTOFFSET.removed.v); return o == 0 ? 0 : _accessor.vector(count: o) }
   public func removed(at index: Int32) -> String? { let o = _accessor.offset(VTOFFSET.removed.v); return o == 0 ? nil : _accessor.directString(at: _accessor.vector(at: o) + index * 4) }
-  public static func startUpdate(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 6) }
+  public static func startUpdate(_ fbb: inout FlatBufferBuilder) -> UOffset { fbb.startTable(with: 7) }
   public static func add(subscription: UInt32, _ fbb: inout FlatBufferBuilder) { fbb.add(element: subscription, def: 0, at: VTOFFSET.subscription.p) }
   public static func add(version: UInt32, _ fbb: inout FlatBufferBuilder) { fbb.add(element: version, def: 0, at: VTOFFSET.version.p) }
   public static func add(reset: Bool, _ fbb: inout FlatBufferBuilder) { fbb.add(element: reset, def: false,
    at: VTOFFSET.reset.p) }
   public static func add(top: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: top, at: VTOFFSET.top.p) }
   public static func addVectorOf(nodes: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: nodes, at: VTOFFSET.nodes.p) }
+  public static func addVectorOf(children: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: children, at: VTOFFSET.children.p) }
   public static func addVectorOf(removed: Offset, _ fbb: inout FlatBufferBuilder) { fbb.add(offset: removed, at: VTOFFSET.removed.p) }
   public static func endUpdate(_ fbb: inout FlatBufferBuilder, start: UOffset) -> Offset { let end = Offset(offset: fbb.endTable(at: start)); return end }
   public static func createUpdate(
@@ -2871,6 +1673,7 @@ public struct Blender_NativeUI_Update: FlatBufferObject, Verifiable, ObjectAPIPa
     reset: Bool = false,
     topOffset top: Offset = Offset(),
     nodesVectorOffset nodes: Offset = Offset(),
+    childrenVectorOffset children: Offset = Offset(),
     removedVectorOffset removed: Offset = Offset()
   ) -> Offset {
     let __start = Blender_NativeUI_Update.startUpdate(&fbb)
@@ -2879,41 +1682,9 @@ public struct Blender_NativeUI_Update: FlatBufferObject, Verifiable, ObjectAPIPa
     Blender_NativeUI_Update.add(reset: reset, &fbb)
     Blender_NativeUI_Update.add(top: top, &fbb)
     Blender_NativeUI_Update.addVectorOf(nodes: nodes, &fbb)
+    Blender_NativeUI_Update.addVectorOf(children: children, &fbb)
     Blender_NativeUI_Update.addVectorOf(removed: removed, &fbb)
     return Blender_NativeUI_Update.endUpdate(&fbb, start: __start)
-  }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_UpdateT {
-    return Blender_NativeUI_UpdateT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_UpdateT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_UpdateT) -> Offset {
-    let __top: Offset
-    if let s = obj.top {
-      __top = builder.create(string: s)
-    } else {
-      __top = Offset()
-    }
-
-    var __nodes__: [Offset] = []
-    for var i in obj.nodes {
-      __nodes__.append(Blender_NativeUI_Node.pack(&builder, obj: &i))
-    }
-    let __nodes = builder.createVector(ofOffsets: __nodes__)
-    let __removed = builder.createVector(ofStrings: obj.removed.compactMap({ $0 }) )
-    let __root = Blender_NativeUI_Update.startUpdate(&builder)
-    Blender_NativeUI_Update.add(subscription: obj.subscription, &builder)
-    Blender_NativeUI_Update.add(version: obj.version, &builder)
-    Blender_NativeUI_Update.add(reset: obj.reset, &builder)
-    Blender_NativeUI_Update.add(top: __top, &builder)
-    Blender_NativeUI_Update.addVectorOf(nodes: __nodes, &builder)
-    Blender_NativeUI_Update.addVectorOf(removed: __removed, &builder)
-    return Blender_NativeUI_Update.endUpdate(&builder, start: __root)
   }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
@@ -2922,50 +1693,15 @@ public struct Blender_NativeUI_Update: FlatBufferObject, Verifiable, ObjectAPIPa
     try _v.visit(field: VTOFFSET.version.p, fieldName: "version", required: false, type: UInt32.self)
     try _v.visit(field: VTOFFSET.reset.p, fieldName: "reset", required: false, type: Bool.self)
     try _v.visit(field: VTOFFSET.top.p, fieldName: "top", required: false, type: ForwardOffset<String>.self)
-    try _v.visit(field: VTOFFSET.nodes.p, fieldName: "nodes", required: false, type: ForwardOffset<Vector<ForwardOffset<Blender_NativeUI_Node>, Blender_NativeUI_Node>>.self)
+    try _v.visit(field: VTOFFSET.nodes.p, fieldName: "nodes", required: false, type: ForwardOffset<Vector<ForwardOffset<Blender_NativeUI_NodeBuffer>, Blender_NativeUI_NodeBuffer>>.self)
+    try _v.visit(field: VTOFFSET.children.p, fieldName: "children", required: false, type: ForwardOffset<Vector<ForwardOffset<Blender_NativeUI_Children>, Blender_NativeUI_Children>>.self)
     try _v.visit(field: VTOFFSET.removed.p, fieldName: "removed", required: false, type: ForwardOffset<Vector<ForwardOffset<String>, String>>.self)
     _v.finish()
   }
 }
 
-public class Blender_NativeUI_UpdateT: NativeObject {
-
-  public var subscription: UInt32
-  public var version: UInt32
-  public var reset: Bool
-  public var top: String?
-  public var nodes: [Blender_NativeUI_NodeT?]
-  public var removed: [String?]
-
-  public init(_ _t: inout Blender_NativeUI_Update) {
-    subscription = _t.subscription
-    version = _t.version
-    reset = _t.reset
-    top = _t.top
-    nodes = []
-    for index in 0..<_t.nodesCount {
-        var __v_ = _t.nodes(at: index)
-        nodes.append(__v_?.unpack())
-    }
-    removed = []
-    for index in 0..<_t.removedCount {
-        removed.append(_t.removed(at: index))
-    }
-  }
-
-  public init() {
-    subscription = 0
-    version = 0
-    reset = false
-    nodes = []
-    removed = []
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Update.self) }
-
-}
 ///  The outcome of a command.
-public struct Blender_NativeUI_Ack: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Ack: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -2999,29 +1735,6 @@ public struct Blender_NativeUI_Ack: FlatBufferObject, Verifiable, ObjectAPIPacke
     Blender_NativeUI_Ack.add(error: error, &fbb)
     return Blender_NativeUI_Ack.endAck(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_AckT {
-    return Blender_NativeUI_AckT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_AckT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_AckT) -> Offset {
-    let __error: Offset
-    if let s = obj.error {
-      __error = builder.create(string: s)
-    } else {
-      __error = Offset()
-    }
-
-    let __root = Blender_NativeUI_Ack.startAck(&builder)
-    Blender_NativeUI_Ack.add(command: obj.command, &builder)
-    Blender_NativeUI_Ack.add(error: __error, &builder)
-    return Blender_NativeUI_Ack.endAck(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -3031,25 +1744,8 @@ public struct Blender_NativeUI_Ack: FlatBufferObject, Verifiable, ObjectAPIPacke
   }
 }
 
-public class Blender_NativeUI_AckT: NativeObject {
-
-  public var command: UInt32
-  public var error: String?
-
-  public init(_ _t: inout Blender_NativeUI_Ack) {
-    command = _t.command
-    error = _t.error
-  }
-
-  public init() {
-    command = 0
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Ack.self) }
-
-}
 ///  What Blender sends at once, see `WM_native_ui_take_updates`.
-public struct Blender_NativeUI_Updates: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Updates: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -3085,32 +1781,6 @@ public struct Blender_NativeUI_Updates: FlatBufferObject, Verifiable, ObjectAPIP
     Blender_NativeUI_Updates.addVectorOf(acks: acks, &fbb)
     return Blender_NativeUI_Updates.endUpdates(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_UpdatesT {
-    return Blender_NativeUI_UpdatesT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_UpdatesT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_UpdatesT) -> Offset {
-    var __updates__: [Offset] = []
-    for var i in obj.updates {
-      __updates__.append(Blender_NativeUI_Update.pack(&builder, obj: &i))
-    }
-    let __updates = builder.createVector(ofOffsets: __updates__)
-    var __acks__: [Offset] = []
-    for var i in obj.acks {
-      __acks__.append(Blender_NativeUI_Ack.pack(&builder, obj: &i))
-    }
-    let __acks = builder.createVector(ofOffsets: __acks__)
-    let __root = Blender_NativeUI_Updates.startUpdates(&builder)
-    Blender_NativeUI_Updates.addVectorOf(updates: __updates, &builder)
-    Blender_NativeUI_Updates.addVectorOf(acks: __acks, &builder)
-    return Blender_NativeUI_Updates.endUpdates(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -3120,34 +1790,8 @@ public struct Blender_NativeUI_Updates: FlatBufferObject, Verifiable, ObjectAPIP
   }
 }
 
-public class Blender_NativeUI_UpdatesT: NativeObject {
-
-  public var updates: [Blender_NativeUI_UpdateT?]
-  public var acks: [Blender_NativeUI_AckT?]
-
-  public init(_ _t: inout Blender_NativeUI_Updates) {
-    updates = []
-    for index in 0..<_t.updatesCount {
-        var __v_ = _t.updates(at: index)
-        updates.append(__v_?.unpack())
-    }
-    acks = []
-    for index in 0..<_t.acksCount {
-        var __v_ = _t.acks(at: index)
-        acks.append(__v_?.unpack())
-    }
-  }
-
-  public init() {
-    updates = []
-    acks = []
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Updates.self) }
-
-}
 ///  Show a view, see `WM_native_ui_subscribe`.
-public struct Blender_NativeUI_Subscribe: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Subscribe: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -3183,28 +1827,6 @@ public struct Blender_NativeUI_Subscribe: FlatBufferObject, Verifiable, ObjectAP
     Blender_NativeUI_Subscribe.addVectorOf(params: params, &fbb)
     return Blender_NativeUI_Subscribe.endSubscribe(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_SubscribeT {
-    return Blender_NativeUI_SubscribeT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_SubscribeT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_SubscribeT) -> Offset {
-    let __view = builder.create(string: obj.view)
-    var __params__: [Offset] = []
-    for var i in obj.params {
-      __params__.append(Blender_NativeUI_Param.pack(&builder, obj: &i))
-    }
-    let __params = builder.createVector(ofOffsets: __params__)
-    let __root = Blender_NativeUI_Subscribe.startSubscribe(&builder)
-    Blender_NativeUI_Subscribe.add(view: __view, &builder)
-    Blender_NativeUI_Subscribe.addVectorOf(params: __params, &builder)
-    return Blender_NativeUI_Subscribe.endSubscribe(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -3214,30 +1836,8 @@ public struct Blender_NativeUI_Subscribe: FlatBufferObject, Verifiable, ObjectAP
   }
 }
 
-public class Blender_NativeUI_SubscribeT: NativeObject {
-
-  public var view: String
-  public var params: [Blender_NativeUI_ParamT?]
-
-  public init(_ _t: inout Blender_NativeUI_Subscribe) {
-    view = _t.view
-    params = []
-    for index in 0..<_t.paramsCount {
-        var __v_ = _t.params(at: index)
-        params.append(__v_?.unpack())
-    }
-  }
-
-  public init() {
-    view = ""
-    params = []
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Subscribe.self) }
-
-}
 ///  Something done to a node of a view.
-public struct Blender_NativeUI_Command: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Command: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -3297,32 +1897,6 @@ public struct Blender_NativeUI_Command: FlatBufferObject, Verifiable, ObjectAPIP
     Blender_NativeUI_Command.add(phase: phase, &fbb)
     return Blender_NativeUI_Command.endCommand(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_CommandT {
-    return Blender_NativeUI_CommandT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_CommandT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_CommandT) -> Offset {
-    let __target = builder.create(string: obj.target)
-    let __value = obj.value?.pack(builder: &builder) ?? Offset()
-    let __root = Blender_NativeUI_Command.startCommand(&builder)
-    Blender_NativeUI_Command.add(id: obj.id, &builder)
-    Blender_NativeUI_Command.add(subscription: obj.subscription, &builder)
-    Blender_NativeUI_Command.add(target: __target, &builder)
-    Blender_NativeUI_Command.add(op: obj.op, &builder)
-    if let o = obj.value?.type {
-      Blender_NativeUI_Command.add(valueType: o, &builder)
-      Blender_NativeUI_Command.add(value: __value, &builder)
-    }
-
-    Blender_NativeUI_Command.add(phase: obj.phase, &builder)
-    return Blender_NativeUI_Command.endCommand(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -3353,57 +1927,8 @@ public struct Blender_NativeUI_Command: FlatBufferObject, Verifiable, ObjectAPIP
   }
 }
 
-public class Blender_NativeUI_CommandT: NativeObject {
-
-  public var id: UInt32
-  public var subscription: UInt32
-  public var target: String
-  public var op: Blender_NativeUI_Op
-  public var value: Blender_NativeUI_ValueUnion?
-  public var phase: Blender_NativeUI_Phase
-
-  public init(_ _t: inout Blender_NativeUI_Command) {
-    id = _t.id
-    subscription = _t.subscription
-    target = _t.target
-    op = _t.op
-    switch _t.valueType {
-    case .boolvalue:
-      var _v = _t.value(type: Blender_NativeUI_BoolValue.self)
-      value = Blender_NativeUI_ValueUnion(_v?.unpack(), type: .boolvalue)
-    case .intvalue:
-      var _v = _t.value(type: Blender_NativeUI_IntValue.self)
-      value = Blender_NativeUI_ValueUnion(_v?.unpack(), type: .intvalue)
-    case .floatvalue:
-      var _v = _t.value(type: Blender_NativeUI_FloatValue.self)
-      value = Blender_NativeUI_ValueUnion(_v?.unpack(), type: .floatvalue)
-    case .textvalue:
-      var _v = _t.value(type: Blender_NativeUI_TextValue.self)
-      value = Blender_NativeUI_ValueUnion(_v?.unpack(), type: .textvalue)
-    case .floatsvalue:
-      var _v = _t.value(type: Blender_NativeUI_FloatsValue.self)
-      value = Blender_NativeUI_ValueUnion(_v?.unpack(), type: .floatsvalue)
-    case .intsvalue:
-      var _v = _t.value(type: Blender_NativeUI_IntsValue.self)
-      value = Blender_NativeUI_ValueUnion(_v?.unpack(), type: .intsvalue)
-    default: break
-    }
-    phase = _t.phase
-  }
-
-  public init() {
-    id = 0
-    subscription = 0
-    target = ""
-    op = .set_
-    phase = .once
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Command.self) }
-
-}
 ///  Commands sent at once, see `WM_native_ui_send`.
-public struct Blender_NativeUI_Commands: FlatBufferObject, Verifiable, ObjectAPIPacker {
+public struct Blender_NativeUI_Commands: FlatBufferObject, Verifiable {
 
   static func validateVersion() { FlatBuffersVersion_25_2_10() }
   public var __buffer: ByteBuffer! { return _accessor.bb }
@@ -3432,26 +1957,6 @@ public struct Blender_NativeUI_Commands: FlatBufferObject, Verifiable, ObjectAPI
     Blender_NativeUI_Commands.addVectorOf(commands: commands, &fbb)
     return Blender_NativeUI_Commands.endCommands(&fbb, start: __start)
   }
-  
-
-  public mutating func unpack() -> Blender_NativeUI_CommandsT {
-    return Blender_NativeUI_CommandsT(&self)
-  }
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_CommandsT?) -> Offset {
-    guard var obj = obj else { return Offset() }
-    return pack(&builder, obj: &obj)
-  }
-
-  public static func pack(_ builder: inout FlatBufferBuilder, obj: inout Blender_NativeUI_CommandsT) -> Offset {
-    var __commands__: [Offset] = []
-    for var i in obj.commands {
-      __commands__.append(Blender_NativeUI_Command.pack(&builder, obj: &i))
-    }
-    let __commands = builder.createVector(ofOffsets: __commands__)
-    let __root = Blender_NativeUI_Commands.startCommands(&builder)
-    Blender_NativeUI_Commands.addVectorOf(commands: __commands, &builder)
-    return Blender_NativeUI_Commands.endCommands(&builder, start: __root)
-  }
 
   public static func verify<T>(_ verifier: inout Verifier, at position: Int, of type: T.Type) throws where T: Verifiable {
     var _v = try verifier.visitTable(at: position)
@@ -3460,22 +1965,3 @@ public struct Blender_NativeUI_Commands: FlatBufferObject, Verifiable, ObjectAPI
   }
 }
 
-public class Blender_NativeUI_CommandsT: NativeObject {
-
-  public var commands: [Blender_NativeUI_CommandT?]
-
-  public init(_ _t: inout Blender_NativeUI_Commands) {
-    commands = []
-    for index in 0..<_t.commandsCount {
-        var __v_ = _t.commands(at: index)
-        commands.append(__v_?.unpack())
-    }
-  }
-
-  public init() {
-    commands = []
-  }
-
-  public func serialize() -> ByteBuffer { return serialize(type: Blender_NativeUI_Commands.self) }
-
-}
