@@ -5,6 +5,7 @@
 # Libs that adhere to strict flags
 add_subdirectory(curve_fit_nd)
 add_subdirectory(fast_float)
+add_subdirectory(flatbuffers)
 add_subdirectory(json)
 if(WITH_IO_FBX)
   add_subdirectory(ufbx)
