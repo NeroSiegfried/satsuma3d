@@ -698,8 +698,8 @@ public final class SwiftSettings: NSObject, UIAdaptivePresentationControllerDele
   private weak var presenter: UIViewController?
   private var sheet: UIViewController?
   private let model = SettingsModel()
-  /** Blender's Preferences, which Blender fills along with the window's panels while Settings
-   * shows, see `SwiftScenePanels.updateSnapshot`. */
+  /** Blender's Preferences, which Blender sends as the `properties` view on their tabs while
+   * Settings shows. */
   let preferences: PanelsModel
   let lists: PreferencesLists
 

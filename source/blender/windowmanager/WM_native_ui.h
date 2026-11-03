@@ -5,16 +5,14 @@
 /** \file
  * \ingroup wm
  *
- * The bridge as a platform's own interface sees it, such as the iPad's SwiftUI one: commands it
- * sends Blender, and snapshots of Blender, as JSON, for it to show. Plain C, so any language can
- * call it: Swift through its bridging header, Kotlin or Java through JNI.
+ * The bridge as a platform's own interface sees it, such as the iPad's SwiftUI one: the views it
+ * shows and the commands it sends, see `native_ui/README.md`; the input it passes on, such as a
+ * stylus hovering; and how much of the window it covers. Plain C, so any language can call it:
+ * Swift through its bridging header, Kotlin or Java through JNI.
  *
  * The interface runs on its own thread. These functions only queue work for Blender's loop or
- * take the latest snapshot it published; none waits for Blender. Blender's loop runs the queued
- * work and publishes new snapshots, then tells the interface through `GHOST_mailbox_published`.
- *
- * Snapshots and menu results are returned as strings the caller owns, freed with
- * #WM_native_ui_json_free.
+ * take what it published; none waits for Blender. Blender's loop runs the queued work and
+ * publishes updates, then tells the interface through `GHOST_mailbox_published`.
  */
 
 #pragma once
@@ -66,7 +64,9 @@ void WM_native_ui_buffer_free(WMNativeUIBuffer *buffer);
 /** \} */
 
 /* -------------------------------------------------------------------- */
-/** \name Commands
+/** \name Input
+ *
+ * What the interface's input does to Blender's, beside the views' commands.
  * \{ */
 
 /** What held + and - buttons make the next selection or stroke do, see
@@ -84,17 +84,13 @@ enum WMNativeUIAssetDragPhase {
   WM_NATIVE_UI_ASSET_DRAG_MOVE = 1,
   WM_NATIVE_UI_ASSET_DRAG_DROP = 2,
   WM_NATIVE_UI_ASSET_DRAG_CANCEL = 3,
-  /** Add without dragging: at the 3D cursor, or onto the active object for materials and node
-   * groups. */
-  WM_NATIVE_UI_ASSET_ADD = 4,
 };
 
-/** Change one of the interface's settings in Blender, see `bridge_setting_execute`. */
-void WM_native_ui_setting_enqueue(const char *setting, const char *value);
 /** A #WMNativeUISelectIntent, while the buttons are held. */
 void WM_native_ui_select_intent_set(int intent);
-/** A #WMNativeUIAssetDragPhase, at \a x, \a y in the window's pixels. \a asset_id is only needed
- * to begin a drag or add an asset. */
+/** An asset dragged from the interface's asset pane, a #WMNativeUIAssetDragPhase, at \a x, \a y
+ * in the window's pixels. \a asset_id, its row's key in the `assets` view, is only needed to begin
+ * a drag. */
 void WM_native_ui_asset_drag(int phase, const char *WM_NATIVE_UI_NULLABLE asset_id, int x, int y);
 /** Two fingers twist the view by \a angle, in radians. */
 void WM_native_ui_view_roll_enqueue(float angle);
@@ -135,17 +131,12 @@ void WM_native_ui_viewport_trailing_cover_set(float pixels);
 /** \} */
 
 /* -------------------------------------------------------------------- */
-/** \name Snapshots
+/** \name Pictures
  *
- * The `take` functions return the latest snapshot once, and null while it is unchanged.
+ * What a view shows as pixels, too large to send as its nodes: taken once each time it changed.
  * \{ */
 
-/** Properties, the Outliner, and the editors the interface shows natively. */
-char *WM_NATIVE_UI_NULLABLE WM_native_ui_panels_take_json(void);
-/** Free a snapshot or menu result. */
-void WM_native_ui_json_free(char *WM_NATIVE_UI_NULLABLE json);
-
-/** The Image Editor's picture when it changed: its image's name, straight RGBA top row first, as
+/** The Image Editor's picture, while the `image` view shows, when it changed: its image's name, straight RGBA top row first, as
  * sent and as large as the image is. No pixels without an image. Each is freed with `free`. */
 bool WM_native_ui_image_take_pixels(char *WM_NATIVE_UI_NULLABLE *WM_NATIVE_UI_NONNULL r_name,
                                     uint8_t *WM_NATIVE_UI_NULLABLE *WM_NATIVE_UI_NONNULL r_rgba,

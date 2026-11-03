@@ -96,11 +96,11 @@ final class InspectorStore {
   @ObservationIgnored var requestContext: JSON = [:]
   @ObservationIgnored private(set) var sequence: UInt64 = 0
   private static var nextSequence: UInt64 = 0
-  /** Where edits go: the node editor's, or the window's panels', such as the Outliner's. */
-  private let setting: String
+  /** Where edits go: the node editor's canvas. */
+  private let sender: (JSON) -> Void
 
-  init(setting: String = "native_nodes_edit") {
-    self.setting = setting
+  init(send: @escaping (JSON) -> Void) {
+    sender = send
   }
 
   private func pendingValue(_ key: String) -> PendingValue {
@@ -121,7 +121,7 @@ final class InspectorStore {
     var payload = request
     payload.merge(requestContext) { $1 }
     payload["sequence"] = NSNumber(value: sequence)
-    Engine.setting(setting, json: payload)
+    sender(payload)
   }
 
   func edit(_ property: JSON, value: Any) {

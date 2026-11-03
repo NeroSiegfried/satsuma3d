@@ -151,14 +151,6 @@ final class SwiftScenePanels {
     hierarchy.update(nodes: nodes, status: outlinerEdits.error ?? "")
   }
 
-  func updateSnapshot(_ snapshot: Any?) {
-    guard let snapshot = snapshot as? JSON else { return }
-    let ack = (snapshot["ack"] as? NSNumber)?.uint64Value ?? 0
-    if let nodesSnapshot = snapshot.dict("nodes"), nodes.shown {
-      nodes.update(nodesSnapshot, ack: ack)
-    }
-  }
-
   /** \} */
 
 #if os(visionOS)

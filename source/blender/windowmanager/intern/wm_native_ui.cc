@@ -135,7 +135,6 @@ namespace blender::ui {
 std::string native_menu_query(bContext *C, const std::string &request, bool execute);
 std::string native_properties_query(bContext *C, const std::string &request, bool execute);
 std::string native_nodes_query(bContext *C, const std::string &request, bool execute);
-std::string native_nodes_identity(bContext *C, const std::string &request);
 void native_nodes_compositor_job(bContext *C);
 }  // namespace blender::ui
 namespace blender::ed::graph {
@@ -174,6 +173,7 @@ void bridge_interface_set(bContext *C, bool desktop);
 
 namespace {
 
+/** A change the views make as the settings of the same names did, see #bridge_setting_execute. */
 struct BridgeSettingCommand {
   std::string setting;
   std::string value;
@@ -185,13 +185,14 @@ enum BridgeAssetDragPhase {
   BRIDGE_ASSET_DRAG_MOVE,
   BRIDGE_ASSET_DRAG_DROP,
   BRIDGE_ASSET_DRAG_CANCEL,
-  /** Drop at the 3D cursor, or onto the active object for materials and node groups. */
+  /** Drop at the 3D cursor, or onto the active object for materials and node groups, as the
+   * `assets` view's rows do when invoked. */
   BRIDGE_ASSET_ADD,
   /** Internal second step of #BRIDGE_ASSET_ADD: release at window coordinates. */
   BRIDGE_ASSET_ADD_RELEASE,
 };
 static_assert(int(BRIDGE_ASSET_DRAG_BEGIN) == int(WM_NATIVE_UI_ASSET_DRAG_BEGIN) &&
-                  int(BRIDGE_ASSET_ADD) == int(WM_NATIVE_UI_ASSET_ADD),
+                  int(BRIDGE_ASSET_DRAG_CANCEL) == int(WM_NATIVE_UI_ASSET_DRAG_CANCEL),
               "Asset drags as WM_native_ui.h numbers them");
 
 struct BridgeAssetDragCommand {
@@ -200,38 +201,18 @@ struct BridgeAssetDragCommand {
   int x = 0, y = 0;
 };
 
-using BridgeMessage = std::variant<BridgeSettingCommand,
-                                  float,
-                                  BridgeAssetDragCommand>;
-/* A single inbox preserves ordering across tools, settings, operators and menus. */
+/** Input from the interface that is not a command to a view: two fingers turning the view, by an
+ * angle, and an asset dragged into it. */
+using BridgeMessage = std::variant<float, BridgeAssetDragCommand>;
+/* One inbox, in the order they came. */
 GHOST_MessageQueue<BridgeMessage> bridge_messages;
 bool bridge_layout_ready = false;
 bool bridge_gizmo_refresh_pending = true;
 /** Blender's own interface instead of the native one: normal screens, no native controls. */
 std::atomic<bool> bridge_desktop_ui{false};
-int bridge_panels_visible = 0;
-std::chrono::steady_clock::time_point bridge_panels_next_snapshot;
-/* The last panels snapshot the native interface was given; cleared when it asks for different panels. */
-std::string bridge_panels_published;
-std::string bridge_panels_json = "null";
-/** Blender's Preferences, a section at a time, in the iPad's Settings, see `SettingsSheet.swift`. */
-/** The keymaps Settings shows with their items and what it searches for, as JSON. */
 /** Changed preferences are saved shortly after, as the iPad may end the app without warning. */
 bool bridge_preferences_save_pending = false;
 std::chrono::steady_clock::time_point bridge_preferences_save_at;
-/** The node tree the native node editor shows: its kind and the groups entered. */
-std::string bridge_nodes_state = "{\"tree\":\"SHADER\"}";
-/** The tree last read, to read it again at once when another is chosen. */
-std::string bridge_nodes_identity;
-/* The node tree read last, read again only when something may have changed it: notifiers, the
- * editor's own commands, or a slow check. Reading a large tree takes a while. */
-bool bridge_nodes_dirty = true;
-/** Composite once the tree is read, for a compositor backdrop just shown. */
-bool bridge_nodes_composite = false;
-std::string bridge_nodes_json;
-std::chrono::steady_clock::time_point bridge_nodes_next_check;
-/** The tree the Add Node list was sent for, sent again only for another. */
-std::string bridge_nodes_add_for;
 /** The native image editor's state: the image chosen and whether UVs show over it. */
 std::string bridge_image_state = "{}";
 /* An interface shows the image editor, see #bridge_image_view_shown. */
@@ -247,8 +228,6 @@ bool bridge_image_uvs_pending = true;
 std::string bridge_storyboard_state = "{}";
 /* Pictures of shots were still to draw when the storyboard was last read. */
 bool bridge_storyboard_pending = false;
-std::string bridge_properties_error;
-int64_t bridge_panels_sequence = 0;
 std::atomic<bool> bridge_navigation_hover_active{false};
 std::atomic<bool> bridge_navigation_redraw_pending{false};
 /** Height of the native bottom tray (the asset pane) as a fraction of the window height. */
@@ -267,19 +246,8 @@ GHOST_Latest<BridgePencilHoverRequest> bridge_hover_requests;
 int2 bridge_asset_drag_xy(0);
 BridgePencilHoverRequest bridge_hover_request;
 
-GHOST_Latest<std::string> bridge_panels_snapshot;
-/* Keyframes shown on the timeline, refreshed on the native cadence while it is open. */
-
-/**
- * Where a large JSON value is spliced into the panels' snapshot: a string starting with a control
- * character, which every string written is escaped of, so no name can be taken for it.
- */
-#define BRIDGE_PLACEHOLDER(name) "\x01native_" name
-#define BRIDGE_PLACEHOLDER_JSON(name) "\"\\u0001native_" name "\""
-
 std::string bridge_json_escape(const std::string &value);
 std::string bridge_json_number(double value);
-void bridge_brush_direction_set(bContext *C, bool add);
 
 wmOperator *bridge_constraint_operator(wmWindow *win)
 {
@@ -1018,60 +986,7 @@ static std::atomic<bool> bridge_navigation_left = false;
 
 void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
 {
-  if (command.setting == "navigation_corner") {
-    bridge_navigation_top = command.value.starts_with("top");
-    bridge_navigation_left = command.value.ends_with("left");
-    WM_main_add_notifier(NC_SPACE | ND_SPACE_VIEW3D, nullptr);
-    return;
-  }
-  if (command.setting == "hover_highlight") {
-    bridge_hover_highlight = command.value == "1";
-    return;
-  }
-  if (command.setting == "tweak_drag") {
-    /* The letters of what is on: "m" move, "r" roll, "t" tilt. */
-    bridge_tweak_move = command.value.find('m') != std::string::npos;
-    bridge_tweak_roll = command.value.find('r') != std::string::npos;
-    bridge_tweak_tilt = command.value.find('t') != std::string::npos;
-    return;
-  }
-  bool preview = false;
-  if (command.setting == "interface") {
-    bridge_interface_set(C, command.value == "desktop");
-    return;
-  }
-  if (command.setting == "native_nodes_state") {
-    bridge_nodes_dirty = true;
-    bridge_nodes_composite = command.value.find("COMPOSITOR") != std::string::npos;
-    bridge_nodes_state = command.value;
-    bridge_panels_next_snapshot = {};
-    bridge_panels_published.clear();
-    return;
-  }
-  if (command.setting == "native_nodes_visible") {
-    bridge_nodes_dirty = true;
-    bridge_panels_visible = (bridge_panels_visible & ~8) | (command.value == "1" ? 8 : 0);
-    bridge_panels_next_snapshot = {};
-    bridge_panels_published.clear();
-    return;
-  }
-  if (command.setting == "native_nodes_edit") {
-    bridge_nodes_dirty = true;
-    std::istringstream stream(command.value);
-    auto value = io::serialize::JsonFormatter().deserialize(stream);
-    if (const auto *request = value ? value->as_dictionary_value() : nullptr) {
-      bridge_panels_sequence = request->lookup_int("sequence").value_or(bridge_panels_sequence);
-      preview = request->lookup_str("phase").value_or("") == "update";
-    }
-    if (!preview) {
-      bridge_panels_next_snapshot = {};
-    }
-    bridge_properties_error = ui::native_nodes_query(C, command.value, true);
-    return;
-  }
   if (command.setting == "native_nodes_create") {
-    bridge_nodes_dirty = true;
-    bridge_nodes_add_for.clear();
     /* A material, Geometry Nodes or compositor nodes for the node editor to show, as their own
      * buttons make them. */
     const char *imports[] = {"bpy", nullptr};
@@ -1114,36 +1029,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
 #else
     UNUSED_VARS(imports);
 #endif
-    bridge_panels_next_snapshot = {};
-    return;
-  }
-  if (command.setting == "native_properties_edit" || command.setting == "native_panel_edit") {
-    std::istringstream stream(command.value);
-    auto value = io::serialize::JsonFormatter().deserialize(stream);
-    if (const auto *request = value ? value->as_dictionary_value() : nullptr) {
-      bridge_panels_sequence = request->lookup_int("sequence").value_or(bridge_panels_sequence);
-      preview = request->lookup_str("phase").value_or("") == "update";
-    }
-    bridge_properties_error.clear();
-  }
-  if (command.setting == "native_properties_edit") {
-    /* Local controls already show the drag value. Keep expensive full-panel snapshots
-     * on their normal cadence while evaluation and viewport redraw run live. */
-    if (!preview) {
-      bridge_panels_next_snapshot = {};
-    }
-    /* While a stroke or other operator runs, only values arrive here, see #bridge_message_live;
-     * their undo steps wait for it to end. */
-#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
-    if (WM_apple_ios_dialog_active(CTX_wm_window(C))) {
-      bridge_properties_error = "Finish the current dialog before editing properties.";
-      return;
-    }
-#endif
-    bridge_properties_error = ui::native_properties_query(C, command.value, true);
-    CLOG_DEBUG(&LOG,
-               "Properties edit %s -> %s",
-               command.value.substr(0, 200).c_str(), bridge_properties_error.c_str());
     return;
   }
 #ifdef WITH_PYTHON
@@ -1229,14 +1114,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
   }
 #endif
 
-  if (command.setting == "object_mode") {
-    bridge_mode_set(C, command.value.c_str());
-    return;
-  }
-  if (command.setting == "brush_direction") {
-    bridge_brush_direction_set(C, command.value == "add");
-    return;
-  }
   if (command.setting == "constraint_axis") {
     const int axis = command.value == "X" ? 0 :
                      command.value == "Y" ? 1 :
@@ -1325,11 +1202,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     return;
   }
 
-  if (command.setting == "mesh_select_mode") {
-    /* MESH_OT_select_mode notifies and pushes its own undo step. */
-    bridge_mesh_select_mode_set(C, command.value);
-    return;
-  }
 
 
 
@@ -1614,31 +1486,6 @@ static std::pair<const char *, const char *> bridge_brush_direction_symbols(cons
     }
   }
   return {"arrowshape.up", "arrowshape.down"};
-}
-
-/** Set the active brush's Direction to its first (\a add) or second choice. */
-void bridge_brush_direction_set(bContext *C, const bool add)
-{
-  const BridgeContextStore context_store = bridge_context_push_view3d(C);
-  std::optional<PointerRNA> brush_ptr = bridge_brush_direction_ptr(C);
-  if (!brush_ptr) {
-    return;
-  }
-  PropertyRNA *prop = RNA_struct_find_property(&*brush_ptr, "direction");
-  const EnumPropertyItem *items = nullptr;
-  int count = 0;
-  bool free = false;
-  RNA_property_enum_items(C, &*brush_ptr, prop, &items, &count, &free);
-  int values[2] = {0, 0};
-  for (int i = 0, n = 0; i < count && n < 2; i++) {
-    if (items[i].identifier[0] != '\0') {
-      values[n++] = items[i].value;
-    }
-  }
-  if (free) {
-    MEM_delete(items);
-  }
-  bridge_rna_undo_push(C, bridge_rna_enum_set(C, *brush_ptr, "direction", values[add ? 0 : 1]));
 }
 
 void bridge_brush_activate(bContext *C, const std::string &key)
@@ -1959,104 +1806,8 @@ void bridge_asset_drag(bContext *C, const BridgeAssetDragCommand &command)
 
 /** \} */
 
-/** The panels' snapshot: the Outliner, and the editors drawn natively, see
- * `bl_ui.native_panels`. */
-void bridge_panels_build(bContext *C)
-{
-  const BridgeContextStore context_store = bridge_context_push_view3d(C);
-  const bool has_view3d_context = CTX_wm_window(C) != nullptr && CTX_wm_area(C) != nullptr &&
-                                  CTX_wm_region(C) != nullptr;
-#ifdef WITH_PYTHON
-  if (has_view3d_context) {
-    const auto now = std::chrono::steady_clock::now();
-    if (bridge_panels_visible && now >= bridge_panels_next_snapshot) {
-      /* Scene projection follows the native refresh cadence, not the viewport frame rate. */
-      bridge_panels_next_snapshot = now + std::chrono::milliseconds(250);
-      BridgeTimer panels_timer("panels");
-      using namespace io::serialize;
-      DictionaryValue merged;
-      merged.append_int("ack", bridge_panels_sequence);
-      if (!bridge_properties_error.empty()) {
-        merged.append_str("error", bridge_properties_error);
-      }
-      if (bridge_panels_visible & 8) {
-        /* Another object, material or modifier chosen anywhere shows straight away. */
-        std::string identity = ui::native_nodes_identity(C, bridge_nodes_state);
-        if (identity != bridge_nodes_identity) {
-          bridge_nodes_identity = std::move(identity);
-          bridge_nodes_dirty = true;
-        }
-        if (bridge_nodes_dirty || now >= bridge_nodes_next_check) {
-          bridge_nodes_dirty = false;
-          bridge_nodes_next_check = now + std::chrono::seconds(2);
-          std::string state = bridge_nodes_state;
-          const bool with_add = state != bridge_nodes_add_for;
-          if (with_add) {
-            /* The nodes it can add, once for each tree. */
-            state.insert(state.size() - 1, ",\"with_add\":1");
-          }
-          const auto diag_start = std::chrono::steady_clock::now();
-          bridge_nodes_json = bridge_timed(
-              "panels.nodes", [&] { return ui::native_nodes_query(C, state, false); });
-          /* With no tree there is nothing to add to: offered again once there is one. */
-          const bool has_tree = bridge_nodes_json.find("\"nodes\":") != std::string::npos;
-          bridge_nodes_add_for = has_tree ? (with_add ? bridge_nodes_state : bridge_nodes_add_for) : "";
-          CLOG_DEBUG(&LOG,
-                     "Nodes read in %lld ms, %zu bytes: %s",
-                 (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
-                     std::chrono::steady_clock::now() - diag_start)
-                     .count(),
-                 bridge_nodes_json.size(), bridge_nodes_json.substr(0, 160).c_str());
-          if (bridge_nodes_composite) {
-            bridge_nodes_composite = false;
-            ui::native_nodes_compositor_job(C);
-          }
-        }
-        /* Spliced in as it is below, rather than read and written again: it is large. */
-        merged.append_str("nodes", BRIDGE_PLACEHOLDER("nodes"));
-      }
-      std::ostringstream merged_stream;
-      JsonFormatter().serialize(merged_stream, merged);
-      bridge_panels_json = merged_stream.str();
-      if (bridge_panels_visible & 8) {
-        const std::string placeholder = BRIDGE_PLACEHOLDER_JSON("nodes");
-        if (const size_t at = bridge_panels_json.find(placeholder); at != std::string::npos) {
-          bridge_panels_json.replace(at, placeholder.size(), bridge_nodes_json.empty() ? "null" : bridge_nodes_json);
-        }
-      }
-      /* Published when it changes: every snapshot wakes the native interface. */
-      if (bridge_panels_json != bridge_panels_published) {
-        bridge_panels_published = bridge_panels_json;
-        bridge_panels_snapshot.publish(bridge_panels_json);
-      }
-    }
-  }
-#endif
-  bridge_context_pop(C, context_store);
-}
-
-
 /** Set when Blender sent notifiers, see #WM_native_ui_tag_changed. */
 bool bridge_changed = true;
-
-void bridge_toolbar_build(bContext *C, const bool handled_commands)
-{
-  /* Describing the panels runs Python and is costly. Do it only when something may have changed:
-   * a native command ran or Blender sent notifiers, as it does for any change of state; or while
-   * they show, on their own cadence. A slow check covers anything that changes without
-   * notifiers. Continuous changes, such as playback changing the frame, describe them ten times a
-   * second. */
-  static std::chrono::steady_clock::time_point next_check, last_build;
-  const auto now = std::chrono::steady_clock::now();
-  const bool wanted = handled_commands || bridge_changed || now >= next_check ||
-                      (bridge_panels_visible && now >= bridge_panels_next_snapshot);
-  if (wanted && (handled_commands || now - last_build >= std::chrono::milliseconds(100))) {
-    bridge_changed = false;
-    last_build = now;
-    next_check = now + std::chrono::seconds(1);
-    bridge_panels_build(C);
-  }
-}
 
 std::string bridge_json_escape(const std::string &value)
 {
@@ -3801,6 +3552,60 @@ void bridge_image_view_shown(const bool shown)
   bridge_image_uvs_pending = true;
 }
 
+/** The node editor's tree, as `native_nodes_query` reads it: with the nodes it can add, `add`, once
+ * for each tree. `Invoke` of `create` with a tree's kind as its value makes one, as the editor's
+ * own buttons do. */
+struct NodesData : CanvasData {
+  /** The state the nodes to add were sent for, sent again only for another. */
+  std::string add_for;
+  /** The compositor's result is drawn behind its nodes, see #native_nodes_compositor_job. */
+  bool composite = false;
+};
+
+void bridge_nodes_view_build(bContext *C,
+                             const views::Params & /*params*/,
+                             views::ViewData *view_data,
+                             views::ViewBuilder &builder)
+{
+  NodesData &data = static_cast<NodesData &>(*view_data);
+  std::string state = bridge_json_encode(*data.state);
+  const bool with_add = state != data.add_for;
+  std::string request = state;
+  if (with_add && request.size() > 2) {
+    request.insert(request.size() - 1, ",\"with_add\":1");
+  }
+  const std::string json = ui::native_nodes_query(C, request, false);
+  /* With no tree there is nothing to add to: offered again once there is one. */
+  data.add_for = json.find("\"nodes\":") != std::string::npos ? std::move(state) : "";
+  if (data.composite) {
+    data.composite = false;
+    ui::native_nodes_compositor_job(C);
+  }
+  bridge_canvas_records(builder, "nodes", json, data);
+}
+
+views::CommandResult bridge_nodes_view_command(bContext *C,
+                                               const views::Params &params,
+                                               views::ViewData *view_data,
+                                               const views::protocol::Command &command,
+                                               std::string &r_error)
+{
+  NodesData &data = static_cast<NodesData &>(*view_data);
+  if (command.target()->string_view() == "create") {
+    const views::protocol::TextValue *kind = command.value_as_TextValue();
+    bridge_setting_execute(
+        C, BridgeSettingCommand{"native_nodes_create", kind && kind->value() ? kind->value()->str() : ""});
+    data.add_for.clear();
+    return views::CommandResult::Done;
+  }
+  const views::CommandResult result = bridge_canvas_command<ui::native_nodes_query>(
+      C, params, view_data, command, r_error);
+  if (command.target()->string_view() == "state") {
+    data.composite = bridge_json_encode(*data.state).find("COMPOSITOR") != std::string::npos;
+  }
+  return result;
+}
+
 /** \} */
 
 /* -------------------------------------------------------------------- */
@@ -4153,6 +3958,16 @@ void WM_native_ui_views_register()
   };
   view_type_add(std::move(image));
 
+  ViewType nodes;
+  nodes.name = "nodes";
+  /* Read four times a second at most, as while a node is dragged. */
+  nodes.min_interval = 0.25;
+  nodes.notifiers = {NC_NODE, NC_MATERIAL, NC_OBJECT, NC_SCENE, NC_WM, NC_SPACE, NC_WORLD, NC_TEXTURE};
+  nodes.create = []() -> std::unique_ptr<ViewData> { return std::make_unique<NodesData>(); };
+  nodes.build = bridge_nodes_view_build;
+  nodes.command = bridge_nodes_view_command;
+  view_type_add(std::move(nodes));
+
   ViewType render;
   render.name = "render";
   render.notifiers = {NC_SCENE, NC_WM, NC_IMAGE};
@@ -4219,15 +4034,6 @@ bool WM_native_ui_stylus_roll(float *r_angle, float r_tilt[2])
   r_tilt[0] = bridge_pencil_tilt_x;
   r_tilt[1] = bridge_pencil_tilt_y;
   return bridge_pencil_roll_down;
-}
-
-extern "C" void WM_native_ui_setting_enqueue(const char *setting, const char *value)
-{
-  if (setting == nullptr || setting[0] == '\0' || value == nullptr || value[0] == '\0') {
-    return;
-  }
-
-  bridge_messages.push(BridgeSettingCommand{setting, value});
 }
 
 /* -------------------------------------------------------------------- */
@@ -4352,7 +4158,6 @@ extern "C" void WM_native_ui_view_roll_enqueue(float angle)
 
 void WM_native_ui_tag_changed()
 {
-  bridge_nodes_dirty = true;
   bridge_image_pixels_pending = true;
   bridge_image_uvs_pending = true;
   bridge_changed = true;
@@ -4418,24 +4223,6 @@ bool bridge_panel_popup(bContext *C, const char *panel)
   popup.rename = true;
   bridge_popup_show(C, std::move(popup));
   return true;
-}
-
-extern "C" char *WM_native_ui_panels_take_json()
-{
-  std::string json;
-  if (!bridge_panels_snapshot.take(json)) {
-    return nullptr;
-  }
-  char *copy = static_cast<char *>(std::malloc(json.size() + 1));
-  if (copy) {
-    std::memcpy(copy, json.c_str(), json.size() + 1);
-  }
-  return copy;
-}
-
-extern "C" void WM_native_ui_json_free(char *json)
-{
-  std::free(json);
 }
 
 void bridge_apply_viewport_preferences(bContext *C)
@@ -4739,42 +4526,7 @@ int WM_native_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region)
 static void bridge_dispatch(bContext *C, BridgeMessage &message)
 {
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
-  const auto *setting = std::get_if<BridgeSettingCommand>(&message);
-  if ((!setting || (setting->setting != "native_properties_edit" &&
-                                                setting->setting != "native_panels" &&
-                                                setting->setting != "native_nodes_state" &&
-                                                setting->setting != "native_nodes_visible" &&
-                                                setting->setting != "native_nodes_edit" &&
-                                                setting->setting != "native_graph_state" &&
-                                                setting->setting != "native_graph_visible" &&
-                                                setting->setting != "native_graph_edit" &&
-                                                setting->setting != "native_image_state" &&
-                                                setting->setting != "native_image_visible" &&
-                                                setting->setting != "native_image_edit" &&
-                                                setting->setting != "native_storyboard_visible" &&
-                                                setting->setting != "native_storyboard_edit" &&
-                                                setting->setting != "native_storyboard_state")))
-  {
-    const BridgeContextStore context_store = bridge_context_push_view3d(C);
-    ui::native_properties_interaction_finish(C);
-    bridge_context_pop(C, context_store);
-  }
-  const bool panel_message = setting && (setting->setting == "native_panels" ||
-                                         setting->setting == "native_panel_edit" ||
-                                         setting->setting == "native_properties_edit" ||
-                                         setting->setting == "native_nodes_state" ||
-                                         setting->setting == "native_nodes_visible" ||
-                                         setting->setting == "native_nodes_edit" ||
-                                         setting->setting == "native_graph_state" ||
-                                         setting->setting == "native_graph_visible" ||
-                                         setting->setting == "native_graph_edit" ||
-                                         setting->setting == "native_image_state" ||
-                                         setting->setting == "native_image_visible" ||
-                                         setting->setting == "native_image_edit" ||
-                                         setting->setting == "native_storyboard_visible" ||
-                                         setting->setting == "native_storyboard_edit" ||
-                                         setting->setting == "native_storyboard_state");
-  if (WM_apple_ios_dialog_active(CTX_wm_window(C)) && !panel_message) {
+  if (WM_apple_ios_dialog_active(CTX_wm_window(C))) {
     return;
   }
 #endif
@@ -4787,12 +4539,7 @@ static void bridge_dispatch(bContext *C, BridgeMessage &message)
         else {
           const BridgeContextStore context_store = bridge_context_push_view3d(C);
           if (CTX_wm_window(C) && CTX_wm_area(C) && CTX_wm_region(C)) {
-            if constexpr (std::is_same_v<T, BridgeSettingCommand>) {
-              bridge_setting_execute(C, command);
-            }
-            else if constexpr (std::is_same_v<T, float>) {
-              bridge_view_roll_angle(C, command);
-            }
+            bridge_view_roll_angle(C, command);
           }
           bridge_context_pop(C, context_store);
         }
@@ -4988,27 +4735,6 @@ static bool bridge_modal_operator_running(bContext *C)
   return false;
 }
 
-/* A panel's edit that only sets a value, not a button, list, menu or operator. */
-static bool bridge_edit_sets_value(const std::string &json)
-{
-  std::istringstream stream(json);
-  auto value = io::serialize::JsonFormatter().deserialize(stream);
-  const auto *request = value ? value->as_dictionary_value() : nullptr;
-  if (request == nullptr || request->lookup_str("action").value_or("") != "property" ||
-      request->lookup("value") == nullptr)
-  {
-    return false;
-  }
-  for (const char *key : {"operator", "list_action", "id_action", "panel_action",
-                          "animation_action"})
-  {
-    if (request->lookup(key)) {
-      return false;
-    }
-  }
-  return true;
-}
-
 /**
  * Whether a message can be handled while a stroke or other modal operator runs: values, what is
  * shown and the view. Modes, tools, brushes, operators, undo, frames and assets change data the
@@ -5016,38 +4742,8 @@ static bool bridge_edit_sets_value(const std::string &json)
  */
 static bool bridge_message_live(const BridgeMessage &message)
 {
-  if (std::holds_alternative<float>(message)) {
-    return true;
-  }
-  const auto *setting = std::get_if<BridgeSettingCommand>(&message);
-  if (setting == nullptr) {
-    return false;
-  }
-  const StringRef name = setting->setting;
-  if (name.endswith("_state") || name.endswith("_visible")) {
-    return true;
-  }
-  if (ELEM(name,
-           "native_brush",
-           "brush_direction",
-           "constraint_axis",
-           "snap",
-           "proportional",
-           "pivot",
-           "orientation",
-           "mirror",
-           "mirror_topology",
-           "native_panels",
-           "hover_highlight",
-           "navigation_corner",
-           "tweak_drag"))
-  {
-    return true;
-  }
-  if (ELEM(name, "native_properties_edit", "native_panel_edit", "native_nodes_edit")) {
-    return bridge_edit_sets_value(setting->value);
-  }
-  return false;
+  /* Turning the view, which changes no data; not an asset dragged in. */
+  return std::holds_alternative<float>(message);
 }
 
 void bridge_undo_push_pending(bContext *C)
@@ -5116,43 +4812,12 @@ void WM_native_ui_flush_commands(bContext *C)
     bridge_context_pop(C, context_store);
   }
 
+  /* An asset dragged on: only its newest place. */
   auto supersedes_preview = [](const BridgeMessage &previous, const BridgeMessage &next) {
-    const auto *a = std::get_if<BridgeSettingCommand>(&previous);
-    const auto *b = std::get_if<BridgeSettingCommand>(&next);
-    if (a && b && a->setting == "timeline_frame" && b->setting == "timeline_frame") {
-      return true;
-    }
-    /* A brush slider's newer value, unless the older one ended its drag. */
-    if (a && b && a->setting == "native_brush" && b->setting == "native_brush" &&
-        a->value.find("\"commit\":true") == std::string::npos &&
-        a->value.substr(0, a->value.find(',')) == b->value.substr(0, b->value.find(',')))
-    {
-      return true;
-    }
-    const auto *drag_a = std::get_if<BridgeAssetDragCommand>(&previous);
-    const auto *drag_b = std::get_if<BridgeAssetDragCommand>(&next);
-    if (drag_a && drag_b && drag_a->phase == BRIDGE_ASSET_DRAG_MOVE &&
-        drag_b->phase == BRIDGE_ASSET_DRAG_MOVE)
-    {
-      return true;
-    }
-    if (!a || !b || a->setting != b->setting ||
-        a->setting != "native_properties_edit")
-    {
-      return false;
-    }
-    std::istringstream a_stream(a->value), b_stream(b->value);
-    auto a_value = io::serialize::JsonFormatter().deserialize(a_stream);
-    auto b_value = io::serialize::JsonFormatter().deserialize(b_stream);
-    const auto *a_request = a_value ? a_value->as_dictionary_value() : nullptr;
-    const auto *b_request = b_value ? b_value->as_dictionary_value() : nullptr;
-    return a_request && b_request && a_request->lookup_str("phase").value_or("") == "update" &&
-           !a_request->lookup_str("interaction").value_or("").is_empty() &&
-           a_request->lookup_str("interaction") == b_request->lookup_str("interaction") &&
-           a_request->lookup_str("id") == b_request->lookup_str("id") &&
-           a_request->lookup_str("key") == b_request->lookup_str("key");
+    const auto *a = std::get_if<BridgeAssetDragCommand>(&previous);
+    const auto *b = std::get_if<BridgeAssetDragCommand>(&next);
+    return a && b && a->phase == BRIDGE_ASSET_DRAG_MOVE && b->phase == BRIDGE_ASSET_DRAG_MOVE;
   };
-  bool handled_commands = false;
   /* Waiting messages first, in the order they came; a stroke or move may start or end between
    * any two of them. Live messages go ahead of any still waiting. */
   Vector<BridgeMessage> messages = std::move(bridge_messages_waiting);
@@ -5172,7 +4837,6 @@ void WM_native_ui_flush_commands(bContext *C)
     bridge_dispatching = true;
     bridge_dispatch(C, message);
     bridge_dispatching = false;
-    handled_commands = true;
   }
   if (!bridge_modal_operator_running(C)) {
     bridge_undo_push_pending(C);
@@ -5225,7 +4889,7 @@ void WM_native_ui_flush_commands(bContext *C)
     bridge_context_pop(C, context_store);
   }
 
-  bridge_toolbar_build(C, handled_commands);
+  bridge_changed = false;
   bridge_volume_build(C);
   {
     /* Views are built as Blender's own editors draw: in the window, its 3D View current. */

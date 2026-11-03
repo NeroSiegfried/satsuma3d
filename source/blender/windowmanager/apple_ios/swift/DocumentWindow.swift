@@ -100,7 +100,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     NotificationCenter.default.addObserver(self, selector: #selector(templatePresentation(_:)),
                                            name: Notification.Name("BlenderTemplatePresentation"),
                                            object: nil)
-    shell.pullSnapshots()
+    shell.pullViews()
     NativeViews.shared.checkViews()
     SoakProbe.start(model: model, shell: shell)
     model.refreshWindowState()
@@ -122,7 +122,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     NativeViews.shared.pull()
     commands.render?.updateStatus(BlenderRender.status)
     commands.settings?.updatePreferences(keymap: BlenderSettings.keymap)
-    shell.pullSnapshots()
+    shell.pullViews()
     SoakProbe.shared?.snapshotsPublished()
     pullMenuPopup()
     if desktop != model.desktop { desktopChanged() }

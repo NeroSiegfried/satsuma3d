@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 /** \file
- * Shared pieces of the SwiftUI interface: Blender's snapshots as Swift values, the engine inbox,
- * and Blender's icons. UIKit owns only immutable snapshots; every edit goes through the inbox.
+ * Shared pieces of the SwiftUI interface: reading the canvases' records as Foundation values, timing
+ * the interface's work, and Blender's icons.
  */
 
 import SwiftUI
@@ -59,21 +59,6 @@ enum InterfaceTimings {
     let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
     file.write(Data("{\"part\":\"\(part)\",\"ms\":\(ms),\"bytes\":\(bytes)}\n".utf8))
     return result
-  }
-}
-
-enum Engine {
-  /** Queue a setting for the engine; `value` is usually JSON. */
-  static func setting(_ name: String, _ value: String) {
-    WM_native_ui_setting_enqueue(name, value)
-  }
-
-  static func setting(_ name: String, json: Any) {
-    guard JSONSerialization.isValidJSONObject(json),
-          let data = try? JSONSerialization.data(withJSONObject: json),
-          let text = String(data: data, encoding: .utf8)
-    else { return }
-    setting(name, text)
   }
 }
 

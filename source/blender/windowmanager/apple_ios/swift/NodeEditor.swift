@@ -41,8 +41,16 @@ final class NodeEditorModel {
   private(set) var shown = false
   /** Bumped to fit the view to the tree, as when another tree shows. */
   private(set) var fitRequest = 0
-  /** The controls on the nodes, which edit through the same store as Properties' controls. */
-  let store = InspectorStore()
+  /** Blender's tree, from its `nodes` view while the editor shows. */
+  let canvas = NativeCanvas("nodes")
+  /** The controls on the nodes, their edits sent to the canvas. */
+  @ObservationIgnored private(set) lazy var store = InspectorStore { [canvas] request in canvas.edit(request) }
+
+  /** Take Blender's tree, if it changed. */
+  func pull() {
+    guard shown, let snapshot = canvas.take() else { return }
+    update(snapshot, ack: (snapshot["ack"] as? NSNumber)?.uint64Value ?? 0)
+  }
   @ObservationIgnored var shownChanged: (Bool) -> Void = { _ in }
 
   var nodes: [JSON] { snapshot?.array("nodes") ?? [] }
@@ -75,7 +83,7 @@ final class NodeEditorModel {
       sendState()
       fitRequest += 1
     }
-    Engine.setting("native_nodes_visible", shown ? "1" : "0")
+    canvas.setShown(shown)
     shownChanged(shown)
   }
 
@@ -111,7 +119,7 @@ final class NodeEditorModel {
 
   private func sendState() {
     store.requestContext = context
-    Engine.setting("native_nodes_state", json: context)
+    canvas.setState(context)
   }
 
   func update(_ next: JSON, ack: UInt64) {
@@ -182,7 +190,7 @@ final class NodeEditorModel {
   func requestFit() { fitRequest += 1 }
 
   func createTree() {
-    Engine.setting("native_nodes_create", kind.rawValue)
+    NativeViews.shared.send(canvas.view, target: "create", op: .invoke, value: .text(kind.rawValue))
   }
 }
 

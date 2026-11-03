@@ -11,9 +11,9 @@
 import SwiftUI
 import UIKit
 
-/* Matches #BridgeAssetDragPhase in `wm_native_ui.cc`. */
+/* Matches #WMNativeUIAssetDragPhase in `WM_native_ui.h`. */
 enum AssetDragPhase: Int32 {
-  case begin = 0, move = 1, drop = 2, cancel = 3, add = 4
+  case begin = 0, move = 1, drop = 2, cancel = 3
 }
 
 private let assetsHeight: CGFloat = 212

@@ -446,7 +446,31 @@ static bool commands_execute(bContext *C, std::vector<std::vector<uint8_t>> rece
       }
     }
   }
+  /* A drag's update is only worth carrying out if no later one for the same node, or its end,
+   * came with it: Blender shows the newest value, once. */
+  for (size_t i = 0; i < commands.size(); i++) {
+    const protocol::Command &command = *commands[i].command;
+    if (command.phase() != protocol::Phase::Update) {
+      continue;
+    }
+    for (size_t j = i + 1; j < commands.size(); j++) {
+      const protocol::Command &later = *commands[j].command;
+      if (later.subscription() == command.subscription() &&
+          later.target()->string_view() == command.target()->string_view() &&
+          ELEM(later.phase(), protocol::Phase::Update, protocol::Phase::End))
+      {
+        if (command.id() != 0) {
+          answers.emplace_back(command.id(), std::string());
+        }
+        commands[i].command = nullptr;
+        break;
+      }
+    }
+  }
   for (WaitingCommand &item : commands) {
+    if (item.command == nullptr) {
+      continue;
+    }
     const bool running = WM_native_ui_engine_busy(C);
     if (!running) {
       bridge_undo_push_pending(C);

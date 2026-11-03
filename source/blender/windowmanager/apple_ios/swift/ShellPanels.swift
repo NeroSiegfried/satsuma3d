@@ -62,8 +62,8 @@ final class ShellPanels {
     assets.clientPoint = { [weak model] point in wm_apple_ios_window_pixels(model?.window, point) }
   }
 
-  /** Blender's panels, timeline and asset snapshots, whichever changed. */
-  func pullSnapshots() {
+  /** What Blender's views show now, for the parts that read them as they change. */
+  func pullViews() {
     timeline.update()
     assets.update()
     panels.preferenceLists.update()
@@ -71,18 +71,7 @@ final class ShellPanels {
     timeline.store.curves.pull()
     timeline.store.storyboard.pull()
     panels.image.pull()
-    if let snapshot = takeJSON("panels", WM_native_ui_panels_take_json()) {
-      InterfaceTimings.measure("panels.apply") { panels.updateSnapshot(snapshot) }
-    }
+    panels.nodes.pull()
     panels.image.pullPixels()
-  }
-
-  private func takeJSON(_ name: String, _ json: UnsafeMutablePointer<CChar>?) -> Any? {
-    guard let json else { return nil }
-    let data = Data(bytes: json, count: strlen(json))
-    WM_native_ui_json_free(json)
-    return InterfaceTimings.measure(name + ".decode", bytes: data.count) {
-      try? JSONSerialization.jsonObject(with: data)
-    }
   }
 }
