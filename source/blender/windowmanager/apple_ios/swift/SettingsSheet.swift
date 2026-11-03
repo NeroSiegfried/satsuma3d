@@ -50,7 +50,7 @@ final class SettingsModel: ObservableObject {
     didSet {
       guard hoverHighlight != oldValue else { return }
       UserDefaults.standard.set(hoverHighlight, forKey: Self.hoverHighlightKey)
-      Engine.setting("hover_highlight", hoverHighlight ? "1" : "0")
+      BlenderSettings.set("hover_highlight", .bool(hoverHighlight))
     }
   }
   /** The sidebar on the right and the brushes on the left, read by the viewport's controls. */
@@ -69,7 +69,7 @@ final class SettingsModel: ObservableObject {
   static func applyNavigationCorner() {
     let defaults = UserDefaults.standard
     let top = defaults.bool(forKey: navigationTopKey), left = defaults.bool(forKey: leftHandedInterfaceKey)
-    Engine.setting("navigation_corner", "\(top ? "top" : "bottom")_\(left ? "left" : "right")")
+    BlenderSettings.set("navigation_corner", .text("\(top ? "top" : "bottom")_\(left ? "left" : "right")"))
   }
 
   var fingerUsesToolChanged: ((Bool) -> Void)?
@@ -86,7 +86,7 @@ final class SettingsModel: ObservableObject {
   func setKeymap(_ name: String) {
     guard name != keymap else { return }
     keymap = name
-    Engine.setting("keymap", name)
+    BlenderSettings.set("keymap", .text(name))
   }
 }
 
@@ -700,10 +700,8 @@ public final class SwiftSettings: NSObject, UIAdaptivePresentationControllerDele
   }
 
   /** The `preferences` entry of the toolbar snapshot. */
-  @objc(updatePreferences:)
-  public func updatePreferences(_ preferences: Any?) {
-    guard let preferences = preferences as? JSON, let keymap = preferences.string("keymap"),
-          keymap != model.keymap else { return }
+  public func updatePreferences(keymap: String?) {
+    guard let keymap, keymap != model.keymap else { return }
     model.keymap = keymap
   }
 

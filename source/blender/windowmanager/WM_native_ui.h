@@ -142,10 +142,6 @@ void WM_native_ui_viewport_trailing_cover_set(float pixels);
  * The `take` functions return the latest snapshot once, and null while it is unchanged.
  * \{ */
 
-/** The tools, modes, tool settings and active object. */
-char *WM_NATIVE_UI_NULLABLE WM_native_ui_toolbar_take_json(void);
-/** The latest toolbar snapshot again, changed or not. */
-char *WM_NATIVE_UI_NULLABLE WM_native_ui_toolbar_copy_json(void);
 /** Properties, the Outliner, and the editors the interface shows natively. */
 char *WM_NATIVE_UI_NULLABLE WM_native_ui_panels_take_json(void);
 /** One of Blender's menus to show where the pointer is: its name and place. */

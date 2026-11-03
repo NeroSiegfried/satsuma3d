@@ -131,7 +131,10 @@ private struct TweakDragMenu: View {
         .font(.system(size: 17, weight: .medium))
         .frame(width: 44, height: 44)
     }
-    .onChange(of: drag, initial: true) { _, drag in Engine.setting("tweak_drag", drag) }
+    .onChange(of: drag, initial: true) { _, drag in
+      let parts = [("m", "move"), ("r", "roll"), ("t", "tilt")].filter { drag.contains($0.0) }.map(\.1)
+      BlenderSettings.set("tweak_drag", .text(parts.joined(separator: ",")))
+    }
     .accessibilityLabel("Tweak Drag")
     .accessibilityValue([drag.contains("m") ? "Move" : nil, drag.contains("r") ? "Rotate" : nil,
                          drag.contains("t") ? "Turn Over" : nil].compactMap { $0 }.joined(separator: ", "))
@@ -526,7 +529,7 @@ struct DocumentToolbar: ToolbarContent {
       Button("Hide Interface", systemImage: "arrow.up.left.and.arrow.down.right") {
         commands.setInterfaceHidden(true)
       }
-      Button("Switch to Desktop Interface", systemImage: "macwindow") { Engine.setting("interface", "desktop") }
+      Button("Switch to Desktop Interface", systemImage: "macwindow") { BlenderSettings.set("desktop", .bool(true)) }
     }
     Button("Settings", systemImage: "gearshape") { commands.settings?.present() }
   }

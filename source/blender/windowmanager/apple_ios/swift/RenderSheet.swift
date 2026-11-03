@@ -21,6 +21,37 @@ import SwiftUI
 import UIKit
 
 /** Frames rendered as images, encoded as an H.264 video off the main thread. */
+/** A render started from here, from Blender's `render` view, see `bridge_render_view_build`. */
+@MainActor
+enum BlenderRender {
+  static let view = NativeViews.shared.subscribe("render")
+
+  /** Render the `image` or the `animation`, `cancel` it, or `clear` its state. */
+  static func run(_ action: String) { NativeViews.shared.send(view, target: action, op: .invoke) }
+
+  static var status: RenderStatus {
+    var values: [String: Blender_NativeUI_Data] = [:]
+    if let top = view.top {
+      for node in view.children(of: top) where node.key.hasPrefix("state:") {
+        if let data = node.content(Blender_NativeUI_Data.self) { values[String(node.key.dropFirst(6))] = data }
+      }
+    }
+    return RenderStatus(values: values)
+  }
+}
+
+/** The render's state, as `bl_ui.native_render.status_json` names its values. */
+struct RenderStatus {
+  let values: [String: Blender_NativeUI_Data]
+
+  func string(_ key: String) -> String? { values[key]?.value(type: Blender_NativeUI_TextValue.self)?.value }
+  func double(_ key: String) -> Double? { values[key]?.value(type: Blender_NativeUI_FloatValue.self)?.value }
+  func strings(_ key: String) -> [String] {
+    guard let texts = values[key]?.value(type: Blender_NativeUI_TextsValue.self) else { return [] }
+    return (0..<texts.valueCount).compactMap { texts.value(at: $0) }
+  }
+}
+
 private func encodeVideo(frames: [String], fps: Double, output: URL, progress: @escaping (Float) -> Void,
                          done: @escaping (URL?) -> Void)
 {
@@ -839,14 +870,14 @@ struct FilmFrame: View {
 
 /**
  * A render and its results, whichever window shows them: the iPad's sheet or the Mac's window.
- * Blender's state arrives in the toolbar snapshot, see #updateStatus.
+ * Blender's state arrives in the `render` view, see #updateStatus.
  */
 @MainActor
 final class RenderSession {
   let model = RenderModel()
   /** Where the render in progress is kept: the project it was started in. */
   private(set) var renderLibrary = RenderLibrary.forDocument(nil)
-  private var lastID: NSNumber?
+  private var lastID: Double?
   private var lastFrame: String?
   private var finishing = false
   /** Shows the renders. */
@@ -888,14 +919,14 @@ final class RenderSession {
     renderLibrary = RenderLibrary.forDocument(wm_apple_ios_document_url())
     model.phase = animation ? "Starting" : "Rendering Image"
     model.started = .now
-    Engine.setting("render", animation ? "animation" : "image")
+    BlenderRender.run(animation ? "animation" : "image")
     BackgroundRender.shared.begin(title: animation ? "Rendering Animation" : "Rendering Image")
     present()
   }
 
   private func stop() {
     guard model.rendering else { return }
-    Engine.setting("render", "cancel")
+    BlenderRender.run("cancel")
     end(success: false)
   }
 
@@ -906,24 +937,23 @@ final class RenderSession {
     BackgroundRender.shared.finish(success: success)
   }
 
-  func updateStatus(_ status: Any?) {
-    guard let status = status as? JSON, model.rendering, !finishing,
-          !jsonEqual(lastID, status["id"]) else { return }
-    lastID = status["id"] as? NSNumber
+  func updateStatus(_ status: RenderStatus) {
+    guard model.rendering, !finishing, let id = status.double("id"), lastID != id else { return }
+    lastID = id
     switch status.string("state") {
       case "rendering":
         showProgress(status)
       case "done":
         finishing = true
-        Engine.setting("render", "clear")
+        BlenderRender.run("clear")
         if model.animation { makeVideo(status) }
         else { keepImage(status.string("image")) }
       case "error":
-        Engine.setting("render", "clear")
+        BlenderRender.run("clear")
         end(success: false)
         fail(status.string("message") ?? "The render could not be completed.")
       case "cancelled":
-        Engine.setting("render", "clear")
+        BlenderRender.run("clear")
         end(success: false)
       default:
         break
@@ -942,7 +972,7 @@ final class RenderSession {
     return formatter.string(from: left).map { "About \($0) remaining" }
   }
 
-  private func showProgress(_ status: JSON) {
+  private func showProgress(_ status: RenderStatus) {
     let total = max(1, status.double("total") ?? 1)
     let done = status.double("done") ?? 0
     let samples = status.double("samples") ?? 0
@@ -979,7 +1009,7 @@ final class RenderSession {
     finished(item)
   }
 
-  private func makeVideo(_ status: JSON) {
+  private func makeVideo(_ status: RenderStatus) {
     let frames = status.strings("frames")
     guard !frames.isEmpty, let folder = status.string("folder") else {
       end(success: false)
@@ -1058,8 +1088,7 @@ public final class SwiftRender: NSObject, UIAdaptivePresentationControllerDelega
     sheet?.dismiss(animated: true)
   }
 
-  @objc(updateStatus:)
-  public func updateStatus(_ status: Any?) { session.updateStatus(status) }
+  func updateStatus(_ status: RenderStatus) { session.updateStatus(status) }
 
   private func fail(_ message: String) {
     let alert = UIAlertController(title: "Unable to Render", message: message, preferredStyle: .alert)

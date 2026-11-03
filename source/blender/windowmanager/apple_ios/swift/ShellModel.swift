@@ -267,7 +267,7 @@ final class ShellModel {
   func viewportOption(_ name: String) -> Bool { node("viewport:" + name)?.toggle?.value ?? false }
   var viewportOptionsShown: Bool { node("viewport:overlays") != nil }
   /** Blender's own interface is showing, as on a desktop computer. */
-  var desktop: Bool { flag("desktop") }
+  var desktop: Bool { BlenderSettings.desktop }
   /** Blender's viewport has shown its first frame. */
   private(set) var viewportReady = false
   private(set) var documentsAvailable = false
@@ -308,11 +308,6 @@ final class ShellModel {
   /** One finger uses the active tool rather than orbiting the view. */
   var fingerUsesTool = false
 
-  /** Parts of the snapshot that other objects show: the render sheet, settings and tool settings,
-   * which says whether the tool has any. */
-  @ObservationIgnored var onRender: ((Any?) -> Void)?
-  @ObservationIgnored var onPreferences: ((Any?) -> Void)?
-
   /** The latest window's model, for commands sent from where no window is at hand. */
   static weak var current: ShellModel?
 
@@ -332,25 +327,6 @@ final class ShellModel {
                                      _ value: Value)
   {
     set(keyPath, value, equal: ==)
-  }
-
-  /** The parts of the toolbar snapshot still sent as JSON: rendering and preferences. */
-  func update(toolbar: NativeUI.Toolbar) {
-    onRender?(toolbar.render.value)
-    onPreferences?(toolbar.preferences.value)
-  }
-
-  /** Take Blender's toolbar snapshot when it changed, or copy it when `copy`. */
-  func pullToolbar(copy: Bool = false) {
-    guard let json = copy ? WM_native_ui_toolbar_copy_json() : WM_native_ui_toolbar_take_json()
-    else { return }
-    let data = Data(bytes: json, count: strlen(json))
-    WM_native_ui_json_free(json)
-    guard let toolbar = InterfaceTimings.measure("toolbar.decode", bytes: data.count, {
-      (try? JSONSerialization.jsonObject(with: data) as? JSON).flatMap(NativeUI.Toolbar.init(json:))
-    })
-    else { return }
-    InterfaceTimings.measure("toolbar.apply") { update(toolbar: toolbar) }
   }
 
   /** Read without waiting for Blender: the presentation mailbox and the launcher. */

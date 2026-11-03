@@ -68,20 +68,18 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     commands.settings?.fingerUsesToolChanged = { [weak commands] useTool in
       commands?.setFingerUsesTool(useTool)
     }
-    model.onRender = { [weak commands] status in commands?.render?.updateStatus(status) }
-    model.onPreferences = { [weak commands] preferences in commands?.settings?.updatePreferences(preferences) }
     /* Industry Compatible is the iPad's default keymap; switch once, then respect the choice. */
     if !UserDefaults.standard.bool(forKey: "BlenderKeymapDefaulted") {
       UserDefaults.standard.set(true, forKey: "BlenderKeymapDefaulted")
-      Engine.setting("keymap", "Industry_Compatible")
+      BlenderSettings.set("keymap", .text("Industry_Compatible"))
     }
     if UserDefaults.standard.object(forKey: SettingsModel.hoverHighlightKey) as? Bool == false {
-      Engine.setting("hover_highlight", "0")
+      BlenderSettings.set("hover_highlight", .bool(false))
     }
     SettingsModel.applyNavigationCorner()
     if UserDefaults.standard.bool(forKey: "BlenderDesktopInterface") {
       /* Start in the interface the person left; Blender follows from its inbox. */
-      Engine.setting("interface", "desktop")
+      BlenderSettings.set("desktop", .bool(true))
     }
     pencilMenu?.delegate = pencilSource
     wm_apple_ios_window_set_pencil_menu(window, pencilMenu)
@@ -98,7 +96,6 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     NotificationCenter.default.addObserver(self, selector: #selector(templatePresentation(_:)),
                                            name: Notification.Name("BlenderTemplatePresentation"),
                                            object: nil)
-    model.pullToolbar(copy: true)
     shell.pullSnapshots()
     NativeViews.shared.checkViews()
     SoakProbe.start(model: model, shell: shell)
@@ -119,7 +116,8 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
   @objc private func snapshotsPublished() {
     let desktop = model.desktop
     NativeViews.shared.pull()
-    model.pullToolbar()
+    commands.render?.updateStatus(BlenderRender.status)
+    commands.settings?.updatePreferences(keymap: BlenderSettings.keymap)
     shell.pullSnapshots()
     SoakProbe.shared?.snapshotsPublished()
     pullMenuPopup()

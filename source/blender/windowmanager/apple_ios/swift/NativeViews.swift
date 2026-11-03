@@ -283,6 +283,26 @@ enum Operators {
   }
 }
 
+/** The interface's settings Blender keeps, from the `settings` view. */
+@MainActor
+enum BlenderSettings {
+  private static let view = NativeViews.shared.subscribe("settings")
+
+  static func set(_ name: String, _ value: NativeValue) {
+    NativeViews.shared.send(view, target: name, op: .set_, value: value)
+  }
+
+  private static func node(_ key: String) -> NativeNode? {
+    guard let top = view.top else { return nil }
+    _ = top.children
+    return view.node(key)
+  }
+
+  /** Blender's own interface shows, as on a desktop computer. */
+  static var desktop: Bool { node("desktop")?.toggle?.value ?? false }
+  static var keymap: String? { node("keymap")?.choice?.value }
+}
+
 /* -------------------------------------------------------------------- */
 /** \name Checking views
  *

@@ -369,8 +369,6 @@ else()
     set(CMAKE_Swift_LANGUAGE_VERSION 5)
     enable_language(Swift)
     set(IOS_LAUNCHER_SWIFT
-      # The types of what the bridge sends, generated from `native_ui.fbs`.
-      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/native_ui/generated/NativeUI.swift
       # The protocol with Blender, generated from `protocol.fbs`, and FlatBuffers' Swift runtime.
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/native_ui/generated/swift/protocol_generated.swift
       ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/ByteBuffer.swift

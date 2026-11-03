@@ -150,34 +150,6 @@ namespace blender {
 
 static CLG_LogRef LOG = {"wm.native"};
 
-/**
- * With `BLENDER_NATIVE_UI_RECORD` in the environment, snapshots are also written to
- * `native_ui_record/<table>/` in the temporary folder, named after the table of `native_ui.fbs`
- * they fit, for `tests/python/native_ui_schema_test.py --snapshots` to validate. The first few
- * hundred of each. Called on Blender's loop.
- */
-static void bridge_record(const char *table, const std::string &json)
-{
-  static const bool record = getenv("BLENDER_NATIVE_UI_RECORD") != nullptr;
-  if (!record) {
-    return;
-  }
-  static std::map<std::string, int> counts;
-  int &count = counts[table];
-  if (count >= 500) {
-    return;
-  }
-  char directory[FILE_MAX];
-  BLI_path_join(directory, sizeof(directory), BKE_tempdir_base(), "native_ui_record", table);
-  BLI_dir_create_recursive(directory);
-  char path[FILE_MAX];
-  BLI_path_join(path, sizeof(path), directory, (std::to_string(count++) + ".json").c_str());
-  if (FILE *file = BLI_fopen(path, "wb")) {
-    fwrite(json.data(), 1, json.size(), file);
-    fclose(file);
-  }
-}
-
 #ifdef WITH_PYTHON
 /** Run a Python expression giving a string, for a part of a snapshot. */
 static bool bridge_python(bContext *C, const char *part, const char *expression, std::string &r_result)
@@ -320,7 +292,6 @@ GHOST_Latest<std::string> bridge_hover_snapshot;
 int2 bridge_asset_drag_xy(0);
 BridgePencilHoverRequest bridge_hover_request;
 
-GHOST_Latest<std::string> bridge_toolbar_snapshot;
 /** One of Blender's menus to show natively where the pointer is, see #bridge_menu_popup. */
 GHOST_Latest<std::string> bridge_menu_popup_snapshot;
 GHOST_Latest<std::string> bridge_panels_snapshot;
@@ -335,8 +306,6 @@ bool bridge_assets_visible = false;
 std::string bridge_assets_json;
 std::chrono::steady_clock::time_point bridge_assets_next_snapshot;
 GHOST_Latest<std::string> bridge_assets_snapshot;
-std::string bridge_toolbar_json =
-    "{\"mode\":\"objectmode\",\"active\":\"builtin.select_box\",\"tools\":[]}";
 
 /**
  * Where a large JSON value is spliced into the panels' snapshot: a string starting with a control
@@ -2076,7 +2045,6 @@ void bridge_assets_build(bContext *C)
   bridge_assets_next_snapshot = now + std::chrono::milliseconds(busy ? 40 : 500);
   if (json != bridge_assets_json) {
     bridge_assets_json = json;
-    bridge_record("Assets", json);
     bridge_assets_snapshot.publish(std::move(json));
   }
 }
@@ -2250,19 +2218,15 @@ void bridge_asset_drag(bContext *C, const BridgeAssetDragCommand &command)
 
 /** \} */
 
-std::string bridge_toolbar_build_json_for_context(bContext *C)
+/** The panels' snapshot: the Outliner, and the editors drawn natively, see
+ * `bl_ui.native_panels`. */
+void bridge_panels_build(bContext *C)
 {
   const BridgeContextStore context_store = bridge_context_push_view3d(C);
   const bool has_view3d_context = CTX_wm_window(C) != nullptr && CTX_wm_area(C) != nullptr &&
                                   CTX_wm_region(C) != nullptr;
-  const char *mode_string = has_view3d_context ? CTX_data_mode_string(C) : "objectmode";
-  std::string render_json = "null";
-  std::string preferences_json = "null";
 #ifdef WITH_PYTHON
   if (has_view3d_context) {
-    bridge_python(C, "render", "bl_ui.native_render.status_json(bpy.context)", render_json);
-    bridge_python(
-        C, "preferences", "bl_ui.native_settings.preferences_json(bpy.context)", preferences_json);
     const auto now = std::chrono::steady_clock::now();
     if (bridge_panels_visible && now >= bridge_panels_next_snapshot) {
       /* Scene projection follows the native refresh cadence, not the viewport frame rate. */
@@ -2427,22 +2391,12 @@ std::string bridge_toolbar_build_json_for_context(bContext *C)
       /* Published when it changes: every snapshot wakes the native interface. */
       if (bridge_panels_json != bridge_panels_published) {
         bridge_panels_published = bridge_panels_json;
-        bridge_record("Panels", bridge_panels_json);
         bridge_panels_snapshot.publish(bridge_panels_json);
       }
     }
   }
 #endif
   bridge_context_pop(C, context_store);
-
-  std::string json = "{\"mode\":\"";
-  json += bridge_json_escape(mode_string ? mode_string : "objectmode");
-  json += "\",\"render\":";
-  json += render_json;
-  json += ",\"preferences\":";
-  json += preferences_json;
-  json += "}";
-  return json;
 }
 
 void bridge_timeline_build(bContext *C)
@@ -2491,7 +2445,6 @@ void bridge_timeline_build(bContext *C)
                      "}";
   if (json != bridge_timeline_json) {
     bridge_timeline_json = json;
-    bridge_record("Timeline", json);
     bridge_timeline_snapshot.publish(std::move(json));
   }
 }
@@ -2501,13 +2454,12 @@ bool bridge_changed = true;
 
 void bridge_toolbar_build(bContext *C, const bool handled_commands)
 {
-  /* Describing the toolbar runs Python and is costly. Do it only when something may have changed:
-   * a native command ran or Blender sent notifiers, as it does for any change of state; or
-   * Properties asks while open. A slow check covers anything that changes without notifiers.
-   * The native toolbar is told about a new description at once and only when it differs.
-   * Continuous changes, such as playback changing the frame, describe it ten times a second. */
+  /* Describing the panels runs Python and is costly. Do it only when something may have changed:
+   * a native command ran or Blender sent notifiers, as it does for any change of state; or while
+   * they show, on their own cadence. A slow check covers anything that changes without
+   * notifiers. Continuous changes, such as playback changing the frame, describe them ten times a
+   * second. */
   static std::chrono::steady_clock::time_point next_check, last_build;
-  static std::string published;
   const auto now = std::chrono::steady_clock::now();
   const bool wanted = handled_commands || bridge_changed || now >= next_check ||
                       (bridge_panels_visible && now >= bridge_panels_next_snapshot);
@@ -2515,16 +2467,7 @@ void bridge_toolbar_build(bContext *C, const bool handled_commands)
     bridge_changed = false;
     last_build = now;
     next_check = now + std::chrono::seconds(1);
-#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
-    WM_apple_ios_finger_tweak_mode_update(C);
-#endif
-    std::string json = bridge_timed("toolbar",
-                                    [&] { return bridge_toolbar_build_json_for_context(C); });
-    if (json != published) {
-      published = json;
-      bridge_record("Toolbar", json);
-      bridge_toolbar_snapshot.publish(std::move(json));
-    }
+    bridge_panels_build(C);
   }
   bridge_timed("timeline", [&] { bridge_timeline_build(C); });
   bridge_timed("assets", [&] { bridge_assets_build(C); });
@@ -3141,7 +3084,6 @@ void bridge_toolbar_view_build(bContext *C,
       return bridge_data(buffer, value);
     });
   };
-  data("desktop", bridge_desktop_ui.load());
 
   if (has_view3d) {
     /* The modes the active object has, as Blender's header lists them. */
@@ -3448,6 +3390,187 @@ bool bridge_toolbar_view_live(const views::protocol::Command &command)
 
 /** \} */
 
+/* -------------------------------------------------------------------- */
+/** \name The Settings and Render Views
+ *
+ * `settings`: the interface's own settings that Blender keeps, which it sets as it starts and as
+ * they change. `render`: a render started from the interface, see `bl_ui.native_render`.
+ * \{ */
+
+void bridge_settings_view_build(bContext * /*C*/,
+                                const views::Params & /*params*/,
+                                views::ViewData * /*data*/,
+                                views::ViewBuilder &builder)
+{
+  const NodeId top = builder.top("settings", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return views::protocol::CreateGroup(buffer);
+  });
+  const auto toggle = [&](const char *key, const char *label, const bool value) {
+    builder.add(top, key, [&](ViewBuffer &buffer, NodeFields &fields) {
+      fields.label = IFACE_(label);
+      return views::protocol::CreateToggle(buffer, value);
+    });
+  };
+  /* Blender's own interface, as on a desktop computer. */
+  toggle("desktop", "Desktop Interface", bridge_desktop_ui.load());
+  toggle("hover_highlight", "Highlight What the Pencil Hovers Over", bridge_hover_highlight);
+  builder.add(top, "keymap", [&](ViewBuffer &buffer, NodeFields &fields) {
+    fields.label = IFACE_("Keymap");
+    static const std::pair<const char *, const char *> keymaps[] = {
+        {"Industry_Compatible", "Industry Compatible"}, {"Blender", "Blender"}};
+    OptionOffsets options = bridge_options(buffer, OptionLabels(keymaps, std::size(keymaps)));
+    return views::protocol::CreateChoiceDirect(buffer, U.keyconfigstr, &options);
+  });
+  builder.add(top, "navigation_corner", [&](ViewBuffer &buffer, NodeFields &fields) {
+    fields.label = IFACE_("Navigation Gizmo");
+    static const std::pair<const char *, const char *> corners[] = {{"top_left", "Top Left"},
+                                                                    {"top_right", "Top Right"},
+                                                                    {"bottom_left", "Bottom Left"},
+                                                                    {"bottom_right", "Bottom Right"}};
+    OptionOffsets options = bridge_options(buffer, OptionLabels(corners, std::size(corners)));
+    const std::string value = std::string(bridge_navigation_top ? "top" : "bottom") + "_" +
+                              (bridge_navigation_left ? "left" : "right");
+    return views::protocol::CreateChoiceDirect(buffer, value.c_str(), &options);
+  });
+  /* What a drag with the Tweak tool does. */
+  builder.add(top, "tweak_drag", [&](ViewBuffer &buffer, NodeFields &fields) {
+    fields.label = IFACE_("Tweak");
+    static const std::pair<const char *, const char *> parts[] = {
+        {"move", "Move"}, {"roll", "Roll"}, {"tilt", "Tilt"}};
+    OptionOffsets options = bridge_options(buffer, OptionLabels(parts, std::size(parts)));
+    std::string value;
+    for (const auto &[on, name] : {std::pair{bridge_tweak_move.load(), "move"},
+                                   std::pair{bridge_tweak_roll.load(), "roll"},
+                                   std::pair{bridge_tweak_tilt.load(), "tilt"}})
+    {
+      if (on) {
+        value += (value.empty() ? "" : ",") + std::string(name);
+      }
+    }
+    return views::protocol::CreateChoiceDirect(
+        buffer, value.c_str(), &options, views::protocol::ChoiceStyle::Expanded, true);
+  });
+}
+
+views::CommandResult bridge_settings_view_command(bContext *C,
+                                                  const views::Params & /*params*/,
+                                                  views::ViewData * /*data*/,
+                                                  const views::protocol::Command &command,
+                                                  std::string &r_error)
+{
+  const std::string_view target = command.target()->string_view();
+  const views::protocol::TextValue *text_value = command.value_as_TextValue();
+  const std::string text = text_value && text_value->value() ? text_value->value()->str() : "";
+  const views::protocol::BoolValue *on = command.value_as_BoolValue();
+  if (command.op() != views::protocol::Op::Set) {
+    r_error = "Settings are only set";
+    return views::CommandResult::Failed;
+  }
+  if (target == "desktop" && on) {
+    bridge_interface_set(C, on->value());
+  }
+  else if (target == "hover_highlight" && on) {
+    bridge_hover_highlight = on->value();
+  }
+  else if (target == "keymap") {
+    bridge_setting_execute(C, BridgeSettingCommand{"keymap", text});
+  }
+  else if (target == "navigation_corner") {
+    bridge_navigation_top = text.starts_with("top");
+    bridge_navigation_left = text.ends_with("left");
+    WM_main_add_notifier(NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+    /* The toolbar says where the gizmo is. */
+    views::view_type_dirty("toolbar");
+  }
+  else if (target == "tweak_drag") {
+    bridge_tweak_move = text.find("move") != std::string::npos;
+    bridge_tweak_roll = text.find("roll") != std::string::npos;
+    bridge_tweak_tilt = text.find("tilt") != std::string::npos;
+  }
+  else {
+    r_error = "No such setting";
+    return views::CommandResult::Failed;
+  }
+  return views::CommandResult::Done;
+}
+
+/** The render's state, as `bl_ui.native_render.status_json` gives it: a node of data for each of
+ * its values, such as `state`, `done` and `image`. Built again soon while it renders. Buttons:
+ * `image` and `animation` render, `cancel` and `clear`. */
+void bridge_render_view_build(bContext *C,
+                              const views::Params & /*params*/,
+                              views::ViewData * /*data*/,
+                              views::ViewBuilder &builder)
+{
+  using namespace io::serialize;
+  const NodeId top = builder.top("render", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return views::protocol::CreateGroup(buffer);
+  });
+  for (const char *name : {"image", "animation", "cancel", "clear"}) {
+    builder.add(top, name, [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      return views::protocol::CreateButton(buffer);
+    });
+  }
+  const std::shared_ptr<Value> status = bridge_python_value(
+      C, "render", "bl_ui.native_render.status_json(bpy.context)");
+  const DictionaryValue *state = status ? status->as_dictionary_value() : nullptr;
+  if (state == nullptr) {
+    return;
+  }
+  for (const DictionaryValue::Item &item : state->elements()) {
+    const std::string key = "state:" + item.first;
+    const Value &value = *item.second;
+    builder.add(top, key, [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      if (const StringValue *text = value.as_string_value()) {
+        return bridge_data(buffer, std::string_view(text->value()));
+      }
+      if (const ArrayValue *array = value.as_array_value()) {
+        std::vector<flatbuffers::Offset<flatbuffers::String>> texts;
+        for (const std::shared_ptr<Value> &element : array->elements()) {
+          const StringValue *text = element->as_string_value();
+          texts.push_back(buffer.CreateString(text ? text->value() : ""));
+        }
+        const auto vector = buffer.CreateVector(texts);
+        return views::protocol::CreateData(buffer,
+                                           views::protocol::Value::TextsValue,
+                                           views::protocol::CreateTextsValue(buffer, vector).Union());
+      }
+      const double number = value.as_double_value() ? value.as_double_value()->value() :
+                            value.as_int_value()    ? double(value.as_int_value()->value()) :
+                            value.as_boolean_value() ? double(value.as_boolean_value()->value()) :
+                                                      0.0;
+      return views::protocol::CreateData(
+          buffer,
+          views::protocol::Value::FloatValue,
+          views::protocol::CreateFloatValue(buffer, number).Union());
+    });
+  }
+  if (bridge_text(*state, "state") == "rendering") {
+    /* Its progress, which no notifier tells of. */
+    views::view_type_dirty("render");
+  }
+}
+
+views::CommandResult bridge_render_view_command(bContext *C,
+                                                const views::Params & /*params*/,
+                                                views::ViewData * /*data*/,
+                                                const views::protocol::Command &command,
+                                                std::string &r_error)
+{
+  const std::string_view target = command.target()->string_view();
+  if (command.op() != views::protocol::Op::Invoke ||
+      !ELEM(target, "image", "animation", "cancel", "clear"))
+  {
+    r_error = "Not something rendering does";
+    return views::CommandResult::Failed;
+  }
+  bridge_setting_execute(C, BridgeSettingCommand{"render", std::string(target)});
+  return views::CommandResult::Done;
+}
+
+/** \} */
+
+
 }  // namespace
 
 void WM_native_ui_views_register()
@@ -3485,6 +3608,22 @@ void WM_native_ui_views_register()
     return CommandResult::Done;
   };
   view_type_add(std::move(brushes));
+
+  ViewType settings;
+  settings.name = "settings";
+  settings.notifiers = {NC_WM};
+  settings.build = bridge_settings_view_build;
+  settings.command = bridge_settings_view_command;
+  settings.live = [](const protocol::Command & /*command*/) { return true; };
+  view_type_add(std::move(settings));
+
+  ViewType render;
+  render.name = "render";
+  render.notifiers = {NC_SCENE, NC_WM, NC_IMAGE};
+  render.min_interval = 0.25;
+  render.build = bridge_render_view_build;
+  render.command = bridge_render_view_command;
+  view_type_add(std::move(render));
 }
 
 void WM_native_ui_starter_library_ensure()
@@ -3690,31 +3829,6 @@ void WM_native_ui_tag_changed()
   bridge_image_pixels_pending = true;
   bridge_image_uvs_pending = true;
   bridge_changed = true;
-}
-
-extern "C" char *WM_native_ui_toolbar_take_json()
-{
-  /* Only a description that changed since the native interface last took one. */
-  if (!bridge_toolbar_snapshot.take(bridge_toolbar_json)) {
-    return nullptr;
-  }
-  char *json_copy = static_cast<char *>(std::malloc(bridge_toolbar_json.size() + 1));
-  if (json_copy != nullptr) {
-    std::memcpy(json_copy, bridge_toolbar_json.c_str(), bridge_toolbar_json.size() + 1);
-  }
-  return json_copy;
-}
-
-extern "C" char *WM_native_ui_toolbar_copy_json()
-{
-  bridge_toolbar_snapshot.take(bridge_toolbar_json);
-
-  char *json_copy = static_cast<char *>(std::malloc(bridge_toolbar_json.size() + 1));
-  if (json_copy == nullptr) {
-    return nullptr;
-  }
-  std::memcpy(json_copy, bridge_toolbar_json.c_str(), bridge_toolbar_json.size() + 1);
-  return json_copy;
 }
 
 

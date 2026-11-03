@@ -182,7 +182,14 @@ class Converter {
   void operator_view(const DictionaryValue &described)
   {
     const std::string_view id = text(described, "id");
-    const NodeId top = builder_.top(id.empty() ? "none" : id, [&](Fields &buffer, NodeFields &fields) {
+    if (id.empty()) {
+      /* No operation. */
+      builder_.top("none", [](Fields &buffer, NodeFields & /*fields*/) {
+        return protocol::CreateGroup(buffer);
+      });
+      return;
+    }
+    const NodeId top = builder_.top(id, [&](Fields &buffer, NodeFields &fields) {
       fields.label = text(described, "title");
       return protocol::CreateOperatorDirect(buffer,
                                             text(described, "operator").data(),

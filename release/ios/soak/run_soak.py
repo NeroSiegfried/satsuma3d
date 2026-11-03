@@ -39,7 +39,7 @@ def run(*args, check=True):
 
 def environment(args):
     variables = {"BLENDER_SOAK": "1", "BLENDER_SOAK_MINUTES": str(args.minutes), "BLENDER_SOAK_SEED": str(args.seed),
-                 # Snapshots for the schema check, see `native_ui.fbs`.
+                 # How long each part of the bridge takes, see `native_ui/timings.py`.
                  "BLENDER_NATIVE_UI_RECORD": "1"}
     if args.ui:
         variables["BLENDER_SOAK_UI"] = "1"
