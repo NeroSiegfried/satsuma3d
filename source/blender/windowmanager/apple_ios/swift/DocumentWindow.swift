@@ -511,7 +511,7 @@ public struct DocumentWindow: View {
             .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: inspector) {
-          InspectorPanel(store: shell.panels.inspector) { shell.panels.setInspectorShown(false) }
+          PropertiesPanel(model: shell.panels.properties) { shell.panels.setInspectorShown(false) }
             .presentationDetents([.medium, .large])
         }
     }
@@ -561,7 +561,7 @@ public struct DocumentWindow: View {
         }
         layers(bottom: false)
         if inspector {
-          InspectorPanel(store: shell.panels.inspector) { shell.panels.setInspectorShown(false) }
+          PropertiesPanel(model: shell.panels.properties) { shell.panels.setInspectorShown(false) }
             .environment(\.panelInWindow, true)
             .frame(width: Self.inspectorWidth)
             .background(Color(uiColor: .secondarySystemBackground).ignoresSafeArea(edges: .vertical))

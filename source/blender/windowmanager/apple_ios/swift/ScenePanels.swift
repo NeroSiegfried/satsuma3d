@@ -18,7 +18,10 @@ final class SwiftScenePanels {
    * own and the Properties' Tool tab. */
   static weak var current: SwiftScenePanels?
 
-  let inspector = InspectorStore(mode: .properties)
+  /** The Properties editor, from Blender's `properties` view while it shows. */
+  let properties = PanelsModel(mode: .properties)
+  /** The Outliner's edits, which go through the panels' requests. */
+  private let requests = InspectorStore(mode: .properties)
   /** The native node editor, which Blender's panel snapshots also feed. */
   let nodes = NodeEditorModel()
   /** The native Image Editor, which they feed too. */
@@ -32,7 +35,7 @@ final class SwiftScenePanels {
   /** Blender's Preferences, which Settings shows. */
   let preferences = InspectorStore(mode: .preferences, tab: "PREFERENCES_INTERFACE")
   let preferenceLists = PreferencesLists()
-  private(set) lazy var hierarchy = HierarchyStore { [weak self] request in self?.inspector.send(request) }
+  private(set) lazy var hierarchy = HierarchyStore { [weak self] request in self?.requests.send(request) }
 
   private var showInspector = false
   private var showHierarchy = false
@@ -45,7 +48,7 @@ final class SwiftScenePanels {
   private var shadingVisible = false
 
   init() {
-    inspector.visible = false
+    properties.setShown(false)
     Self.current = self
   }
 
@@ -101,8 +104,8 @@ final class SwiftScenePanels {
 
   private func applyVisibility() {
     if !showInspector { ColorPickerSession.active?.close() }
-    inspector.visible = showInspector
-    Engine.setting("native_panels", "\((showInspector ? 1 : 0) | (showHierarchy ? 2 : 0))")
+    properties.setShown(showInspector)
+    Engine.setting("native_panels", showHierarchy ? "2" : "0")
     panelsDidChange?()
   }
 
@@ -126,12 +129,9 @@ final class SwiftScenePanels {
     if let imageSnapshot = snapshot.dict("image"), image.shown {
       image.update(imageSnapshot)
     }
-    if ack < inspector.sequence { return }
+    if ack < requests.sequence { return }
     if let nodes = snapshot["hierarchy"] as? [Any] {
       hierarchy.update(nodes: nodes.compactMap { $0 as? JSON }, status: snapshot.string("error") ?? "")
-    }
-    if showInspector, snapshot["inspector"] != nil {
-      inspector.update(snapshot: snapshot)
     }
   }
 
@@ -148,7 +148,7 @@ final class SwiftScenePanels {
   /** The panel a window shows: the same store as the editor's, so both stay in step. */
   func windowContent(_ kind: PanelWindow) -> AnyView {
     switch kind {
-      case .properties: AnyView(InspectorPanel(store: inspector) {})
+      case .properties: AnyView(PropertiesPanel(model: properties) {})
       case .nodes: AnyView(NodeEditorPanel(model: nodes))
       case .image: AnyView(ImageEditorPanel(model: image))
       default: AnyView(HierarchyPanel(store: hierarchy) {})
