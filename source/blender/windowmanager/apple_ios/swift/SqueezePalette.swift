@@ -1167,13 +1167,10 @@ final class SqueezePalette {
 
   var commands: [BlenderMenuItem]? { BlenderMenus.shared.items[commandRoute] }
 
-  /** How many menus deep a command's route is: one for the context menu's own. */
+  /** How many menus deep a command's route is: one for the context menu's own. A route is its
+   * menu, then a line for each step from there. */
   static func depth(of route: String) -> Int {
-    guard let data = route.data(using: .utf8),
-          let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-          let path = json["path"] as? [Any]
-    else { return 1 }
-    return max(1, path.count)
+    max(1, route.split(separator: "\n", omittingEmptySubsequences: false).count - 1)
   }
 
   /** The active object's or bone's name, for Rename Active to start from. */
