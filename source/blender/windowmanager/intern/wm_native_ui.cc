@@ -4141,6 +4141,8 @@ void bridge_interface_set(bContext *C, const bool desktop)
   if (win != nullptr) {
     WM_event_add_notifier(C, NC_WINDOW, nullptr);
   }
+  /* The settings view tells the interface, also when Blender's own Window menu switched. */
+  WM_event_add_notifier(C, NC_WM | ND_DATACHANGED, nullptr);
 }
 
 static wmOperatorStatus bridge_interface_toggle_exec(bContext *C, wmOperator * /*op*/)
