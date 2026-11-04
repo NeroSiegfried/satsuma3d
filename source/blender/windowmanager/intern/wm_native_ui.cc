@@ -29,6 +29,7 @@
 #include "BKE_preview_image.hh"
 #include "BKE_scene.hh"
 #include "BKE_screen.hh"
+#include "BKE_workspace.hh"
 #include "BKE_undo_system.hh"
 #include "BKE_vfont.hh"
 #include "DNA_vfont_types.h"
@@ -4144,6 +4145,56 @@ bool WM_native_ui_desktop_mode()
   return bridge_desktop_ui || WM_native_interface() == nullptr;
 }
 
+/**
+ * Bring a 3D View to \a win for the native interface to show full screen: out of another
+ * editor's full screen, or a maximized one with its headers, which a file may have been saved
+ * with, or to a workspace with one. Whether it is ready.
+ */
+static bool bridge_view3d_ensure(bContext *C, wmWindow *win, bScreen *screen)
+{
+  const bool found = bridge_find_view3d_area(screen) != nullptr;
+  if (found && screen->state != SCREENMAXIMIZED) {
+    return true;
+  }
+  if (screen->state != SCREENNORMAL) {
+    for (ScrArea &area : screen->areabase) {
+      if (!ED_area_is_global(&area)) {
+        ED_screen_full_restore(C, &area);
+        break;
+      }
+    }
+    return false;
+  }
+  /* A workspace in the same mode, as changing to another changes the mode too. */
+  const Object *object = CTX_data_active_object(C);
+  const int mode = object ? object->mode : OB_MODE_OBJECT;
+  Main *bmain = CTX_data_main(C);
+  for (WorkSpace &workspace : bmain->workspaces) {
+    const WorkSpaceLayout *layout = BKE_workspace_active_layout_for_workspace_get(
+        win->workspace_hook, &workspace);
+    if (workspace.object_mode == mode && layout &&
+        bridge_find_view3d_area(BKE_workspace_layout_screen_get(layout)))
+    {
+      ED_workspace_change(&workspace, C, CTX_wm_manager(C), win);
+      return false;
+    }
+  }
+  /* None has one: the largest editor becomes one. */
+  ScrArea *largest = nullptr;
+  for (ScrArea &area : screen->areabase) {
+    if (!ED_area_is_global(&area) &&
+        (largest == nullptr || area.winx * area.winy > largest->winx * largest->winy))
+    {
+      largest = &area;
+    }
+  }
+  if (largest != nullptr) {
+    CTX_wm_area_set(C, largest);
+    ED_area_newspace(C, largest, SPACE_VIEW3D, false);
+  }
+  return false;
+}
+
 void WM_native_ui_ensure_layout(bContext *C)
 {
   if (C == nullptr) {
@@ -4161,6 +4212,12 @@ void WM_native_ui_ensure_layout(bContext *C)
   wmWindow *win = CTX_wm_window(C);
   bScreen *screen = CTX_wm_screen(C);
   ScrArea *area = CTX_wm_area(C);
+  if (win != nullptr && screen != nullptr && !bridge_view3d_ensure(C, win, screen))
+  {
+    /* The screen changed: full screen and its regions follow on the next pass. */
+    bridge_context_pop(C, context_store);
+    return;
+  }
   if (win != nullptr && screen != nullptr && area != nullptr && screen->state == SCREENNORMAL) {
     ED_screen_state_toggle(C, win, area, SCREENFULL);
     bridge_gizmo_refresh_pending = true;
