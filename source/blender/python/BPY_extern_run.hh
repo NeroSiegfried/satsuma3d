@@ -22,11 +22,17 @@
 
 #pragma once
 
+#include <memory>
+
 #include "BLI_compiler_attrs.h"
 #include "BLI_string_ref.hh"
 #include "BLI_sys_types.h"
 
 namespace blender {
+
+namespace io::serialize {
+class Value;
+}
 
 struct ReportList;
 struct Text;
@@ -241,6 +247,17 @@ struct BPy_RunErrInfo {
                                                     const char *expr,
                                                     BPy_RunErrInfo *err_info,
                                                     char **r_value) ATTR_NONNULL(1, 3, 5);
+
+/**
+ * Evaluate `expr` as a value: dictionaries, lists, text, numbers, booleans and null.
+ *
+ * \return The value, or null on failure.
+ */
+std::shared_ptr<io::serialize::Value> BPY_run_string_as_value(bContext *C,
+                                                              const char *imports[],
+                                                              const char *expr,
+                                                              BPy_RunErrInfo *err_info)
+    ATTR_NONNULL(1, 3);
 
 /** \} */
 

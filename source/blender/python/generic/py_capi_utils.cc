@@ -24,6 +24,7 @@
 #ifndef MATH_STANDALONE
 #  include "MEM_guardedalloc.h"
 
+#  include "BLI_serialize.hh"
 #  include "BLI_string_utf8.h"
 #endif
 
@@ -1812,6 +1813,75 @@ bool PyC_RunString_AsStringOrNone(const char *imports[],
 {
   size_t value_size;
   return PyC_RunString_AsStringAndSizeOrNone(imports, expr, filename, r_value, &value_size);
+}
+
+static std::shared_ptr<io::serialize::Value> pyc_as_serialize_value(PyObject *value)
+{
+  using namespace io::serialize;
+  if (PyBool_Check(value)) {
+    return std::make_shared<BooleanValue>(value == Py_True);
+  }
+  if (PyLong_Check(value)) {
+    const int64_t number = PyLong_AsLongLong(value);
+    if (number == -1 && PyErr_Occurred()) {
+      PyErr_Clear();
+    }
+    return std::make_shared<IntValue>(number);
+  }
+  if (PyFloat_Check(value)) {
+    return std::make_shared<DoubleValue>(PyFloat_AS_DOUBLE(value));
+  }
+  if (PyUnicode_Check(value)) {
+    Py_ssize_t size;
+    const char *text = PyUnicode_AsUTF8AndSize(value, &size);
+    if (text == nullptr) {
+      PyErr_Clear();
+      return std::make_shared<StringValue>("");
+    }
+    return std::make_shared<StringValue>(std::string(text, size));
+  }
+  if (PyList_Check(value) || PyTuple_Check(value)) {
+    std::shared_ptr<ArrayValue> array = std::make_shared<ArrayValue>();
+    const Py_ssize_t size = PySequence_Fast_GET_SIZE(value);
+    PyObject **items = PySequence_Fast_ITEMS(value);
+    for (Py_ssize_t i = 0; i < size; i++) {
+      array->append(pyc_as_serialize_value(items[i]));
+    }
+    return array;
+  }
+  if (PyDict_Check(value)) {
+    std::shared_ptr<DictionaryValue> dictionary = std::make_shared<DictionaryValue>();
+    Py_ssize_t pos = 0;
+    PyObject *key, *item;
+    while (PyDict_Next(value, &pos, &key, &item)) {
+      /* Keys as text, as JSON writes them. */
+      PyObject *key_text = PyObject_Str(key);
+      const char *name = key_text ? PyUnicode_AsUTF8(key_text) : nullptr;
+      if (name == nullptr) {
+        PyErr_Clear();
+      }
+      else {
+        dictionary->append(name, pyc_as_serialize_value(item));
+      }
+      Py_XDECREF(key_text);
+    }
+    return dictionary;
+  }
+  return std::make_shared<NullValue>();
+}
+
+bool PyC_RunString_AsValue(const char *imports[],
+                           const char *expr,
+                           const char *filename,
+                           std::shared_ptr<io::serialize::Value> &r_value)
+{
+  PyObject *retval = pyc_run_string_as_py_object(imports, nullptr, expr, filename);
+  if (retval == nullptr) {
+    return false;
+  }
+  r_value = pyc_as_serialize_value(retval);
+  Py_DECREF(retval);
+  return true;
 }
 
 /** \} */

@@ -594,6 +594,24 @@ bool BPY_run_string_as_string_or_none(
       C, imports, expr, err_info, r_value, &value_dummy_len);
 }
 
+std::shared_ptr<io::serialize::Value> BPY_run_string_as_value(bContext *C,
+                                                              const char *imports[],
+                                                              const char *expr,
+                                                              BPy_RunErrInfo *err_info)
+{
+  PyGILState_STATE gilstate;
+  bpy_context_set(C, &gilstate);
+
+  std::shared_ptr<io::serialize::Value> value;
+  if (!PyC_RunString_AsValue(imports, expr, "<expr as value>", value)) {
+    run_string_handle_error(err_info);
+  }
+
+  bpy_context_clear(C, &gilstate);
+
+  return value;
+}
+
 bool BPY_run_string_as_intptr(bContext *C,
                               const char *imports[],
                               const char *expr,

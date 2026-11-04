@@ -10,6 +10,7 @@
 
 #include <Python.h>
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -19,6 +20,10 @@
 #include "BLI_sys_types.h"
 
 namespace blender {
+
+namespace io::serialize {
+class Value;
+}
 
 /** Useful to print Python objects while debugging. */
 void PyC_ObSpit(const char *name, PyObject *var);
@@ -295,6 +300,15 @@ struct PyC_FlagSet {
                                                 const char *expr,
                                                 const char *filename,
                                                 char **r_value) ATTR_NONNULL(2, 3, 4);
+/**
+ * The value as JSON would hold it: dictionaries, lists and tuples, text, numbers, booleans and
+ * null, with null for anything else.
+ */
+[[nodiscard]] bool PyC_RunString_AsValue(const char **imports,
+                                         const char *expr,
+                                         const char *filename,
+                                         std::shared_ptr<io::serialize::Value> &r_value)
+    ATTR_NONNULL(2, 3);
 
 /**
  * Flush Python's `sys.stdout` and `sys.stderr`. Errors are ignored.
