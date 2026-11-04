@@ -10,8 +10,6 @@ to what Blender's own header uses: the unified paint settings when they are shar
 brush.
 """
 
-import json
-
 import bpy
 
 __all__ = (
@@ -123,12 +121,9 @@ def brush_values(context):
     return result
 
 
-def brush_set(context, payload):
-    """Set one of `size`, `strength`, `weight` or `color` from a JSON object with its `key` and `value`."""
-    request = json.loads(payload)
+def brush_set(context, key, value):
+    """Set one of `size`, `strength`, `weight` or `color`."""
     size, strength, color = _owners(context) or (None, None, None)
-    key = request.get("key")
-    value = request.get("value")
     if key == "size" and size is not None:
         prop = _size_prop(size)
         setattr(size, prop, int(round(value)) if prop == "size" else float(value))

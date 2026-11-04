@@ -173,7 +173,7 @@ def _brush_value():
     low, high = brush[key]["min"], brush[key]["max"]
     top = min(high, max(low * 4, 200)) if key == "size" else high
     value = low + (top - low) * _random.random()
-    bl_ui.native_brush.brush_set(bpy.context, json.dumps({"key": key, "value": value}))
+    bl_ui.native_brush.brush_set(bpy.context, key, value)
     return {"brush": key, "value": value}
 
 

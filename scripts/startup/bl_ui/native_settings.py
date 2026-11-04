@@ -4,26 +4,18 @@
 
 """Blender preferences shown in the native iPad Settings."""
 
-import json
-
 import bpy
 
 __all__ = (
-    "preferences_json",
     "keymap_set",
     "addons",
     "keymaps",
-    "command",
+    "addon_enable",
+    "keymap_item_active",
 )
 
 # Keymap presets offered on the iPad, by preset file name.
 KEYMAPS = ("Industry_Compatible", "Blender")
-
-
-def preferences_json(context):
-    return json.dumps({
-        "keymap": context.window_manager.keyconfigs.active.name,
-    })
 
 
 def keymap_set(context, name):
@@ -100,27 +92,21 @@ def keymaps(context, search="", expanded=()):
     return keymaps
 
 
-def command(context, name, value):
-    """Changes Settings makes to add-ons and keymaps, ``value`` being JSON."""
-    value = json.loads(value)
-    if name == "addon":
-        module = value.get("module", "")
-        if value.get("enable"):
-            bpy.ops.preferences.addon_enable(module=module)
-        else:
-            bpy.ops.preferences.addon_disable(module=module)
-    elif name == "keymap_item_active":
-        keyconfig = context.window_manager.keyconfigs.user
-        km = keyconfig.keymaps.get(value.get("keymap", ""))
-        if km is None:
-            return
-        kmi = km.active().keymap_items.from_id(value.get("id", -1))
-        if kmi is None:
-            return
-        kmi.active = bool(value.get("active"))
+def addon_enable(context, module, enable):
+    if enable:
+        bpy.ops.preferences.addon_enable(module=module)
     else:
-        return
+        bpy.ops.preferences.addon_disable(module=module)
     # Saved with the other preferences, see `bridge_preferences_save` in `wm_native_ui.cc`.
+    context.preferences.is_dirty = True
+
+
+def keymap_item_active(context, keymap, item_id, active):
+    km = context.window_manager.keyconfigs.user.keymaps.get(keymap)
+    kmi = km and km.active().keymap_items.from_id(item_id)
+    if kmi is None:
+        return
+    kmi.active = active
     context.preferences.is_dirty = True
 
 

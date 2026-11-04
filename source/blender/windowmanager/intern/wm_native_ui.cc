@@ -122,7 +122,6 @@
 #include <functional>
 #include <map>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -978,15 +977,6 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     BPY_run_string_eval(C, imports, expression.c_str());
     return;
   }
-  if (command.setting == "native_addon" || command.setting == "native_keymap_item_active") {
-    /* Add-ons and keymap items, which Settings lists in its own way, see `bl_ui.native_settings`. */
-    const char *imports[] = {"bpy", "bl_ui", nullptr};
-    const std::string expression = "bl_ui.native_settings.command(bpy.context, \"" +
-                                   command.setting.substr(strlen("native_")) + "\", \"" +
-                                   bridge_json_escape(command.value) + "\")";
-    BPY_run_string_eval(C, imports, expression.c_str());
-    return;
-  }
   if (command.setting == "render" || command.setting == "viewport_toggle") {
     /* Rendering and viewport options from the iPad's Share and More menus, see
      * `bl_ui.native_render`. */
@@ -1012,15 +1002,15 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     bridge_context_pop(C, context_store);
     return;
   }
-  if (command.setting == "native_brush") {
-    /* The sidebar's size and strength, and the color well, see `bl_ui.native_brush`. A drag
-     * sends many values and one undo step as it ends. */
+  if (ELEM(command.setting, "native_brush", "native_brush_commit")) {
+    /* The sidebar's size and strength, and the color well, see `bl_ui.native_brush`: the value's
+     * key and value. A drag sends many values and one undo step as it ends. */
     const BridgeContextStore context_store = bridge_context_push_view3d(C);
     const char *imports[] = {"bpy", "bl_ui", nullptr};
-    const std::string expression = "bl_ui.native_brush.brush_set(bpy.context, \"" +
-                                   bridge_json_escape(command.value) + "\")";
+    const std::string expression = "bl_ui.native_brush.brush_set(bpy.context, " + command.value +
+                                   ")";
     BPY_run_string_eval(C, imports, expression.c_str());
-    if (command.value.find("\"commit\":true") != std::string::npos) {
+    if (command.setting == "native_brush_commit") {
       ED_undo_push(C, "Brush Setting");
     }
     WM_main_add_notifier(NC_BRUSH | NA_EDITED, nullptr);
@@ -2602,9 +2592,8 @@ views::CommandResult bridge_toolbar_view_command(bContext *C,
       value = bridge_json_number(number->value());
     }
     const bool commit = ELEM(command.phase(), views::protocol::Phase::Once, views::protocol::Phase::End);
-    return setting("native_brush",
-                   "{\"key\":\"" + std::string(target.substr(6)) + "\",\"value\":" + value +
-                       ",\"commit\":" + (commit ? "true" : "false") + "}");
+    return setting(commit ? "native_brush_commit" : "native_brush",
+                   "\"" + bridge_json_escape(std::string(target.substr(6))) + "\", " + value);
   }
   if (set && StringRef(target).startswith("viewport:")) {
     return setting("viewport_toggle", std::string(target.substr(9)));
@@ -3095,12 +3084,13 @@ views::CommandResult bridge_preferences_list_view_command(bContext *C,
     r_error = "Not something the Preferences' lists do";
     return views::CommandResult::Failed;
   }
-  DictionaryValue value;
-  std::string name;
+  /* The change, as `bl_ui.native_settings` makes it. */
+  const char *flag = on->value() ? "True" : "False";
+  std::string call;
   if (StringRef(target).endswith(":enabled")) {
-    name = "addon";
-    value.append_str("module", target.substr(0, target.size() - strlen(":enabled")));
-    value.append("enable", std::make_shared<BooleanValue>(on->value()));
+    call = "addon_enable(bpy.context, \"" +
+           bridge_json_escape(target.substr(0, target.size() - strlen(":enabled"))) + "\", " +
+           flag + ")";
   }
   else if (StringRef(target).endswith(":active")) {
     const std::string item = target.substr(0, target.size() - strlen(":active"));
@@ -3109,18 +3099,17 @@ views::CommandResult bridge_preferences_list_view_command(bContext *C,
       r_error = "No such keymap item";
       return views::CommandResult::Failed;
     }
-    name = "keymap_item_active";
-    value.append_str("keymap", item.substr(0, slash));
-    value.append_int("id", std::atoll(item.c_str() + slash + 1));
-    value.append("active", std::make_shared<BooleanValue>(on->value()));
+    call = "keymap_item_active(bpy.context, \"" + bridge_json_escape(item.substr(0, slash)) +
+           "\", " + std::to_string(std::atoll(item.c_str() + slash + 1)) + ", " + flag + ")";
   }
   else {
     r_error = "Not something the Preferences' lists do";
     return views::CommandResult::Failed;
   }
-  std::ostringstream stream;
-  JsonFormatter().serialize(stream, value);
-  bridge_setting_execute(C, BridgeSettingCommand{"native_" + name, stream.str()});
+#ifdef WITH_PYTHON
+  const char *imports[] = {"bpy", "bl_ui", nullptr};
+  BPY_run_string_eval(C, imports, ("bl_ui.native_settings." + call).c_str());
+#endif
   return views::CommandResult::Done;
 }
 
