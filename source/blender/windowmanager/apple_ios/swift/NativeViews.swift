@@ -460,7 +460,7 @@ enum BlenderSettings {
 /** \name Checking views
  *
  * With `BLENDER_NATIVE_UI_VIEWS` in the environment, such as `properties:OBJECT,properties:TOOL`
- * (a view and its tab, a parameter as `preferences_list:list=addons`, or `menu:VIEW3D_MT_add` for
+ * (a view and its tab, parameters as `preferences_list:list=keymaps&search=grab`, or `menu:VIEW3D_MT_add` for
  * a menu by its name),
  * those views are shown to no one but written as text to `native_ui_record/views/` in the
  * temporary folder whenever they change, to check what Blender sends.
@@ -479,8 +479,13 @@ extension NativeViews {
       /* A tab, or for a menu its name. */
       var params: [String: NativeValue] = parts.count > 1 ? ["tab": .text(parts[1])] : [:]
       if parts[0] == "menu", parts.count > 1 { params = ["route": .text(BlenderMenus.route(parts[1]))] }
-      else if parts.count > 1, let equals = parts[1].firstIndex(of: "=") {
-        params = [String(parts[1][..<equals]): .text(String(parts[1][parts[1].index(after: equals)...]))]
+      else if parts.count > 1, parts[1].contains("=") {
+        /* Parameters as `key=value&key=value`. */
+        params = [:]
+        for pair in parts[1].split(separator: "&") {
+          let pair = pair.split(separator: "=", maxSplits: 1).map(String.init)
+          params[pair[0]] = .text(pair.count > 1 ? pair[1] : "")
+        }
       }
       checked.append((String(entry), subscribe(parts[0], params: params)))
     }
