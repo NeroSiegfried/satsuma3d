@@ -1,9 +1,0 @@
-Project: FlatBuffers
-URL: https://github.com/google/flatbuffers
-License: SPDX:Apache-2.0
-Copyright: Copyright 2014 Google Inc.
-Upstream version: 25.2.10
-Local modifications: Only the C++ runtime headers (include/flatbuffers) and the Swift runtime
-  (swift, from swift/Sources/FlatBuffers) are included. The schema compiler, flatc, is not built
-  with Blender: code generated from schemas is checked in, see
-  source/blender/windowmanager/native_ui.

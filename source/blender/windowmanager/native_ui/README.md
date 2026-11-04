@@ -52,8 +52,8 @@ edits are commands with parameters.
 ## Files
 
 - `protocol.fbs`: the protocol, in FlatBuffers' schema language. Read its comments first.
-- `generated/`: the code `flatc` makes from it, for C++, Swift and Kotlin. Checked in, so
-  Blender builds without `flatc`; run `generate.py` after changing the schema.
+- `generate.py`: makes a language's code from it with `flatc`. Blender's build does this for C++
+  and Swift with FlatBuffers from its libraries, so nothing generated is checked in.
 - `view_tree.hh`: how Blender's code writes a view, a node at a time.
 - `../WM_native_ui_views.hh`: how an editor adds a view type.
 - `../WM_native_ui.h`: the C API a shell calls, from Swift directly or from Kotlin through JNI.

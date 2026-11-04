@@ -464,3 +464,12 @@ else()
   add_library(bf_deps_optional_osl INTERFACE)
   add_library(bf::dependencies::optional::osl ALIAS bf_deps_optional_osl)
 endif()
+
+# -----------------------------------------------------------------------------
+# Configure FlatBuffers
+
+add_library(bf_deps_optional_flatbuffers INTERFACE)
+add_library(bf::dependencies::optional::flatbuffers ALIAS bf_deps_optional_flatbuffers)
+if(WITH_NATIVE_UI)
+  target_include_directories(bf_deps_optional_flatbuffers SYSTEM INTERFACE ${FLATBUFFERS_INCLUDE_DIRS})
+endif()

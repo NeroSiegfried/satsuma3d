@@ -451,6 +451,21 @@ find_package(TIFF REQUIRED)
 set(fmt_ROOT ${LIBDIR}/fmt)
 find_package(fmt REQUIRED)
 
+if(WITH_NATIVE_UI)
+  # The runtimes for the protocol with a platform's interface, and `flatc` to generate its code:
+  # the host's when cross-compiling.
+  set(FLATBUFFERS_INCLUDE_DIRS ${LIBDIR}/flatbuffers/include)
+  set(FLATBUFFERS_SWIFT_DIR ${LIBDIR}/flatbuffers/swift)
+  if(WITH_APPLE_CROSSPLATFORM)
+    set(FLATBUFFERS_FLATC ${CMAKE_SOURCE_DIR}/lib/macos_arm64/flatbuffers/bin/flatc)
+  else()
+    set(FLATBUFFERS_FLATC ${LIBDIR}/flatbuffers/bin/flatc)
+  endif()
+  if(NOT EXISTS ${FLATBUFFERS_FLATC})
+    message(FATAL_ERROR "WITH_NATIVE_UI needs FlatBuffers, not found in the libraries: ${FLATBUFFERS_FLATC}")
+  endif()
+endif()
+
 if(WITH_IMAGE_WEBP)
   set(WEBP_ROOT_DIR ${LIBDIR}/webp)
   find_package(WebP REQUIRED)

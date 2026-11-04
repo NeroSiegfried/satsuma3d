@@ -185,12 +185,23 @@ if(WITH_INPUT_IME)
 endif()
 
 if(WITH_NATIVE_UI)
-  # The bridge to a platform's own interface: the commands it sends Blender, and the snapshots of
-  # Blender it shows, as JSON.
+  # The bridge to a platform's own interface: the views of Blender it shows, and the commands it
+  # sends, see `native_ui/README.md`.
   add_definitions(-DWITH_NATIVE_UI)
+  # The protocol's code, generated from `protocol.fbs` as Blender is built.
+  set(NATIVE_UI_GENERATED ${CMAKE_CURRENT_BINARY_DIR}/native_ui)
+  add_custom_command(
+    OUTPUT ${NATIVE_UI_GENERATED}/protocol_generated.h
+    COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/native_ui/generate.py
+      --flatc ${FLATBUFFERS_FLATC} --language cpp --output ${NATIVE_UI_GENERATED}
+    DEPENDS native_ui/protocol.fbs native_ui/generate.py
+  )
+  add_custom_target(bf_windowmanager_native_ui_protocol
+    DEPENDS ${NATIVE_UI_GENERATED}/protocol_generated.h
+  )
   list(APPEND INC
     PUBLIC native_ui
-    PUBLIC native_ui/generated/cpp
+    PUBLIC ${NATIVE_UI_GENERATED}
   )
   list(APPEND SRC
     intern/wm_native_ui.cc
@@ -200,11 +211,10 @@ if(WITH_NATIVE_UI)
 
     intern/wm_apple_ios_volume.h
     intern/wm_native_ui_timing.hh
-    native_ui/generated/cpp/protocol_generated.h
     native_ui/view_tree.hh
   )
   list(APPEND LIB
-    PUBLIC bf::extern::flatbuffers
+    PUBLIC bf::dependencies::optional::flatbuffers
     PRIVATE bf::extern::xxhash
   )
 endif()
@@ -258,6 +268,9 @@ add_library(bf::windowmanager ALIAS bf_windowmanager)
 
 # RNA_prototypes.hh
 add_dependencies(bf_windowmanager bf_rna)
+if(WITH_NATIVE_UI)
+  add_dependencies(bf_windowmanager bf_windowmanager_native_ui_protocol)
+endif()
 
 if(WITH_GTESTS)
   set(TEST_INC
@@ -270,5 +283,5 @@ if(WITH_GTESTS)
       native_ui/tests/view_tree_test.cc
     )
   endif()
-  blender_add_test_suite_lib(windowmanager "${TEST_SRC}" "${INC};${TEST_INC}" "${INC_SYS}" "${LIB}")
+  blender_add_test_suite_lib(windowmanager "${TEST_SRC}" "${INC};${TEST_INC}" "${INC_SYS}" "${LIB};bf_windowmanager")
 endif()

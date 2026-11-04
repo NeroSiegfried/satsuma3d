@@ -368,29 +368,38 @@ else()
     # `wm_apple_ios_window.mm`.
     set(CMAKE_Swift_LANGUAGE_VERSION 5)
     enable_language(Swift)
+    set(IOS_NATIVE_UI_PROTOCOL ${CMAKE_CURRENT_BINARY_DIR}/native_ui/protocol_generated.swift)
+    add_custom_command(
+      OUTPUT ${IOS_NATIVE_UI_PROTOCOL}
+      COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/native_ui/generate.py
+        --flatc ${FLATBUFFERS_FLATC} --language swift --output ${CMAKE_CURRENT_BINARY_DIR}/native_ui
+      DEPENDS
+        ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/native_ui/protocol.fbs
+        ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/native_ui/generate.py
+    )
     set(IOS_LAUNCHER_SWIFT
       # The protocol with Blender, generated from `protocol.fbs`, and FlatBuffers' Swift runtime.
-      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/native_ui/generated/swift/protocol_generated.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/ByteBuffer.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Constants.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Enum.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/FlatBufferBuilder.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/FlatBufferObject.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/FlatBuffersUtils.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/FlatbuffersErrors.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Int+extension.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Message.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Mutable.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/NativeObject.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Offset.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Root.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/String+extension.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Struct.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Table.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/TableVerifier.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/VeriferOptions.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Verifiable.swift
-      ${CMAKE_SOURCE_DIR}/extern/flatbuffers/swift/Verifier.swift
+      ${IOS_NATIVE_UI_PROTOCOL}
+      ${FLATBUFFERS_SWIFT_DIR}/ByteBuffer.swift
+      ${FLATBUFFERS_SWIFT_DIR}/Constants.swift
+      ${FLATBUFFERS_SWIFT_DIR}/Enum.swift
+      ${FLATBUFFERS_SWIFT_DIR}/FlatBufferBuilder.swift
+      ${FLATBUFFERS_SWIFT_DIR}/FlatBufferObject.swift
+      ${FLATBUFFERS_SWIFT_DIR}/FlatBuffersUtils.swift
+      ${FLATBUFFERS_SWIFT_DIR}/FlatbuffersErrors.swift
+      ${FLATBUFFERS_SWIFT_DIR}/Int+extension.swift
+      ${FLATBUFFERS_SWIFT_DIR}/Message.swift
+      ${FLATBUFFERS_SWIFT_DIR}/Mutable.swift
+      ${FLATBUFFERS_SWIFT_DIR}/NativeObject.swift
+      ${FLATBUFFERS_SWIFT_DIR}/Offset.swift
+      ${FLATBUFFERS_SWIFT_DIR}/Root.swift
+      ${FLATBUFFERS_SWIFT_DIR}/String+extension.swift
+      ${FLATBUFFERS_SWIFT_DIR}/Struct.swift
+      ${FLATBUFFERS_SWIFT_DIR}/Table.swift
+      ${FLATBUFFERS_SWIFT_DIR}/TableVerifier.swift
+      ${FLATBUFFERS_SWIFT_DIR}/VeriferOptions.swift
+      ${FLATBUFFERS_SWIFT_DIR}/Verifiable.swift
+      ${FLATBUFFERS_SWIFT_DIR}/Verifier.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/Assets.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/BlenderMenus.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/FileDrop.swift
