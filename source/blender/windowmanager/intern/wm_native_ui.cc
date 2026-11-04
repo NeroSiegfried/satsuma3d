@@ -21,6 +21,7 @@
 #include "BKE_global.hh"
 #include "BKE_idprop.hh"
 #include "BKE_idtype.hh"
+#include "BKE_library.hh"
 #include "BKE_lib_id.hh"
 #include "BKE_main.hh"
 #include "BKE_packedFile.hh"
@@ -41,6 +42,7 @@
 #include "BLI_listbase.h"
 #include "BLI_math_vector.h"
 #include "BLI_path_utils.hh"
+#include "BLI_string.h"
 #include "BLI_serialize.hh"
 #include "BLI_time.h"
 #include "BLI_timer.h"
@@ -51,6 +53,7 @@
 #include "GHOST_Mailbox.hh"
 
 #include "DEG_depsgraph.hh"
+#include "DEG_depsgraph_build.hh"
 
 #include "DNA_action_types.h"
 #include "DNA_asset_types.h"
@@ -642,10 +645,55 @@ void bridge_text_object_edit(bContext *C, const std::string &command)
   }
 }
 
+/** The active object's data, should it come from a library, so that no mode but Object Mode can
+ * edit it, as with an asset just added. */
+static ID *bridge_mode_linked_data(bContext *C)
+{
+  Object *ob = CTX_data_active_object(C);
+  ID *data = ob ? static_cast<ID *>(ob->data) : nullptr;
+  return data && !ID_IS_EDITABLE(data) ? data : nullptr;
+}
+
 void bridge_mode_set(bContext *C, const char *mode)
 {
   wmOperatorType *ot = WM_operatortype_find("OBJECT_OT_mode_set", false);
   if (ot == nullptr) {
+    return;
+  }
+
+  /* Offer to make linked data local, rather than only saying it has to be. */
+  const wmNativeInterface *native = WM_native_interface();
+  if (ID *data = bridge_mode_linked_data(C); data && !STR_ELEM(mode, "OBJECT", "POSE") &&
+                                             native && native->alert)
+  {
+    wmNativeAlert alert;
+    alert.title = RPT_("Make Local?");
+    alert.message = std::string("\"") + BKE_id_name(*data) + "\" " +
+                    RPT_("is linked from a library, so it cannot be edited. Make it local to "
+                         "edit it in this file.");
+    alert.actions = {{IFACE_("Cancel"), wmNativeAlert::Role::Cancel}, {IFACE_("Make Local")}};
+    alert.preferred_action = 1;
+    native->alert(
+        C,
+        alert,
+        [mode = std::string(mode)](bContext *C, const int action, uint64_t) {
+          ID *data = bridge_mode_linked_data(C);
+          if (action != 1 || !data) {
+            return;
+          }
+          Main *bmain = CTX_data_main(C);
+          if (BKE_lib_id_make_local(bmain, data, LIB_ID_MAKELOCAL_ASSET_DATA_CLEAR)) {
+            BKE_id_newptr_and_tag_clear(data);
+            DEG_relations_tag_update(bmain);
+            WM_event_add_notifier(C, NC_WINDOW, nullptr);
+            ED_undo_push(C, "Make Local");
+          }
+          if (!bridge_mode_linked_data(C)) {
+            bridge_mode_set(C, mode.c_str());
+          }
+        },
+        {},
+        "bridge_make_local");
     return;
   }
 
