@@ -49,6 +49,9 @@ final class NativeView {
   /** The view's top node, once it arrived. */
   private(set) var top: NativeNode?
   @ObservationIgnored private var nodes: [String: NativeNode] = [:]
+  /** Counts the nodes coming and going, so a node looked up before it arrived is shown once it
+   * does. Their values are observed on the nodes themselves. */
+  private var shape = 0
   @ObservationIgnored private var version: UInt32 = 0
   /** Counts the updates applied, to tell whether anything changed since. */
   @ObservationIgnored private(set) var revision = 0
@@ -64,7 +67,10 @@ final class NativeView {
     self.params = params
   }
 
-  func node(_ key: String) -> NativeNode? { nodes[key] }
+  func node(_ key: String) -> NativeNode? {
+    _ = shape
+    return nodes[key]
+  }
 
   /** The nodes under `node`, in order. */
   func children(of node: NativeNode) -> [NativeNode] { node.children.compactMap { nodes[$0] } }
@@ -86,6 +92,8 @@ final class NativeView {
     }
     version = update.version
     revision += 1
+    let count = nodes.count
+    var added = update.reset
     for index in 0..<update.nodesCount {
       guard let buffer = update.nodes(at: index) else { continue }
       /* Copied into a buffer of its own, which outlives the batch it came in. */
@@ -97,6 +105,7 @@ final class NativeView {
       }
       else {
         nodes[key] = NativeNode(key: key, node: node)
+        added = true
       }
     }
     for index in 0..<update.childrenCount {
@@ -106,6 +115,7 @@ final class NativeView {
     for index in 0..<update.removedCount {
       if let key = update.removed(at: index) { nodes[key] = nil }
     }
+    if added || nodes.count != count { shape += 1 }
     if let topKey = update.top, top?.key != topKey { top = nodes[topKey] }
     else if update.reset, let topKey = top?.key { top = nodes[topKey] }
   }
