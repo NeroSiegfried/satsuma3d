@@ -9,7 +9,6 @@ the result itself. Animations are written as PNG frames to a temporary folder, f
 makes a video. Settings changed for this are restored when the render ends.
 """
 
-import json
 import os
 import re
 
@@ -19,8 +18,8 @@ __all__ = (
     "start",
     "cancel",
     "clear",
-    "status_json",
-    "viewport_json",
+    "status",
+    "viewport_options",
     "viewport_toggle",
 )
 
@@ -198,8 +197,8 @@ def clear(_context):
         _set_state(state="idle")
 
 
-def status_json(_context):
-    return json.dumps(_state, ensure_ascii=True, allow_nan=False)
+def status(_context):
+    return _state
 
 
 # -----------------------------------------------------------------------------
@@ -233,17 +232,17 @@ _TOGGLES = {
 }
 
 
-def viewport_json(context):
+def viewport_options(context):
     space = _view3d(context)
     if space is None:
-        return "null"
+        return None
     result = {}
     for name, owner_and_property in _TOGGLES.items():
         owner, prop = owner_and_property(space)
         result[name] = bool(getattr(owner, prop))
     region = space.region_3d
     result["camera_view"] = region is not None and region.view_perspective == 'CAMERA'
-    return json.dumps(result)
+    return result
 
 
 def viewport_toggle(context, name):

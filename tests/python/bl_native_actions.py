@@ -22,7 +22,7 @@ def check(ok, name):
 
 
 def titles(tool="builtin.select_box"):
-    return [item["title"] for item in json.loads(actions.actions_json(bpy.context, tool))]
+    return [item["title"] for item in actions.actions(bpy.context, tool)]
 
 
 icons = bpy.types.UILayout.bl_rna.functions['prop'].parameters['icon'].enum_items.keys()

@@ -10,13 +10,12 @@ and selecting, moving or deleting a frame acts on every key on it, as with summa
 timeline.
 """
 
-import json
 import bpy
 from bpy.props import BoolProperty, IntProperty, StringProperty
 from bpy_extras import anim_utils
 
 __all__ = (
-    "keys_json",
+    "keys",
 )
 
 
@@ -59,7 +58,7 @@ def _grease_pencil_layers(context):
         yield from ob.data.layers
 
 
-def keys_json(context):
+def keys(context):
     """Keyed frames as `[{"f": frame, "s": selected}, ...]`, sorted by frame."""
     frames = {}
     for fcurve in _fcurves(context):
@@ -78,7 +77,7 @@ def keys_json(context):
         for gp_frame in layer.frames:
             frame = gp_frame.frame_number
             frames[frame] = frames.get(frame, False) or gp_frame.select
-    return json.dumps([{"f": frame, "s": frames[frame]} for frame in sorted(frames)])
+    return [{"f": frame, "s": frames[frame]} for frame in sorted(frames)]
 
 
 def _frames(text):

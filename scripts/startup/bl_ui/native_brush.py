@@ -15,7 +15,7 @@ import json
 import bpy
 
 __all__ = (
-    "brush_json",
+    "brush_values",
     "brush_set",
 )
 
@@ -81,11 +81,11 @@ def _range(owner, prop):
     return rna.soft_min, rna.soft_max, rna.default
 
 
-def brush_json(context):
+def brush_values(context):
     """The brush's size, strength and color, or null outside the modes that paint with brushes."""
     owners = _owners(context)
     if owners is None:
-        return "null"
+        return None
     size, strength, color = owners
     result = {}
     if size is not None:
@@ -120,7 +120,7 @@ def brush_json(context):
     # Drawing with the material's color has no color of the brush's own: no color well.
     if color is not None:
         result["color"] = [float(c) for c in color.color]
-    return json.dumps(result)
+    return result
 
 
 def brush_set(context, payload):

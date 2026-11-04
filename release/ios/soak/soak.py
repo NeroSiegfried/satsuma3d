@@ -52,7 +52,7 @@ def _override():
 def _brush():
     import bl_ui.native_brush
     try:
-        return json.loads(bl_ui.native_brush.brush_json(bpy.context)) or {}
+        return bl_ui.native_brush.brush_values(bpy.context) or {}
     except Exception:
         return {}
 

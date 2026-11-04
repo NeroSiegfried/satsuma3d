@@ -199,9 +199,9 @@ def _hierarchy(context):
     return rows
 
 
-def hierarchy_json(context):
+def hierarchy(context):
     """The Outliner's rows, in outline order, for the native interface's `outliner` view."""
-    return json.dumps(_hierarchy(context), ensure_ascii=True, allow_nan=False)
+    return _hierarchy(context)
 
 
 class WM_OT_native_panel_edit(bpy.types.Operator):

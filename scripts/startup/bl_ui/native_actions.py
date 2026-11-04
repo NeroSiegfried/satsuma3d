@@ -15,7 +15,7 @@ import json
 import bpy
 
 __all__ = (
-    "actions_json",
+    "actions",
     "rename_active",
     "run",
 )
@@ -311,7 +311,7 @@ def _available(state):
             continue
 
 
-def actions_json(context, tool):
+def actions(context, tool):
     state = _State(context, tool)
     items = []
     available = list(_available(state))
@@ -323,7 +323,7 @@ def actions_json(context, tool):
             "icon": action.icon, "symbol": "",
             "selected": bool(action.checked(state)) if action.checked else False,
         })
-    return json.dumps(items, ensure_ascii=True)
+    return items
 
 
 def rename_active(context, name):

@@ -11,8 +11,8 @@ import bpy
 __all__ = (
     "preferences_json",
     "keymap_set",
-    "addons_json",
-    "keymaps_json",
+    "addons",
+    "keymaps",
     "command",
 )
 
@@ -40,7 +40,7 @@ def keymap_set(context, name):
 
 
 
-def addons_json(context):
+def addons(context):
     """The add-ons Settings lists, as Blender's Preferences do, with whether each is enabled."""
     import addon_utils
     from bpy.app.translations import pgettext_iface as iface_
@@ -58,7 +58,7 @@ def addons_json(context):
             "enabled": mod.__name__ in enabled,
         })
     addons.sort(key=lambda addon: (addon["category"].casefold(), addon["name"].casefold()))
-    return json.dumps(addons)
+    return addons
 
 
 def _keymaps_flat(items, depth, result):
@@ -67,17 +67,15 @@ def _keymaps_flat(items, depth, result):
         _keymaps_flat(children, depth + 1, result)
 
 
-def keymaps_json(context, state):
+def keymaps(context, search="", expanded=()):
     """
     The user's keymaps in the order Blender's Preferences list them, each with its depth in that
-    hierarchy. ``state`` (JSON) names the keymaps to list the items of, as ``expanded``; with a
-    ``search``, only the items whose name or keys match are listed, in every keymap that has any.
+    hierarchy, with the items of those named in ``expanded``; with a ``search``, only the items whose name or keys match are listed, in every keymap that has any.
     """
     from bl_keymap_utils import keymap_hierarchy
 
-    state = json.loads(state or "{}")
-    expanded = set(state.get("expanded", ()))
-    search = state.get("search", "").casefold()
+    expanded = set(expanded)
+    search = search.casefold()
     keyconfig = context.window_manager.keyconfigs.user
     flat = []
     _keymaps_flat(keymap_hierarchy.generate(), 0, flat)
@@ -99,7 +97,7 @@ def keymaps_json(context, state):
                 continue
             entry["items"] = items
         keymaps.append(entry)
-    return json.dumps(keymaps)
+    return keymaps
 
 
 def command(context, name, value):

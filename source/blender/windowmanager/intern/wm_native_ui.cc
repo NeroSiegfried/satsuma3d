@@ -148,22 +148,6 @@ namespace blender {
 
 static CLG_LogRef LOG = {"wm.native"};
 
-#ifdef WITH_PYTHON
-/** Run a Python expression giving a string, for a part of a snapshot. */
-static bool bridge_python(bContext *C, const char *part, const char *expression, std::string &r_result)
-{
-  BridgeTimer timer(part);
-  const char *imports[] = {"bpy", "bl_ui", nullptr};
-  char *result = nullptr;
-  if (!BPY_run_string_as_string(C, imports, expression, nullptr, &result)) {
-    return false;
-  }
-  r_result = result;
-  MEM_delete(result);
-  return true;
-}
-#endif
-
 /* The scene as 3D geometry for a volumetric window, see `wm_apple_ios_volume.cc`. */
 void bridge_volume_build(bContext *C);
 bool bridge_volume_command(bContext *C, StringRef setting, StringRef value);
@@ -1821,18 +1805,15 @@ using OptionOffsets = std::vector<flatbuffers::Offset<views::protocol::Option>>;
 /** Values of a choice and their labels. */
 using OptionLabels = Span<std::pair<const char *, const char *>>;
 
-/** A JSON value a Python expression gives, or null. */
+/** The value a Python expression gives, or null. */
 std::shared_ptr<io::serialize::Value> bridge_python_value(bContext *C,
                                                          const char *part,
                                                          const char *expression)
 {
 #ifdef WITH_PYTHON
-  std::string json;
-  if (!bridge_python(C, part, expression, json)) {
-    return nullptr;
-  }
-  std::istringstream stream(json);
-  return io::serialize::JsonFormatter().deserialize(stream);
+  BridgeTimer timer(part);
+  const char *imports[] = {"bpy", "bl_ui", nullptr};
+  return BPY_run_string_as_value(C, imports, expression, nullptr);
 #else
   UNUSED_VARS(C, part, expression);
   return nullptr;
@@ -1899,7 +1880,7 @@ OptionOffsets bridge_options(ViewBuffer &buffer, const OptionLabels items)
   return options;
 }
 
-/** The tools of the mode, as `native_toolbar_json` lists them: a choice for each, of the tools
+/** The tools of the mode, as `native_toolbar` lists them: a choice for each, of the tools
  * of its group, and lines between sets of them. */
 void bridge_tools_build(bContext *C, views::ViewBuilder &builder, const NodeId top)
 {
@@ -1911,7 +1892,7 @@ void bridge_tools_build(bContext *C, views::ViewBuilder &builder, const NodeId t
       C, imports, "bl_ui.space_toolsystem_common.native_select_fallback_keep(bpy.context)");
 #endif
   const std::shared_ptr<Value> tools = bridge_python_value(
-      C, "tools", "bl_ui.space_toolsystem_common.native_toolbar_json(bpy.context)");
+      C, "tools", "bl_ui.space_toolsystem_common.native_toolbar(bpy.context)");
   const NodeId list = builder.add(top, "tools", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
     return views::protocol::CreateGroup(buffer);
   });
@@ -1972,7 +1953,7 @@ void bridge_brush_build(bContext *C, views::ViewBuilder &builder, const NodeId t
 {
   using namespace io::serialize;
   const std::shared_ptr<Value> value = bridge_python_value(
-      C, "brush", "bl_ui.native_brush.brush_json(bpy.context)");
+      C, "brush", "bl_ui.native_brush.brush_values(bpy.context)");
   const DictionaryValue *brush = value ? value->as_dictionary_value() : nullptr;
   if (brush == nullptr) {
     return;
@@ -2238,7 +2219,7 @@ void bridge_actions_build(bContext *C, const char *tool, views::ViewBuilder &bui
     }
     return;
   }
-  const std::string expression = "bl_ui.native_actions.actions_json(bpy.context, \"" +
+  const std::string expression = "bl_ui.native_actions.actions(bpy.context, \"" +
                                  bridge_json_escape(tool ? tool : "") + "\")";
   const std::shared_ptr<Value> actions = bridge_python_value(C, "actions", expression.c_str());
   const ArrayValue *array = actions ? actions->as_array_value() : nullptr;
@@ -2522,10 +2503,10 @@ void bridge_toolbar_view_build(bContext *C,
     data("viewport_background", Span<double>(color, 3));
   }
   if (has_view3d) {
-    /* The viewport's options, see `bl_ui.native_render.viewport_json`. */
+    /* The viewport's options, see `bl_ui.native_render.viewport_options`. */
     using namespace io::serialize;
     const std::shared_ptr<Value> viewport = bridge_python_value(
-        C, "viewport", "bl_ui.native_render.viewport_json(bpy.context)");
+        C, "viewport", "bl_ui.native_render.viewport_options(bpy.context)");
     if (const DictionaryValue *options = viewport ? viewport->as_dictionary_value() : nullptr) {
       for (const DictionaryValue::Item &item : options->elements()) {
         const BooleanValue *value = item.second->as_boolean_value();
@@ -2787,7 +2768,7 @@ void bridge_timeline_keys_view_build(bContext *C,
     return views::protocol::CreateGroup(buffer);
   });
   const std::shared_ptr<Value> keys = bridge_python_value(
-      C, "timeline.keys", "bl_ui.native_timeline.keys_json(bpy.context)");
+      C, "timeline.keys", "bl_ui.native_timeline.keys(bpy.context)");
   std::vector<int64_t> frames, selected;
   if (const ArrayValue *array = keys ? keys->as_array_value() : nullptr) {
     for (const std::shared_ptr<Value> &item : array->elements()) {
@@ -3015,7 +2996,7 @@ void bridge_preferences_list_view_build(bContext *C,
   };
   if (list == "addons") {
     const std::shared_ptr<Value> addons = bridge_python_value(
-        C, "preferences.addons", "bl_ui.native_settings.addons_json(bpy.context)");
+        C, "preferences.addons", "bl_ui.native_settings.addons(bpy.context)");
     const NodeId rows = builder.add(top, "addons", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
       return views::protocol::CreateList(buffer);
     });
@@ -3043,21 +3024,18 @@ void bridge_preferences_list_view_build(bContext *C,
     }
   }
   else if (list == "keymaps") {
-    /* What to list, as `keymaps_json` takes it. */
-    DictionaryValue state;
-    state.append_str("search", std::string(params.text("search").value_or("")));
-    auto expanded = state.append_array("expanded");
+    /* What to list, as `keymaps` takes it. */
+    std::string expression = "bl_ui.native_settings.keymaps(bpy.context, search=\"" +
+                             bridge_json_escape(std::string(params.text("search").value_or(""))) +
+                             "\", expanded=(";
     if (const views::protocol::Param *param = params.find("expanded")) {
       if (const views::protocol::TextsValue *names = param->value_as_TextsValue()) {
         for (const flatbuffers::String *name : *names->value()) {
-          expanded->append_str(name->str());
+          expression += "\"" + bridge_json_escape(name->str()) + "\",";
         }
       }
     }
-    std::ostringstream state_stream;
-    JsonFormatter().serialize(state_stream, state);
-    const std::string expression = "bl_ui.native_settings.keymaps_json(bpy.context, \"" +
-                                   bridge_json_escape(state_stream.str()) + "\")";
+    expression += "))";
     const std::shared_ptr<Value> keymaps = bridge_python_value(
         C, "preferences.keymaps", expression.c_str());
     const NodeId rows = builder.add(top, "keymaps", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
@@ -3151,7 +3129,7 @@ views::CommandResult bridge_preferences_list_view_command(bContext *C,
 /* -------------------------------------------------------------------- */
 /** \name The Outliner View
  *
- * The scene's collections and objects, as `bl_ui.native_panels.hierarchy_json` lists them: the
+ * The scene's collections and objects, as `bl_ui.native_panels.hierarchy` lists them: the
  * tree list `outliner`, its rows keyed by their path from the scene's collection, such as
  * `/c12/o34` for an object in a collection, the active object's the list's active row. Each row
  * has its `<key>:hidden` toggle, the `<key>:actions` it allows, and `<key>:accepts`, whether rows
@@ -3165,7 +3143,7 @@ void bridge_outliner_view_build(bContext *C,
 {
   using namespace io::serialize;
   const std::shared_ptr<Value> rows = bridge_python_value(
-      C, "outliner", "bl_ui.native_panels.hierarchy_json(bpy.context)");
+      C, "outliner", "bl_ui.native_panels.hierarchy(bpy.context)");
   const ArrayValue *array = rows ? rows->as_array_value() : nullptr;
   std::string active;
   if (array) {
@@ -3511,7 +3489,7 @@ views::CommandResult bridge_settings_view_command(bContext *C,
   return views::CommandResult::Done;
 }
 
-/** The render's state, as `bl_ui.native_render.status_json` gives it: a node of data for each of
+/** The render's state, as `bl_ui.native_render.status` gives it: a node of data for each of
  * its values, such as `state`, `done` and `image`. Built again soon while it renders. Buttons:
  * `image` and `animation` render, `cancel` and `clear`. */
 void bridge_render_view_build(bContext *C,
@@ -3529,7 +3507,7 @@ void bridge_render_view_build(bContext *C,
     });
   }
   const std::shared_ptr<Value> status = bridge_python_value(
-      C, "render", "bl_ui.native_render.status_json(bpy.context)");
+      C, "render", "bl_ui.native_render.status(bpy.context)");
   const DictionaryValue *state = status ? status->as_dictionary_value() : nullptr;
   if (state == nullptr) {
     return;

@@ -40,7 +40,7 @@ enum BlenderRender {
   }
 }
 
-/** The render's state, as `bl_ui.native_render.status_json` names its values. */
+/** The render's state, as `bl_ui.native_render.status` names its values. */
 struct RenderStatus {
   let values: [String: Blender_NativeUI_Data]
 

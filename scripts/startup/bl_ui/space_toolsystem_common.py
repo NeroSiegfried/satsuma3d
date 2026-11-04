@@ -210,16 +210,15 @@ def native_select_fallback_keep(context):
     )
 
 
-def native_toolbar_json(context):
-    """Snapshot the same context-dependent groups and remembered tools as draw_cls."""
-    import json
+def native_toolbar(context):
+    """The same context-dependent groups and remembered tools as draw_cls."""
     from bpy.app.translations import pgettext_iface
 
     helper = ToolSelectPanelHelper
     space_type = context.space_data.type
     cls = helper._tool_class_from_space_type(space_type)
     if cls is None:
-        return "[]"
+        return []
     active_id = getattr(helper._tool_active_from_context(context, space_type), "idname", None)
 
     from bpy.app.translations import pgettext_tip
@@ -272,7 +271,7 @@ def native_toolbar_json(context):
             tools.append(tool_data(item))
     if tweak is not None:
         tools.append(tool_data(tweak))
-    return json.dumps(tools, ensure_ascii=False, separators=(",", ":"))
+    return tools
 
 
 class ToolSelectPanelHelper:
