@@ -147,6 +147,7 @@ else()
 endif()
 include(cmake/fmt.cmake)
 include(cmake/robinmap.cmake)
+include(cmake/flatbuffers.cmake)
 include(cmake/xml2.cmake)
 # OpenColorIO and dependencies.
 include(cmake/expat.cmake)
