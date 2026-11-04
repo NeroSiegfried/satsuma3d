@@ -38,7 +38,8 @@ check(titles()[:1] == ["Select All"] and "Delete" not in titles(), "Nothing sele
 cube.select_set(True)
 bpy.context.view_layer.objects.active = cube
 # Hide needs a 3D viewport, which background mode does not have.
-check(titles()[:2] == ["Duplicate", "Delete"], "A selected object leads with Duplicate and Delete")
+check(titles("builtin.move")[:2] == ["Duplicate", "Delete"], "A selected object leads with Duplicate and Delete")
+check(titles()[:1] == ["Select All"] and "Duplicate" in titles(), "Selection tools lead with selecting")
 check("Shade Smooth" in titles() and "Join" not in titles() and "Parent" not in titles(),
       "One mesh offers shading, not Join or Parent")
 check("Shade Smooth" not in titles("builtin.move"), "Shading stays with the selection tools")
@@ -69,15 +70,15 @@ bpy.context.tool_settings.mesh_select_mode = (True, False, False)
 bpy.ops.mesh.select_all(action='DESELECT')
 check(titles()[:1] == ["Select All"] and "Delete" not in titles(), "Edit Mode with nothing selected")
 bpy.ops.mesh.select_all(action='SELECT')
-vertex = titles()
+vertex = titles("builtin.move")
 check(vertex[:2] == ["Connect", "Merge"] and "Delete" in vertex and "Inset" not in vertex,
       "Vertices offer Connect and Merge first, no face tools: " + str(vertex))
 bpy.context.tool_settings.mesh_select_mode = (False, True, False)
-edge = titles()
+edge = titles("builtin.move")
 check(edge[:2] == ["Bevel", "Bridge Loops"] and "Dissolve" in edge and "Connect" not in edge,
       "Edges offer Bevel and Bridge: " + str(edge))
 bpy.context.tool_settings.mesh_select_mode = (False, False, True)
-face = titles()
+face = titles("builtin.move")
 check(face[:2] == ["Extrude", "Inset"] and "Separate" in face and "Bevel" not in face and "Merge" not in face,
       "Faces offer Extrude, Inset and Separate: " + str(face))
 import bmesh
