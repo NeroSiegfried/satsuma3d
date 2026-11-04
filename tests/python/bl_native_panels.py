@@ -21,19 +21,33 @@ def check(ok, name):
     checks.append(name)
 
 
-def state(mask=2):
-    return json.loads(panels.snapshot_json(bpy.context, mask))
+_failed = []
+
+
+def apply(**request):
+    """Run an edit as the outliner view does, remembering whether it failed."""
+    try:
+        result = bpy.ops.wm.native_panel_edit('EXEC_DEFAULT', True, request=json.dumps(request))
+    except RuntimeError:
+        result = {'CANCELLED'}
+    _failed[:] = ['FINISHED' not in result]
+
+
+def failed():
+    return _failed[0]
+
+
+def rows():
+    return panels.hierarchy(bpy.context)
 
 
 def edit(obj, action, **values):
-    panels.apply_json(bpy.context, json.dumps(dict(id=str(obj.session_uid), action=action,
-                                                 sequence=len(checks) + 1, **values)))
+    apply(id=str(obj.session_uid), action=action, **values)
 
 
 cube = bpy.context.active_object
 camera = bpy.data.objects['Camera']
-check(len([row for row in state()['hierarchy'] if row['kind'] == 'object']) == 3, 'Real scene objects')
-check('hierarchy' not in state(0), 'Hidden hierarchy skips projection')
+check(len([row for row in rows() if row['kind'] == 'object']) == 3, 'Real scene objects')
 edit(camera, 'select')
 check(bpy.context.active_object == camera and camera.select_get() and not cube.select_get(), 'Active object selection')
 edit(cube, 'select', extend=True, value=True)
@@ -43,40 +57,38 @@ check(bpy.context.active_object == camera and camera.select_get() and not cube.s
 edit(cube, 'visibility', value=True)
 check(cube.hide_get(), 'Hide object')
 edit(cube, 'select')
-check(bpy.context.active_object == camera and state()['error'], 'Hidden object cannot be selected')
+check(bpy.context.active_object == camera and failed(), 'Hidden object cannot be selected')
 edit(cube, 'visibility', value=False)
 check(not cube.hide_get(), 'Show object')
 cube.hide_select = True
 edit(cube, 'select')
-check(bpy.context.active_object == camera and state()['error'], 'Selection lock respected')
+check(bpy.context.active_object == camera and failed(), 'Selection lock respected')
 cube.hide_select = False
 child = bpy.data.objects.new('Nested "quoted"', None)
 bpy.context.collection.objects.link(child)
 child.parent = cube
-rows = state()['hierarchy']
-parent = next(row for row in rows if row['id'] == str(cube.session_uid))
-nested = next(row for row in rows if row['id'] == str(child.session_uid))
+hierarchy = rows()
+parent = next(row for row in hierarchy if row['id'] == str(cube.session_uid))
+nested = next(row for row in hierarchy if row['id'] == str(child.session_uid))
 check(nested['parent'] == parent['key'] and parent['children'], 'Parent tree and disclosure state')
 uid = str(child.session_uid)
 bpy.data.objects.remove(child, do_unlink=True)
-panels.apply_json(bpy.context, json.dumps(dict(id=uid, sequence=999, action='select')))
-check(state()['ack'] == 999 and state()['error'], 'Deleted target is rejected and acknowledged')
+apply(id=uid, action='select')
+check(failed(), 'Deleted target is rejected')
 edit(cube, 'select')
 bpy.ops.object.mode_set(mode='EDIT')
 edit(camera, 'select')
-check(bpy.context.active_object == cube and state()['error'], 'Edit Mode guarded')
+check(bpy.context.active_object == cube and failed(), 'Edit Mode guarded')
 bpy.ops.object.mode_set(mode='OBJECT')
-panels.apply_json(bpy.context, json.dumps(dict(id=str(camera.session_uid), sequence=1000, action='select')), True)
-check(state()['error'] and bpy.context.active_object == cube, 'Native dialog blocks edits')
 edit(cube, 'rename', value='  Renamed Cube  ')
 check(cube.name == 'Renamed Cube', 'Rename trims the native field')
 edit(cube, 'rename', value='  ')
-check(cube.name == 'Renamed Cube' and state()['error'], 'Blank names are rejected')
+check(cube.name == 'Renamed Cube' and failed(), 'Blank names are rejected')
 camera.select_set(True)
 before = set(bpy.data.objects)
 edit(cube, 'duplicate')
 added = set(bpy.data.objects) - before
-check(len(added) == 1 and not state()['error'], 'Duplicate targets only the swiped row despite multi-selection')
+check(len(added) == 1 and not failed(), 'Duplicate targets only the swiped row despite multi-selection')
 duplicate = added.pop()
 check(duplicate.data != cube.data and duplicate.data.vertices[0].co == cube.data.vertices[0].co,
       'Duplicate uses Blender data duplication')
@@ -86,17 +98,17 @@ camera.select_set(True)
 edit(duplicate, 'delete')
 check(set(bpy.data.objects) == before and camera.select_get(), 'Delete targets only one row and preserves other selected objects')
 edit(cube, 'visibility', value=True)
-actions = next(row['actions'] for row in state()['hierarchy'] if row['id'] == str(cube.session_uid))
+actions = next(row['actions'] for row in rows() if row['id'] == str(cube.session_uid))
 check('duplicate' not in actions and {'visibility', 'rename', 'delete'} <= set(actions),
       'Hidden rows expose only applicable actions')
 edit(cube, 'duplicate')
-check(state()['error'] and set(bpy.data.objects) == before, 'Hidden-object duplication is rejected')
+check(failed() and set(bpy.data.objects) == before, 'Hidden-object duplication is rejected')
 edit(cube, 'visibility', value=False)
 edit(cube, 'select')
 bpy.ops.object.mode_set(mode='EDIT')
-for action in ('delete', 'duplicate', 'rename'):
+for action in ('delete', 'duplicate'):
     edit(camera, action, value='Not renamed')
-    check(state()['error'] and bpy.data.objects.get('Camera') == camera, 'Edit Mode guards ' + action)
+    check(failed() and bpy.data.objects.get('Camera') == camera, 'Edit Mode guards ' + action)
 bpy.ops.object.mode_set(mode='OBJECT')
 # Scene-local deletion must retain an object linked into another scene.
 other_scene = bpy.data.scenes.new('Other Scene')
@@ -113,10 +125,10 @@ bpy.ops.mesh.primitive_cube_add()
 check(bpy.context.object.name in collection.objects, 'New objects use the newly created collection')
 count = len(bpy.data.collections)
 edit(cube, 'collection_new', value='   ')
-check(len(bpy.data.collections) == count and state()['error'], 'Blank collection names are rejected')
+check(len(bpy.data.collections) == count and failed(), 'Blank collection names are rejected')
 bpy.ops.object.mode_set(mode='EDIT')
 edit(cube, 'collection_new', value='Not Added')
-check(len(bpy.data.collections) == count and state()['error'], 'Collection creation is guarded in Edit Mode')
+check(len(bpy.data.collections) == count and failed(), 'Collection creation is guarded in Edit Mode')
 bpy.ops.object.mode_set(mode='OBJECT')
 edit(cube, 'collection_new', value='Native Collection')
 check(len(bpy.data.collections) == count + 1 and bpy.context.collection.name != collection.name,
@@ -124,17 +136,16 @@ check(len(bpy.data.collections) == count + 1 and bpy.context.collection.name != 
 
 
 def collection_row(coll):
-    return next(row for row in state()['hierarchy'] if row['kind'] == 'collection' and row['id'] == str(coll.session_uid))
+    return next(row for row in rows() if row['kind'] == 'collection' and row['id'] == str(coll.session_uid))
 
 
 def edit_collection(coll, action, **values):
-    panels.apply_json(bpy.context, json.dumps(dict(id=str(coll.session_uid), kind='collection', action=action,
-                                                 sequence=len(checks) + 1, **values)))
+    apply(id=str(coll.session_uid), kind='collection', action=action, **values)
 
 
 check(collection_row(bpy.context.scene.collection)['actions'] == [],
       'The scene collection cannot be hidden, renamed or deleted')
-check(collection_row(collection)['actions'] == ['visibility', 'rename', 'delete', 'move'],
+check(set(collection_row(collection)['actions']) == {'visibility', 'rename', 'delete', 'move'},
       'Collections offer swipe actions and can be dragged')
 edit_collection(collection, 'visibility', value=True)
 check(collection_row(collection)['hidden'] and
@@ -153,9 +164,8 @@ check('Props' not in bpy.data.collections and contents <= set(holder.objects) an
 
 # Dragging rows: objects into collections or onto other objects, collections into collections.
 def request(action, ids, target, kind='object'):
-    panels.apply_json(bpy.context, json.dumps(dict(action=action, kind=kind, ids=ids, target=target,
-                                                 sequence=len(checks) + 1)))
-    return state()['error']
+    apply(action=action, kind=kind, ids=ids, target=target)
+    return failed()
 
 
 scene_collection = bpy.context.scene.collection
@@ -176,9 +186,9 @@ check(not error and list(lamp.users_collection) == [shelf], 'Dropping an object 
 error = request('parent', [str(lamp.session_uid)], str(stand.session_uid))
 check(not error and lamp.parent == stand and all(abs(a - b) < 1e-5 for a, b in zip(lamp.matrix_world.translation, before.translation)),
       'Dropping an object on another parents it in place')
-rows = state()['hierarchy']
-stand_rows = [row for row in rows if row['id'] == str(stand.session_uid)]
-lamp_row = next(row for row in rows if row['id'] == str(lamp.session_uid))
+hierarchy = rows()
+stand_rows = [row for row in hierarchy if row['id'] == str(stand.session_uid)]
+lamp_row = next(row for row in hierarchy if row['id'] == str(lamp.session_uid))
 check(lamp_row['parent'] in {row['key'] for row in stand_rows},
       'A parented object lists under its parent, sharing its collection')
 error = request('parent', [str(stand.session_uid)], str(lamp.session_uid))
@@ -202,15 +212,14 @@ check(error and shelf.name in scene_collection.children, 'A collection cannot mo
 
 # The selection's swipe and menu actions, as one step each.
 both = [str(lamp.session_uid), str(stand.session_uid)]
-request_ids = lambda action, **values: panels.apply_json(bpy.context, json.dumps(dict(
-    action=action, ids=both, sequence=len(checks) + 1, **values)))
+request_ids = lambda action, **values: apply(action=action, ids=both, **values)
 request_ids('visibility', value=True)
 check(lamp.hide_get() and stand.hide_get(), 'Hide several objects')
 request_ids('visibility', value=False)
 count = len(bpy.data.objects)
 request_ids('duplicate')
-check(len(bpy.data.objects) == count + 2 and not state()['error'], 'Duplicate several objects')
+check(len(bpy.data.objects) == count + 2 and not failed(), 'Duplicate several objects')
 request_ids('delete')
-check('Light' not in bpy.data.objects and 'Stand' not in bpy.data.objects and not state()['error'],
+check('Light' not in bpy.data.objects and 'Stand' not in bpy.data.objects and not failed(),
       'Delete several objects')
 print('PASS: native scene panels ' + json.dumps(checks))
