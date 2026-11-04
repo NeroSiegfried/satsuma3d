@@ -27,11 +27,6 @@ extension Dictionary where Key == String, Value == Any {
   func dict(_ key: String) -> JSON? { self[key] as? JSON }
 }
 
-/** Records read as new dictionaries even when nothing changed: their contents compared. */
-func jsonListEqual(_ a: [JSON], _ b: [JSON]) -> Bool {
-  a.count == b.count && zip(a, b).allSatisfy { ($0 as NSDictionary).isEqual($1 as NSDictionary) }
-}
-
 func jsonDictEqual(_ a: JSON, _ b: JSON) -> Bool {
   (a as NSDictionary).isEqual(b as NSDictionary)
 }
@@ -162,16 +157,6 @@ func axisColor(_ label: String?) -> Color {
   }
 }
 
-extension View {
-  /** Run when Reduce Motion is off; otherwise apply immediately. */
-  func motionAware<V: Equatable>(_ animation: Animation = .smooth(duration: 0.28), value: V) -> some View {
-    self.animation(UIAccessibility.isReduceMotionEnabled ? nil : animation, value: value)
-  }
-}
-
-/** Fills as UIKit draws them on the panels' glass, measured from UIKit-drawn panels: on glass,
- * UIKit's grouped and fill colors come out lighter in dark mode and darker in light mode than
- * the same colors drawn by SwiftUI. */
 /** The round buttons ending the header of an editor docked at the bottom, alike in each: More,
  * then Add, then Close. */
 extension View {
@@ -205,8 +190,6 @@ enum PanelStyle {
   static let card = dynamic(dark: UIColor(white: 1, alpha: 0.085), light: UIColor(white: 0, alpha: 0.064))
   /** Number fields and capsules on a section. */
   static let field = dynamic(dark: UIColor(white: 1, alpha: 0.17), light: UIColor(white: 0, alpha: 0.14))
-  /** The Outliner's search field. */
-  static let search = dynamic(dark: UIColor(white: 1, alpha: 0.125), light: UIColor(white: 1, alpha: 0.48))
   /** Placeholder behind a missing preview. */
   static let thumbnail = dynamic(dark: UIColor(white: 1, alpha: 0.04), light: UIColor(white: 0, alpha: 0.11))
   /** Selected rows and tabs. */

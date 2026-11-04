@@ -219,7 +219,6 @@ struct DocumentToolbar: ToolbarContent {
   @Bindable var model: ShellModel
   let shell: ShellPanels
   let commands: ShellCommands
-  @Binding var stripWidth: CGFloat
   @AppStorage(FaceControl.shownKey) private var faceControlShown = false
 
   var body: some ToolbarContent {
@@ -629,28 +628,6 @@ struct DocumentToolbar: ToolbarContent {
     }
   }
 
-  @ViewBuilder
-  private var centerSettings: some View {
-    if transformTools.contains(model.activeTool) {
-      transformSettings
-    }
-    else if shell.panels.tools.hasToolSettings && model.toolStripRoom < 160 {
-      /* No room for the strip beside the other items: all the settings in a popover. */
-      Button("Tool Settings", systemImage: "slider.horizontal.3") { model.toolSettingsOpen = true }
-        .labelStyle(.iconOnly)
-        .frame(width: 44, height: 44)
-        .panelGlass(in: Circle())
-        .popover(isPresented: $model.toolSettingsOpen) {
-          shell.panels.toolSettingsContent { model.toolSettingsOpen = false }
-        }
-        .background(ToolStripMarker { model.toolStripRoom = $0 })
-        .accessibilityIdentifier("blender.tool-settings.more")
-    }
-    else if shell.panels.tools.hasToolSettings {
-      toolSettings
-    }
-  }
-
   /** The mode's mirror axes, as Blender's header has them in a popover; none outside modes that
    * mirror. */
   private var hasMirror: Bool { !(model.transformSettings["mirror_axes"] ?? "").isEmpty }
@@ -671,88 +648,6 @@ struct DocumentToolbar: ToolbarContent {
                                                set: { model.send("mirror_topology", .set_, .bool($0)) }))
       }
     }
-  }
-
-  private var transformSettings: some View {
-    HStack(spacing: 0) {
-      if model.activeTool == "builtin.select" {
-        TweakDragMenu()
-      }
-      ForEach(TransformSetting.all, id: \.key) { setting in
-        let value = model.transformSettings[setting.key]
-        let selected = setting.options.first { $0.value == value }
-        Menu {
-          Picker(setting.title, selection: Binding(
-            get: { value ?? "" },
-            set: { model.send(setting.key, .set_, .text($0)) })) {
-            ForEach(setting.options, id: \.value) { option in
-              Label { Text(option.title) } icon: { iconImage(setting.image(option)) }
-                .tag(option.value)
-            }
-          }
-        } label: {
-          iconImage(selected.flatMap { setting.image($0) } ??
-                    (setting.key == "snap" && value == "mixed" ? wm_apple_ios_icon("control.Snapping", "magnet") :
-                     wm_apple_ios_icon("control.\(setting.title)", setting.symbol)))
-            .frame(width: 44, height: 44)
-        }
-        .accessibilityLabel(setting.title)
-        .accessibilityValue(selected?.title ?? (setting.key == "orientation" && value == "custom" ?
-                                                  "Custom Orientation" : "Multiple or Other Elements"))
-        .accessibilityIdentifier("blender.setting.\(setting.title)")
-      }
-      if hasMirror {
-        Menu { mirrorToggles } label: {
-          iconImage(BlenderIcon.image("MOD_MIRROR"))
-            .frame(width: 44, height: 44)
-        }
-        .accessibilityLabel("Mirror")
-        .accessibilityValue((model.transformSettings["mirror"] ?? "").uppercased())
-        .accessibilityIdentifier("blender.setting.Mirror")
-      }
-    }
-    .padding(.horizontal, 4)
-    /* One glass group, as the bar's other groups. */
-    .panelGlass(in: Capsule())
-  }
-
-  /** The tool's settings as a strip in the room the bar leaves between its other items; when they
-   * do not all fit they scroll, and all of them are in a popover. */
-  private var toolSettings: some View {
-    /* The room less the capsule's padding, and the overflow button when it is shown. */
-    let room = model.toolStripRoom - 24
-    let overflow = stripWidth > room + 0.5
-    let strip = ToolStrip(model: shell.panels.tools)
-      .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { stripWidth = $0 }
-    return HStack(spacing: 4) {
-      if overflow {
-        ScrollView(.horizontal, showsIndicators: false) { strip }
-          .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-          .frame(width: max(1, room - 36))
-      }
-      else {
-        /* At its own width, which the bar reads as it places the item: a width measured only
-         * after layout leaves the bar's item as narrow as it first was, and taps outside it
-         * do not reach the strip. */
-        strip.fixedSize()
-      }
-      if overflow {
-        Button("More Tool Settings", systemImage: "ellipsis") { model.toolSettingsOpen = true }
-          .labelStyle(.iconOnly)
-          .foregroundStyle(PanelStyle.tint)
-          .frame(width: 32)
-          .accessibilityIdentifier("blender.tool-settings.more")
-      }
-    }
-    .popover(isPresented: $model.toolSettingsOpen) {
-      shell.panels.toolSettingsContent { model.toolSettingsOpen = false }
-    }
-    .tint(PanelStyle.tint)
-    .padding(.horizontal, 12)
-    .frame(height: 44)
-    /* Its own glass, as the bar's other groups have. */
-    .panelGlass(in: Capsule())
-    .background(ToolStripMarker { model.toolStripRoom = $0 })
   }
 
   /* -------------------------------------------------------------------- */
@@ -795,91 +690,6 @@ extension View {
       shell.panels.shadingContent(model: model) { model.shadingOpen = false }
     }
     .onChange(of: model.shadingOpen) { _, shown in shell.panels.setShadingShown(shown) }
-  }
-}
-
-/**
- * Measures the room the navigation bar leaves for the tool settings strip it centers: twice the
- * distance from the bar's middle to the nearest control on either side, not counting the strip.
- * SwiftUI's frames of toolbar items are each in their own hosting view, so this asks UIKit.
- */
-struct ToolStripMarker: UIViewRepresentable {
-  let changed: (CGFloat) -> Void
-
-  final class Marker: UIView {
-    var changed: ((CGFloat) -> Void)?
-    private var pending = false
-    private var lastRoom: CGFloat = 0
-
-    override func didMoveToWindow() {
-      super.didMoveToWindow()
-      remeasure()
-      /* The bar brings its other items in with an animation: measure again once they are in. */
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.remeasure() }
-    }
-
-    override func layoutSubviews() {
-      super.layoutSubviews()
-      remeasure()
-    }
-
-    func remeasure() {
-      if pending || window == nil { return }
-      pending = true
-      DispatchQueue.main.async { [weak self] in
-        guard let self else { return }
-        pending = false
-        guard let room = measure(), abs(room - lastRoom) > 0.5 else { return }
-        lastRoom = room
-        changed?(room)
-      }
-    }
-
-    private func measure() -> CGFloat? {
-      var bar: UIView? = superview
-      while let view = bar, !(view is UINavigationBar) { bar = view.superview }
-      guard let bar else { return nil }
-      /* The strip sits behind its own controls: skip what is inside it. */
-      let strip = convert(bounds, to: bar).insetBy(dx: -1, dy: -1)
-      let center = bar.bounds.midX
-      var left: CGFloat?
-      var right: CGFloat?
-      var pending: [UIView] = [bar]
-      while let view = pending.popLast() {
-        if view.isHidden || view.alpha < 0.01 { continue }
-        if view !== bar, isDescendant(of: view) {
-          if view is UIControl { continue }
-          pending.append(contentsOf: view.subviews)
-          continue
-        }
-        let other = view.convert(view.bounds, to: bar)
-        if strip.contains(other) { continue }
-        if view is UIControl && other.width < bar.bounds.width / 2 {
-          if other.midX < center { left = max(left ?? other.maxX, other.maxX) }
-          else { right = min(right ?? other.minX, other.minX) }
-          continue
-        }
-        pending.append(contentsOf: view.subviews)
-      }
-      /* Until the items on both sides are in, keep the last room: a strip measured too wide makes
-       * the bar give up centering it. */
-      guard let left, let right else { return nil }
-      return max(80, 2 * min(center - left, right - center) - 32)
-    }
-  }
-
-  func makeUIView(context: Context) -> Marker {
-    let marker = Marker()
-    marker.isUserInteractionEnabled = false
-    marker.changed = changed
-    return marker
-  }
-
-  func updateUIView(_ marker: Marker, context: Context) {
-    marker.changed = changed
-    marker.remeasure()
-    /* The bar's items change with an animation: measure again once they are in. */
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak marker] in marker?.remeasure() }
   }
 }
 

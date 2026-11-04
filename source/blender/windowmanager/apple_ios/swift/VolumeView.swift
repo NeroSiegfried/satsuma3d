@@ -270,11 +270,6 @@ final class VolumeStore {
   func objectName(_ entity: Entity) -> String? {
     instances.values.first { $0.entity === entity }?.name
   }
-
-  /** A point in the volume's space as Blender's world space. */
-  func blenderPoint(_ point: SIMD3<Float>, from entity: Entity) -> SIMD3<Float> {
-    entity.convert(position: point, to: scene)
-  }
 }
 
 /** \} */

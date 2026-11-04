@@ -555,18 +555,6 @@ extension View {
 }
 
 extension View {
-  /** Glass that morphs into other glass of the same `id` in a `PanelGlassGroup`. */
-  @ViewBuilder
-  func panelGlassID(_ id: String, in namespace: Namespace.ID) -> some View {
-#if os(visionOS)
-    self
-#else
-    self.glassEffectID(id, in: namespace)
-#endif
-  }
-}
-
-extension View {
   /** Lists of choices, grouped as the platform groups its lists. */
   func groupedListStyle() -> some View { self.listStyle(.insetGrouped) }
 

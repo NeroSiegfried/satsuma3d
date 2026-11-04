@@ -460,7 +460,6 @@ public struct DocumentWindow: View {
   let shell: ShellPanels
   let commands: ShellCommands
   let pencilMenu: PencilMenu?
-  @State private var stripWidth: CGFloat = 0
   /** The viewport's size, with the Image Editor's beside or below it. */
   @State private var layersSize = CGSize.zero
   /** How much of that the 3D viewport has, the Image Editor the rest. */
@@ -537,7 +536,7 @@ public struct DocumentWindow: View {
     NavigationStack {
       columnLayout
         .toolbar {
-          DocumentToolbar(model: model, shell: shell, commands: commands, stripWidth: $stripWidth)
+          DocumentToolbar(model: model, shell: shell, commands: commands)
         }
         .toolbar(controlsShown ? .visible : .hidden, for: .navigationBar)
         .toolbarTitleDisplayMode(.inline)
@@ -601,7 +600,7 @@ public struct DocumentWindow: View {
       layers
         .toolbar {
           /* Kept while the bar is hidden: items added again lose the bar's centering of the strip. */
-          DocumentToolbar(model: model, shell: shell, commands: commands, stripWidth: $stripWidth)
+          DocumentToolbar(model: model, shell: shell, commands: commands)
         }
         .toolbar(controlsShown ? .visible : .hidden, for: .navigationBar)
         .toolbarTitleDisplayMode(.inline)

@@ -1018,13 +1018,10 @@ struct ToolRails: View {
       .opacity(RollDial.shared.showing ? 0 : 1)
       /* Fading as the dial opens; back at once as it lands, where the chosen item meets it. */
       .animation(RollDial.shared.showing ? .easeOut(duration: 0.18) : nil, value: RollDial.shared.showing)
-      /* For the Pencil's dial over the tool settings. */
       .onChange(of: toolItems.map(\.id), initial: true) { _, _ in
-        RollDial.shared.tools = toolItems
         updateSqueezePalette(toolItems: toolItems, brushItems: brushItems)
       }
-      .onChange(of: model.activeTool, initial: true) { _, tool in
-        RollDial.shared.activeTool = tools.active(tool)
+      .onChange(of: model.activeTool, initial: true) { _, _ in
         updateSqueezePalette(toolItems: toolItems, brushItems: brushItems)
       }
       .onChange(of: brushItems.map(\.id)) { _, _ in
@@ -1086,7 +1083,6 @@ struct ToolRails: View {
    * them, with their settings. */
   private func updateSqueezePalette(toolItems: [RailItem], brushItems: [RailItem]) {
 #if !os(visionOS)
-    RollDial.shared.activeBrush = model.activeBrush.isEmpty ? nil : model.activeBrush
     let strokes = model.direction?.hidden == true ? nil : intent.strokes
     let palette = SqueezePalette.shared
     palette.update(tools: toolItems, activeTool: tools.active(model.activeTool), brushes: brushItems,
@@ -1412,12 +1408,6 @@ final class RollDial {
   /** The roll from one item to the next. */
   static let step = Double.pi / 9
 
-  /** Tools of the active mode, and the active one, for the dial over the tool settings; the active
-   * brush too. */
-  @ObservationIgnored var tools: [RailItem] = []
-  @ObservationIgnored var activeTool = ""
-  @ObservationIgnored var activeBrush: String?
-
   /** A rail a Pencil can roll on at once, without holding first. */
   struct Zone {
     var frame: CGRect
@@ -1574,13 +1564,6 @@ final class RollDial {
     guard center == nil else { return }
     confirmed = nil
     landed = nil
-  }
-
-  /** The tools around a Pencil holding the tool settings. */
-  func beginTools(at point: CGPoint) {
-    begin(items: tools, active: activeTool, at: point) { item in
-      ShellModel.current?.setTool(item.id)
-    }
   }
 
   var showing: Bool { center != nil }
@@ -1740,45 +1723,6 @@ struct RollDialLayer: View {
     }
     .frame(width: 60, height: 60)
     .foregroundStyle(front ? Color.white : Color.primary)
-  }
-}
-
-/** Held with a Pencil, the tool settings fan out the mode's tools, to roll the Pencil through. */
-struct PencilToolDialHold: ViewModifier {
-  @State private var press: (start: CGPoint, moved: Bool, id: Int)?
-  @State private var holding = false
-
-  func body(content: Content) -> some View {
-    content.simultaneousGesture(
-      DragGesture(minimumDistance: 0, coordinateSpace: .global)
-        .onChanged { value in
-          if press == nil {
-            guard PencilRoll.shared.down else { return }
-            let id = Int.random(in: 0 ..< Int.max)
-            press = (value.startLocation, false, id)
-            /* A Pencil held still, without moving, rolls: nothing reports it held but time. */
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-              guard let press, press.id == id, !press.moved, PencilRoll.shared.down else { return }
-              holding = true
-              RollDial.shared.beginTools(at: press.start)
-            }
-          }
-          else if !holding, hypot(value.translation.width, value.translation.height) > 12 {
-            press?.moved = true
-          }
-        }
-        .onEnded { _ in
-          press = nil
-          guard holding else { return }
-          holding = false
-          RollDial.shared.end()
-        })
-      .onChange(of: RollDial.shared.showing) { _, showing in
-        if !showing {
-          holding = false
-          press = nil
-        }
-      }
   }
 }
 

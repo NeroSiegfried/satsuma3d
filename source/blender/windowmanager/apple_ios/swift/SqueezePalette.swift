@@ -305,9 +305,7 @@ final class SqueezePalette {
 
   /** The menus opened, the context menu first. */
   private(set) var commandPath: [(route: String, title: String)] = []
-  private(set) var commandIndex: Double?
   var commandRoute: String { commandPath.last?.route ?? BlenderMenus.contextRoute }
-  var commandTitle: String { commandPath.last?.title ?? "Commands" }
 
   /** The roll from one item to the next, as the rails' dial has it. */
   static let step = Double.pi / 9
@@ -396,11 +394,6 @@ final class SqueezePalette {
   private func squeezed(at point: CGPoint?, roll: Double?, lean: Double? = nil, in window: UIWindow?) {
     guard PencilSqueeze.showsPalette else { return }
     if isOpen && (window == nil || window === self.window) {
-      /* Squeezing on a command rolled to runs it. */
-      if commandRolled, let item = highlightedCommand {
-        activate(item)
-        return
-      }
       close()
       return
     }
@@ -415,8 +408,6 @@ final class SqueezePalette {
     self.window = window
     page = .main
     commandPath = []
-    commandIndex = nil
-    commandRolled = false
     commandScroll = 0
     commandPage = 0
     values = [:]
@@ -494,7 +485,6 @@ final class SqueezePalette {
   }
 
   private func pageChanged() {
-    commandIndex = page == .commands ? 0 : nil
     guard isOpen, let tip, let window else { return }
     target = nil
     if page == .commands { Task { _ = await BlenderMenus.shared.fetch(commandRoute) } }
@@ -1177,41 +1167,6 @@ final class SqueezePalette {
 
   var commands: [BlenderMenuItem]? { BlenderMenus.shared.items[commandRoute] }
 
-  private var highlightedCommand: BlenderMenuItem? {
-    guard let commandIndex, let commands else { return nil }
-    let index = Int(commandIndex.rounded())
-    return commands.indices.contains(index) ? commands[index] : nil
-  }
-
-  var highlightedCommandID: String? { highlightedCommand?.id }
-
-  /** Where the commands' ring has turned to. */
-  var commandPosition: Double { commandIndex ?? 0 }
-
-  func scrubCommands(to position: Double) {
-    guard let commands, !commands.isEmpty else { return }
-    let before = commandPosition
-    let after = min(Double(commands.count - 1), max(0, position))
-    commandIndex = after
-    if Int(before.rounded()) != Int(after.rounded()) { Haptics.selection() }
-  }
-
-  func endScrubCommands() {
-    commandIndex = commandIndex.map { $0.rounded() }
-  }
-
-  /** The roll has turned to a command, which a squeeze then runs. */
-  @ObservationIgnored private var commandRolled = false
-
-  private func turnCommands(by steps: Double, at point: CGPoint) {
-    guard let commands, !commands.isEmpty else { return }
-    commandRolled = true
-    let before = commandIndex ?? 0
-    let after = min(Double(commands.count - 1), max(0, before + steps))
-    commandIndex = after
-    if Int(before.rounded()) != Int(after.rounded()) { tick(at: point) }
-  }
-
   /** How many menus deep a command's route is: one for the context menu's own. */
   static func depth(of route: String) -> Int {
     guard let data = route.data(using: .utf8),
@@ -1252,7 +1207,6 @@ final class SqueezePalette {
         Haptics.selection()
         return
       }
-      commandIndex = 0
       commandPage = 0
       Task { _ = await BlenderMenus.shared.fetch(item.route) }
       Haptics.selection()
@@ -1271,7 +1225,6 @@ final class SqueezePalette {
   }
 
   func commandsBack() {
-    commandIndex = 0
     if commandPath.isEmpty { page = .main }
     else { commandPath.removeLast() }
   }
@@ -1879,24 +1832,6 @@ private struct ArcItem: View {
     }
     .contentShape(Circle())
     .hoverHighlight(Circle())
-  }
-}
-
-/** The brush's color at the end of the brushes' arc: the system's color well. */
-private struct ColorWell: View {
-  let rgb: [Double]
-  private var palette: SqueezePalette { .shared }
-
-  var body: some View {
-    ColorPicker(selection: Binding(get: { Color(red: rgb[0], green: rgb[1], blue: rgb[2]) }, set: { color in
-      var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-      UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
-      palette.setColor([r, g, b].map { min(1, max(0, Double($0))) }, settleAfter: 0.6)
-    }), supportsOpacity: false) {
-      Text("Color")
-    }
-    .labelsHidden()
-    .frame(width: 40, height: 40)
   }
 }
 

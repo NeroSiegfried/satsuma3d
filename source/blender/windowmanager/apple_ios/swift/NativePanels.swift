@@ -76,8 +76,6 @@ final class PanelsModel {
     case shading
     /** Tool settings in the top bar, as one compact strip. */
     case toolStrip
-    /** All tool settings in a popover. */
-    case toolPopover
     /** Blender's Preferences, a section at a time, in Settings. */
     case preferences
     /** The last operation's settings, to adjust it. */
@@ -111,7 +109,7 @@ final class PanelsModel {
     if mode == .properties { params["properties"] = .bool(true) }
     let name = switch mode {
       /* The tool's settings follow a change of tool at once. */
-      case .toolStrip, .toolPopover: "tool_settings"
+      case .toolStrip: "tool_settings"
       case .redo: "redo"
       case .dialog: "dialog"
       default: "properties"

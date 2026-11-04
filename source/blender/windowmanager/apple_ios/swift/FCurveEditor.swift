@@ -29,8 +29,6 @@ struct FCurveKey: Equatable {
   var rightSelected: Bool { flags & 4 != 0 }
   var interpolation: Int { (flags >> 4) & 0x3F }
   var easing: Int { (flags >> 10) & 0x3 }
-  var leftType: Int { (flags >> 12) & 0x7 }
-  var rightType: Int { (flags >> 15) & 0x7 }
   var point: CGPoint { CGPoint(x: frame, y: value) }
 }
 

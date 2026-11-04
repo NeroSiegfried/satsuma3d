@@ -139,10 +139,6 @@ final class HierarchyStore: ObservableObject {
           "target": target.string("id") ?? ""])
     Haptics.impact()
   }
-
-  func nodes(withIDs ids: [String]) -> [JSON] {
-    ids.compactMap { id in nodes.first { $0.string("id") == id } }
-  }
 }
 
 struct HierarchyPanel: View {

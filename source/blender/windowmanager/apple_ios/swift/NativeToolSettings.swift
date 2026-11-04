@@ -45,35 +45,6 @@ extension PanelsModel {
   var hasToolSettings: Bool { panels.contains { isPopout($0) || !stripControls(of: $0).isEmpty } }
 }
 
-/** The tool's settings as compact columns in the top bar, see #PanelsModel.stripControls. */
-struct ToolStrip: View {
-  let model: PanelsModel
-
-  var body: some View {
-    HStack(spacing: 6) {
-      ForEach(model.panels) { panel in
-        if model.isPopout(panel) {
-          StripPopout(model: model, panel: panel)
-        }
-        else {
-          ForEach(model.stripControls(of: panel)) { control in
-            if control.kind == .group {
-              NativeToggleGroup(model: model, group: control, compact: true)
-            }
-            else {
-              StripColumn(model: model, node: control)
-            }
-          }
-        }
-      }
-    }
-    .frame(height: 40)
-    .tint(PanelStyle.tint)
-    .accessibilityIdentifier("blender.tool-settings.strip")
-    .modifier(PencilToolDialHold())
-  }
-}
-
 /**
  * The tool's settings as the top bar's own items, each a system control: as many as there is room
  * for show in the bar, and the system puts the rest in its overflow menu, each as a menu item
@@ -250,32 +221,6 @@ func menuName(_ node: NativeNode) -> String {
   guard let button = node.content(Blender_NativeUI_MenuButton.self) else { return "" }
   return (0..<button.paramsCount).compactMap { button.params(at: $0) }
     .first { $0.key == "menu" }?.value(type: Blender_NativeUI_TextValue.self)?.value ?? ""
-}
-
-/** One of the strip's panels as a single control, its settings in a popover. */
-struct StripPopout: View {
-  let model: PanelsModel
-  let panel: NativeNode
-  @State private var open = false
-
-  var body: some View {
-    Button {
-      open = true
-    } label: {
-      StripCapsuleLabel(title: panel.label, icon: panel.icon)
-    }
-    .buttonStyle(.plain)
-    .frame(height: 40)
-    .popover(isPresented: $open) {
-      ScrollView {
-        PanelSection(model: model, panel: panel, bare: true)
-          .padding()
-      }
-      .frame(idealWidth: 320, idealHeight: 340)
-      .presentationCompactAdaptation(.popover)
-    }
-    .accessibilityLabel(panel.label)
-  }
 }
 
 /** A setting as a column of the strip: its caption over its control. */
