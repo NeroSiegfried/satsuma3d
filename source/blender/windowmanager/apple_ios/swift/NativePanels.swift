@@ -27,22 +27,47 @@ extension NativeNode {
   var kind: Blender_NativeUI_Content { node.contentType }
   var role: Blender_NativeUI_Role { node.role }
 
-  func content<T: FlatBufferObject>(_ type: T.Type) -> T? { node.content(type: type) }
+  /** Its content, should it be of that kind: read as another, its fields would point anywhere. */
+  func content<T: NativeContent>(_ type: T.Type) -> T? { kind == T.kind ? node.content(type: type) : nil }
 
-  var panel: Blender_NativeUI_Panel? { kind == .panel ? content(Blender_NativeUI_Panel.self) : nil }
-  var toggle: Blender_NativeUI_Toggle? { kind == .toggle ? content(Blender_NativeUI_Toggle.self) : nil }
-  var number: Blender_NativeUI_Number? { kind == .number ? content(Blender_NativeUI_Number.self) : nil }
-  var choice: Blender_NativeUI_Choice? { kind == .choice ? content(Blender_NativeUI_Choice.self) : nil }
-  var reference: Blender_NativeUI_Reference? {
-    kind == .reference ? content(Blender_NativeUI_Reference.self) : nil
-  }
-  var list: Blender_NativeUI_List? { kind == .list ? content(Blender_NativeUI_List.self) : nil }
-  var row: Blender_NativeUI_Row? { kind == .row ? content(Blender_NativeUI_Row.self) : nil }
-  var group: Blender_NativeUI_Group? { kind == .group ? content(Blender_NativeUI_Group.self) : nil }
+  var panel: Blender_NativeUI_Panel? { content(Blender_NativeUI_Panel.self) }
+  var toggle: Blender_NativeUI_Toggle? { content(Blender_NativeUI_Toggle.self) }
+  var number: Blender_NativeUI_Number? { content(Blender_NativeUI_Number.self) }
+  var choice: Blender_NativeUI_Choice? { content(Blender_NativeUI_Choice.self) }
+  var reference: Blender_NativeUI_Reference? { content(Blender_NativeUI_Reference.self) }
+  var list: Blender_NativeUI_List? { content(Blender_NativeUI_List.self) }
+  var row: Blender_NativeUI_Row? { content(Blender_NativeUI_Row.self) }
+  var group: Blender_NativeUI_Group? { content(Blender_NativeUI_Group.self) }
 
   /** Drawn in the header of the panel it is in. */
   var inHeader: Bool { role == .name || role == .visibility || role == .header }
 }
+
+/** A node's content of one kind. */
+protocol NativeContent: FlatBufferObject {
+  static var kind: Blender_NativeUI_Content { get }
+}
+
+extension Blender_NativeUI_Group: NativeContent { static var kind: Blender_NativeUI_Content { .group } }
+extension Blender_NativeUI_Panel: NativeContent { static var kind: Blender_NativeUI_Content { .panel } }
+extension Blender_NativeUI_Toggle: NativeContent { static var kind: Blender_NativeUI_Content { .toggle } }
+extension Blender_NativeUI_Number: NativeContent { static var kind: Blender_NativeUI_Content { .number } }
+extension Blender_NativeUI_TextField: NativeContent { static var kind: Blender_NativeUI_Content { .textfield } }
+extension Blender_NativeUI_Choice: NativeContent { static var kind: Blender_NativeUI_Content { .choice } }
+extension Blender_NativeUI_Color: NativeContent { static var kind: Blender_NativeUI_Content { .color } }
+extension Blender_NativeUI_Reference: NativeContent { static var kind: Blender_NativeUI_Content { .reference } }
+extension Blender_NativeUI_Button: NativeContent { static var kind: Blender_NativeUI_Content { .button } }
+extension Blender_NativeUI_MenuButton: NativeContent { static var kind: Blender_NativeUI_Content { .menubutton } }
+extension Blender_NativeUI_Label: NativeContent { static var kind: Blender_NativeUI_Content { .label } }
+extension Blender_NativeUI_Separator: NativeContent { static var kind: Blender_NativeUI_Content { .separator } }
+extension Blender_NativeUI_List: NativeContent { static var kind: Blender_NativeUI_Content { .list } }
+extension Blender_NativeUI_Row: NativeContent { static var kind: Blender_NativeUI_Content { .row } }
+extension Blender_NativeUI_Picture: NativeContent { static var kind: Blender_NativeUI_Content { .picture } }
+extension Blender_NativeUI_Menu: NativeContent { static var kind: Blender_NativeUI_Content { .menu } }
+extension Blender_NativeUI_Operator: NativeContent { static var kind: Blender_NativeUI_Content { .operator_ } }
+extension Blender_NativeUI_Data: NativeContent { static var kind: Blender_NativeUI_Content { .data } }
+extension Blender_NativeUI_Asset: NativeContent { static var kind: Blender_NativeUI_Content { .asset } }
+extension Blender_NativeUI_Record: NativeContent { static var kind: Blender_NativeUI_Content { .record } }
 
 extension Blender_NativeUI_Choice {
   var allOptions: [Blender_NativeUI_Option] { (0..<optionsCount).compactMap { options(at: $0) } }
