@@ -4580,12 +4580,9 @@ static std::optional<std::string> bridge_undo_pending;
 
 /* Whether a stroke or another modal operator is running. The file browser waits for the system's
  * picker, holding no data half changed. */
-static bool bridge_modal_operator_running(bContext *C)
+static bool bridge_modal_handler_running(bContext *C)
 {
   wmWindowManager *wm = CTX_wm_manager(C);
-  if (wm->runtime->undo_stack && wm->runtime->undo_stack->step_init) {
-    return true;
-  }
   for (wmWindow &win : wm->windows) {
     for (wmEventHandler &handler : win.runtime->modalhandlers) {
       if (handler.type == WM_HANDLER_TYPE_OP &&
@@ -4596,6 +4593,14 @@ static bool bridge_modal_operator_running(bContext *C)
     }
   }
   return false;
+}
+
+/* Or an undo step it began, as a stroke does, is still open. */
+static bool bridge_modal_operator_running(bContext *C)
+{
+  const wmWindowManager *wm = CTX_wm_manager(C);
+  return (wm->runtime->undo_stack && wm->runtime->undo_stack->step_init) ||
+         bridge_modal_handler_running(C);
 }
 
 /**
@@ -4628,7 +4633,9 @@ void bridge_undo_push_pending(bContext *C)
  */
 bool WM_native_ui_undo_push_defer(bContext *C, const char *name)
 {
-  if (!bridge_dispatching || !bridge_modal_operator_running(C)) {
+  /* An open undo step without a modal operator is one an operator began and ends with this push,
+   * as entering Sculpt Mode does: held back, it would wait for itself. */
+  if (!bridge_dispatching || !bridge_modal_handler_running(C)) {
     return false;
   }
   bridge_undo_pending = name ? name : "";
