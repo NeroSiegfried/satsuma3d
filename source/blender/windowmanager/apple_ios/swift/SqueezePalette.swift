@@ -177,7 +177,8 @@ final class SqueezePalette {
         return .accessory(accessory)
       }
       if let section = sections.first(where: { angle >= $0.start && angle <= $0.end }) { return .part(section.part) }
-      return pieces.first { angle >= $0.start - cap && angle <= $0.end + cap }.map { .part($0.part) }
+      let gap = Double(SqueezePalette.pieceGap / 2) / Double(radius)
+      return pieces.first { angle >= $0.start - gap && angle <= $0.end + gap }.map { .part($0.part) }
     }
   }
 
@@ -187,6 +188,8 @@ final class SqueezePalette {
     static let half = 1.42
     /** The nearest arc's middle, from the tip. */
     static let inner: CGFloat = 122
+    /** The brush's settings' arc's middle, further out for the length its sliders need. */
+    static let settings: CGFloat = inner + 50
 
     var center: CGPoint
     /** Where the middle of the arcs faces, from the center. */
@@ -291,7 +294,7 @@ final class SqueezePalette {
   static let wheelRing: CGFloat = 12
   /** The colors used last, on a short arc between the color wheel and the brush's settings. */
   static let recentThickness: CGFloat = 34
-  static var recentRadius: CGFloat { Arc.inner + 26 - Ring.narrow / 2 - Ring.gap - recentThickness / 2 }
+  static var recentRadius: CGFloat { Arc.settings - Ring.narrow / 2 - Ring.gap - recentThickness / 2 }
 
   /** The size or strength being changed, shown as the brush where the arcs center. */
   var previewing: String?
@@ -513,7 +516,7 @@ final class SqueezePalette {
     func add(_ thickness: CGFloat, length points: CGFloat, _ make: (inout Ring) -> Void) {
       /* With brushes, further out, for the room their settings and the brushes take. */
       radius = result.last.map { radius + $0.thickness / 2 + Ring.gap + thickness / 2 } ??
-        (brush != nil ? Arc.inner + 26 : Arc.inner - 10)
+        (brush != nil ? Arc.settings : Arc.inner - 10)
       var ring = Ring(id: result.count, radius: radius, thickness: thickness, start: arc.start, end: arc.end)
       make(&ring)
       result.append(ring)
@@ -524,25 +527,24 @@ final class SqueezePalette {
     if brush?["size"] != nil { parts.append((.size, 140)) }
     if brush?["strength"] != nil { parts.append((.strength, 140)) }
     if brush?["weight"] != nil { parts.append((.weight, 140)) }
-    if direction != nil { parts.append((.direction, 84)) }
-    if color != nil { parts.append((.color, 40)) }
+    if direction != nil { parts.append((.direction, 92)) }
+    if color != nil { parts.append((.color, Ring.narrow)) }
     let commands = !contextCommands(BlenderMenus.contextRoute).isEmpty
     if brush != nil, !parts.isEmpty {
       let accessories = CGFloat((commands ? 2 : 1) + (canRedo ? 1 : 0)) * (Ring.narrow - 2)
-      let length = accessories + CGFloat(parts.reduce(0) { $0 + $1.share }) + CGFloat(parts.count - 1) * (Ring.narrow + 6)
+      let length = accessories + CGFloat(parts.reduce(0) { $0 + $1.share }) + CGFloat(parts.count + 1) * Self.pieceGap
       add(Ring.narrow, length: length) { ring in
         /* Undo and redo at its start, the commands' button at its end, leaving the brushes their
          * arc. */
         /* Redo only once there is something to redo. */
         ring.leading = canRedo ? [.undo, .redo] : [.undo]
         ring.trailing = commands ? [.more] : []
-        /* Clear of the buttons: the settings' rounded ends reach half their thickness past
-         * where they start, and a little more between. */
-        let clear = Double(Ring.narrow / 2 + 6) / Double(ring.radius)
-        let low = ring.middle.lowerBound + clear
-        let high = ring.middle.upperBound - (ring.trailing.isEmpty ? 0 : clear)
+        /* Each setting is drawn within its stretch, its rounded ends too, so the same small gap
+         * parts them from each other and from the buttons. */
+        let gap = Double(Self.pieceGap) / Double(ring.radius)
+        let low = ring.middle.lowerBound + gap
+        let high = ring.middle.upperBound - (ring.trailing.isEmpty ? 0 : gap)
         let middle = low...max(low, high)
-        let gap = Double(Ring.narrow + 6) / Double(ring.radius)
         let room = (middle.upperBound - middle.lowerBound) - gap * Double(parts.count - 1)
         /* The in and out, and the color, as long as they need; the sliders share the rest. */
         let fixed = { (part: Part) in part == .direction || part == .color }
@@ -623,6 +625,9 @@ final class SqueezePalette {
     }
     return result
   }
+
+  /** Between the brush's settings on their arc. */
+  static let pieceGap: CGFloat = 8
 
   /** How far the context menu's arc has turned, in radians: its commands start this far before
    * its start. */
@@ -1912,27 +1917,33 @@ private struct ArcSlider: View {
 
   var body: some View {
     let width = ring.thickness - 10
-    let track = ArcBand(center: arc.center, radius: ring.radius, thickness: width, start: piece.start, end: piece.end)
+    /* All within its stretch, rounded ends too; the size's symbol before its line. */
+    let cap = Double(width / 2) / Double(ring.radius)
+    let start = piece.start + (key == "size" ? 2 * cap + 4 / Double(ring.radius) : cap)
+    let end = max(start, piece.end - cap)
+    let track = ArcBand(center: arc.center, radius: ring.radius, thickness: width, start: start, end: end)
+    let whole = ArcBand(center: arc.center, radius: ring.radius, thickness: width, start: piece.start + cap,
+                        end: max(piece.start + cap, piece.end - cap))
     let t = palette.fraction(key)
-    let value = piece.start + (piece.end - piece.start) * t
+    let value = start + (end - start) * t
     GeometryReader { proxy in
       ZStack {
         if key == "size" {
           let line = { (upTo: Double) in
-            TaperedArc(center: arc.center, radius: ring.radius, thin: 6, thick: width, start: piece.start,
-                       end: piece.end, upTo: upTo)
+            TaperedArc(center: arc.center, radius: ring.radius, thin: 6, thick: width, start: start, end: end,
+                       upTo: upTo)
           }
-          line(piece.end).fill(Color.primary.opacity(0.1))
+          line(end).fill(Color.primary.opacity(0.1))
           line(value).fill(Color.accentColor)
         }
         else {
           /* Faint where it is weak, full where it is strong. */
           let center = UnitPoint(x: arc.center.x / max(1, proxy.size.width), y: arc.center.y / max(1, proxy.size.height))
           let gradient = AngularGradient(colors: [Color.accentColor.opacity(0.12), Color.accentColor], center: center,
-                                         startAngle: .radians(piece.start), endAngle: .radians(piece.end))
+                                         startAngle: .radians(start), endAngle: .radians(end))
           track.fill(Color.primary.opacity(0.08))
           track.fill(gradient).opacity(0.35)
-          ArcBand(center: arc.center, radius: ring.radius, thickness: width, start: piece.start, end: value)
+          ArcBand(center: arc.center, radius: ring.radius, thickness: width, start: start, end: value)
             .fill(gradient)
           /* Where it is, a knob on the line. */
           Circle()
@@ -1944,18 +1955,18 @@ private struct ArcSlider: View {
         Image(systemName: symbol)
           .font(.system(size: 11, weight: .semibold))
           .foregroundStyle(key == "size" ? Color.secondary : Color.white)
-          .rotationEffect(arc.upright(piece.start))
-          .position(arc.point(piece.start - Double(key == "size" ? 14 : 0) / Double(ring.radius), radius: ring.radius))
+          .rotationEffect(arc.upright(start))
+          .position(arc.point(key == "size" ? piece.start + cap : start, radius: ring.radius))
       }
     }
-    .contentShape(track)
-    .modifier(Lit(shape: track, part: SqueezePalette.part(key)))
+    .contentShape(whole)
+    .modifier(Lit(shape: whole, part: SqueezePalette.part(key)))
     .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .local)
       .onChanged { gesture in
         let angle = arc.angle(of: gesture.location)
         defer { last = angle }
         guard let last else { return }
-        let next = min(1, max(0, palette.fraction(key) + (angle - last) / (piece.end - piece.start)))
+        let next = min(1, max(0, palette.fraction(key) + (angle - last) / max(1e-6, end - start)))
         palette.setFraction(key, next)
       }
       .onEnded { _ in
