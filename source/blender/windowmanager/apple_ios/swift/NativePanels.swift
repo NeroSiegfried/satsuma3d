@@ -68,6 +68,7 @@ extension Blender_NativeUI_Operator: NativeContent { static var kind: Blender_Na
 extension Blender_NativeUI_Data: NativeContent { static var kind: Blender_NativeUI_Content { .data } }
 extension Blender_NativeUI_Asset: NativeContent { static var kind: Blender_NativeUI_Content { .asset } }
 extension Blender_NativeUI_Record: NativeContent { static var kind: Blender_NativeUI_Content { .record } }
+extension Blender_NativeUI_Ramp: NativeContent { static var kind: Blender_NativeUI_Content { .ramp } }
 
 extension Blender_NativeUI_Choice {
   var allOptions: [Blender_NativeUI_Option] { (0..<optionsCount).compactMap { options(at: $0) } }

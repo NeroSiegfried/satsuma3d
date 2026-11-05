@@ -9,6 +9,7 @@
  * `interface_native.hh`: written from the buttons Blender draws, and edited as they are.
  */
 #include "BKE_animsys.h"
+#include "BKE_colorband.hh"
 #include "BKE_appdir.hh"
 #include "BKE_context.hh"
 #include "BKE_global.hh"
@@ -45,6 +46,7 @@
 #include "DEG_depsgraph.hh"
 #include "DEG_depsgraph_build.hh"
 #include "DNA_ID.h"
+#include "DNA_color_types.h"
 #include "DNA_curve_types.h"
 #include "DNA_modifier_types.h"
 #include "DNA_object_types.h"
@@ -550,6 +552,62 @@ std::optional<std::string> command_text(const protocol::Command *command)
 }
 
 /** Set the property \a but edits to the value \a request gives, as an edit in the button does. */
+/** A color ramp's key: of the property its button draws. */
+std::string ramp_key(const Button &but)
+{
+  return "ramp:" + property_key(but, -1);
+}
+
+/** Moves, chooses, adds or removes a stop of the color ramp \a but draws, as \a request asks,
+ * with the button's own update. A drag is one step to undo, at its end. */
+bool apply_ramp(bContext *C, Button &but, const native::EditRequest &request)
+{
+  ColorBand *coba = reinterpret_cast<ColorBand *>(but.poin);
+  if (!coba || (but.flag & BUT_DISABLED) ||
+      (but.rnapoin.owner_id && !ID_IS_EDITABLE(but.rnapoin.owner_id)))
+  {
+    return false;
+  }
+  const std::optional<double> number = command_number(request.command);
+  const char *undo = nullptr;
+  if (request.action == "activate") {
+    if (!number || *number < 0 || *number >= coba->tot) {
+      return false;
+    }
+    coba->cur = short(*number);
+  }
+  else if (request.action == "add") {
+    if (!number || !std::isfinite(*number) ||
+        !BKE_colorband_element_add(coba, std::clamp(float(*number), 0.0f, 1.0f)))
+    {
+      return false;
+    }
+    undo = "Add Color Ramp Stop";
+  }
+  else if (request.action == "remove") {
+    if (!BKE_colorband_element_remove(coba, coba->cur)) {
+      return false;
+    }
+    undo = "Delete Color Ramp Stop";
+  }
+  else {
+    if (!number || !std::isfinite(*number) || coba->cur < 0 || coba->cur >= coba->tot) {
+      return false;
+    }
+    coba->data[coba->cur].pos = std::clamp(float(*number), 0.0f, 1.0f);
+    BKE_colorband_update_sort(coba);
+    /* A drag taken back leaves nothing to undo. */
+    if (ELEM(request.phase, "", "end")) {
+      undo = "Move Color Ramp Stop";
+    }
+  }
+  button_apply_native(C, &but, false);
+  if (undo) {
+    ED_undo_push(C, undo);
+  }
+  return true;
+}
+
 bool set_property(bContext *C,
                   Button &but,
                   int index,
@@ -1712,6 +1770,48 @@ class Writer {
       property(node, *look.lock, look.lock_index, {.role = protocol::Role::Lock});
     }
     return node;
+  }
+
+  /** A color ramp, as #template_color_ramp draws it: its colors, and its stops to edit. */
+  NodeId ramp(const NodeId parent, Button &but)
+  {
+    const ColorBand &coba = *reinterpret_cast<const ColorBand *>(but.poin);
+    const std::string edit_key = ramp_key(but);
+    const std::string key = this->key(edit_key);
+    data.edits.add_overwrite(key, {Edit::Kind::Ramp, panel, edit_key, occurrence(edit_key)});
+    const auto shown = [](const float linear[4], double *r_color) {
+      float color[4];
+      copy_v4_v4(color, linear);
+      IMB_colormanagement_scene_linear_to_srgb_v3(color, color);
+      for (int i = 0; i < 4; i++) {
+        r_color[i] = std::isfinite(color[i]) ? color[i] : 0.0;
+      }
+    };
+    /* Enough to show it smooth, as Blender evaluates it. */
+    constexpr int samples = 64;
+    double colors[samples * 4];
+    for (int i = 0; i < samples; i++) {
+      float color[4] = {0, 0, 0, 1};
+      BKE_colorband_evaluate(&coba, i / float(samples - 1), color);
+      shown(color, colors + i * 4);
+    }
+    Vector<double> stops(coba.tot * 5);
+    for (int i = 0; i < coba.tot; i++) {
+      const CBData &stop = coba.data[i];
+      stops[i * 5] = stop.pos;
+      const float color[4] = {stop.r, stop.g, stop.b, stop.a};
+      shown(color, &stops[i * 5 + 1]);
+    }
+    return builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
+      fields.label = RNA_property_ui_name(but.rnaprop);
+      fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE)) &&
+                       (!but.rnapoin.owner_id || ID_IS_EDITABLE(but.rnapoin.owner_id));
+      fields.property = RNA_property_identifier(but.rnaprop);
+      return protocol::CreateRamp(buffer,
+                                  buffer.CreateVector(colors, samples * 4),
+                                  buffer.CreateVector(stops.data(), stops.size()),
+                                  coba.cur);
+    });
   }
 
   /** A data-block picker, of the template drawing \a prop of \a ptr in \a block. */
@@ -3669,6 +3769,18 @@ static std::string panels_walk(bContext *C,
         }
         continue;
       }
+      if (but.type == ButtonType::ColorBand && but.poin && but.rnaprop) {
+        const std::string key = ramp_key(but);
+        if (execute) {
+          if (target_panel && *requested_key == key && !applied) {
+            applied = apply_ramp(C, but, *request);
+          }
+        }
+        else if (writer && seen.insert(key).second) {
+          writer->ramp(node, but);
+        }
+        continue;
+      }
       if (!but.rnaprop || !but.rnapoin.data || (but.flag & UI_HIDDEN)) {
         continue;
       }
@@ -4234,7 +4346,8 @@ Block *native_node_header_block(bContext *C)
   return block;
 }
 
-/** Calls `fn` for each value a node's block shows, as the Properties fields go, and `id_fn`
+/** Calls `fn` for each value a node's block shows, as the Properties fields go, a color ramp
+ * among them, and `id_fn`
  * for each data-block picker (an image, a node group), whose parts are left out. */
 template<typename Fn, typename IDFn> void for_each_node_field(Block &block, Fn fn, IDFn id_fn)
 {
@@ -4249,6 +4362,12 @@ template<typename Fn, typename IDFn> void for_each_node_field(Block &block, Fn f
           seen.insert(id_template_key(template_ptr, template_prop)).second)
       {
         id_fn(template_ptr, template_prop);
+      }
+      continue;
+    }
+    if (but.type == ButtonType::ColorBand && but.poin && but.rnaprop) {
+      if (seen.insert(ramp_key(but)).second) {
+        fn(but, -1, ramp_key(but));
       }
       continue;
     }
@@ -4536,6 +4655,10 @@ void write_node_fields(Writer &writer,
   for_each_node_field(
       *block,
       [&](Button &but, const int index, const std::string & /*key*/) {
+        if (but.type == ButtonType::ColorBand) {
+          writer.ramp(group("fields"), but);
+          return;
+        }
         const bool socket = RNA_struct_is_a(but.rnapoin.type, RNA_NodeSocket);
         writer.property(
             group(socket ? "socket:" + std::string(
@@ -4961,7 +5084,9 @@ bool apply_node_property(bContext *C,
       *block,
       [&](Button &but, const int index, const std::string &field_key) {
         if (!applied && !picker && field_key == key) {
-          applied = request.action.empty() ? set_property(C, but, index, request, true, false) :
+          applied = but.type == ButtonType::ColorBand ?
+                        apply_ramp(C, but, request) :
+                    request.action.empty() ? set_property(C, but, index, request, true, false) :
                                              animate_property(C, but, index, request.action);
         }
       },

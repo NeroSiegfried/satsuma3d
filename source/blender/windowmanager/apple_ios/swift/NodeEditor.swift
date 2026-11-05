@@ -2307,6 +2307,8 @@ struct NodeCanvasField: View {
             guard node.enabled else { return }
             ColorPickerSession(model: model, node: node).present(from: anchor)
           }
+        case .ramp:
+          NativeRamp(model: model, node: node)
         default:
           labeled { valueText(summary, chevron: true) }
             .contentShape(Rectangle())

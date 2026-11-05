@@ -435,6 +435,9 @@ struct ControlRow: View {
           NativeChoice(model: model, node: node)
         case .color:
           labeled(width: nil) { NativeColorSwatch(model: model, node: node) }
+        case .ramp:
+          NativeRamp(model: model, node: node)
+            .padding(.vertical, 6)
         case .reference:
           ReferenceRow(model: model, node: node)
             .padding(.vertical, 4)
@@ -649,6 +652,175 @@ struct NativeColorSwatch: View {
       .disabled(!node.enabled)
       .accessibilityLabel(node.label)
       .accessibilityValue(model.isMixed(node) ? "Mixed" : "")
+  }
+}
+
+/** A color ramp: its colors in a bar, its stops as handles below. A tap on a stop makes it the
+ * active one, whose position and color are the controls after it; dragged sideways it moves,
+ * pulled well off the bar it goes. A tap on the bar adds a stop there. */
+struct NativeRamp: View {
+  let model: PanelsModel
+  let node: NativeNode
+  /** A stop being dragged: the stops as the drag began, the one dragged, where it is now, and
+   * whether it is pulled off to remove it. */
+  @State private var drag: (stops: [Stop], index: Int, position: Double, off: Bool, last: CFTimeInterval)?
+
+  struct Stop {
+    var position: Double
+    var color: Color
+    var opaque: Bool
+  }
+
+  private static let bar: CGFloat = 24
+  private static let handle = CGSize(width: 14, height: 18)
+  private static let inset: CGFloat = 8
+
+  private var ramp: Blender_NativeUI_Ramp? { node.content(Blender_NativeUI_Ramp.self) }
+  private var active: Int { Int(ramp?.active ?? 0) }
+
+  private static func color(_ value: (Int) -> Double, _ at: Int) -> (Color, Bool) {
+    let alpha = value(at + 3)
+    return (Color(.sRGB, red: value(at), green: value(at + 1), blue: value(at + 2), opacity: alpha), alpha > 0.999)
+  }
+
+  private var stops: [Stop] {
+    guard let ramp else { return [] }
+    var stops = (0..<ramp.stopsCount / 5).map { i -> Stop in
+      let (color, opaque) = Self.color({ ramp.stops(at: Int32($0)) }, Int(i) * 5 + 1)
+      return Stop(position: ramp.stops(at: i * 5), color: color, opaque: opaque)
+    }
+    /* Where it was let go, until Blender shows it there. */
+    if case .float(let position)? = model.pending(node), stops.indices.contains(active) {
+      stops[active].position = position
+    }
+    return stops
+  }
+
+  var body: some View {
+    let stops = drag.map(dragged) ?? self.stops
+    GeometryReader { proxy in
+      let width = max(1, proxy.size.width - 2 * Self.inset)
+      ZStack(alignment: .topLeading) {
+        bar(stops)
+          .frame(width: width, height: Self.bar)
+          .offset(x: Self.inset)
+          .contentShape(Rectangle())
+          .onTapGesture { location in
+            guard node.enabled else { return }
+            model.send(node, .add, .float(min(1, max(0, location.x / width))))
+          }
+        ForEach(Array(stops.enumerated()), id: \.offset) { index, stop in
+          handle(stop, active: drag?.index ?? active == index)
+            .opacity(drag?.index == index && drag?.off == true ? 0.3 : 1)
+            .position(x: Self.inset + width * stop.position, y: Self.bar + Self.handle.height / 2 + 2)
+            .gesture(move(index, width: width))
+        }
+      }
+    }
+    .frame(height: Self.bar + Self.handle.height + 4)
+    .opacity(node.enabled ? 1 : 0.5)
+    .accessibilityElement()
+    .accessibilityLabel(node.label)
+    .accessibilityValue(stops.indices.contains(active) ? "Stop \(active + 1) of \(stops.count) at \(Int(stops[active].position * 100)) percent" : "")
+    .accessibilityAdjustableAction { direction in
+      guard stops.indices.contains(active) else { return }
+      let step = direction == .increment ? 0.05 : -0.05
+      model.set(node, .float(min(1, max(0, stops[active].position + step))))
+    }
+  }
+
+  /** As the drag shows it: the stop dragged where it is now, or gone when pulled off. */
+  private func dragged(_ drag: (stops: [Stop], index: Int, position: Double, off: Bool, last: CFTimeInterval)) -> [Stop] {
+    var stops = drag.stops
+    if stops.indices.contains(drag.index) { stops[drag.index].position = drag.position }
+    return stops
+  }
+
+  /** Blender's colors; while a stop is dragged, the stops blended straight, as Blender shows them
+   * a moment later. */
+  private func bar(_ stops: [Stop]) -> some View {
+    let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
+    var gradient: [Gradient.Stop] = []
+    var opaque = true
+    if let drag {
+      for (index, stop) in dragged(drag).enumerated() where !(index == drag.index && drag.off) {
+        gradient.append(.init(color: stop.color, location: stop.position))
+        opaque = opaque && stop.opaque
+      }
+      gradient.sort { $0.location < $1.location }
+    }
+    else if let ramp {
+      let count = Int(ramp.colorsCount / 4)
+      for i in 0..<count {
+        let (color, solid) = Self.color({ ramp.colors(at: Int32($0)) }, i * 4)
+        gradient.append(.init(color: color, location: Double(i) / Double(max(1, count - 1))))
+        opaque = opaque && solid
+      }
+    }
+    return shape
+      .fill(LinearGradient(stops: gradient, startPoint: .leading, endPoint: .trailing))
+      .background {
+        /* What shows through where it is transparent. */
+        if !opaque {
+          Canvas { context, size in
+            let cell: CGFloat = 6
+            for row in 0..<Int(ceil(size.height / cell)) {
+              for column in stride(from: row % 2, to: Int(ceil(size.width / cell)), by: 2) {
+                context.fill(Path(CGRect(x: CGFloat(column) * cell, y: CGFloat(row) * cell, width: cell, height: cell)),
+                             with: .color(.gray.opacity(0.35)))
+              }
+            }
+          }
+          .clipShape(shape)
+        }
+      }
+      .overlay(shape.strokeBorder(.separator, lineWidth: 0.5))
+  }
+
+  private func handle(_ stop: Stop, active: Bool) -> some View {
+    let shape = RoundedRectangle(cornerRadius: 4, style: .continuous)
+    return shape
+      .fill(stop.color)
+      .overlay(shape.strokeBorder(active ? Color.accentColor : .white, lineWidth: active ? 2.5 : 1.5))
+      .shadow(color: .black.opacity(0.3), radius: 1, y: 0.5)
+      .frame(width: Self.handle.width, height: Self.handle.height)
+      .contentShape(.interaction, Rectangle().inset(by: -10))
+      .hoverEffect(.lift)
+  }
+
+  /** A tap makes the stop active; a drag moves it, as one step to undo, or removes it. */
+  private func move(_ index: Int, width: CGFloat) -> some Gesture {
+    DragGesture(minimumDistance: 0)
+      .onChanged { value in
+        guard node.enabled else { return }
+        if drag == nil {
+          if index != active { model.send(node, .activate, .int(Int64(index))) }
+          let stops = self.stops
+          guard stops.indices.contains(index) else { return }
+          drag = (stops, index, stops[index].position, false, 0)
+        }
+        guard var current = drag else { return }
+        let moved = abs(value.translation.width) >= 4 || abs(value.translation.height) >= 4
+        guard moved else { return }
+        current.position = min(1, max(0, current.stops[index].position + value.translation.width / width))
+        current.off = current.stops.count > 1 && abs(value.translation.height) > 40
+        if !current.off, CACurrentMediaTime() - current.last >= 1.0 / 60.0 {
+          model.send(node, .set_, .float(current.position), phase: current.last == 0 ? .begin : .update)
+          current.last = CACurrentMediaTime()
+        }
+        drag = current
+      }
+      .onEnded { _ in
+        guard let current = drag else { return }
+        drag = nil
+        if current.off {
+          if current.last != 0 { model.send(node, .set_, .float(current.stops[index].position), phase: .cancel) }
+          model.send(node, .remove)
+        }
+        else if current.last != 0 {
+          model.set(node, .float(current.position), phase: .end)
+        }
+      }
   }
 }
 

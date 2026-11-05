@@ -307,6 +307,19 @@ table Record {
   params: [Param];
 }
 
+/// A color ramp, such as a node's: colors at stops along it, blended between. Commands: `Set` with
+/// a float moves the active stop there, `Activate` with an int makes that stop the active one,
+/// `Add` with a float adds a stop there and `Remove` removes the active one. The active stop's
+/// position and color are controls of their own.
+table Ramp {
+  /// Its colors from start to end, evenly spaced: red, green, blue and alpha each, in display
+  /// space.
+  colors: [double];
+  /// Its stops in order, five numbers each: the position, from 0 to 1, and the color.
+  stops: [double];
+  active: int;
+}
+
 /// A value an interface uses as it sees fit, rather than a control: such as where Blender draws
 /// the navigation gizmo, for an interface to keep clear of it.
 table Data {
@@ -388,6 +401,7 @@ union Content {
   Data,
   Asset,
   Record,
+  Ramp,
 }
 
 /* -------------------------------------------------------------------- */

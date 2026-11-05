@@ -90,7 +90,24 @@ bool control_request(PanelsData &data,
         return false;
     }
   }
-  if (edit.kind != Edit::Kind::Property) {
+  if (edit.kind == Edit::Kind::Ramp) {
+    switch (op) {
+      case protocol::Op::Activate:
+        request.action = "activate";
+        return true;
+      case protocol::Op::Add:
+        request.action = "add";
+        return true;
+      case protocol::Op::Remove:
+        request.action = "remove";
+        return true;
+      case protocol::Op::Set:
+        break;
+      default:
+        return false;
+    }
+  }
+  else if (edit.kind != Edit::Kind::Property) {
     return false;
   }
   if (ELEM(op,

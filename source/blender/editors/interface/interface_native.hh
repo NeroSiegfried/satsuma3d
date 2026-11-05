@@ -40,6 +40,8 @@ struct Edit {
     List,
     /** An operator run by its name, as a list's Duplicate. */
     Call,
+    /** A color ramp's stops. */
+    Ramp,
   };
   Kind kind = Kind::Property;
   /** The panel drawing it, by its id. */
