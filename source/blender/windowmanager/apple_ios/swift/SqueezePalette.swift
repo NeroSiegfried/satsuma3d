@@ -1903,6 +1903,7 @@ private struct ArcSlider: View {
       }
     }
     .contentShape(whole)
+    .hoverHighlight(whole)
     .modifier(Lit(shape: whole, part: SqueezePalette.part(key)))
     .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .local)
       .onChanged { gesture in
@@ -1960,6 +1961,7 @@ private struct ArcDirection: View {
       }
     }
     .contentShape(track)
+    .hoverHighlight(track)
     .onTapGesture { location in
       /* The half tapped. */
       palette.chooseDirection(arc.angle(of: location) > middle)
