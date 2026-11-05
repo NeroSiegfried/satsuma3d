@@ -52,16 +52,9 @@ final class SqueezePalette {
     }
   }
 
-  enum Page: Hashable {
-    /** The tools, the brushes and the brush's settings. */
-    case main
-    /** Blender's commands for what is selected, in place of the brush's settings. */
-    case commands
-  }
-
-  /** What sits at an end of the tools' and brushes' arc: undo and redo, and the commands. */
+  /** What sits at the start of the brush's settings' arc: undo and redo. */
   enum Accessory: Hashable {
-    case undo, redo, more
+    case undo, redo
   }
 
   /** The tools' or the brushes' stretch of their arc: grown to turn through many, or shrunk to
@@ -138,27 +131,19 @@ final class SqueezePalette {
 
     var middleAngle: Double { (start + end) / 2 }
     var leading: [Accessory] = []
-    var trailing: [Accessory] = []
     var pieces: [Piece] = []
 
     /** From one tool or brush to the next along it, in radians. */
     var step: Double { Double(thickness - 2) / Double(radius) }
 
     func angle(_ accessory: Accessory) -> Double {
-      if trailing.isEmpty, sections.isEmpty, pieces.isEmpty, let index = leading.firstIndex(of: accessory) {
-        /* Alone on their arc: spread along it. */
-        return start + (end - start) * (Double(index) + 0.5) / Double(leading.count)
-      }
-      if let index = leading.firstIndex(of: accessory) { return start + Double(index) * step }
-      let index = trailing.firstIndex(of: accessory) ?? 0
-      return end - Double(trailing.count - 1 - index) * step
+      start + Double(leading.firstIndex(of: accessory) ?? 0) * step
     }
 
-    /** Between what is at its ends, where the tools and brushes go. */
+    /** Past what is at its start, where the tools and brushes go. */
     var middle: ClosedRange<Double> {
       let low = start + (leading.isEmpty ? 0 : (Double(leading.count) - 0.4) * step)
-      let high = end - (trailing.isEmpty ? 0 : (Double(trailing.count) - 0.4) * step)
-      return low...max(low, high)
+      return low...max(low, end)
     }
 
     enum Hit: Equatable {
@@ -173,7 +158,7 @@ final class SqueezePalette {
       let cap = Double(thickness / 2) / Double(radius)
       guard angle >= start - cap, angle <= end + cap else { return nil }
       if !commands.isEmpty { return .part(.commands) }
-      if let accessory = (leading + trailing).first(where: { abs(self.angle($0) - angle) < step / 2 }) {
+      if let accessory = leading.first(where: { abs(self.angle($0) - angle) < step / 2 }) {
         return .accessory(accessory)
       }
       if let section = sections.first(where: { angle >= $0.start && angle <= $0.end }) { return .part(section.part) }
@@ -256,11 +241,6 @@ final class SqueezePalette {
   private(set) var shown = false
   /** Where the arcs are, around where the Pencil was squeezed. */
   private(set) var arc: Arc?
-  /** Which way the Pencil's barrel leaned as it was squeezed. */
-  @ObservationIgnored private var lean: Double?
-  var page = Page.main {
-    didSet { if page != oldValue { pageChanged() } }
-  }
   @ObservationIgnored private(set) weak var window: UIWindow?
   @ObservationIgnored private var input: PaletteInput?
   @ObservationIgnored private var generation = 0
@@ -389,8 +369,6 @@ final class SqueezePalette {
   /** Which of the two is grown, where there are brushes. */
   var expanded = Part.brushes
 
-  var primary: Part { page == .commands ? .commands : band }
-
   /* -------------------------------------------------------------------- */
   /* Opening and closing */
 
@@ -409,7 +387,6 @@ final class SqueezePalette {
   private func open(at point: CGPoint, roll: Double?, lean: Double?, in window: UIWindow) {
     generation += 1
     self.window = window
-    page = .main
     commandPath = []
     commandScroll = 0
     commandPage = 0
@@ -425,7 +402,6 @@ final class SqueezePalette {
     toolPosition = Double(tools.firstIndex { $0.id == activeTool } ?? 0)
     brushPosition = Double(brushes.firstIndex { $0.id == activeBrush } ?? 0)
     expanded = .brushes
-    self.lean = lean
     let arc = Self.arc(around: point, in: window, outer: outer, lean: lean)
     var instant = Transaction()
     instant.disablesAnimations = true
@@ -459,7 +435,6 @@ final class SqueezePalette {
       self.tip = nil
       self.arc = nil
       self.target = nil
-      self.page = .main
     }
   }
 
@@ -485,17 +460,6 @@ final class SqueezePalette {
 
   static func motion(_ animation: Animation) -> Animation? {
     UIAccessibility.isReduceMotionEnabled ? nil : animation
-  }
-
-  private func pageChanged() {
-    guard isOpen, let tip, let window else { return }
-    target = nil
-    if page == .commands { Task { _ = await BlenderMenus.shared.fetch(commandRoute) } }
-    /* Moved in, if the rings coming out would leave the window, back again as they go. */
-    let moved = Self.arc(around: tip, in: window, outer: outer, lean: lean)
-    if let arc, moved.center != arc.center || moved.facing != arc.facing {
-      withAnimation(Self.motion(.spring(response: 0.34, dampingFraction: 0.86))) { self.arc = moved }
-    }
   }
 
   /** How far out the arcs reach, which does not depend on where they face. */
@@ -529,22 +493,19 @@ final class SqueezePalette {
     if brush?["weight"] != nil { parts.append((.weight, 140)) }
     if direction != nil { parts.append((.direction, 92)) }
     if color != nil { parts.append((.color, Ring.narrow)) }
-    let commands = !contextCommands(BlenderMenus.contextRoute).isEmpty
     if brush != nil, !parts.isEmpty {
-      let accessories = CGFloat((commands ? 2 : 1) + (canRedo ? 1 : 0)) * (Ring.narrow - 2)
+      let accessories = CGFloat(canRedo ? 2 : 1) * (Ring.narrow - 2)
       let length = accessories + CGFloat(parts.reduce(0) { $0 + $1.share }) + CGFloat(parts.count + 1) * Self.pieceGap
       add(Ring.narrow, length: length) { ring in
-        /* Undo and redo at its start, the commands' button at its end, leaving the brushes their
-         * arc. */
-        /* Redo only once there is something to redo. */
+        /* Undo and redo at its start, leaving the brushes their arc; redo only once there is
+         * something to redo. Painting has no commands of its own, so the settings have the rest. */
         ring.leading = canRedo ? [.undo, .redo] : [.undo]
-        ring.trailing = commands ? [.more] : []
         /* Each setting is drawn within its stretch, its rounded ends too, so the same small gap
          * parts them from each other and from the buttons. */
         let gap = Double(Self.pieceGap) / Double(ring.radius)
         let low = ring.middle.lowerBound + gap
-        let high = ring.middle.upperBound - (ring.trailing.isEmpty ? 0 : gap)
-        let middle = low...max(low, high)
+        /* Into the arc's rounded end, as far in from its edge as they are from its sides. */
+        let middle = low...max(low, ring.end + Double(Ring.narrow / 2 - 5) / Double(ring.radius))
         let room = (middle.upperBound - middle.lowerBound) - gap * Double(parts.count - 1)
         /* The in and out, and the color, as long as they need; the sliders share the rest. */
         let fixed = { (part: Part) in part == .direction || part == .color }
@@ -587,7 +548,7 @@ final class SqueezePalette {
     }
     /* Then the commands for what is selected, with undo and redo, without brush settings, or
      * once asked for. */
-    if page == .commands || brush == nil {
+    if brush == nil {
       let history: [CommandEntry] = canRedo ? [.undo, .redo] : [.undo]
       add(Ring.narrow, length: .infinity) { ring in
         ring.commands = (brush == nil ? history : []) + contextCommands(BlenderMenus.contextRoute)
@@ -769,7 +730,7 @@ final class SqueezePalette {
     }
     lastPoint = point
     if let lock = rollLock, hypot(point.x - lock.x, point.y - lock.y) > 30 { rollLock = nil }
-    let next = part(at: point) ?? primary
+    let next = part(at: point) ?? band
     if next != target { target = next }
     if rollLock == nil, let roll, let last = hoverRoll { rolled(by: Self.wrapped(roll - last), on: next, at: point) }
     hoverRoll = roll
@@ -807,7 +768,6 @@ final class SqueezePalette {
     for ring in rings {
       switch ring.hit(point, around: arc) {
         case .accessory(.undo), .accessory(.redo): return .history
-        case .accessory(.more): return nil
         /* Commands are tapped, not turned. */
         case .part(.commands): return nil
         case .part(let part): return part
@@ -1227,8 +1187,7 @@ final class SqueezePalette {
   }
 
   func commandsBack() {
-    if commandPath.isEmpty { page = .main }
-    else { commandPath.removeLast() }
+    _ = commandPath.popLast()
   }
 
   /* -------------------------------------------------------------------- */
@@ -1348,7 +1307,6 @@ struct SqueezePaletteLayer: View {
         }
         .frame(width: proxy.size.width, height: proxy.size.height)
         .allowsHitTesting(palette.shown)
-        .animation(SqueezePalette.motion(.spring(response: 0.34, dampingFraction: 0.84)), value: palette.page)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Tool Palette")
         .accessibilityIdentifier("blender.squeeze-palette")
@@ -1627,7 +1585,7 @@ private struct RingView: View {
       ForEach(ring.sections, id: \.part) { section in
         ArcSection(arc: arc, ring: ring, section: section)
       }
-      ForEach(ring.leading + ring.trailing, id: \.self) { accessory in
+      ForEach(ring.leading, id: \.self) { accessory in
         self.accessory(accessory)
           .rotationEffect(arc.upright(ring.angle(accessory), middle: ring.middleAngle))
           .position(arc.point(ring.angle(accessory), radius: ring.radius))
@@ -1648,22 +1606,7 @@ private struct RingView: View {
         PaletteIconButton(symbol: "arrow.uturn.backward", label: "Undo", enabled: palette.canUndo) { palette.undo() }
       case .redo:
         PaletteIconButton(symbol: "arrow.uturn.forward", label: "Redo", enabled: palette.canRedo) { palette.redo() }
-      case .more:
-        PaletteIconButton(symbol: moreSymbol, label: palette.page == .commands ? "Back" : "Commands") { more() }
-          .contentTransition(.symbolEffect(.replace))
-          .accessibilityIdentifier("blender.squeeze-palette.commands")
     }
-  }
-
-  private var moreSymbol: String {
-    palette.page != .commands ? "ellipsis" : palette.commandPath.isEmpty ? "xmark" : "chevron.backward"
-  }
-
-  /** The commands, back out of a submenu, or closed. */
-  private func more() {
-    if palette.page != .commands { palette.page = .commands }
-    else if palette.commandPath.isEmpty { palette.page = .main }
-    else { palette.commandsBack() }
   }
 
   @ViewBuilder
