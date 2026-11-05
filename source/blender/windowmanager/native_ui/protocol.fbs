@@ -265,6 +265,9 @@ table Button {
   key: string;
   /// It shows as pressed, as one that turns something on, such as X-Ray, while it is on.
   pressed: bool;
+  /// Blender shows only its icon, such as the X that removes an item: its label is for those who
+  /// can't see it.
+  icon_only: bool;
 }
 
 /// A button that opens a menu, a view of its own named here.

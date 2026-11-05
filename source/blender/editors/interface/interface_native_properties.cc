@@ -1819,7 +1819,12 @@ class Writer {
       common(fields);
       return protocol::CreateButton(buffer,
                                     destructive ? protocol::ButtonStyle::Destructive :
-                                                  protocol::ButtonStyle::Normal);
+                                                  protocol::ButtonStyle::Normal,
+                                    0,
+                                    0,
+                                    0,
+                                    false,
+                                    label.empty() && but.str.empty() && icon != ICON_NONE);
     });
   }
 

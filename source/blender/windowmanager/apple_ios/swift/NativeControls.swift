@@ -537,16 +537,27 @@ struct NativeButton: View {
   var compact = false
 
   var body: some View {
-    Button(role: node.content(Blender_NativeUI_Button.self)?.style == .destructive ? .destructive : nil) {
+    let button = node.content(Blender_NativeUI_Button.self)
+    /* Its icon alone where Blender shows only that, its label still read out. */
+    let iconOnly = button?.iconOnly == true && BlenderIcon.image(node.icon) != nil
+    Button(role: button?.style == .destructive ? .destructive : nil) {
       model.send(node, .invoke)
     } label: {
-      Label {
-        Text(node.label)
-      } icon: {
-        IconView(name: node.icon)
+      Group {
+        if iconOnly {
+          IconView(name: node.icon)
+        }
+        else {
+          Label {
+            Text(node.label)
+          } icon: {
+            IconView(name: node.icon)
+          }
+        }
       }
       .frame(maxWidth: compact ? nil : .infinity, alignment: .leading)
     }
+    .accessibilityLabel(node.label)
     .buttonStyle(.borderless)
     .disabled(!node.enabled)
     .frame(minHeight: compact ? 26 : 44)
