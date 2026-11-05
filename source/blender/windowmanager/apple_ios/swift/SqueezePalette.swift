@@ -1613,18 +1613,33 @@ private struct RingView: View {
   private func content(_ piece: Piece) -> some View {
     switch piece.part {
       case .size:
-        ArcSlider(arc: arc, ring: ring, piece: piece, key: "size", symbol: "circle.dashed")
+        framed(piece) { ArcSlider(arc: $0, ring: ring, piece: piece, key: "size", symbol: "circle.dashed") }
       case .strength:
-        ArcSlider(arc: arc, ring: ring, piece: piece, key: "strength", symbol: "drop.fill")
+        framed(piece) { ArcSlider(arc: $0, ring: ring, piece: piece, key: "strength", symbol: "drop.fill") }
       case .weight:
-        ArcSlider(arc: arc, ring: ring, piece: piece, key: "weight", symbol: "scalemass.fill")
+        framed(piece) { ArcSlider(arc: $0, ring: ring, piece: piece, key: "weight", symbol: "scalemass.fill") }
       case .direction:
-        ArcDirection(arc: arc, ring: ring, piece: piece)
+        framed(piece) { ArcDirection(arc: $0, ring: ring, piece: piece) }
       case .color:
         ArcColor(arc: arc, ring: ring, piece: piece)
       default:
         EmptyView()
     }
+  }
+
+  /** In a frame of its own just around \a piece, drawn around the arcs' center moved to match:
+   * the pointer's hover effects find a view by its frame, so one as large as the palette would
+   * take them from every other. */
+  private func framed<V: View>(_ piece: Piece, _ make: (Arc) -> V) -> some View {
+    let half = ring.thickness / 2
+    var rect = CGRect.null
+    for i in 0...16 {
+      let p = arc.point(piece.start + (piece.end - piece.start) * Double(i) / 16, radius: ring.radius)
+      rect = rect.union(CGRect(x: p.x - half, y: p.y - half, width: 2 * half, height: 2 * half))
+    }
+    var local = arc
+    local.center = CGPoint(x: arc.center.x - rect.minX, y: arc.center.y - rect.minY)
+    return make(local).frame(width: rect.width, height: rect.height).position(x: rect.midX, y: rect.midY)
   }
 }
 
