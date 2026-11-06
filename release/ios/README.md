@@ -35,6 +35,10 @@ provisioning profile before signing. These entitlements do not grant all physica
 RAM: iPadOS determines the allowance for the device and current conditions. Keep
 the thumbnail extension on its own profile without the app's memory entitlements.
 
+Reloadable file and tiled image buffers obey the image cache limit on iPadOS, so
+CPU copies can be evicted to leave room for GPU textures. Dirty image buffers
+remain protected by the cache; generated and viewer images remain persistent.
+
 The native interface targets iOS/iPadOS 27.0 for external testing. Use the stable
 Xcode 27.0 installation for the distribution build; the Xcode 27.1 simulator used
 by some development tests is not a runtime requirement. The optional 27.1 toolbar

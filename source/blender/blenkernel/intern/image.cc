@@ -4748,8 +4748,16 @@ static ImBuf *image_acquire_ibuf(Image *ima, ImageUser *iuser, void **r_lock)
       }
     }
 
-    /* We only want movies and sequences to be memory limited. */
-    if (ibuf != nullptr && !ELEM(ima->source, IMA_SRC_MOVIE, IMA_SRC_SEQUENCE)) {
+    /* iPadOS also needs reloadable still images to obey the cache limit: keeping their CPU
+     * buffers permanently resident can leave no room for GPU textures. The cache protects
+     * dirty buffers, so unsaved image edits are not evicted. */
+#if defined(APPLE_TARGET_IOS)
+    const bool memory_limited = ELEM(
+        ima->source, IMA_SRC_MOVIE, IMA_SRC_SEQUENCE, IMA_SRC_FILE, IMA_SRC_TILED);
+#else
+    const bool memory_limited = ELEM(ima->source, IMA_SRC_MOVIE, IMA_SRC_SEQUENCE);
+#endif
+    if (ibuf != nullptr && !memory_limited) {
       ibuf->userflags |= IB_PERSISTENT;
     }
   }
