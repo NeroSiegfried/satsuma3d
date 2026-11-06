@@ -143,7 +143,8 @@ struct PropertiesContext : DetachedAreaContext {
   }
 };
 
-std::string icon_name(const int icon)
+/** Blender's own name of \a icon, which lasts as long as Blender runs. */
+const char *icon_name(const int icon)
 {
   const char *name = nullptr;
   return RNA_enum_identifier(rna_enum_icon_items, icon, &name) ? name : "";
@@ -1749,7 +1750,7 @@ class Writer {
                 buffer,
                 std::to_string(id->session_uid).c_str(),
                 id->name + 2,
-                icon_name(RNA_struct_ui_icon(candidate.type)).c_str()));
+                icon_name(RNA_struct_ui_icon(candidate.type))));
           }
         }
         FOREACH_MAIN_ID_END;
@@ -2070,7 +2071,7 @@ class Writer {
       options_.push_back(protocol::CreateOptionDirect(buffer,
                                                       item.identifier,
                                                       item.name,
-                                                      icon_name(item.icon).c_str(),
+                                                      icon_name(item.icon),
                                                       preview_icon_path(C, item.icon).c_str()));
       if (flags ? (selected & item.value) != 0 : selected == item.value) {
         r_value = item.identifier;
@@ -3644,7 +3645,7 @@ static std::string panels_walk(bContext *C,
                   buffer,
                   heading ? nullptr : items[i].identifier,
                   items[i].name ? items[i].name : "",
-                  heading ? nullptr : icon_name(items[i].icon).c_str()));
+                  heading ? nullptr : icon_name(items[i].icon)));
             }
             if (free) {
               MEM_delete(items);
