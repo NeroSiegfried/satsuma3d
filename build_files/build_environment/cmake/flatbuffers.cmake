@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 # The C++ runtime (headers only), the schema compiler `flatc`, and the Swift runtime's sources,
-# which the iOS app builds with its own code. Cross-compiled libraries have no `flatc`: the build
-# runs the host's.
+# which the iOS app builds with its own code. Cross-compiled libraries build no `flatc`: the
+# host's is added to them, as the build runs it.
 if(WITH_APPLE_CROSSPLATFORM)
   set(FLATBUFFERS_FLATC OFF)
 else()
