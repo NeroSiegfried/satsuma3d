@@ -40,6 +40,7 @@
 #include "DNA_workspace_types.h"
 
 #include "BKE_appdir.hh"
+#include "BLT_translation.hh"
 #include "BKE_collection.hh"
 #include "BKE_curves.hh"
 #include "BKE_context.hh"
@@ -721,13 +722,41 @@ void sync_scene(bContext *C)
 }
 
 /** Applies an edit; the undo step's name, empty for none, or nothing when it failed. */
+/** A sequencer scene for a file without one, as its first shot is added: with the scene's size
+ * and frame rate, the window keeping its scene and following the shot under the playhead. */
+Scene *new_story_scene(bContext *C)
+{
+  WorkSpace *workspace = CTX_wm_workspace(C);
+  const Scene *shown = CTX_data_scene(C);
+  if (!workspace) {
+    return nullptr;
+  }
+  Scene *story = BKE_scene_add(CTX_data_main(C), DATA_("Story"));
+  if (shown) {
+    story->r.xsch = shown->r.xsch;
+    story->r.ysch = shown->r.ysch;
+    story->r.xasp = shown->r.xasp;
+    story->r.yasp = shown->r.yasp;
+    story->r.frs_sec = shown->r.frs_sec;
+    story->r.frs_sec_base = shown->r.frs_sec_base;
+  }
+  seq::editing_ensure(story);
+  workspace->sequencer_scene = story;
+  workspace->flags |= WORKSPACE_SYNC_SCENE_TIME;
+  WM_event_add_notifier(C, NC_WINDOW, nullptr);
+  return story;
+}
+
 std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
 {
+  const std::string action = query.lookup_str("action").value_or("");
   Scene *scene = CTX_data_sequencer_scene(C);
+  if (!scene && action == "add") {
+    scene = new_story_scene(C);
+  }
   if (!scene) {
     return std::nullopt;
   }
-  const std::string action = query.lookup_str("action").value_or("");
   Strip *strip = find_strip(scene, query);
 
   if (action == "frame") {

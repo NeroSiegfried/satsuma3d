@@ -539,7 +539,8 @@ struct TimelineContent: View {
 #if os(visionOS)
     false
 #else
-    store.storyboardAvailable || store.storyboardShown
+    /* Any file can start a storyboard: its first shot makes the sequencer scene. */
+    true
 #endif
   }
 
