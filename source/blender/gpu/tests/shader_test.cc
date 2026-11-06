@@ -305,6 +305,60 @@ static void test_shader_ssbo_binding()
 GPU_TEST(shader_ssbo_binding)
 
 #ifdef WITH_METAL_BACKEND
+static void test_shader_sampler_argument_buffer_boundary()
+{
+  for (const int slot : {15, 16}) {
+    ShaderCreateInfo info("pyGPU_Shader");
+    info.sampler(slot, ImageType::Float2D, "input_tx");
+    info.image(0,
+               TextureFormat::SFLOAT_32_32_32_32,
+               Qualifier::write,
+               ImageReadWriteType::image2D,
+               "output_img");
+    info.local_group_size(1);
+    info.compute_source_generated = R"(
+void main()
+{
+  imageStore(output_img, ivec2(0), textureLod(input_tx, vec2(0.5), 0.0));
+})";
+    gpu::Shader *shader = GPU_shader_create_from_info_python(
+        reinterpret_cast<GPUShaderCreateInfo *>(&info));
+    ASSERT_NE(shader, nullptr);
+    GPU_shader_bind(shader);
+
+    const float4 expected(0.25f, 0.5f, 0.75f, 1.0f);
+    gpu::Texture *input = GPU_texture_create_2d("sampler boundary input",
+                                                1,
+                                                1,
+                                                1,
+                                                TextureFormat::SFLOAT_32_32_32_32,
+                                                GPU_TEXTURE_USAGE_SHADER_READ,
+                                                &expected.x);
+    gpu::Texture *output = GPU_texture_create_2d("sampler boundary output",
+                                                 1,
+                                                 1,
+                                                 1,
+                                                 TextureFormat::SFLOAT_32_32_32_32,
+                                                 GPU_TEXTURE_USAGE_SHADER_WRITE |
+                                                     GPU_TEXTURE_USAGE_HOST_READ,
+                                                 nullptr);
+    GPU_texture_bind(input, GPU_shader_get_sampler_binding(shader, "input_tx"));
+    GPU_texture_image_bind(output, 0);
+    GPU_compute_dispatch(shader, 1, 1, 1);
+    GPU_memory_barrier(GPU_BARRIER_TEXTURE_UPDATE);
+    float *result = static_cast<float *>(GPU_texture_read(output, GPU_DATA_FLOAT, 0));
+    for (int i = 0; i < 4; i++) {
+      EXPECT_FLOAT_EQ(result[i], expected[i]);
+    }
+    MEM_delete(result);
+    GPU_texture_free(output);
+    GPU_texture_free(input);
+    GPU_shader_unbind();
+    GPU_shader_free(shader);
+  }
+}
+GPU_TEST(shader_sampler_argument_buffer_boundary)
+
 static void test_shader_sampler_argument_buffer_binding()
 {
   gpu::Shader *shader = GPU_shader_create_from_info_name("gpu_sampler_arg_buf_test");

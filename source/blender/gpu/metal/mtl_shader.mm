@@ -170,7 +170,8 @@ const shader::ShaderCreateInfo &MTLShader::patch_create_info(
     }
   }
 
-  if (original_info.max_sampler_slot() > 16) {
+  /* Direct sampler slots are indexed 0..15; slot 16 already requires an argument buffer. */
+  if (original_info.max_sampler_slot() >= 16) {
     if (patched_info_ == nullptr) {
       patched_info_ = std::make_unique<PatchedShaderCreateInfo>(original_info);
     }
