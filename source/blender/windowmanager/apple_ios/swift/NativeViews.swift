@@ -61,6 +61,9 @@ final class NativeView {
   @ObservationIgnored fileprivate var unanswered = 0
   /** Called once Blender answered every command sent, and the view shows what they did. */
   @ObservationIgnored var settled: (() -> Void)?
+  /** The next update shows what a change made here asked for, such as a panel's controls once
+   * it opens: it moves into place rather than jumping. */
+  @ObservationIgnored var animatesNext = false
 
   fileprivate init(name: String, params: [String: NativeValue]) {
     self.name = name
@@ -82,6 +85,12 @@ final class NativeView {
   }
 
   fileprivate func apply(_ update: Blender_NativeUI_Update) {
+    guard animatesNext else { return applyNow(update) }
+    animatesNext = false
+    withMotion { applyNow(update) }
+  }
+
+  private func applyNow(_ update: Blender_NativeUI_Update) {
     if update.reset {
       nodes.removeAll(keepingCapacity: true)
     }

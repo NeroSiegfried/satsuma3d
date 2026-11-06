@@ -205,6 +205,8 @@ final class PanelsModel {
 
   func setOpen(_ panel: NativeNode, _ open: Bool) {
     withMotion { expanding[panel.key] = open }
+    /* Blender sends its controls once it is open: they slide out, and what is below moves down. */
+    if open { view.animatesNext = true }
     send(panel, open ? .open_ : .close)
   }
 
