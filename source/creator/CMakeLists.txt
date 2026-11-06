@@ -510,6 +510,8 @@ else()
         "${CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER}.thumbnailer"
       XCODE_ATTRIBUTE_SKIP_INSTALL "YES"
       XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC "NO"
+      # The thumbnail extension must not inherit the main app's memory/GPU entitlements.
+      XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS ""
       # Blender's libraries, shared with the app: `Blender.app/PlugIns/<appex>/` to `Assets/lib`.
       BUILD_WITH_INSTALL_RPATH TRUE
       INSTALL_RPATH "@loader_path/../../Assets/lib"

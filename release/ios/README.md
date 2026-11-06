@@ -29,6 +29,12 @@ use ARM64, but their binaries are not interchangeable.
 
 ## TestFlight Distribution
 
+The main app requests Increased Memory Limit and Extended Virtual Addressing for
+production scenes. Enable both capabilities on its App ID and regenerate its
+provisioning profile before signing. These entitlements do not grant all physical
+RAM: iPadOS determines the allowance for the device and current conditions. Keep
+the thumbnail extension on its own profile without the app's memory entitlements.
+
 The native interface targets iOS/iPadOS 27.0 for external testing. Use the stable
 Xcode 27.0 installation for the distribution build; the Xcode 27.1 simulator used
 by some development tests is not a runtime requirement. The optional 27.1 toolbar
