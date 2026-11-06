@@ -3432,6 +3432,13 @@ static std::string panels_walk(bContext *C,
         node = physics->second;
       }
       else if (is_outer || collapsible_subpanel) {
+        /* A stack's panel by the icon of what it is, such as a modifier's type. */
+        const PointerRNA *instance_data = is_outer && candidate.instance ?
+                                              panel_custom_data_get(candidate.instance) :
+                                              nullptr;
+        const int instance_icon = instance_data && instance_data->type ?
+                                      RNA_struct_ui_icon(instance_data->type) :
+                                      ICON_NONE;
         node = writer->panel_node(is_outer ? top : panel_nodes.at(candidate.parent),
                                   candidate.id,
                                   is_outer,
@@ -3440,7 +3447,9 @@ static std::string panels_walk(bContext *C,
                                   header_hidden,
                                   panel_active,
                                   is_outer && candidate.instance && pt.reorder ? stack_index++ :
-                                                                                 -1);
+                                                                                 -1,
+                                  true,
+                                  instance_icon == ICON_NONE ? "" : icon_name(instance_icon));
       }
       else {
         node = panel_nodes.at(outer);
