@@ -151,5 +151,8 @@ if(WITH_GTESTS)
     tests/IMB_scaling_test.cc
     tests/IMB_transform_test.cc
   )
+  if(WITH_IMAGE_OPENEXR)
+    list(APPEND TEST_SRC tests/IMB_openexr_test.cc)
+  endif()
   blender_add_test_suite_lib(imbuf "${TEST_SRC}" "${INC}" "${INC_SYS}" "${LIB}")
 endif()

@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
+#include <new>
 #include <set>
 #include <string>
 
@@ -2144,6 +2145,9 @@ ImBuf *imb_load_openexr(const uchar *mem, size_t size, int flags, ImFileColorSpa
       const bool is_alpha = exr_has_alpha(*file);
 
       ibuf = IMB_allocImBuf(width, height, is_alpha ? 32 : 24, 0);
+      if (!ibuf) {
+        throw std::bad_alloc();
+      }
       ibuf->foptions.flag |= exr_is_half_float(*file) ? OPENEXR_HALF : 0;
       ibuf->foptions.flag |= openexr_header_get_compression(file_header);
 
@@ -2194,7 +2198,10 @@ ImBuf *imb_load_openexr(const uchar *mem, size_t size, int flags, ImFileColorSpa
           size_t ystride = -xstride * width;
 
           /* No need to clear image memory, it will be fully written below. */
-          IMB_alloc_float_pixels(ibuf, 4, false);
+          if (!IMB_alloc_float_pixels(ibuf, 4, false)) {
+            /* Do not construct offset slice pointers from a null pixel buffer. */
+            throw std::bad_alloc();
+          }
 
           /* Inverse correct first pixel for data-window
            * coordinates (- dw.min.y because of y flip). */
