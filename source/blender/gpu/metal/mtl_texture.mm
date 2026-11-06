@@ -1155,6 +1155,14 @@ void gpu::MTLTexture::update_sub(int mip,
      * NOTE: Allocation will be tracked with command submission and released once no longer in use.
      */
     temp_allocation->free();
+#if defined(APPLE_TARGET_IOS)
+    /* Image-cache limits bound CPU copies, but a large upload batch can also retain a
+     * staging copy of every texture until the next frame. Recycle completed uploads during
+     * the batch. Command-buffer references protect allocations still in use by the GPU. */
+    MTLBufferPool *pool = MTLContext::get_global_memory_manager();
+    pool->begin_new_safe_list();
+    pool->update_memory_pools();
+#endif
   }
 }
 
