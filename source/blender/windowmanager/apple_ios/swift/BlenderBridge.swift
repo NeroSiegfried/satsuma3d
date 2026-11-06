@@ -93,6 +93,18 @@ enum BlenderIcon {
     if let image { cache.setObject(image, forKey: cacheKey) }
     return image
   }
+
+  /** The system's symbol for a plain action Blender shows as an icon, such as the X that removes. */
+  static func symbol(_ name: String?) -> String? {
+    switch name {
+      case "X", "PANEL_CLOSE", "CANCEL": "xmark"
+      case "TRASH": "trash"
+      case "ADD": "plus"
+      case "REMOVE": "minus"
+      case "DOWNARROW_HLT": "chevron.down"
+      default: nil
+    }
+  }
 }
 
 /** A Blender icon, or an SF Symbol when Blender has none by that name. */

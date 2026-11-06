@@ -542,12 +542,16 @@ struct NativeButton: View {
   var body: some View {
     let button = node.content(Blender_NativeUI_Button.self)
     /* Its icon alone where Blender shows only that, its label still read out. */
-    let iconOnly = button?.iconOnly == true && BlenderIcon.image(node.icon) != nil
+    let symbol = BlenderIcon.symbol(node.icon)
+    let iconOnly = button?.iconOnly == true && (symbol != nil || BlenderIcon.image(node.icon) != nil)
     Button(role: button?.style == .destructive ? .destructive : nil) {
       model.send(node, .invoke)
     } label: {
       Group {
-        if iconOnly {
+        if iconOnly, let symbol {
+          Image(systemName: symbol)
+        }
+        else if iconOnly {
           IconView(name: node.icon)
         }
         else {
@@ -576,7 +580,12 @@ struct HeaderButton: View {
     Button {
       model.send(node, .invoke)
     } label: {
-      if let image = BlenderIcon.image(node.icon) {
+      if let symbol = BlenderIcon.symbol(node.icon) {
+        Image(systemName: symbol)
+          .font(.system(size: 15, weight: .semibold))
+          .frame(width: 36, height: 36)
+      }
+      else if let image = BlenderIcon.image(node.icon) {
         /* At the icon's own size, as a plain button draws it. */
         Image(uiImage: image)
           .frame(width: 36, height: 36)
