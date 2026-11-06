@@ -1038,6 +1038,15 @@ static void file_read_reports_finalize(BlendFileReadReport *bf_reports)
   }
 }
 
+static bool wm_file_read_keep_native_layout()
+{
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  return !G.background && !WM_native_ui_desktop_mode();
+#else
+  return false;
+#endif
+}
+
 bool WM_file_read(bContext *C,
                   const char *filepath,
                   const bool use_scripts_autoexec_check,
@@ -1050,6 +1059,12 @@ bool WM_file_read(bContext *C,
 
   const bool use_data = true;
   const bool use_userdef = false;
+
+  /* File layouts belong to Blender's desktop interface. Keep the current native layout,
+   * including for callers that bypass the file-opening operator (such as recovery). */
+  if (wm_file_read_keep_native_layout()) {
+    G.fileflags |= G_FILE_NO_UI;
+  }
 
   /* NOTE: a matching #wm_read_callback_post_wrapper must be called. */
   wm_read_callback_pre_wrapper(C, filepath);
@@ -2501,6 +2516,11 @@ static void read_factory_reset_props(wmOperatorType *ot)
 void wm_open_init_load_ui(wmOperator *op, bool use_prefs)
 {
   PropertyRNA *prop = RNA_struct_find_property(op->ptr, "load_ui");
+  if (wm_file_read_keep_native_layout()) {
+    /* An explicit load_ui=true must not replace the native iPad layout either. */
+    RNA_property_boolean_set(op->ptr, prop, false);
+    return;
+  }
   if (!RNA_property_is_set(op->ptr, prop)) {
     bool value = use_prefs ? ((U.flag & USER_FILENOUI) == 0) : ((G.fileflags & G_FILE_NO_UI) == 0);
 
