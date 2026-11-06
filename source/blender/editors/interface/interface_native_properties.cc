@@ -3009,7 +3009,10 @@ static std::string panels_walk(bContext *C,
           }
           if (!caption.empty()) {
             if (!RNA_property_array_check(button->rnaprop)) {
-              tool_labels[button.get()] = caption;
+              /* A row's heading, such as Axis, names the row: a toggle in it keeps its own
+               * text, such as X. */
+              const bool own = button->type == ButtonType::Toggle && !button->str.empty();
+              tool_labels[button.get()] = own ? button->str : caption;
             }
             /* A vector's first row carries the caption ("Offset X"); later rows only axes. */
             if (!layout_names.count(button->rnaprop) && button->rnaindex <= 0) {
