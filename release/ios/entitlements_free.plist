@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- What a personal (free) development team can sign, checked with Xcode 27.2 in November 2026:
+	     Increased Memory Limit only. Extended Virtual Addressing and Background GPU Access are refused
+	     for personal teams, so builds signed this way have no background renders on the GPU and the
+	     default address space. Use `entitlements.plist` with a paid team. -->
+	<key>com.apple.developer.kernel.increased-memory-limit</key>
+	<true/>
+</dict>
+</plist>

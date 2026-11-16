@@ -58,8 +58,10 @@ if(WITH_APPLE_CROSSPLATFORM)
       set(CACHE_VAR_TYPE)
     else()
       if(CACHE_VAR_TYPE STREQUAL "BOOL")
-        # Remove IPAD arg
-        if(NOT CACHE_VAR STREQUAL "APPLE_TARGET_DEVICE" AND NOT CACHE_VAR STREQUAL "WITH_CROSSCOMPILED_TOOLS")
+        # Remove IPAD arg. The host tools never need the native interface's bridge, whose
+        # FlatBuffers only the iOS libraries have.
+        if(NOT CACHE_VAR STREQUAL "APPLE_TARGET_DEVICE" AND NOT CACHE_VAR STREQUAL "WITH_CROSSCOMPILED_TOOLS" AND
+           NOT CACHE_VAR STREQUAL "WITH_NATIVE_UI")
           set(CMAKE_ARGS "${CMAKE_ARGS} -D${CACHE_VAR}=${${CACHE_VAR}}")
         else()
           # Disable iPad for tools compilation
