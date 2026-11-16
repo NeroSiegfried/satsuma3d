@@ -19,10 +19,21 @@ root = Path.home() / 'Documents'
 lib = ctypes.CDLL(None)
 lib.os_proc_available_memory.restype = ctypes.c_size_t
 
-class TaskInfo(ctypes.Structure):
-    _fields_ = [('virtual', ctypes.c_uint64), ('resident', ctypes.c_uint64),
-                ('resident_max', ctypes.c_uint64), ('times', ctypes.c_int32 * 4),
-                ('policy', ctypes.c_int32), ('suspend', ctypes.c_int32)]
+class TaskVMInfo(ctypes.Structure):
+    """`task_vm_info_data_t` up to `phys_footprint` (revision 1). The footprint, not resident size,
+    is what iPadOS compares with the app's memory limit."""
+    _fields_ = [('virtual', ctypes.c_uint64), ('region_count', ctypes.c_int32), ('page_size', ctypes.c_int32),
+                ('resident', ctypes.c_uint64), ('resident_peak', ctypes.c_uint64),
+                ('device', ctypes.c_uint64), ('device_peak', ctypes.c_uint64),
+                ('internal', ctypes.c_uint64), ('internal_peak', ctypes.c_uint64),
+                ('external', ctypes.c_uint64), ('external_peak', ctypes.c_uint64),
+                ('reusable', ctypes.c_uint64), ('reusable_peak', ctypes.c_uint64),
+                ('purgeable_volatile_pmap', ctypes.c_uint64), ('purgeable_volatile_resident', ctypes.c_uint64),
+                ('purgeable_volatile_virtual', ctypes.c_uint64),
+                ('compressed', ctypes.c_uint64), ('compressed_peak', ctypes.c_uint64),
+                ('compressed_lifetime', ctypes.c_uint64), ('phys_footprint', ctypes.c_uint64)]
+
+TASK_VM_INFO = 22
 
 task = ctypes.c_uint32.in_dll(lib, 'mach_task_self_').value
 metal = ctypes.CDLL('/System/Library/Frameworks/Metal.framework/Metal')
@@ -36,11 +47,15 @@ objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 objc.objc_msgSend.restype = ctypes.c_uint64
 
 def memory():
-    info = TaskInfo()
+    info = TaskVMInfo()
     count = ctypes.c_uint32(ctypes.sizeof(info)//4)
-    status = lib.task_info(task, 20, ctypes.byref(info), ctypes.byref(count))
-    return dict(time=time.time(), available=lib.os_proc_available_memory(),
-                resident=info.resident if status == 0 else None,
+    status = lib.task_info(task, TASK_VM_INFO, ctypes.byref(info), ctypes.byref(count))
+    available = lib.os_proc_available_memory()
+    footprint = info.phys_footprint if status == 0 else None
+    return dict(time=time.time(), available=available,
+                resident=info.resident if status == 0 else None, footprint=footprint,
+                # The limit as the governor will measure it: footprint plus what is still available.
+                limit=footprint + available if footprint is not None else None,
                 metal=objc.objc_msgSend(device, selector))
 
 state = {'status': 'running', 'stage': 'startup', 'cycles': [],
@@ -154,8 +169,9 @@ def move():
             first=state['cycles'][0]['settled'][-1]
             last=cycle['settled'][-1]
             state['settled_resident_growth']=last['resident']-first['resident']
+            state['settled_footprint_growth']=last['footprint']-first['footprint']
             state['settled_metal_growth']=last['metal']-first['metal']
-            assert state['settled_resident_growth'] < 1024**3, 'Resident memory grew by over 1 GiB across reloads'
+            assert state['settled_footprint_growth'] < 1024**3, 'Footprint grew by over 1 GiB across reloads'
             assert state['settled_metal_growth'] < 1024**3, 'Metal allocations grew by over 1 GiB across reloads'
             assert min(c['settled'][-1]['available'] for c in state['cycles']) > 1024**3, 'Less than 1 GiB settled headroom'
             state.update(status='passed', stage='complete')

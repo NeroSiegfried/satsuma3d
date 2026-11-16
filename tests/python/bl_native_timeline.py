@@ -23,7 +23,7 @@ def check(ok, name):
 
 
 def frames():
-    return [key["f"] for key in json.loads(timeline.keys_json(bpy.context))]
+    return [key["f"] for key in timeline.keys(bpy.context)]
 
 
 cube = bpy.data.objects['Cube']
@@ -43,7 +43,7 @@ camera.select_set(False)
 
 
 def selected():
-    return [key["f"] for key in json.loads(timeline.keys_json(bpy.context)) if key["s"]]
+    return [key["f"] for key in timeline.keys(bpy.context) if key["s"]]
 
 
 check(bpy.ops.anim.native_key_select(frames="10") == {'FINISHED'} and selected() == [10],
