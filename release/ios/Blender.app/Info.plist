@@ -26,9 +26,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>LSHandlerRank</key>
-			<string>Owner</string>
-			<key>LSIsAppleDefaultForType</key>
-			<true/>
+			<string>Default</string>
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>org.blenderfoundation.blender.file</string>
@@ -124,7 +122,7 @@
 		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 	</array>
-	<key>UTExportedTypeDeclarations</key>
+	<key>UTImportedTypeDeclarations</key>
 	<array>
 		<dict>
 			<key>UTTypeConformsTo</key>
