@@ -42,6 +42,14 @@ def applies(action_id, tool="builtin.select_box"):
     return actions._BY_ID[action_id].applies(actions._State(bpy.context, tool))
 
 
+import os
+
+
+def tool_icon_exists(name):
+    """A tool's icon, as the toolbar shows it: `ops.mesh.inset` and the like."""
+    return os.path.exists(os.path.join(bpy.utils.system_resource('DATAFILES', path="icons"), name + ".dat"))
+
+
 # The registry itself.
 icons = bpy.types.UILayout.bl_rna.functions['prop'].parameters['icon'].enum_items.keys()
 for action in actions.ACTIONS:
@@ -51,7 +59,9 @@ for action in actions.ACTIONS:
     except KeyError:
         exists = False
     check(exists, f"{action.op} exists ({action.id})")
-    check(not action.icon or action.icon in icons, f"{action.icon} is a Blender icon")
+    check(bool(action.icon), f"{action.id} has an icon, as the strip shows icons")
+    check(action.icon in icons or (action.icon.startswith("ops.") and tool_icon_exists(action.icon)),
+          f"{action.icon} is a Blender icon or tool icon")
     check(action.group in actions.GROUPS, f"{action.id} has a known group")
     check(action.destructive == (action.group == "Delete"), f"{action.id}: destructive exactly in Delete")
     if action.menu:

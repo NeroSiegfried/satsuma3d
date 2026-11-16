@@ -142,6 +142,26 @@ final class RailState {
   var dialing = false
   /** The item under the finger while sliding. */
   var hovered: String?
+  /** The grouped item whose other tools show beside the rail while it is held, and the one of
+   * them under the finger. */
+  var flyout: String?
+  var flyoutHovered: String?
+  /** The frames of the flyout's items in the window, to tell which one is under the finger. */
+  private(set) var flyoutFrames: [String: CGRect] = [:]
+
+  func setFlyoutFrame(_ frame: CGRect?, for id: String) {
+    if flyoutFrames[id] != frame { flyoutFrames[id] = frame }
+  }
+
+  func flyoutItem(at point: CGPoint) -> String? {
+    guard flyout != nil else { return nil }
+    return flyoutFrames.first { $0.value.insetBy(dx: -6, dy: -4).contains(point) }?.key
+  }
+
+  func closeFlyout() {
+    flyout = nil
+    flyoutHovered = nil
+  }
   /** The rail following a drag, before it docks. */
   var dragOffset: CGFloat = 0
   /** Dragged away from its edge, the rail follows the finger to another. */
@@ -274,13 +294,14 @@ struct RailItemView: View {
         Capsule().fill(.clear).panelGlass(in: Capsule())
       }
     }
-    .overlay(alignment: .bottomTrailing) {
+    .background(alignment: .bottomTrailing) {
       if item.grouped {
-        Image(systemName: "arrowtriangle.down.fill")
-          .resizable()
-          .frame(width: 7, height: 7)
-          .foregroundStyle(selected ? Color.white : Color.secondary)
-          .padding(6)
+        /* More tools stacked under this one: a second edge peeking out behind it, as a deck of
+         * cards shows, rather than desktop Blender's corner arrow. */
+        Capsule()
+          .strokeBorder(Color.secondary.opacity(selected ? 0.55 : 0.45), lineWidth: 1.5)
+          .frame(width: 22, height: 10)
+          .offset(x: -6, y: 4)
           .accessibilityHidden(true)
       }
     }
@@ -430,43 +451,17 @@ struct Rail: View {
       if inside { label.show(item.title, item: item.id, rail: state, transient: false) }
       else { label.hoverEnded() }
     }
-    .contextMenu {
-      if item.grouped && state.listVisible && !state.pressSelecting { groupMenu(item) }
+    /* VoiceOver picks a group's other tools from the actions rotor, as a hold shows them. */
+    .accessibilityActions {
+      ForEach(item.group.filter { $0.id != item.id }) { child in
+        Button(child.title) { pick(child, closing: false) }
+      }
     }
     .accessibilityLabel(item.title)
     .accessibilityIdentifier(item.id)
     .accessibilityAddTraits(item.id == active ? .isSelected : [])
-    .accessibilityHint(item.grouped ? "Touch and hold for related tools" :
+    .accessibilityHint(item.grouped ? "Touch and hold, then slide to a related tool" :
                        brush ? "Touch and hold to choose from all brushes" : "")
-  }
-
-  /** A group's tools, while the list is open; an empty menu is not shown. */
-  @ViewBuilder
-  private func groupMenu(_ item: RailItem) -> some View {
-    ForEach(Array(groupSections(item).enumerated()), id: \.offset) { _, section in
-      Section {
-        ForEach(section) { child in
-          Button {
-            pick(child, closing: false)
-          } label: {
-            Label {
-              Text(child.title)
-            } icon: {
-              if let image = child.image { Image(uiImage: image) }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  private func groupSections(_ item: RailItem) -> [[RailItem]] {
-    var sections: [[RailItem]] = [[]]
-    for (index, child) in item.group.enumerated() {
-      if item.groupBreaks.contains(index) && !sections[sections.count - 1].isEmpty { sections.append([]) }
-      sections[sections.count - 1].append(child)
-    }
-    return sections
   }
 
   /* -------------------------------------------------------------------- */
@@ -500,11 +495,14 @@ struct Rail: View {
     pick(item, closing: state.expanded && !state.docked)
   }
 
-  /** A hold opens the closed rail to slide to another item. An open list scrolls instead, and
-   * a group's own menu takes the hold there. */
+  /** A hold opens the closed rail to slide to another item, or a group's other tools beside it.
+   * An open list scrolls instead, except from a group, whose tools a hold shows there too. */
   private func canBeginPress(on item: RailItem) -> Bool {
-    !state.listVisible
+    !state.listVisible || item.grouped
   }
+
+  /** Where titles are not already beside the items, a hold names what is under the finger. */
+  private var namesOnHold: Bool { brush || edge.horizontal || !state.expanded }
 
   /** Holding an item opens the rail; the finger slides to another and chooses it on release. */
   private func pressSelect(_ item: RailItem) -> some Gesture {
@@ -525,10 +523,37 @@ struct Rail: View {
             return
           }
           state.hovered = item.id
-          withAnimation(animation) { state.expanded = true }
+          if item.grouped {
+            /* The group's tools at once, beside the rail, while the finger is still down. */
+            Haptics.selection()
+            label.hide()
+            withAnimation(animation) { state.flyout = item.id }
+          }
+          else {
+            if namesOnHold { label.show(item.title, item: item.id, rail: state, transient: false) }
+            withAnimation(animation) { state.expanded = true }
+          }
         }
         if state.dialing { return }
-        if let drag, let id = state.item(at: drag.location) { state.hovered = id }
+        guard let drag else { return }
+        if let child = state.flyoutItem(at: drag.location) {
+          if state.flyoutHovered != child { Haptics.selection() }
+          state.flyoutHovered = child
+          return
+        }
+        state.flyoutHovered = nil
+        if let id = state.item(at: drag.location), id != state.hovered {
+          state.hovered = id
+          guard let over = items.first(where: { $0.id == id }) else { return }
+          if over.grouped {
+            label.hide()
+            withAnimation(animation) { state.flyout = id }
+          }
+          else {
+            withAnimation(animation) { state.closeFlyout() }
+            if namesOnHold { label.show(over.title, item: over.id, rail: state, transient: false) }
+          }
+        }
       }
       .onEnded { value in
         guard state.pressSelecting, case .second(true, let drag) = value else { return }
@@ -549,12 +574,24 @@ struct Rail: View {
     /* The item's tap ends with the hold: it is not one. */
     state.suppressTap = true
     DispatchQueue.main.async { state.suppressTap = false }
+    if let flyout = state.flyout {
+      let child = point.flatMap { state.flyoutItem(at: $0) } ?? state.flyoutHovered
+      let group = items.first { $0.id == flyout }?.group ?? []
+      withAnimation(animation) { state.closeFlyout() }
+      if let picked = group.first(where: { $0.id == child }) {
+        state.hovered = nil
+        pick(picked, closing: true)
+        label.show(picked.title, item: flyout, rail: state, transient: true)
+        return
+      }
+    }
     let id = point.flatMap { state.item(at: $0) } ?? state.hovered
     state.hovered = nil
     if let item = items.first(where: { $0.id == id }) {
       pick(item, closing: true)
     }
     else {
+      label.hide()
       withAnimation(animation) { state.expanded = false }
     }
   }
@@ -998,6 +1035,7 @@ struct ToolRails: View {
             .transition(.opacity.combined(with: .scale(scale: 0.9)))
         }
         railLabel(safe: safe, layout: layout, frame: proxy.frame(in: .global), size: proxy.size)
+        railFlyout(items: toolItems, safe: safe, layout: layout, frame: proxy.frame(in: .global), size: proxy.size)
         if let hint = model.dragHint {
           /* Below the bar: nothing else shows the command is waiting for a drag. */
           DragHintBadge(hint: hint) { wm_apple_ios_window_send_key(model.window, "ESC") }
@@ -1157,6 +1195,76 @@ struct ToolRails: View {
         sidebarPosition = min(1, max(0, (sidebarPosition >= 0 ? sidebarPosition : 0.5) +
                                        (direction == .increment ? -0.1 : 0.1)))
       }
+  }
+
+  /** A held group's tools beside the tool rail, level with it: the finger slides onto one and
+   * lifts to choose it, each named, the active one marked. */
+  @ViewBuilder
+  private func railFlyout(items: [RailItem], safe: CGRect, layout: RailLayout, frame: CGRect,
+                          size: CGSize) -> some View
+  {
+    if let id = tools.flyout, let item = items.first(where: { $0.id == id }), let anchor = tools.frames[id] {
+      let scaleX = frame.width > 0 ? size.width / frame.width : 1
+      let scaleY = frame.height > 0 ? size.height / frame.height : 1
+      let itemX = (anchor.midX - frame.minX) * scaleX, itemY = (anchor.midY - frame.minY) * scaleY
+      let bounds = safe.insetBy(dx: 8, dy: 8)
+      let rowHeight: CGFloat = 48, width: CGFloat = 230
+      let height = CGFloat(item.group.count) * rowHeight + 12
+      let railEdge = layout.toolEdge
+      let center: CGPoint = {
+        switch railEdge {
+          case .leading, .trailing:
+            let toward: CGFloat = railEdge == .trailing ? -1 : 1
+            let x = layout.toolCenter.x + toward * (layout.toolWidth / 2 + 10 + width / 2)
+            return CGPoint(x: x, y: min(max(itemY, bounds.minY + height / 2), bounds.maxY - height / 2))
+          case .top, .bottom:
+            let toward: CGFloat = railEdge == .top ? 1 : -1
+            let y = layout.toolCenter.y + toward * (layout.toolHeight / 2 + 10 + height / 2)
+            return CGPoint(x: min(max(itemX, bounds.minX + width / 2), bounds.maxX - width / 2), y: y)
+        }
+      }()
+      VStack(spacing: 0) {
+        ForEach(item.group) { child in
+          let hovered = tools.flyoutHovered == child.id
+          let current = child.id == tools.active(model.activeTool)
+          HStack(spacing: 10) {
+            if let image = child.image {
+              Image(uiImage: image)
+                .renderingMode(image.renderingMode == .alwaysOriginal ? .original : .template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 24, height: 24)
+            }
+            Text(child.title)
+              .font(.system(size: 17))
+              .lineLimit(1)
+            Spacer(minLength: 0)
+            if current {
+              Image(systemName: "checkmark")
+                .font(.system(size: 13, weight: .semibold))
+            }
+          }
+          .foregroundStyle(hovered ? Color.white : Color.primary)
+          .padding(.horizontal, 14)
+          .frame(height: rowHeight)
+          .background {
+            if hovered { Capsule().fill(Color(uiColor: .systemBlue)) }
+          }
+          .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+            tools.setFlyoutFrame($0, for: child.id)
+          }
+          .onDisappear { tools.setFlyoutFrame(nil, for: child.id) }
+          .accessibilityHidden(true)
+        }
+      }
+      .padding(6)
+      .frame(width: width)
+      .panelGlass(in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+      .position(center)
+      .allowsHitTesting(false)
+      .accessibilityIdentifier("blender.toolbar.group")
+      .transition(.opacity.combined(with: .scale(scale: 0.92)))
+    }
   }
 
   @ViewBuilder

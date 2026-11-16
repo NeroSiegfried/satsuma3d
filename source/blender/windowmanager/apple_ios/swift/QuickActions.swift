@@ -141,23 +141,33 @@ struct QuickActionButton: View {
   }
 }
 
-/** A quick action in the bar: its title, as an edit menu's. */
+/** A quick action in the bar: its icon, which a hold names; its title where it has no icon. */
 struct QuickActionBarItem: View {
   let action: QuickAction
   let model: ShellModel
+  /** Held long enough to name it: the hold shows its name instead of running it. */
+  @State private var naming = false
+  @State private var heldToName = false
 
   private var destructive: Bool {
     action.icon == "TRASH" || action.operatorName.hasSuffix(".delete")
   }
 
+  /** Shown as its icon, where it has one: axis keys and actions without one keep their text. */
+  private var image: UIImage? { action.axis ? nil : action.image }
+
   var body: some View {
     Button {
+      if heldToName {
+        heldToName = false
+        return
+      }
       action.run(in: model)
     } label: {
       label
-        .padding(.horizontal, action.axis ? 12 : 14)
+        .padding(.horizontal, action.axis ? 12 : (image != nil ? 10 : 14))
         .frame(height: ShellMetrics.barCircle)
-        .frame(minWidth: action.axis ? 52 : nil)
+        .frame(minWidth: action.axis ? 52 : (image != nil ? ShellMetrics.barCircle : nil))
         .background {
           if action.selected {
             Capsule().fill(action.axis ? action.axisColor : Color(uiColor: .systemBlue))
@@ -166,11 +176,38 @@ struct QuickActionBarItem: View {
         .contentShape(Capsule())
     }
     .buttonStyle(QuickActionPressStyle(shape: Capsule()))
+    /* A hold names it, in a popover the bar's scrolling cannot clip; lifting the finger ends it. */
+    .simultaneousGesture(
+      LongPressGesture(minimumDuration: 0.4, maximumDistance: 12)
+        .onEnded { _ in
+          guard image != nil else { return }
+          Haptics.selection()
+          heldToName = true
+          naming = true
+        }
+        .sequenced(before: DragGesture(minimumDistance: 0))
+        .onEnded { _ in
+          naming = false
+          /* The button may or may not see the lift as a tap: either way, the next one is a tap. */
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { heldToName = false }
+        })
+    .popover(isPresented: $naming, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
+      Text(action.title)
+        .font(.subheadline)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .presentationCompactAdaptation(.popover)
+    }
+    .help(action.title)
     .accessibilityLabel(action.axis ? "\(action.key) axis constraint" : action.title)
     .accessibilityValue(action.axis ? (action.selected ? "On" : "Off") : "")
     .accessibilityAddTraits(action.selected ? .isSelected : [])
     .accessibilityIdentifier(action.id.hasPrefix("action:") ? "blender.action.\(action.id.dropFirst("action:".count))" :
                                action.operatorName)
+  }
+
+  private var tint: Color {
+    action.selected ? Color.white : destructive ? Color(uiColor: .systemRed) : Color.primary
   }
 
   @ViewBuilder
@@ -187,12 +224,19 @@ struct QuickActionBarItem: View {
       }
       .foregroundStyle(action.selected ? Color.black : action.axisColor)
     }
+    else if let image {
+      Image(uiImage: image)
+        .renderingMode(image.renderingMode == .alwaysOriginal ? .original : .template)
+        .resizable()
+        .scaledToFit()
+        .frame(width: 24, height: 24)
+        .foregroundStyle(tint)
+    }
     else {
       Text(action.title)
         .font(.system(size: 17))
         .lineLimit(1)
-        .foregroundStyle(action.selected ? Color.white :
-                           destructive ? Color(uiColor: .systemRed) : Color.primary)
+        .foregroundStyle(tint)
     }
   }
 }
@@ -347,11 +391,12 @@ struct QuickActionsRow: View {
     actionsBarChrome + min(ceil(actionItemsWidth), max(0, maxWidth - actionsBarChrome))
   }
 
-  /** The actions as an edit menu's: titles between hairlines, deleting in red. */
+  /** The actions: icons, a hold naming each, deleting in red; titles between hairlines where there is no icon. */
   private var actionItems: some View {
     HStack(spacing: 0) {
       ForEach(Array(actions.enumerated()), id: \.element.id) { index, action in
-        if index > 0 {
+        /* Hairlines part titles, as an edit menu's; icons stand apart by themselves. */
+        if index > 0 && (action.image == nil || actions[index - 1].image == nil) {
           Rectangle()
             .fill(Color.primary.opacity(0.2))
             .frame(width: 1, height: 22)
