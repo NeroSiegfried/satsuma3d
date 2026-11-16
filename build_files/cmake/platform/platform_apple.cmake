@@ -453,10 +453,13 @@ find_package(fmt REQUIRED)
 
 if(WITH_NATIVE_UI)
   # The runtimes for the protocol with a platform's interface, and `flatc` to generate its code:
-  # cross-compiled libraries carry the host's.
-  set(FLATBUFFERS_INCLUDE_DIRS ${LIBDIR}/flatbuffers/include)
-  set(FLATBUFFERS_SWIFT_DIR ${LIBDIR}/flatbuffers/swift)
-  set(FLATBUFFERS_FLATC ${LIBDIR}/flatbuffers/bin/flatc)
+  # cross-compiled libraries carry the host's. The macOS libraries have none, so a macOS build
+  # checking the bridge can point FLATBUFFERS_ROOT at the iOS libraries' (headers and host `flatc`).
+  set(FLATBUFFERS_ROOT ${LIBDIR}/flatbuffers CACHE PATH "FlatBuffers for WITH_NATIVE_UI")
+  mark_as_advanced(FLATBUFFERS_ROOT)
+  set(FLATBUFFERS_INCLUDE_DIRS ${FLATBUFFERS_ROOT}/include)
+  set(FLATBUFFERS_SWIFT_DIR ${FLATBUFFERS_ROOT}/swift)
+  set(FLATBUFFERS_FLATC ${FLATBUFFERS_ROOT}/bin/flatc)
   if(NOT EXISTS ${FLATBUFFERS_FLATC})
     message(FATAL_ERROR "WITH_NATIVE_UI needs FlatBuffers, not found in the libraries: ${FLATBUFFERS_FLATC}")
   endif()
