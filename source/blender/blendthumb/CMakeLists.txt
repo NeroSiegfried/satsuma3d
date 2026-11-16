@@ -71,6 +71,7 @@ elseif(APPLE)
     setup_platform_linker_libs(blender-thumbnailer)
     target_link_libraries(blender-thumbnailer
       bf_blenlib
+      bf_blenloader_core
       # Avoid linker error about undefined _main symbol.
       "-e _NSExtensionMain"
       "-framework QuickLookThumbnailing"

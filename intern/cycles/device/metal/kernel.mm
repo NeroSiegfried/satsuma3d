@@ -48,7 +48,8 @@ struct ShaderCache {
     // TODO: Look into tuning for DEVICE_KERNEL_INTEGRATOR_INTERSECT_DEDICATED_LIGHT and
     // DEVICE_KERNEL_INTEGRATOR_SHADE_DEDICATED_LIGHT, DEVICE_KERNEL_INTEGRATOR_SHADE_LIGHT_*.
 #  ifndef WITH_APPLE_CROSSPLATFORM
-    if (MetalInfo::get_device_vendor(mtlDevice) == METAL_GPU_APPLE) {
+    /* Every Metal device Cycles supports is an Apple GPU: upstream removed the vendor query. */
+    {
       switch (MetalInfo::get_apple_gpu_architecture(mtlDevice)) {
         default:
         case APPLE_M3:
