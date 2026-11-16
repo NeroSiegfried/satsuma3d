@@ -2233,6 +2233,48 @@ void bridge_transform_build(const Scene *scene,
   }
 }
 
+/** One context action from `bl_ui.native_actions` as a button keyed `action:<id>`: dimmed when it
+ * cannot run, tinted when destructive, pressed while what it toggles is on. One that opens a menu
+ * or activates a tool names it as its operator's `name`, `WM_OT_call_menu` or
+ * `WM_OT_tool_set_by_id`, so an interface can open the menu natively. */
+void bridge_action_add(views::ViewBuilder &builder,
+                       const NodeId parent,
+                       const io::serialize::DictionaryValue &action)
+{
+  const std::shared_ptr<io::serialize::Value> *enabled = action.lookup("enabled");
+  builder.add(parent,
+              "action:" + std::string(bridge_text(action, "action")),
+              [&](ViewBuffer &buffer, NodeFields &fields) {
+                fields.label = bridge_text(action, "title");
+                fields.icon = bridge_text(action, "icon");
+                /* Enabled unless it says otherwise, as the strip's items always can run. */
+                fields.enabled = enabled == nullptr || bridge_flag(action, "enabled");
+                const StringRef menu = bridge_text(action, "menu");
+                const StringRef tool = bridge_text(action, "tool");
+                const StringRef name = !menu.is_empty() ? menu : tool;
+                flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<views::protocol::Param>>>
+                    params;
+                if (!name.is_empty()) {
+                  const flatbuffers::Offset<views::protocol::Param> param =
+                      views::protocol::CreateParamDirect(
+                          buffer,
+                          "name",
+                          views::protocol::Value::TextValue,
+                          views::protocol::CreateTextValueDirect(buffer, std::string(name).c_str())
+                              .Union());
+                  params = buffer.CreateVector(&param, 1);
+                }
+                return views::protocol::CreateButton(
+                    buffer,
+                    bridge_flag(action, "destructive") ? views::protocol::ButtonStyle::Destructive :
+                                                         views::protocol::ButtonStyle::Normal,
+                    buffer.CreateString(std::string(bridge_text(action, "operator"))),
+                    params,
+                    0,
+                    bridge_flag(action, "selected"));
+              });
+}
+
 /** Quick actions for the mode, tool and selection, as `bl_ui.native_actions` chooses them; or
  * the axes a move, turn or scale running is constrained to. */
 void bridge_actions_build(bContext *C, const char *tool, views::ViewBuilder &builder, const NodeId top)
@@ -2266,24 +2308,121 @@ void bridge_actions_build(bContext *C, const char *tool, views::ViewBuilder &bui
     return;
   }
   for (const std::shared_ptr<Value> &item : array->elements()) {
-    const DictionaryValue *action = item->as_dictionary_value();
-    if (action == nullptr) {
-      continue;
+    if (const DictionaryValue *action = item->as_dictionary_value()) {
+      bridge_action_add(builder, row, *action);
     }
-    builder.add(row,
-                "action:" + std::string(bridge_text(*action, "action")),
-                [&](ViewBuffer &buffer, NodeFields &fields) {
-                  fields.label = bridge_text(*action, "title");
-                  fields.icon = bridge_text(*action, "icon");
-                  return views::protocol::CreateButtonDirect(
-                      buffer,
-                      views::protocol::ButtonStyle::Normal,
-                      bridge_text(*action, "operator").data(),
-                      nullptr,
-                      nullptr,
-                      bridge_flag(*action, "selected"));
-                });
   }
+}
+
+/** The surfaces of `bl_ui.native_actions` beyond the strip, which the `actions` view shows. */
+constexpr const char *bridge_action_surfaces[] = {"palette", "long_press", "radial"};
+
+/** The `actions` view: one surface of the context actions, by its `surface` parameter, built only
+ * while the interface shows it. The palette is a group per action group, in order; the long-press
+ * menu is the groups `section:fixed` and `section:actions` and, where the mode has a context menu, a `more`
+ * button that opens it; the radial is its slots in order. Invoking `action:<id>` runs one. */
+void bridge_actions_view_build(bContext *C,
+                               const views::Params &params,
+                               views::ViewData * /*data*/,
+                               views::ViewBuilder &builder)
+{
+  using namespace io::serialize;
+  const std::string_view surface = params.text("surface").value_or("palette");
+  const NodeId top = builder.top("actions", [&](ViewBuffer &buffer, NodeFields &fields) {
+    fields.label = surface;
+    return views::protocol::CreateGroup(buffer);
+  });
+  if (std::find_if(std::begin(bridge_action_surfaces), std::end(bridge_action_surfaces), [&](const char *name) {
+        return surface == name;
+      }) == std::end(bridge_action_surfaces))
+  {
+    return;
+  }
+  const BridgeContextStore context_store = bridge_context_push_view3d(C);
+  if (CTX_wm_area(C) == nullptr) {
+    bridge_context_pop(C, context_store);
+    return;
+  }
+  const bToolRef *tool = bridge_active_tool(C);
+  const std::string expression = "bl_ui.native_actions." + std::string(surface) + "(bpy.context, \"" +
+                                 bridge_json_escape(tool ? tool->idname : "") + "\")";
+  const std::shared_ptr<Value> value = bridge_python_value(C, "actions", expression.c_str());
+  bridge_context_pop(C, context_store);
+  if (!value) {
+    return;
+  }
+  const auto group_add = [&](const std::string &key, const StringRef label, const ArrayValue &items) {
+    const NodeId group = builder.add(top, key, [&](ViewBuffer &buffer, NodeFields &fields) {
+      fields.label = label;
+      return views::protocol::CreateGroup(buffer, views::protocol::Layout::Column);
+    });
+    for (const std::shared_ptr<Value> &item : items.elements()) {
+      if (const DictionaryValue *action = item->as_dictionary_value()) {
+        bridge_action_add(builder, group, *action);
+      }
+    }
+  };
+  if (const ArrayValue *array = value->as_array_value()) {
+    for (const std::shared_ptr<Value> &item : array->elements()) {
+      const DictionaryValue *entry = item->as_dictionary_value();
+      if (entry == nullptr) {
+        continue;
+      }
+      const std::shared_ptr<Value> *items = entry->lookup("items");
+      const ArrayValue *items_array = items ? (*items)->as_array_value() : nullptr;
+      if (items_array) {
+        /* A palette group. */
+        const StringRef name = bridge_text(*entry, "group");
+        group_add("group:" + std::string(name), name, *items_array);
+      }
+      else {
+        /* A radial slot. */
+        bridge_action_add(builder, top, *entry);
+      }
+    }
+    return;
+  }
+  if (const DictionaryValue *menu = value->as_dictionary_value()) {
+    for (const char *section : {"fixed", "actions"}) {
+      const std::shared_ptr<Value> *items = menu->lookup(section);
+      if (const ArrayValue *items_array = items ? (*items)->as_array_value() : nullptr) {
+        /* Not keyed by the bare name: `actions` is the view's top node. */
+        group_add("section:" + std::string(section), section, *items_array);
+      }
+    }
+    const StringRef more = bridge_text(*menu, "more");
+    if (!more.is_empty()) {
+      builder.add(top, "more", [&](ViewBuffer &buffer, NodeFields &fields) {
+        fields.label = IFACE_("More...");
+        const flatbuffers::Offset<views::protocol::Param> param = views::protocol::CreateParamDirect(
+            buffer,
+            "name",
+            views::protocol::Value::TextValue,
+            views::protocol::CreateTextValueDirect(buffer, std::string(more).c_str()).Union());
+        return views::protocol::CreateButton(buffer,
+                                             views::protocol::ButtonStyle::Normal,
+                                             buffer.CreateString("WM_OT_call_menu"),
+                                             buffer.CreateVector(&param, 1));
+      });
+    }
+  }
+}
+
+views::CommandResult bridge_actions_view_command(bContext *C,
+                                                 const views::Params & /*params*/,
+                                                 views::ViewData * /*data*/,
+                                                 const views::protocol::Command &command,
+                                                 std::string &r_error)
+{
+  const std::string_view target = command.target()->string_view();
+  if (command.op() != views::protocol::Op::Invoke || !StringRef(target).startswith("action:")) {
+    /* `more` and `action:rename` are the interface's own: it opens the menu, or asks for the
+     * name, itself. */
+    r_error = "Actions are only invoked";
+    return views::CommandResult::Failed;
+  }
+  bridge_setting_execute(C, BridgeSettingCommand{"native_action", std::string(target.substr(7))});
+  return views::CommandResult::Done;
 }
 
 /** The text object being typed into: `text`, which `Add` types into and `Remove` deletes from, and
@@ -3618,6 +3757,14 @@ void WM_native_ui_views_register()
   toolbar.command = bridge_toolbar_view_command;
   toolbar.live = bridge_toolbar_view_live;
   view_type_add(std::move(toolbar));
+
+  ViewType actions;
+  actions.name = "actions";
+  /* Runs Python, as the toolbar's strip does: on any change, ten times a second at most. */
+  actions.min_interval = 0.1;
+  actions.build = bridge_actions_view_build;
+  actions.command = bridge_actions_view_command;
+  view_type_add(std::move(actions));
 
   ViewType brushes;
   brushes.name = "brushes";

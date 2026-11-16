@@ -132,6 +132,11 @@ check(len(menu["actions"]) <= actions.LONG_PRESS_ACTIONS and
       not {item["title"] for item in menu["actions"]} & {"Duplicate", "Delete"},
       "Long press adds up to five other actions: " + str(menu["actions"]))
 check(menu["more"] == "VIEW3D_MT_object_context_menu", "More... opens the object context menu")
+menu = actions.long_press(bpy.context, "builtin.select_box")
+check(not any(item["group"] == "Selection" for item in menu["actions"]) and menu["actions"][0]["title"] == "Edit",
+      "The selection tools' lead stays in the strip, out of the long-press menu: " + str(menu["actions"]))
+check(not any(item["group"] == "Selection" for item in actions.radial(bpy.context, "builtin.select_box")),
+      "The radial has no selection actions")
 radial = actions.radial(bpy.context, "builtin.move")
 check(len(radial) <= actions.RADIAL_SLOTS and not any(item["destructive"] for item in radial),
       "The radial has up to eight slots and nothing destructive")

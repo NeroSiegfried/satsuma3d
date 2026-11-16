@@ -627,6 +627,14 @@ def _strip(state):
     return available
 
 
+def _commands(state):
+    """The strip's actions for the long-press menu and the radial: the mode's own commands in the
+    registry's order, without the selection tools' lead or the selection actions it brings."""
+    available = [action for action in _strip(state) if action.group != "Selection"]
+    available.sort(key=lambda action: (1 if action.destructive else 0, _INDEX[action.id]))
+    return available
+
+
 def actions(context, tool):
     """The collapsed strip: the in-scope actions that can run now and may show in the strip."""
     state = _State(context, tool)
@@ -644,8 +652,8 @@ def palette(context, tool):
 
 
 def long_press(context, tool):
-    """The long-press menu: a fixed top section for the mode, then the top in-scope actions that are
-    not already in it, then "More..." for Blender's own context menu of the mode."""
+    """The long-press menu: a fixed top section for the mode, then the mode's top commands that are
+    not already in it (never selection actions), then "More..." for Blender's own context menu."""
     state = _State(context, tool)
     fixed = []
     taken = set()
@@ -662,7 +670,7 @@ def long_press(context, tool):
                 fixed.append(_item(action, state, _can_run(action, state)))
         except (AttributeError, KeyError, RuntimeError, ReferenceError):
             continue
-    middle = [action for action in _strip(state) if action.op not in taken][:LONG_PRESS_ACTIONS]
+    middle = [action for action in _commands(state) if action.op not in taken][:LONG_PRESS_ACTIONS]
     return {
         "fixed": fixed,
         "actions": [_item(action, state) for action in middle],
@@ -674,7 +682,7 @@ def radial(context, tool):
     """The Pencil squeeze radial's default slots: the top in-scope actions that can run now, never a
     destructive one. The shell lets the owner pin slots over these."""
     state = _State(context, tool)
-    chosen = [action for action in _strip(state) if not action.destructive][:RADIAL_SLOTS]
+    chosen = [action for action in _commands(state) if not action.destructive][:RADIAL_SLOTS]
     return [_item(action, state) for action in chosen]
 
 
