@@ -154,6 +154,19 @@ check(answer["level"] == "info" and "Body parented to Rig with automatic weights
 check(reveal.after_operator(bpy.context, "OBJECT_OT_parent_set", "bpy.ops.object.parent_set(type='OBJECT')")["show"]
       == "operation", "Plain parenting keeps its settings")
 
+# 5. The bridge evaluates `bl_ui.native_<name>....` after only `import bl_ui`: every such module it
+# names must be loaded by `bl_ui` itself (native_reveal was not, so on the iPad it never ran).
+import os
+import re
+import bl_ui
+here = os.path.dirname(os.path.abspath(__file__))
+bridge = os.path.join(here, "..", "..", "source", "blender", "windowmanager", "intern", "wm_native_ui.cc")
+if os.path.exists(bridge):
+    names = sorted(set(re.findall(r"bl_ui\.(native_[a-z_]+)", open(bridge, encoding="utf-8").read())))
+    check(len(names) >= 5, "Bridge modules found: %s" % names)
+    missing = [name for name in names if not hasattr(bl_ui, name)]
+    check(not missing, "Every module the bridge calls is loaded by bl_ui: missing %s" % missing)
+
 counts = collections.Counter(shows(idname) for idname in operators)
 print("reveal: " + json.dumps(counts, sort_keys=True))
 print('PASS: native reveal ' + json.dumps(checks[:4] + ["%d table rows" % len(TABLE)]))

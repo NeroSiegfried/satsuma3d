@@ -2163,7 +2163,15 @@ std::shared_ptr<io::serialize::Value> bridge_python_value(bContext *C,
 #ifdef WITH_PYTHON
   BridgeTimer timer(part);
   const char *imports[] = {"bpy", "bl_ui", nullptr};
-  return BPY_run_string_as_value(C, imports, expression, nullptr);
+  std::shared_ptr<io::serialize::Value> value = BPY_run_string_as_value(C, imports, expression, nullptr);
+  if (!value) {
+    /* Python's error goes to the console, which a device does not keep: say it in the session's
+     * log, or a whole feature fails without a trace (Stage 2A's reveal rules did, for a day). */
+    WM_native_ui_session_log("error", (std::string("python ") + part + " failed: " +
+                                       std::string(expression).substr(0, 120))
+                                          .c_str());
+  }
+  return value;
 #else
   UNUSED_VARS(C, part, expression);
   return nullptr;

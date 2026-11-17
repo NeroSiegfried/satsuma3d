@@ -19,6 +19,7 @@ _modules = [
     "native_intents",
     "native_panels",
     "native_render",
+    "native_reveal",
     "native_settings",
     "native_timeline",
     "native_view_state",
