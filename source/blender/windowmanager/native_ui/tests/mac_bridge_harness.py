@@ -355,6 +355,27 @@ def enter(mode):
         bpy.ops.object.mode_set(mode='POSE')
 
 
+def path_of(top):
+    """The context path the tab sends (ROUND5 7B): its elements' names and icons."""
+    node = next((n for n in (top or {}).get("children", []) if n["key"] == "path"), None)
+    return [(n.get("label"), n.get("icon")) for n in (node or {}).get("children", [])]
+
+
+def expected_path_end(tab):
+    """The name the last element of a tab's context path must have, where the tab names it: the
+    active object's, its data's or its material's; None where the tab is not checked by name."""
+    ob = bpy.context.view_layer.objects.active
+    if ob is None:
+        return None
+    if tab in {"OBJECT", "MODIFIER", "PARTICLES", "PHYSICS", "CONSTRAINT"}:
+        return ob.name
+    if tab == "DATA" and ob.data is not None:
+        return ob.data.name
+    if tab == "MATERIAL":
+        return ob.active_material.name if ob.active_material else ob.name
+    return None
+
+
 def tick_tabs():
     global step
     try:
@@ -378,7 +399,23 @@ def tick_tabs():
             mode = TAB_MODES[(step - 5) // 4]
             trees = {tab: tree(sub) for tab, sub in subs.items()}
             missing = [tab for tab, top in trees.items() if top is None]
+            # Every tab but Tool and the sidebar's (which have none in Blender) sends Blender's
+            # context path, ending in what the tab shows (ROUND5 7B).
+            paths = {tab: path_of(top) for tab, top in trees.items() if top}
+            path_problems = []
+            for tab, path in paths.items():
+                if tab == "TOOL" or tab.startswith("SIDEBAR:"):
+                    if path:
+                        path_problems.append("%s sends a path %s" % (tab, path))
+                    continue
+                if not path:
+                    path_problems.append("%s sends no path" % tab)
+                    continue
+                expected = expected_path_end(tab)
+                if expected is not None and path[-1][0] != expected:
+                    path_problems.append("%s ends in %r, not %r" % (tab, path[-1][0], expected))
             entry = {"name": mode, "context": bpy.context.mode, "missing": missing,
+                     "paths": paths, "path_problems": path_problems,
                      "nodes": {tab: count(top) for tab, top in trees.items() if top},
                      "item": labels(trees.get("SIDEBAR:Item") or {}),
                      "item_tree": trees.get("SIDEBAR:Item"),
@@ -386,6 +423,10 @@ def tick_tabs():
             report["steps"].append(entry)
             if missing:
                 report["error"] = "No view for " + ", ".join(missing) + " in " + mode
+                finish("error")
+                return None
+            if path_problems:
+                report["error"] = "Context path in " + mode + ": " + "; ".join(path_problems)
                 finish("error")
                 return None
             if mode == TAB_MODES[-1]:

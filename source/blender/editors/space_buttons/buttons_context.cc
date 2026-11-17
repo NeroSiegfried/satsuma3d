@@ -860,6 +860,24 @@ void ED_buttons_native_context_prepare(const bContext *C, SpaceProperties *sbuts
   buttons_context_compute(C, sbuts);
 }
 
+static bool buttons_context_path_element_drawn(const SpaceProperties *sbuts, const PointerRNA *ptr);
+
+Vector<PointerRNA> ED_buttons_native_context_path(const SpaceProperties *sbuts)
+{
+  Vector<PointerRNA> elements;
+  const ButsContextPath *path = static_cast<const ButsContextPath *>(sbuts->path);
+  /* Blender draws no path on the Tool tab, see #buttons_panel_context_poll. */
+  if (path == nullptr || sbuts->mainb == BCONTEXT_TOOL) {
+    return elements;
+  }
+  for (int i = 0; i < path->len; i++) {
+    if (buttons_context_path_element_drawn(sbuts, &path->ptr[i])) {
+      elements.append(path->ptr[i]);
+    }
+  }
+  return elements;
+}
+
 bool ED_buttons_should_sync_with_outliner(const bContext *C,
                                           const SpaceProperties *sbuts,
                                           ScrArea *area)
@@ -1267,6 +1285,35 @@ static bool buttons_panel_context_poll(const bContext *C, PanelType * /*pt*/)
   return sbuts->mainb != BCONTEXT_TOOL;
 }
 
+/** Whether the context path shows \a ptr: not the scene and view layer on the tabs that are not
+ * theirs, to save space; nothing missing. */
+static bool buttons_context_path_element_drawn(const SpaceProperties *sbuts, const PointerRNA *ptr)
+{
+  if (!ELEM(sbuts->mainb,
+            BCONTEXT_RENDER,
+            BCONTEXT_OUTPUT,
+            BCONTEXT_SCENE,
+            BCONTEXT_VIEW_LAYER,
+            BCONTEXT_WORLD,
+            BCONTEXT_STRIP,
+            BCONTEXT_STRIP_MODIFIER) &&
+      ptr->type == RNA_Scene)
+  {
+    return false;
+  }
+  if (!ELEM(sbuts->mainb,
+            BCONTEXT_RENDER,
+            BCONTEXT_OUTPUT,
+            BCONTEXT_SCENE,
+            BCONTEXT_VIEW_LAYER,
+            BCONTEXT_WORLD) &&
+      ptr->type == RNA_ViewLayer)
+  {
+    return false;
+  }
+  return ptr->data != nullptr;
+}
+
 static void buttons_panel_context_draw(const bContext *C, Panel *panel)
 {
   SpaceProperties *sbuts = CTX_wm_space_properties(C);
@@ -1283,31 +1330,7 @@ static void buttons_panel_context_draw(const bContext *C, Panel *panel)
   for (int i = 0; i < path->len; i++) {
     PointerRNA *ptr = &path->ptr[i];
 
-    /* Skip scene and view layer to save space. */
-    if (!ELEM(sbuts->mainb,
-              BCONTEXT_RENDER,
-              BCONTEXT_OUTPUT,
-              BCONTEXT_SCENE,
-              BCONTEXT_VIEW_LAYER,
-              BCONTEXT_WORLD,
-              BCONTEXT_STRIP,
-              BCONTEXT_STRIP_MODIFIER) &&
-        ptr->type == RNA_Scene)
-    {
-      continue;
-    }
-    if (!ELEM(sbuts->mainb,
-              BCONTEXT_RENDER,
-              BCONTEXT_OUTPUT,
-              BCONTEXT_SCENE,
-              BCONTEXT_VIEW_LAYER,
-              BCONTEXT_WORLD) &&
-        ptr->type == RNA_ViewLayer)
-    {
-      continue;
-    }
-
-    if (ptr->data == nullptr) {
+    if (!buttons_context_path_element_drawn(sbuts, ptr)) {
       continue;
     }
 

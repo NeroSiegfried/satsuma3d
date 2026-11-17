@@ -180,6 +180,18 @@ final class PanelsModel {
     return "OBJECT"
   }
 
+  /** The tab's name, as Blender's Properties editor is titled by its tab ("Material"). */
+  var tabTitle: String? {
+    tabs.first { $0.value == currentTab }?.label.flatMap { $0.isEmpty ? nil : $0 }
+  }
+
+  /** Blender's context path under the tabs, such as the object and its material: each a label
+   * with its type's icon (ROUND5 7B). None on the Tool tab and the sidebar's. */
+  var pathItems: [NativeNode] {
+    guard let path = view.node("path") else { return [] }
+    return view.children(of: path)
+  }
+
   func selectTab(_ tab: String) {
     guard tab != currentTab else { return }
     chosenTab = tab
@@ -357,26 +369,188 @@ struct PanelRow: Identifiable {
 /** \name Properties
  * \{ */
 
+/**
+ * Blender's Properties editor (ROUND5 7B, decision 28): its tabs in a column at the leading edge,
+ * the active tab's name as the title, Blender's context path under it, and the tab's panels, each
+ * one box. The 3D Viewport sidebar's tabs, which have names and no icons, stay a strip above the
+ * panels, where a column of words would not fit.
+ */
 struct PropertiesPanel: View {
   let model: PanelsModel
   let close: () -> Void
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
 
   var body: some View {
+    let named = model.tabItems.contains { BlenderIcon.image($0.icon) == nil }
     VStack(spacing: 0) {
-      PanelHeader(title: model.hasContent ? model.title : "Properties", close: close) { EmptyView() }
-      PanelsTabs(model: model)
-        .padding(.horizontal, 8)
-        .frame(height: 44)
-      /* The Tool tab as Blender's: the active tool and the mode's Tool panels, brush and all. */
-      PanelsForm(model: model)
-        .padding(.top, 4)
+      PanelHeader(title: model.tabTitle ?? "Properties", close: close) { EmptyView() }
+      HStack(alignment: .top, spacing: 0) {
+        PropertiesTabColumn(model: model)
+          .zIndex(1)
+        VStack(spacing: 0) {
+          if named {
+            PanelsTabs(model: model, namedOnly: true)
+              .padding(.horizontal, 8)
+              .frame(height: 40)
+          }
+          PropertiesContextPath(model: model)
+          /* The Tool tab as Blender's: the active tool and the mode's Tool panels, brush and all. */
+          PanelsForm(model: model)
+        }
+      }
     }
     .tint(PanelStyle.tint)
   }
 }
 
+/**
+ * The Properties editor's tabs as Blender draws them: a column of icons at its leading edge, in
+ * Blender's order with a gap between its groups, the active one in the panels' lighter grey
+ * joining the content beside it (the accent in glass). The column scrolls where the tabs do not
+ * fit, and brings the active tab into view when it appears and whenever the tab or the tabs
+ * change (ROUND5 7B, report 28). A hold names a tab.
+ */
+struct PropertiesTabColumn: View {
+  let model: PanelsModel
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
+  /** The tab held, named beside it. */
+  @State private var held: String?
+  @State private var heldToName = false
+
+  static let width: CGFloat = 40
+
+  var body: some View {
+    let tabs = model.tabItems.filter { BlenderIcon.image($0.icon) != nil }
+    let glass = style == ShellStyle.glass.rawValue
+    ScrollViewReader { reader in
+      ScrollView(.vertical, showsIndicators: false) {
+        VStack(spacing: 2) {
+          ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
+            if index > 0 && tab.group != tabs[index - 1].group {
+              /* Blender's gap between its groups of tabs. */
+              Color.clear.frame(height: 8)
+            }
+            cell(tab, glass: glass)
+          }
+        }
+        .padding(.vertical, 4)
+      }
+      .scrollClipDisabled()
+      .onChange(of: model.currentTab + "|" + tabs.map(\.id).joined(separator: ","), initial: true) { _, _ in
+        /* On a tab chosen before the column existed too, such as by a reveal. */
+        let tab = model.currentTab
+        DispatchQueue.main.async { withMotion { reader.scrollTo(tab, anchor: .center) } }
+      }
+    }
+    .frame(width: Self.width)
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("Tabs")
+  }
+
+  private func cell(_ tab: PanelTab, glass: Bool) -> some View {
+    let selected = tab.id == model.currentTab
+    /* Rounded on its leading side; the active one reaches the column's trailing edge, where the
+     * content begins. */
+    let shape = UnevenRoundedRectangle(topLeadingRadius: glass ? 8 : ShellStyle.radius,
+                                       bottomLeadingRadius: glass ? 8 : ShellStyle.radius,
+                                       bottomTrailingRadius: glass ? 8 : 0, topTrailingRadius: glass ? 8 : 0,
+                                       style: .continuous)
+    return Button {
+      if heldToName {
+        heldToName = false
+        return
+      }
+      model.selectTab(tab.id)
+      Haptics.selection()
+    } label: {
+      Group {
+        if let image = BlenderIcon.image(tab.icon, themed: !(glass && selected)) {
+          Image(uiImage: image).resizable().scaledToFit().frame(width: 20, height: 20)
+        }
+      }
+      .foregroundStyle(selected && glass ? Color.white : .primary)
+      .frame(width: 36, height: 36)
+      .background(selected ? (glass ? Color.accentColor : ShellStyle.panel) : .clear, in: shape)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .frame(width: Self.width, alignment: glass ? .center : .trailing)
+    .overlay(alignment: .leading) {
+      if held == tab.id {
+        ShellNameLabel(text: tab.title)
+          .offset(x: Self.width + 6)
+          .transition(.opacity)
+      }
+    }
+    .simultaneousGesture(
+      LongPressGesture(minimumDuration: 0.4, maximumDistance: 12)
+        .onEnded { _ in
+          Haptics.selection()
+          heldToName = true
+          withAnimation(.easeOut(duration: 0.12)) { held = tab.id }
+        }
+        .sequenced(before: DragGesture(minimumDistance: 0))
+        .onEnded { _ in
+          withAnimation(.easeOut(duration: 0.12)) { held = nil }
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { heldToName = false }
+        })
+    .id(tab.id)
+    .zIndex(held == tab.id ? 1 : 0)
+    .accessibilityLabel(tab.title)
+    .accessibilityAddTraits(selected ? .isSelected : [])
+    .accessibilityIdentifier(tab.id)
+    .help(tab.title)
+  }
+}
+
+/**
+ * Blender's context path under the Properties editor's title (`buttons_panel_context_draw`): each
+ * element's icon and name, Blender's small arrow between them, the last one in semibold, such as
+ * `▣ Cube › ● Shirt`. It scrolls sideways when long; no name is cut. Blender's pin is left out:
+ * the detached editor Properties is built from keeps no pinned data-block between requests.
+ */
+struct PropertiesContextPath: View {
+  let model: PanelsModel
+
+  var body: some View {
+    let items = model.pathItems
+    if !items.isEmpty {
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 4) {
+          ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+            if index > 0 {
+              IconView(name: "RIGHTARROW", symbol: "chevron.right", size: 12)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.secondary)
+            }
+            HStack(spacing: 4) {
+              IconView(name: item.icon, size: 16)
+              if !item.label.isEmpty {
+                Text(item.label)
+                  .font(.subheadline.weight(index == items.count - 1 ? .semibold : .regular))
+                  .lineLimit(1)
+                  .fixedSize()
+              }
+            }
+            .foregroundStyle(.primary)
+            .accessibilityElement(children: .combine)
+          }
+        }
+        .padding(.horizontal, 12)
+      }
+      .softHorizontalScrollEdge()
+      .frame(height: 30)
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel("Context")
+      .accessibilityIdentifier("blender.properties.path")
+    }
+  }
+}
+
 struct PanelsTabs: View {
   let model: PanelsModel
+  /** Only the tabs named rather than drawn as icons, beside the Properties editor's column. */
+  var namedOnly = false
   /** Whether more tabs lie past the leading and trailing edges, which fade there. */
   @State private var more = (leading: false, trailing: false)
   @State private var content = CGRect.zero
@@ -390,10 +564,11 @@ struct PanelsTabs: View {
   }
 
   var body: some View {
+    let tabs = model.tabs.filter { !namedOnly || BlenderIcon.image($0.icon) == nil }
     ScrollViewReader { reader in
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 2) {
-          ForEach(model.tabs, id: \.value) { tab in
+          ForEach(tabs, id: \.value) { tab in
             let id = tab.value ?? ""
             let selected = id == model.currentTab
             Button {
@@ -488,18 +663,20 @@ struct PanelsForm: View {
   private var content: some View {
     /* Not lazy: lazy stacks stay empty when they first appear in a hidden, unsized panel. A
      * column exactly as wide as the form, so no row can widen it past its panel (ROUND5 7A). */
-    /* Spaced like an inset grouped table: a 44 point header right above its card. */
-    PanelColumn(spacing: 17) {
+    /* Blender's panels: boxes 8 points from the editor's edges and 6 apart (ROUND5 7B). */
+    PanelColumn(spacing: 6) {
       let style = model.textStyle
       ForEach(model.panels) { panel in
         if let style, panel.key == "panel:DATA_PT_font" {
           /* A text object's font, styles and spacing together; Blender's Font panel stays below
            * for the rest, such as its bold and italic fonts and text on a curve. */
-          VStack(alignment: .leading, spacing: 0) {
+          PanelBox {
             Text("Text")
-              .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-              .padding(.leading, 12)
+              .font(.subheadline.weight(.semibold))
+              .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+              .padding(.leading, 8)
             TextStyleSection(style: style)
+              .padding([.horizontal, .bottom], 8)
           }
           PanelSection(model: model, panel: panel, title: "More Font Options")
         }
@@ -520,8 +697,8 @@ struct PanelsForm: View {
           .transition(.opacity)
       }
     }
-    .padding(.horizontal, 16)
-    .padding(.top, 3)
+    .padding(.horizontal, 8)
+    .padding(.top, 4)
     .padding(.bottom, 16)
   }
 }
@@ -576,12 +753,19 @@ extension NativeNode: Identifiable {
   nonisolated var id: String { key }
 }
 
-/** A panel: its header, and its controls in a card that slides out from under it. */
+/**
+ * A panel as Blender draws it (ROUND5 7B, decision 28): one box holding its header and its body,
+ * the panels' grey on the editor's, no lines between rows. The header is Blender's triangle, the
+ * panel's icon, its name, its own controls and, in a stack that can be reordered, the grip; a tap
+ * opens or closes it, and the body slides out from under the header, clipped by the box. A
+ * sub-panel is a header inside its parent's body, its own body on a darker ground. A panel
+ * without a header, such as a material's slots, is a box with its body alone.
+ */
 struct PanelSection: View {
   let model: PanelsModel
   let panel: NativeNode
   var title: String?
-  /** Its controls alone, without its header, as in a popover of its own. */
+  /** Its controls alone, without its header or box, as in a popover of its own. */
   var bare = false
   /** Another of the stack's panels dragged over this one, which takes its place. */
   @State private var dropping = false
@@ -589,50 +773,39 @@ struct PanelSection: View {
   private var content: Blender_NativeUI_Panel? { panel.panel }
   private var position: Int? { content.flatMap { $0.position >= 0 ? Int($0.position) : nil } }
 
+  /** A row of its body needing more width than the body has: logged, at most once a minute, as
+   * `layout properties <tab> <panel> needs W of P` (ROUND5 7A). */
+  private var overflow: String { "properties \(model.currentTab) \(panel.key)" }
+
   var body: some View {
-    let fixed = bare || (content?.fixed ?? false)
-    let expanded = bare || model.isOpen(panel)
-    VStack(alignment: .leading, spacing: 0) {
-      if !fixed {
-        draggableHeader(expanded: expanded)
+    let fixed = content?.fixed ?? false
+    let expanded = model.isOpen(panel)
+    let nodes = model.body(of: panel)
+    Group {
+      if bare {
+        PanelBody(model: model, panel: panel, overflow: overflow)
       }
-      let rows = model.rows(of: panel)
-      /* The card slides out from under its header: the container clips it as its height animates,
-       * so it never passes over the header or the section above. */
-      VStack(spacing: 0) {
-        if expanded && !rows.isEmpty {
-          Group {
-            if bare(rows) {
-              ControlRow(model: model, node: rows[0].node)
-            }
-            else {
-              /* As wide as the card, whatever a row asks: one that needs more is laid out in what
-               * there is, and logged (ROUND5 7A). */
-              PanelColumn(spacing: 0, overflow: overflow) {
-                /* A modifier's or constraint's name and the rest of where it applies, open. */
-                let header = model.header(of: panel)
-                if let name = header.first(where: { $0.role == .name }) {
-                  PanelStackOptions(model: model, name: name, toggles: PanelStackOptions.secondary(header))
-                    .padding(.vertical, 2)
-                  Divider()
-                }
-                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                  if index > 0 { Divider() }
-                  rowView(row)
-                    .padding(.vertical, 2)
-                }
-              }
-              .padding(.horizontal, 12)
-              .background(PanelStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            }
+      else if let single = barePicker(nodes) {
+        /* The shading mode picker is already a pill: a box around it would nest the shape. */
+        ControlRow(model: model, node: single)
+      }
+      else {
+        PanelBox {
+          if !fixed {
+            draggableHeader(expanded: expanded)
           }
-          .transition(.opacity.combined(with: .move(edge: .top)))
+          /* The body slides out from under its header: the box clips it as its height animates,
+           * so it never passes over the header or the panel above. */
+          if expanded && !nodes.isEmpty {
+            PanelBody(model: model, panel: panel, overflow: overflow)
+              .padding(.horizontal, 8)
+              .padding(.top, fixed ? 8 : 0)
+              .padding(.bottom, 8)
+              .transition(.opacity.combined(with: .move(edge: .top)))
+          }
         }
       }
-      .frame(maxWidth: .infinity, alignment: .top)
-      .clipped()
     }
-    .padding(.top, fixed ? 8 : 0)
     .overlay(alignment: .top) {
       if dropping {
         Capsule().fill(Color.accentColor).frame(height: 3).offset(y: -2)
@@ -652,10 +825,6 @@ struct PanelSection: View {
       return true
     }
   }
-
-  /** A row of its body needing more width than the body has: logged, at most once a minute, as
-   * `layout properties <tab> <panel> needs W of P` (ROUND5 7A). */
-  private var overflow: String { "properties \(model.currentTab) \(panel.key)" }
 
   /** A dragged panel, as text naming it, which only the stack reads. */
   static let dragPrefix = "blender.panel\n"
@@ -677,10 +846,11 @@ struct PanelSection: View {
     }
   }
 
-  /** The shading mode picker is already a pill; a card around it nests the shape. */
-  private func bare(_ rows: [PanelRow]) -> Bool {
-    guard model.mode == .shading, rows.count == 1, let choice = rows[0].node.choice else { return false }
-    return rows[0].node.node.property == "type" && choice.style != .actions
+  /** The viewport shading's mode picker, alone in its panel. */
+  private func barePicker(_ nodes: [NativeNode]) -> NativeNode? {
+    guard model.mode == .shading, nodes.count == 1, let choice = nodes[0].choice,
+          nodes[0].node.property == "type", choice.style != .actions else { return nil }
+    return nodes[0]
   }
 
   private func header(expanded: Bool) -> some View {
@@ -688,71 +858,132 @@ struct PanelSection: View {
     let switchOnly = !(content?.openable ?? true)
     let active = content?.active ?? false
     let id = String(panel.key.dropFirst("panel:".count))
-    return HStack(spacing: 8) {
+    return HStack(spacing: 6) {
       Button {
         guard !switchOnly else { return }
         model.setOpen(panel, !expanded)
       } label: {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
           Image(systemName: "chevron.right")
-            .font(.system(size: 11, weight: .semibold))
+            .font(.system(size: 10, weight: .bold))
             .rotationEffect(.degrees(expanded ? 90 : 0))
-            .frame(width: 14, height: 14)
+            .frame(width: 12, height: 12)
             .opacity(switchOnly ? 0 : 1)
           if let icon = BlenderIcon.image(panel.icon) {
-            Image(uiImage: icon).resizable().scaledToFit().frame(width: 18, height: 18)
+            Image(uiImage: icon).resizable().scaledToFit().frame(width: 16, height: 16)
           }
           /* Blender's panel name: wraps rather than being cut. */
           Text(title ?? panel.label)
+            .font(.subheadline.weight(.semibold))
             .lineLimit(2)
             .foregroundStyle(active ? PanelStyle.tint : .primary)
           Spacer(minLength: 0)
         }
-        .frame(minHeight: 44)
-        .contentShape(Rectangle())
+        .frame(minHeight: 32)
+        /* Blender's 32 point header, touched across 44 points. */
+        .contentShape(.interaction, Rectangle().inset(by: -6))
       }
       .buttonStyle(.plain)
       .disabled(switchOnly)
       .accessibilityValue((expanded ? "Expanded" : "Collapsed") + (active ? ", Active" : ""))
       .accessibilityIdentifier("blender.section." + id)
       PanelHeaderControls(model: model, controls: model.header(of: panel))
+      if position != nil {
+        /* Blender's grip: the panel drags by its header. */
+        Image(systemName: "line.3.horizontal")
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(.secondary)
+          .frame(width: 20, height: 32)
+          .accessibilityHidden(true)
+      }
     }
-    .padding(.leading, 12)
-    .padding(.trailing, 4)
+    .padding(.horizontal, 8)
   }
+}
 
-  @ViewBuilder
-  private func rowView(_ row: PanelRow) -> some View {
-    if row.heading {
-      let open = model.isOpen(row.node)
-      let subpanel = String(row.node.key.dropFirst("panel:".count))
-      HStack(spacing: 8) {
+/** A panel's box: Blender's panel grey (or the glass's card) with Blender's rounding, clipping
+ * what is in it. */
+struct PanelBox<Content: View>: View {
+  @ViewBuilder let content: Content
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
+
+  var body: some View {
+    let glass = style == ShellStyle.glass.rawValue
+    let shape = RoundedRectangle(cornerRadius: glass ? 14 : ShellStyle.radius, style: .continuous)
+    PanelColumn(spacing: 0) { content }
+      .frame(maxWidth: .infinity, alignment: .topLeading)
+      .background(glass ? PanelStyle.card : ShellStyle.panel, in: shape)
+      .clipShape(shape)
+  }
+}
+
+/** A panel's body: a modifier's or constraint's name first, then its rows and sub-panels, each
+ * laid out at the body's width (ROUND5 7A). */
+struct PanelBody: View {
+  let model: PanelsModel
+  let panel: NativeNode
+  var overflow: String? = nil
+
+  var body: some View {
+    PanelColumn(spacing: 4, overflow: overflow) {
+      /* A modifier's or constraint's name and the rest of where it applies, open. */
+      let header = model.header(of: panel)
+      if panel.kind == .panel, let name = header.first(where: { $0.role == .name }) {
+        PanelStackOptions(model: model, name: name, toggles: PanelStackOptions.secondary(header))
+      }
+      ForEach(model.body(of: panel)) { node in
+        if node.kind == .panel {
+          SubPanel(model: model, panel: node)
+        }
+        else {
+          ControlRow(model: model, node: node)
+        }
+      }
+    }
+  }
+}
+
+/** A sub-panel, as Blender draws one inside its parent: its header row, and its body on a darker
+ * ground below it while open. */
+struct SubPanel: View {
+  let model: PanelsModel
+  let panel: NativeNode
+
+  var body: some View {
+    let open = model.isOpen(panel)
+    let id = String(panel.key.dropFirst("panel:".count))
+    PanelColumn(spacing: 0) {
+      HStack(spacing: 6) {
         Button {
-          model.setOpen(row.node, !open)
+          model.setOpen(panel, !open)
         } label: {
-          HStack(spacing: 8) {
+          HStack(spacing: 6) {
             Image(systemName: "chevron.right")
-              .font(.system(size: 10, weight: .semibold))
+              .font(.system(size: 9, weight: .bold))
               .rotationEffect(.degrees(open ? 90 : 0))
-              .frame(width: 12)
-            Text(row.node.label)
+              .frame(width: 12, height: 12)
+            Text(panel.label)
               .font(.subheadline)
+              .lineLimit(2)
               .frame(maxWidth: .infinity, alignment: .leading)
           }
-          .foregroundStyle(.secondary)
-          .frame(minHeight: 36)
-          .contentShape(Rectangle())
+          .frame(minHeight: 32)
+          .contentShape(.interaction, Rectangle().inset(by: -6))
         }
         .buttonStyle(.plain)
         .accessibilityValue(open ? "Expanded" : "Collapsed")
-        .accessibilityIdentifier("blender.subpanel." + subpanel)
-        PanelHeaderControls(model: model, controls: model.header(of: row.node))
+        .accessibilityIdentifier("blender.subpanel." + id)
+        PanelHeaderControls(model: model, controls: model.header(of: panel))
       }
-      .padding(.leading, CGFloat(12 * row.depth))
+      if open && !model.body(of: panel).isEmpty {
+        /* Blender's `panel_sub_back`: the sub-panel's body a shade darker than its parent's. */
+        AnyView(PanelBody(model: model, panel: panel))
+          .padding(8)
+          .background(Color.black.opacity(0.12), in: RoundedRectangle(cornerRadius: ShellStyle.radius, style: .continuous))
+          .transition(.opacity.combined(with: .move(edge: .top)))
+      }
     }
-    else {
-      ControlRow(model: model, node: row.node)
-    }
+    .clipped()
   }
 }
 

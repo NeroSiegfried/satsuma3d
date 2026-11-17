@@ -175,4 +175,17 @@ check('LayoutChecker.shared.overflow(' in panels and
 check('case "tab":' in (SWIFT / 'Snapshots.swift').read_text(encoding='utf-8'),
       "Snapshot scripts can open Properties on a tab (`tab <ID>`)")
 
+# 7B: Properties is Blender's editor frame, not a settings form: a panel is one box (header and
+# body together), no lines between rows, the tabs in a column, the tab's name as the title, and
+# Blender's context path under it.
+check(not re.search(r'cornerRadius:\s*20\b', panels) and 'Divider()' not in panels,
+      "NativePanels.swift draws no inset-grouped card (radius 20) and no dividers between rows (ROUND5 7B)")
+section = panels[panels.index('struct PanelSection'):panels.index('struct PanelBox')]
+check('PanelBox {' in section, "PanelSection draws through PanelBox (ROUND5 7B)")
+check('PropertiesTabColumn(' in panels and 'model.tabTitle' in panels and 'PropertiesContextPath(' in panels,
+      "Properties has its tabs in a column, the tab's name as its title and the context path (ROUND5 7B)")
+check('"path"' in (SWIFT.parents[2] / 'editors/interface/interface_native_properties.cc').read_text(encoding='utf-8')
+      and 'ED_buttons_native_context_path' in bridge,
+      "The bridge sends Blender's context path as a `path` group (ROUND5 7B)")
+
 print('PASS: native shell sources ' + json.dumps(checks))

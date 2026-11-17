@@ -2729,6 +2729,8 @@ static std::string panels_walk(bContext *C,
   std::string tab_id = tool_settings ? "TOOL" : shading ? "SHADING" : overlays ? "OVERLAYS" : "OBJECT";
   std::string panel_context;
   Vector<Tab> tabs;
+  /* The Properties editor's own space, for its context path. */
+  const SpaceProperties *properties_space = nullptr;
   if (preferences) {
     tab_id = preferences_tabs(C, requested_tab, tabs, panel_context);
   }
@@ -2751,12 +2753,18 @@ static std::string panels_walk(bContext *C,
     }
     context.space->mainbuser = context.space->mainb = selected;
     ED_buttons_native_context_prepare(C, context.space);
+    properties_space = context.space;
+    /* Blender's separators part the tabs into groups, which its tab column draws apart. */
+    int group = 0;
     for (int i = 0; i < tab_count; i++) {
       const auto &tab = items[i];
       if (!tab.identifier || !tab.identifier[0]) {
+        if (!tabs.is_empty()) {
+          group = tabs.last().group + 1;
+        }
         continue;
       }
-      tabs.append({tab.identifier, tab.name, icon_name(tab.icon)});
+      tabs.append({tab.identifier, tab.name, icon_name(tab.icon), group});
       if (tab.value == context.space->mainb) {
         tab_id = tab.identifier;
       }
@@ -2765,7 +2773,7 @@ static std::string panels_walk(bContext *C,
       MEM_delete(items);
     }
     for (const std::string &category : sidebar_categories()) {
-      tabs.append({SIDEBAR_TAB_PREFIX + category, category, ""});
+      tabs.append({SIDEBAR_TAB_PREFIX + category, category, "", group + 1});
     }
     if (sidebar_requested &&
         std::any_of(tabs.begin(), tabs.end(), [&](const Tab &tab) { return tab.id == requested_tab; }))
@@ -2832,6 +2840,34 @@ static std::string panels_walk(bContext *C,
                                       buffer.CreateVector(options),
                                       protocol::ChoiceStyle::Tabs);
       });
+    }
+    /* Blender's context path under the tabs, such as the object and its material: each element
+     * its type's icon and its name, as #buttons_panel_context_draw draws them. None on the Tool
+     * tab and the sidebar's, which have none in Blender. */
+    const Vector<PointerRNA> path = properties_space ?
+                                        ED_buttons_native_context_path(properties_space) :
+                                        Vector<PointerRNA>();
+    if (!path.is_empty()) {
+      const NodeId path_node = writer->builder.add(
+          top, "path", [&](Buffer &buffer, NodeFields & /*fields*/) {
+            return protocol::CreateGroup(buffer, protocol::Layout::Row);
+          });
+      for (const int i : path.index_range()) {
+        PointerRNA element = path[i];
+        char buffer_name[128];
+        char *name = RNA_struct_name_get_alloc(&element, buffer_name, sizeof(buffer_name), nullptr);
+        const std::string label = name ? name : "";
+        if (name && name != buffer_name) {
+          MEM_delete(name);
+        }
+        const char *icon = icon_name(RNA_struct_ui_icon(element.type));
+        writer->builder.add(
+            path_node, "path:" + std::to_string(i), [&](Buffer &buffer, NodeFields &fields) {
+              fields.label = label;
+              fields.icon = icon;
+              return protocol::CreateLabel(buffer);
+            });
+      }
     }
   }
   const std::set<std::string> *expanded = data.expanded().lookup_ptr(tab_id);

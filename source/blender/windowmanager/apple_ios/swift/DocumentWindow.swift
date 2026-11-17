@@ -530,6 +530,7 @@ public struct DocumentWindow: View {
   /** The split as the divider is dragged, kept once it is let go. */
   @State private var imageSplitDrag: Double?
   @Environment(\.horizontalSizeClass) private var sizeClass
+  @Environment(\.colorScheme) private var colorScheme
   @AppStorage(ShellStyle.key) private var interfaceStyle = ShellStyle.blender.rawValue
 
   /** The native controls are hidden in full screen, and over Blender's own interface. */
@@ -632,7 +633,11 @@ public struct DocumentWindow: View {
           PropertiesPanel(model: shell.panels.properties) { shell.panels.setInspectorShown(false) }
             .environment(\.panelInWindow, true)
             .frame(width: Self.inspectorWidth)
-            .background(Color(uiColor: .secondarySystemBackground).ignoresSafeArea(edges: .vertical))
+            /* Blender's editor grey and light text in its style, as the tool settings row
+             * (ROUND5 7B); the system's grouped background in glass. */
+            .background((interfaceStyle == ShellStyle.glass.rawValue ? Color(uiColor: .secondarySystemBackground) :
+                          ShellStyle.region).ignoresSafeArea(edges: .vertical))
+            .environment(\.colorScheme, interfaceStyle == ShellStyle.glass.rawValue ? colorScheme : .dark)
             .padding(.bottom, docked)
             .transition(.move(edge: .trailing))
             .accessibilityIdentifier("blender.inspector.panel")

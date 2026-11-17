@@ -33,6 +33,13 @@ Vector<eSpaceButtons_Context> ED_buttons_tabs_list(const SpaceProperties *sbuts,
 void ED_buttons_visible_tabs_menu(bContext *C, ui::Layout *layout, void * /*arg*/);
 void ED_buttons_navbar_menu(bContext *C, ui::Layout *layout, void * /*arg*/);
 void ED_buttons_native_context_prepare(const bContext *C, SpaceProperties *sbuts);
+/**
+ * The elements of the context path drawn under the tabs, such as the object and its material,
+ * in order, with the scene and view layer left out on the tabs that are not theirs, as
+ * #buttons_panel_context_draw draws them; none on the Tool tab. For the native Properties editor,
+ * after #ED_buttons_native_context_prepare.
+ */
+Vector<PointerRNA> ED_buttons_native_context_path(const SpaceProperties *sbuts);
 bool ED_buttons_tab_has_search_result(SpaceProperties *sbuts, int index);
 
 void ED_buttons_search_string_set(SpaceProperties *sbuts, const char *value);
