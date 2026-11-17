@@ -32,6 +32,7 @@ __all__ = (
     "radial",
     "rename_active",
     "run",
+    "run_reported",
 )
 
 # The palette's groups, in display order. The mesh-centric groups come first, as in the plan; the
@@ -155,11 +156,22 @@ class _State:
         return self.mode == 'SCULPT' and (
             ("mask" in self.tool and "face_set" not in self.tool) or self.sculpt_brush == 'MASK')
 
+    @property
+    def hidden_objects(self):
+        """Whether Hide has hidden any object of the view layer. Walked at most once per query, and
+        only in Object Mode, since the strip asks for its scope on every refresh."""
+        cached = self.__dict__.get("_hidden_objects")
+        if cached is None:
+            cached = self.mode == 'OBJECT' and any(ob.hide_get() for ob in self.context.view_layer.objects)
+            self.__dict__["_hidden_objects"] = cached
+        return cached
+
     def scope_key(self):
         """What decides presence. Two states with the same key show the same palette items."""
         return (self.mode, self.select_mode, self.tool, self.sculpt_brush,
                 self.obj.type if self.obj else None,
-                bool(self.selected) if self.mode == 'OBJECT' else self.verts > 0)
+                bool(self.selected) if self.mode == 'OBJECT' else self.verts > 0,
+                self.mode == 'OBJECT' and self.hidden_objects)
 
     def xray(self):
         space = self.context.space_data
@@ -185,7 +197,7 @@ class Rule:
 
 class Action:
     __slots__ = ("id", "label", "op", "icon", "scope", "enabled", "props", "checked", "first", "invoke",
-                 "group", "destructive", "tool", "menu", "strip")
+                 "group", "destructive", "tool", "menu", "strip", "rules")
 
     def __init__(self, id, label, op, icon="", when=None, props=None, checked=None, first=None,
                  invoke=False, *, group, enabled=None, destructive=False, tool="", menu="", strip=True):
@@ -198,6 +210,8 @@ class Action:
         rules = [rule for rule in (when.enabled if isinstance(when, Rule) else None, enabled) if rule]
         # Dimming: can it run now. The operator's poll is checked on top of this.
         self.enabled = (lambda s: all(rule(s) for rule in rules)) if rules else _always
+        # The same rules apart, each able to say why it fails, see `reason`.
+        self.rules = rules
         self.props = props or {}
         self.checked = checked
         # Whether it leads the strip: what the active tool or brush works on comes before the rest.
@@ -238,6 +252,18 @@ class Action:
         """In scope and able to run, ignoring the operator's poll."""
         return self.scope(state) and self.enabled(state)
 
+    def reason(self, state):
+        """Why it cannot run now, in words for the person, or an empty string when its rules
+        allow it. A rule says why with its `why`, see `_mesh`."""
+        if not self.scope(state):
+            return "{:s} does not apply to what is selected".format(self.label)
+        for rule in self.rules:
+            if not rule(state):
+                why = getattr(rule, "why", None)
+                return "{:s}: {:s}".format(self.label, why(state)) if why else (
+                    "{:s} is not available for this selection".format(self.label))
+        return ""
+
 
 def _unapplied_scale(s):
     """Non-unit scale silently skews bevels, modifiers and physics, so offer to apply it."""
@@ -260,6 +286,14 @@ def _mesh(*modes, verts=0, edges=0, faces=0, exclude=()):
 
     def enabled(s):
         return s.verts >= verts and s.edges >= edges and s.faces >= faces
+
+    def why(s):
+        for have, need, one, many in ((s.verts, verts, "vertex", "vertices"), (s.edges, edges, "edge", "edges"),
+                                      (s.faces, faces, "face", "faces")):
+            if have < need:
+                return "select at least {:d} {:s}".format(need, one if need == 1 else many)
+        return ""
+    enabled.why = why
     return Rule(scope, enabled)
 
 
@@ -278,6 +312,7 @@ def _object(min_selected=1, types=None, tools=None):
     def enabled(s):
         chosen = s.selected_of_type(*types) if types else s.selected
         return len(chosen) >= min_selected
+    enabled.why = lambda _s: "select at least {:d} objects".format(min_selected)
     return Rule(scope, enabled)
 
 
@@ -328,8 +363,10 @@ ACTIONS = [
            group="Object"),
     Action("object.convert_mesh", "Convert to Mesh", "object.convert", "OUTLINER_OB_MESH",
            _active_type('CURVE', 'SURFACE', 'FONT', 'META'), {"target": 'MESH'}, group="Object"),
-    Action("object.duplicate", "Duplicate", "object.duplicate", "DUPLICATE", _object(), {"linked": False},
-           group="Object"),
+    # Duplicates continue into a move, as Shift+D does: a copy left on its original reads as nothing
+    # having happened. The move waits for a finger, slides, and lifting places it.
+    Action("object.duplicate", "Duplicate", "object.duplicate_move", "DUPLICATE", _object(),
+           {"OBJECT_OT_duplicate": {"linked": False}}, invoke=True, group="Object"),
     Action("object.shade_smooth", "Shade Smooth", "object.shade_smooth", "MESH_UVSPHERE", _object(types=('MESH',)),
            group="Normals & Shading"),
     Action("object.subdivision", "Subdivision", "object.native_modifier_toggle", "MOD_SUBSURF",
@@ -455,8 +492,8 @@ ACTIONS = [
            group="Normals & Shading", strip=False),
     # Any selection. Blender's Mirror menu: interactive, or across an axis at once.
     Action("mesh.mirror", "Mirror", "", "MOD_MIRROR", _mesh(verts=1), menu="VIEW3D_MT_mirror", group="Transform"),
-    Action("mesh.duplicate", "Duplicate", "mesh.duplicate", "DUPLICATE", _mesh(verts=1), group="Mesh",
-           strip=False),
+    Action("mesh.duplicate", "Duplicate", "mesh.duplicate_move", "DUPLICATE", _mesh(verts=1), invoke=True,
+           group="Mesh", strip=False),
     Action("mesh.hide", "Hide", "mesh.hide", "HIDE_ON", _mesh(verts=1), {"unselected": False}, group="Mesh",
            strip=False),
     Action("mesh.delete_verts", "Delete", "mesh.delete", "TRASH", _mesh("VERT", verts=1), {"type": 'VERT'},
@@ -482,6 +519,21 @@ ACTIONS = [
     # Selection tools in Object and Edit Mode.
     Action("view.xray", "X-Ray", "view3d.toggle_xray", "XRAY",
            lambda s: s.selecting and s.mode in {'OBJECT', 'EDIT_MESH'}, checked=lambda s: s.xray(), group="View"),
+
+    # The view, which a keyboard reaches with the numeric keypad's period and Home: what is
+    # selected filling it, or everything with nothing selected.
+    Action("view.frame_selected", "Frame Selected", "view3d.view_selected", "ZOOM_SELECTED",
+           lambda s: (s.mode == 'OBJECT' and bool(s.selected)) or (s.mode == 'EDIT_MESH' and s.verts > 0),
+           invoke=True, group="View"),
+    Action("view.frame_all", "Frame All", "view3d.view_all", "ZOOM_ALL",
+           lambda s: (s.mode == 'OBJECT' and not s.selected) or (s.mode == 'EDIT_MESH' and not s.verts),
+           invoke=True, group="View"),
+    # What Hide hid, back again: on the strip while objects are hidden, as nothing else there
+    # undoes it; in the palette for a mesh, whose hidden parts are not counted as it is drawn.
+    Action("object.reveal", "Reveal Hidden", "object.hide_view_clear", "HIDE_OFF",
+           lambda s: s.mode == 'OBJECT' and s.hidden_objects, {"select": True}, group="Object"),
+    Action("mesh.reveal", "Reveal Hidden", "mesh.reveal", "HIDE_OFF", lambda s: s.mode == 'EDIT_MESH',
+           {"select": True}, group="Mesh", strip=False),
 
     # Sculpt Mode: face sets, for the face set tools and brush.
     Action("sculpt.face_set_mask", "From Mask", "sculpt.face_sets_create", "MOD_MASK", lambda s: s.face_sets,
@@ -559,10 +611,10 @@ ACTIONS = [
            menu="VIEW3D_MT_mirror", group="Transform", strip=False),
     Action("armature.subdivide", "Subdivide", "armature.subdivide", "BONE_DATA", lambda s: s.mode == 'EDIT_ARMATURE',
            group="Armature"),
-    Action("armature.duplicate", "Duplicate", "armature.duplicate", "DUPLICATE",
-           lambda s: s.mode == 'EDIT_ARMATURE', group="Armature"),
-    Action("grease.duplicate", "Duplicate", "grease_pencil.duplicate", "DUPLICATE",
-           lambda s: s.mode == 'EDIT_GREASE_PENCIL', group="Grease Pencil"),
+    Action("armature.duplicate", "Duplicate", "armature.duplicate_move", "DUPLICATE",
+           lambda s: s.mode == 'EDIT_ARMATURE', invoke=True, group="Armature"),
+    Action("grease.duplicate", "Duplicate", "grease_pencil.duplicate_move", "DUPLICATE",
+           lambda s: s.mode == 'EDIT_GREASE_PENCIL', invoke=True, group="Grease Pencil"),
     Action("grease.delete", "Delete", "grease_pencil.delete", "TRASH", lambda s: s.mode == 'EDIT_GREASE_PENCIL',
            group="Delete", destructive=True),
 ]
@@ -617,6 +669,15 @@ def _order(state):
     return key
 
 
+def _why(action, state):
+    """Why a dimmed action cannot run, for the interface to show beside it."""
+    try:
+        reason = action.reason(state)
+    except (AttributeError, KeyError, RuntimeError, ReferenceError):
+        reason = ""
+    return reason or "{:s} is not available in {:s}".format(action.label, _mode_name(state.context))
+
+
 def _item(action, state, enabled=True):
     return {
         "title": action.label, "action": action.id, "operator": action.operator().idname(),
@@ -624,6 +685,7 @@ def _item(action, state, enabled=True):
         "selected": bool(action.checked(state)) if action.checked else False,
         "enabled": enabled, "group": action.group, "destructive": action.destructive,
         "tool": action.tool, "menu": action.menu,
+        "why": "" if enabled else _why(action, state),
     }
 
 
@@ -719,6 +781,48 @@ def run(context, action_id, tool=""):
         return False
     context_type = 'INVOKE_REGION_WIN' if action.invoke else 'EXEC_REGION_WIN'
     return 'FINISHED' in operator(context_type, True, **action.properties(state))
+
+
+def _mode_name(context):
+    """The mode as Blender's mode menu names it: "Object Mode", "Edit Mode", "Sculpt Mode"."""
+    ob = context.active_object
+    mode = ob.mode if ob is not None else 'OBJECT'
+    items = bpy.types.Object.bl_rna.properties["mode"].enum_items
+    return items[mode].name if mode in items else "Object Mode"
+
+
+def _error_text(context, action, error):
+    """What an operator's error says, for the person: its poll's own message, or its report."""
+    text = str(error).strip()
+    marker = ".poll() "
+    if marker in text:
+        text = text.split(marker, 1)[1].strip()
+        if text.startswith("failed, context is incorrect"):
+            return "{:s} is not available in {:s}".format(action.label, _mode_name(context))
+        return "{:s}: {:s}".format(action.label, text)
+    for prefix in ("Error: ", "Warning: ", "Info: "):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+    return text.strip()
+
+
+def run_reported(context, action_id, tool=""):
+    """Run an action as `run` does, and say why not when it does not: a string for the person, or
+    an empty one once it ran. A tap on an action is always answered."""
+    action = _BY_ID.get(action_id)
+    if action is None:
+        return ""
+    state = _State(context, tool)
+    reason = action.reason(state)
+    if reason:
+        return reason
+    operator = action.operator()
+    context_type = 'INVOKE_REGION_WIN' if action.invoke else 'EXEC_REGION_WIN'
+    try:
+        operator(context_type, True, **action.properties(state))
+    except RuntimeError as ex:
+        return _error_text(context, action, ex)
+    return ""
 
 
 class OBJECT_OT_native_modifier_toggle(bpy.types.Operator):

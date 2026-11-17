@@ -123,6 +123,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <mutex>
 #include <functional>
 #include <map>
 #include <optional>
@@ -148,6 +150,11 @@ void native_properties_interaction_finish(bContext *C);
 }  // namespace blender::ui
 
 namespace blender {
+
+/** The interface's short messages as JSON, see #WM_native_ui_notice. */
+static std::string bridge_notices_json();
+/** Why \a ot cannot run in \a C, in words for the person, after its poll failed. */
+static std::string bridge_operator_unavailable(bContext *C, wmOperatorType *ot);
 
 static CLG_LogRef LOG = {"wm.native"};
 
@@ -414,6 +421,21 @@ void bridge_operator_call(bContext *C, const char *op_name, PointerRNA *props = 
                                         blender::wm::OpCallContext::ExecRegionWin,
                           props,
                           nullptr);
+  }
+  else if (wmOperatorType *ot = WM_operatortype_find(op_name, true)) {
+    /* A tap is answered: say why it did nothing. */
+    WM_native_ui_notice(RPT_WARNING, bridge_operator_unavailable(C, ot).c_str());
+  }
+}
+
+/** Run \a ot with \a props as a tap on the interface does, or say why it cannot run. */
+static void bridge_operator_call_ptr(bContext *C, wmOperatorType *ot, PointerRNA *props)
+{
+  if (WM_operator_poll(C, ot)) {
+    WM_operator_name_call_ptr(C, ot, blender::wm::OpCallContext::ExecRegionWin, props, nullptr);
+  }
+  else {
+    WM_native_ui_notice(RPT_WARNING, bridge_operator_unavailable(C, ot).c_str());
   }
 }
 
@@ -700,9 +722,7 @@ void bridge_mode_set(bContext *C, const char *mode)
   PointerRNA props = WM_operator_properties_create_ptr(ot);
   RNA_enum_set_identifier(C, &props, "mode", mode);
   RNA_boolean_set(&props, "toggle", false);
-  if (WM_operator_name_poll(C, "OBJECT_OT_mode_set")) {
-    WM_operator_name_call_ptr(C, ot, blender::wm::OpCallContext::ExecRegionWin, &props, nullptr);
-  }
+  bridge_operator_call_ptr(C, ot, &props);
   WM_operator_properties_free(&props);
 }
 
@@ -914,9 +934,7 @@ void bridge_mesh_select_mode_set(bContext *C, const std::string &value)
   RNA_enum_set_identifier(C, &props, "action", "ENABLE");
   RNA_boolean_set(&props, "use_extend", false);
   RNA_boolean_set(&props, "use_expand", false);
-  if (WM_operator_name_poll(C, "MESH_OT_select_mode")) {
-    WM_operator_name_call_ptr(C, ot, blender::wm::OpCallContext::ExecRegionWin, &props, nullptr);
-  }
+  bridge_operator_call_ptr(C, ot, &props);
   WM_operator_properties_free(&props);
 }
 
@@ -1097,10 +1115,17 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     /* The button may predate a context change; `run` checks the action still applies. */
     const bToolRef *tool = bridge_active_tool(C);
     const char *imports[] = {"bpy", "bl_ui", nullptr};
-    const std::string expression = "bl_ui.native_actions.run(bpy.context, \"" +
+    const std::string expression = "bl_ui.native_actions.run_reported(bpy.context, \"" +
                                    bridge_json_escape(command.value) + "\", \"" +
                                    bridge_json_escape(tool ? tool->idname : "") + "\")";
-    BPY_run_string_eval(C, imports, expression.c_str());
+    /* Why it did not run, when it did not: a tap is answered. */
+    char *reason = nullptr;
+    if (BPY_run_string_as_string(C, imports, expression.c_str(), nullptr, &reason) && reason) {
+      WM_native_ui_notice(RPT_WARNING, reason);
+    }
+    if (reason) {
+      MEM_delete(reason);
+    }
     return;
   }
 #endif
@@ -1731,6 +1756,94 @@ void bridge_asset_drop_snap_update(bContext *C, const int xy[2])
   ED_view3d_cursor_snap_data_update(state, C, region, mval);
 }
 
+/**
+ * In Edit Mode Blender's Add menu adds a primitive into the mesh being edited. The Starter
+ * library's primitives are the same shapes as objects, which Blender only adds in Object Mode: in
+ * Edit Mesh they are added as its primitives instead, as the Add menu would.
+ */
+static const char *bridge_asset_edit_mesh_primitive(asset_system::AssetRepresentation &asset)
+{
+  if (asset.get_id_type() != ID_OB ||
+      asset.owner_asset_library().name() != BRIDGE_STARTER_LIBRARY_NAME)
+  {
+    return nullptr;
+  }
+  static const std::pair<StringRef, const char *> primitives[] = {
+      {"Plane", "MESH_OT_primitive_plane_add"},
+      {"Grid", "MESH_OT_primitive_grid_add"},
+      {"Cube", "MESH_OT_primitive_cube_add"},
+      {"UV Sphere", "MESH_OT_primitive_uv_sphere_add"},
+      {"Ico Sphere", "MESH_OT_primitive_ico_sphere_add"},
+      {"Cylinder", "MESH_OT_primitive_cylinder_add"},
+      {"Cone", "MESH_OT_primitive_cone_add"},
+      {"Torus", "MESH_OT_primitive_torus_add"},
+      {"Circle", "MESH_OT_primitive_circle_add"},
+  };
+  const StringRef name = asset.get_name();
+  for (const auto &[asset_name, op_name] : primitives) {
+    if (name == asset_name) {
+      return op_name;
+    }
+  }
+  return nullptr;
+}
+
+/** A primitive dragged from the asset pane in Edit Mesh, added where it is let go. */
+static std::string bridge_asset_edit_mesh_pending;
+
+/** Add the mesh primitive \a op_name into the edited mesh, at window position \a xy on the plane
+ * of the 3D cursor facing the view, or at the 3D cursor without one. */
+static void bridge_asset_edit_mesh_add(bContext *C, const char *op_name, const int *xy)
+{
+  wmOperatorType *ot = WM_operatortype_find(op_name, true);
+  if (ot == nullptr) {
+    return;
+  }
+  PointerRNA props = WM_operator_properties_create_ptr(ot);
+  ARegion *region = CTX_wm_region(C);
+  View3D *v3d = CTX_wm_view3d(C);
+  Scene *scene = CTX_data_scene(C);
+  if (xy && region && v3d && scene && region->regiontype == RGN_TYPE_WINDOW) {
+    const float mval[2] = {float(xy[0] - region->winrct.xmin), float(xy[1] - region->winrct.ymin)};
+    float location[3];
+    ED_view3d_win_to_3d(v3d, region, scene->cursor.location, mval, location);
+    RNA_float_set_array(&props, "location", location);
+  }
+  bridge_operator_call_ptr(C, ot, &props);
+  WM_operator_properties_free(&props);
+}
+
+/**
+ * Whether the asset pane's \a asset can be added in the current mode as Blender would add it.
+ * Objects and collections are added in Object Mode only, as Blender's own drop does; outside it
+ * this says so, offering Object Mode, or adds a Starter primitive into the edited mesh.
+ * Returns true when it handled the asset, \a xy being where it was let go, or null for a tap.
+ */
+static bool bridge_asset_outside_object_mode(bContext *C,
+                                             asset_system::AssetRepresentation &asset,
+                                             const int *xy,
+                                             const bool drag)
+{
+  if (!ELEM(asset.get_id_type(), ID_OB, ID_GR) || CTX_data_mode_enum(C) == CTX_MODE_OBJECT) {
+    return false;
+  }
+  const char *primitive = CTX_data_mode_enum(C) == CTX_MODE_EDIT_MESH ?
+                              bridge_asset_edit_mesh_primitive(asset) :
+                              nullptr;
+  if (primitive == nullptr) {
+    WM_native_ui_notice(RPT_WARNING,
+                        IFACE_("Objects are added in Object Mode"),
+                        (std::string(IFACE_("Object Mode")) + "\tmode:OBJECT").c_str());
+  }
+  else if (drag) {
+    bridge_asset_edit_mesh_pending = primitive;
+  }
+  else {
+    bridge_asset_edit_mesh_add(C, primitive, xy);
+  }
+  return true;
+}
+
 void bridge_asset_drag(bContext *C, const BridgeAssetDragCommand &command)
 {
   const BridgeContextStore context_store = bridge_context_push_view3d(C);
@@ -1750,6 +1863,13 @@ void bridge_asset_drag(bContext *C, const BridgeAssetDragCommand &command)
     case BRIDGE_ASSET_DRAG_BEGIN:
     case BRIDGE_ASSET_ADD: {
       asset_system::AssetRepresentation *asset = bridge_asset_find(command.key);
+      bridge_asset_edit_mesh_pending.clear();
+      if (asset && !dragging &&
+          bridge_asset_outside_object_mode(
+              C, *asset, nullptr, command.phase == BRIDGE_ASSET_DRAG_BEGIN))
+      {
+        break;
+      }
       if (!asset || dragging ||
           (command.phase == BRIDGE_ASSET_ADD && !bridge_asset_add_location(C, asset->get_id_type(), xy)))
       {
@@ -1778,6 +1898,12 @@ void bridge_asset_drag(bContext *C, const BridgeAssetDragCommand &command)
       }
       break;
     case BRIDGE_ASSET_DRAG_DROP:
+      if (!bridge_asset_edit_mesh_pending.empty()) {
+        const std::string op_name = std::move(bridge_asset_edit_mesh_pending);
+        bridge_asset_edit_mesh_pending.clear();
+        bridge_asset_edit_mesh_add(C, op_name.c_str(), xy);
+        break;
+      }
       if (dragging) {
         /* The release over a drop box becomes #EVT_DROP, as when releasing a dragged button. */
         bridge_asset_drop_snap_update(C, xy);
@@ -1786,6 +1912,7 @@ void bridge_asset_drag(bContext *C, const BridgeAssetDragCommand &command)
       }
       break;
     case BRIDGE_ASSET_DRAG_CANCEL:
+      bridge_asset_edit_mesh_pending.clear();
       if (dragging) {
         /* Escape cancels a drag; queued, it also follows any pending moves. */
         bridge_asset_drag_event(win, win->runtime->eventstate->xy, EVT_ESCKEY, KM_PRESS);
@@ -2263,6 +2390,8 @@ void bridge_action_add(views::ViewBuilder &builder,
                 fields.icon = bridge_text(action, "icon");
                 /* Enabled unless it says otherwise, as the strip's items always can run. */
                 fields.enabled = enabled == nullptr || bridge_flag(action, "enabled");
+                /* A dimmed action says why, as a tooltip would over it. */
+                fields.description = bridge_text(action, "why");
                 const StringRef menu = bridge_text(action, "menu");
                 const StringRef tool = bridge_text(action, "tool");
                 const StringRef name = !menu.is_empty() ? menu : tool;
@@ -2563,6 +2692,10 @@ void bridge_toolbar_view_build(bContext *C,
       return bridge_data(buffer, value);
     });
   };
+  {
+    const std::string notices = bridge_notices_json();
+    data("notices", std::string_view(notices));
+  }
 
   if (has_view3d) {
     /* The modes the active object has, as Blender's header lists them. */
@@ -4193,6 +4326,150 @@ void WM_native_ui_tag_changed()
   bridge_image_uvs_pending = true;
   bridge_changed = true;
 }
+
+/* -------------------------------------------------------------------- */
+/** \name Notices and the Session's Log
+ *
+ * A touch interface has no status bar for Blender's reports, and no pointer under which a
+ * disabled item could explain itself. Notices are its short messages: what a report says, why a
+ * command did not run. The toolbar view carries the latest few as `notices`.
+ * \{ */
+
+struct BridgeNotice {
+  int number;
+  int level;
+  std::string text;
+  std::string button;
+};
+static Vector<BridgeNotice> bridge_notices;
+static int bridge_notice_number = 0;
+static double bridge_notice_time = 0.0;
+
+void WM_native_ui_session_log(const char *kind, const char *text)
+{
+  static const bool asked_for = BLI_getenv("PLATYPUS_SESSION_LOG") != nullptr;
+  if (!asked_for && WM_native_ui_desktop_mode()) {
+    return;
+  }
+  /* Blender's thread and the interface's both write. */
+  static std::mutex mutex;
+  std::scoped_lock lock(mutex);
+  char path[FILE_MAX];
+  BLI_path_join(path, sizeof(path), BKE_tempdir_base(), "platypus-session.log");
+  /* Start again once it is large; the one before is kept beside it. */
+  if (BLI_exists(path) && BLI_file_size(path) > 1024 * 1024) {
+    const std::string previous = std::string(path) + ".1";
+    BLI_rename_overwrite(path, previous.c_str());
+  }
+  FILE *file = BLI_fopen(path, "a");
+  if (file == nullptr) {
+    return;
+  }
+  const std::time_t now = std::time(nullptr);
+  std::tm local = {};
+  localtime_r(&now, &local);
+  char stamp[16] = "";
+  std::strftime(stamp, sizeof(stamp), "%H:%M:%S", &local);
+  fprintf(file, "%s %s %s\n", stamp, kind, text);
+  fclose(file);
+}
+
+extern "C" void WM_native_ui_log(const char *kind, const char *text)
+{
+  if (kind && text) {
+    WM_native_ui_session_log(kind, text);
+  }
+}
+
+void WM_native_ui_notice(const int level, const char *text, const char *button)
+{
+  if (text == nullptr || text[0] == '\0') {
+    return;
+  }
+  /* What an operator reports can arrive twice, from its popup and from the log: said once. */
+  const double now = BLI_time_now_seconds();
+  if (!bridge_notices.is_empty() && bridge_notices.last().text == text &&
+      now - bridge_notice_time < 1.0)
+  {
+    return;
+  }
+  bridge_notice_time = now;
+  bridge_notices.append({++bridge_notice_number, level, text, button ? button : ""});
+  if (bridge_notices.size() > 6) {
+    bridge_notices.remove(0);
+  }
+  wm::native_ui::view_type_dirty("toolbar");
+  WM_native_ui_session_log(level >= RPT_WARNING ? "warning" : "info", text);
+}
+
+static std::string bridge_notices_json()
+{
+  std::string json = "[";
+  for (const BridgeNotice &notice : bridge_notices) {
+    if (json.size() > 1) {
+      json += ",";
+    }
+    json += "{\"number\":" + std::to_string(notice.number) + ",\"level\":\"" +
+            (notice.level >= RPT_ERROR ? "error" : notice.level >= RPT_WARNING ? "warning" : "info") +
+            "\",\"text\":\"" + bridge_json_escape(notice.text) + "\",\"button\":\"" +
+            bridge_json_escape(notice.button) + "\"}";
+  }
+  return json + "]";
+}
+
+static std::string bridge_operator_unavailable(bContext *C, wmOperatorType *ot)
+{
+  const std::string name = WM_operatortype_name(ot, nullptr);
+  bool free_message = false;
+  const char *message = CTX_wm_operator_poll_msg_get(C, &free_message);
+  std::string text;
+  if (message && message[0]) {
+    text = name + ": " + message;
+  }
+  else {
+    /* Name the mode as the mode menu does ("Edit Mode"), not as the context enum ("Mesh Edit"). */
+    const Object *ob = CTX_data_active_object(C);
+    const char *mode = nullptr;
+    RNA_enum_name(rna_enum_object_mode_items, ob ? int(ob->mode) : int(OB_MODE_OBJECT), &mode);
+    text = name + " is not available" +
+           (mode ? std::string(" in ") + IFACE_(mode) : std::string(" here"));
+  }
+  if (free_message) {
+    MEM_delete(message);
+  }
+  return text;
+}
+
+void WM_native_ui_operator_finished(bContext *C, wmOperator *op)
+{
+  /* Navigation runs many times a second while the view moves: not what the log is for. */
+  if (ELEM(StringRef(op->type->idname),
+           "VIEW3D_OT_zoom",
+           "VIEW3D_OT_rotate",
+           "VIEW3D_OT_move",
+           "VIEW3D_OT_dolly",
+           "VIEW3D_OT_view_roll",
+           "VIEW3D_OT_ndof_all",
+           "VIEW3D_OT_ndof_orbit",
+           "VIEW3D_OT_ndof_orbit_zoom",
+           "VIEW3D_OT_ndof_pan"))
+  {
+    return;
+  }
+  std::string line = WM_operator_pystring(C, op, false, true);
+  if (CTX_wm_window(C) && CTX_data_scene(C)) {
+    line += std::string("  [") + CTX_data_mode_string(C);
+    if (CTX_wm_area(C) && CTX_wm_workspace(C)) {
+      if (const bToolRef *tool = WM_toolsystem_ref_from_context(C)) {
+        line += std::string(", ") + tool->idname;
+      }
+    }
+    line += "]";
+  }
+  WM_native_ui_session_log("op", line.c_str());
+}
+
+/** \} */
 
 
 /**

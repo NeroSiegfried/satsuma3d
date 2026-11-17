@@ -66,6 +66,21 @@ void WM_native_ui_starter_library_ensure();
  */
 bool WM_native_ui_desktop_mode();
 
+/**
+ * Say something to the person in the interface's own way, briefly and without stopping them: what
+ * a report says, or why a command did not run. \a level is a report type, #RPT_INFO or
+ * #RPT_WARNING. \a button names something the interface offers beside it, or is empty.
+ */
+void WM_native_ui_notice(int level, const char *text, const char *button = "");
+/**
+ * A line of the session's log, a text file in the temporary folder that says what was run and
+ * shown, for finding out afterwards what happened on a device. Written only while the platform's
+ * interface shows, or with `PLATYPUS_SESSION_LOG` in the environment.
+ */
+void WM_native_ui_session_log(const char *kind, const char *text);
+/** An operator finished, see #wmNativeInterface::operator_finished. */
+void WM_native_ui_operator_finished(bContext *C, wmOperator *op);
+
 /** \} */
 
 /* -------------------------------------------------------------------- */

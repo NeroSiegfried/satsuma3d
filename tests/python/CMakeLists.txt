@@ -251,6 +251,11 @@ add_blender_test(
 )
 
 add_blender_test(
+  script_native_view_state
+  --python ${CMAKE_CURRENT_LIST_DIR}/bl_native_view_state.py
+)
+
+add_blender_test(
   script_bundled_modules
   --python ${CMAKE_CURRENT_LIST_DIR}/bl_bundled_modules.py -- --inside-blender
 )

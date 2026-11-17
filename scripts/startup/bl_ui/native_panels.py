@@ -555,6 +555,119 @@ class VIEW3D_PT_native_brush_settings(bpy.types.Panel):
         _draw_mirror(layout, context)
 
 
+# Above this many selected vertices their median is not worked out as the panel is drawn.
+_MEDIAN_LIMIT = 50000
+
+
+def _median_selection(context):
+    """The Edit Mode meshes' selected vertices as `[(object, mesh, vertices)]`, or an empty list
+    when there are none or too many to go through."""
+    objects = [ob for ob in context.objects_in_mode_unique_data if ob.type == 'MESH']
+    count = sum(ob.data.total_vert_sel for ob in objects)
+    if count == 0 or count > _MEDIAN_LIMIT:
+        return []
+    import bmesh
+    selection = []
+    for ob in objects:
+        if ob.data.total_vert_sel:
+            mesh = bmesh.from_edit_mesh(ob.data)
+            selection.append((ob, mesh, [vert for vert in mesh.verts if vert.select]))
+    return selection
+
+
+def _median_global(self, selection):
+    # Several objects have no local space in common.
+    return self.native_item_space == 'GLOBAL' or len(selection) > 1
+
+
+def _median(self, selection):
+    from mathutils import Vector
+    use_global = _median_global(self, selection)
+    total = Vector()
+    count = 0
+    for ob, _mesh, verts in selection:
+        matrix = ob.matrix_world
+        for vert in verts:
+            total += (matrix @ vert.co) if use_global else vert.co
+        count += len(verts)
+    return total / count
+
+
+def _median_get(self):
+    selection = _median_selection(bpy.context)
+    return tuple(_median(self, selection)) if selection else (0.0, 0.0, 0.0)
+
+
+def _median_set(self, value):
+    from mathutils import Vector
+    import bmesh
+    selection = _median_selection(bpy.context)
+    if not selection:
+        return
+    offset = Vector(value) - _median(self, selection)
+    use_global = _median_global(self, selection)
+    for ob, _mesh, verts in selection:
+        local = (ob.matrix_world.inverted_safe().to_3x3() @ offset) if use_global else offset
+        for vert in verts:
+            vert.co += local
+        bmesh.update_edit_mesh(ob.data, loop_triangles=True, destructive=False)
+
+
+class VIEW3D_PT_native_item_median(bpy.types.Panel):
+    """Item's Transform in Edit Mode for the native interface: where the selected vertices are,
+    which Blender's own panel shows in fields that are not properties"""
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Item"
+    bl_label = "Transform"
+
+    @classmethod
+    def register(cls):
+        bpy.types.WindowManager.native_item_median = bpy.props.FloatVectorProperty(
+            name="Median",
+            description="Where the selected vertices are, on average: changing it moves them all",
+            subtype='TRANSLATION',
+            unit='LENGTH',
+            precision=4,
+            get=_median_get,
+            set=_median_set,
+        )
+        bpy.types.WindowManager.native_item_space = bpy.props.EnumProperty(
+            name="Space",
+            description="The space the median is in",
+            items=(
+                ('GLOBAL', "Global", "The scene's space"),
+                ('LOCAL', "Local", "The object's own space"),
+            ),
+            default='LOCAL',
+        )
+
+    @classmethod
+    def unregister(cls):
+        del bpy.types.WindowManager.native_item_median
+        del bpy.types.WindowManager.native_item_space
+
+    @classmethod
+    def poll(cls, context):
+        # As the panels above, only the native projection draws this, from the main region.
+        region = context.region
+        return context.mode == 'EDIT_MESH' and region is not None and region.type == 'WINDOW'
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = True
+        window_manager = context.window_manager
+        count = sum(ob.data.total_vert_sel for ob in context.objects_in_mode_unique_data
+                    if ob.type == 'MESH')
+        if count == 0:
+            layout.label(text="Nothing selected")
+        elif count > _MEDIAN_LIMIT:
+            layout.label(text="Select fewer vertices to move them by typing")
+        else:
+            layout.prop(window_manager, "native_item_median", text="Vertex" if count == 1 else "Median")
+            layout.prop(window_manager, "native_item_space", expand=True)
+
+
 class WM_OT_native_node_tree_new(bpy.types.Operator):
     """Make a node tree for the native node editor to show, as its own buttons do"""
     bl_idname = "wm.native_node_tree_new"
@@ -597,4 +710,5 @@ classes = (
     VIEW3D_PT_native_sculpt_settings,
     VIEW3D_PT_native_sculpt_remesh_popout_settings,
     VIEW3D_PT_native_brush_settings,
+    VIEW3D_PT_native_item_median,
 )

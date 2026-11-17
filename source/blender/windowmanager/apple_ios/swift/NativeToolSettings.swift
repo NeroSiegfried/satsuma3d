@@ -159,7 +159,8 @@ struct ToolSettingItem: View {
           if let current, !(current.preview ?? "").isEmpty {
             HStack(spacing: 6) {
               optionIcon(current)
-              Text(name).lineLimit(1)
+              /* A data-block's name, the person's own: shortened in the middle if it must be. */
+              Text(name).lineLimit(1).truncationMode(.middle)
             }
           }
           else {
@@ -268,12 +269,13 @@ struct StripColumn: View {
         Text(caption ?? node.shortLabel)
           .font(.caption2)
           .foregroundStyle(.secondary)
+          /* Blender's label in full: the column widens rather than cut or shrink it. */
           .lineLimit(1)
-          .minimumScaleFactor(0.8)
+          .fixedSize()
         control
           .frame(height: 26)
       }
-      .frame(width: width, height: 40)
+      .frame(minWidth: width, minHeight: 40, maxHeight: 40)
       .controlActions(model, node)
     }
   }

@@ -20,6 +20,7 @@ _modules = [
     "native_render",
     "native_settings",
     "native_timeline",
+    "native_view_state",
     "anim",
     "asset_shelf",
     "node_add_menu",
@@ -135,6 +136,8 @@ def register():
     # The bundled extensions, turned on once for the native iPad interface.
     from . import native_addons
     native_addons.register()
+    from . import native_view_state
+    native_view_state.register()
 
     from bpy.props import (
         EnumProperty,
@@ -197,6 +200,8 @@ def register():
 
 def unregister():
     from bpy.utils import unregister_class
+    from . import native_view_state
+    native_view_state.unregister()
     for mod in reversed(_modules_loaded):
         for cls in reversed(mod.classes):
             if cls.is_registered:

@@ -405,8 +405,9 @@ struct QuickActionsRow: View {
           .frame(width: width, height: ShellMetrics.rowHeight, alignment: .leading)
         }
       }
-      .padding(.bottom, model.safeAreaInsets.bottom + ShellMetrics.rowBottom + model.bottomTray +
-                        model.bottomRailHeight)
+      /* Above the keyboard while one of the strip's fields is typed into; the viewport stays. */
+      .padding(.bottom, max(model.safeAreaInsets.bottom + ShellMetrics.rowBottom + model.bottomTray +
+                              model.bottomRailHeight, KeyboardLift.shared.stripLift + 8))
       .ignoresSafeArea(edges: .bottom)
     }
     .ignoresSafeArea(edges: .horizontal)
@@ -548,6 +549,7 @@ struct QuickActionsRow: View {
     .clipShape(ShellShape())
     /* Not interactive glass once open, which would take the touches of the actions on it. */
     .panelGlass(interactive: !actionsOpen, in: Capsule())
+    .layoutZone("actions")
     .offset(x: frame.minX)
     .animation(animation, value: actions)
   }
@@ -600,7 +602,9 @@ struct QuickActionsRow: View {
     return ZStack(alignment: .leading) {
       if redoOpen {
         RedoContent(model: redo, close: closeRedo, widthChanged: redoWidthChanged)
+          .environment(\.inOperationStrip, true)
           .frame(width: frame.width, height: frame.height)
+          .layoutZone("operation")
           .accessibilityIdentifier("blender.redo.strip")
           .transition(.opacity)
       }

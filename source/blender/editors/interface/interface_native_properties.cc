@@ -2856,6 +2856,34 @@ static std::string panels_walk(bContext *C,
   const bool tool_tab = !viewport && !preferences && tab_id == "TOOL";
   const bool sidebar_tab = !viewport && !preferences && StringRef(tab_id).startswith(SIDEBAR_TAB_PREFIX);
   const std::string sidebar_category = sidebar_tab ? tab_id.substr(strlen(SIDEBAR_TAB_PREFIX)) : "";
+  if (sidebar_tab) {
+    /* The sidebar's panels are the 3D Viewport's: they are polled and drawn, and their buttons
+     * run, with it as the context's area, as in Blender's own sidebar. Item's Transform panel and
+     * add-ons' panels read the view from the context. The Properties context above is restored as
+     * it is freed. */
+    ScrArea *area = detached_context->previous_area;
+    ARegion *region = detached_context->previous_region;
+    if (area == nullptr || area->spacetype != SPACE_VIEW3D) {
+      area = nullptr;
+      region = nullptr;
+      if (bScreen *screen = CTX_wm_screen(C)) {
+        for (ScrArea &candidate : screen->areabase) {
+          if (candidate.spacetype == SPACE_VIEW3D) {
+            area = &candidate;
+            break;
+          }
+        }
+      }
+    }
+    if (area && (region == nullptr || region->regiontype != RGN_TYPE_WINDOW)) {
+      region = BKE_area_find_region_type(area, RGN_TYPE_WINDOW);
+    }
+    if (area == nullptr || region == nullptr) {
+      return execute ? "There is no 3D Viewport." : "";
+    }
+    CTX_wm_area_set(C, area);
+    CTX_wm_region_set(C, region);
+  }
   std::set<std::string> sidebar_panels;
   const Vector<std::string> tool_contexts = tool_tab ? tool_tab_contexts(C) : Vector<std::string>();
   std::set<std::string> tool_panels;
@@ -2869,6 +2897,14 @@ static std::string panels_walk(bContext *C,
       /* The category's panels and their sub-panels. */
       if (pt.parent_id[0] ? !sidebar_panels.count(pt.parent_id) : sidebar_category != pt.category) {
         continue;
+      }
+      /* Item's Transform in Edit Mode is fields without properties (the median of what is
+       * selected), which are not written here: `bl_ui.native_panels` has them instead. */
+      if (STREQ(pt.idname, "VIEW3D_PT_transform")) {
+        const Object *edit_object = CTX_data_edit_object(C);
+        if (edit_object && !ELEM(edit_object->type, OB_ARMATURE, OB_MBALL)) {
+          continue;
+        }
       }
       sidebar_panels.insert(pt.idname);
       if (!(pt.flag & PANEL_TYPE_INSTANCED)) {

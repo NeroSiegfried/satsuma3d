@@ -53,6 +53,7 @@
 #include "DEG_depsgraph.hh"
 
 #include "WM_api.hh"
+#include "WM_native_interface.hh"
 #include "WM_types.hh"
 
 #include "RNA_access.hh"
@@ -308,6 +309,12 @@ static void apply_scale_factor_clamp(float *val,
 
 static TransformProperties *v3d_transform_props_ensure(View3D *v3d)
 {
+  if (v3d == nullptr) {
+    /* Panels drawn without a 3D Viewport in the context, as a native interface may draw them:
+     * the values are kept apart from any view, rather than read through a null one. */
+    static TransformProperties without_view;
+    return &without_view;
+  }
   if (v3d->runtime.properties_storage == nullptr) {
     TransformProperties *tfp = MEM_new<TransformProperties>("TransformProperties");
     /* Construct C++ structures in otherwise zero initialized struct. */
@@ -2245,7 +2252,14 @@ static void view3d_panel_transform(const bContext *C, Panel *panel)
     if (OB_TYPE_SUPPORT_EDITMODE(ob->type) || ELEM(ob->type, OB_VOLUME, OB_CURVES, OB_POINTCLOUD))
     {
       View3D *v3d = CTX_wm_view3d(C);
-      v3d_object_dimension_buts(nullptr, &col, v3d, ob);
+      if (WM_native_interface() != nullptr || v3d == nullptr) {
+        /* A native interface shows properties: the object's own dimensions, which set its scale
+         * as the fields below do. */
+        col.prop(&obptr, "dimensions", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+      }
+      else {
+        v3d_object_dimension_buts(nullptr, &col, v3d, ob);
+      }
     }
   }
 }

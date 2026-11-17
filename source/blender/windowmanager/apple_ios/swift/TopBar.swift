@@ -5,7 +5,7 @@
 /** \file
  * The document window's toolbar: back to the documents, the sidebar menu,
  * the editing mode, adding to the scene and the mesh selection mode; the active tool's settings in
- * the middle; then viewport shading, Properties, and Undo with Share and More. A phone keeps the
+ * the middle; then viewport shading, Properties, and Undo and Redo with Share and More. A phone keeps the
  * most used items and puts the rest in one menu.
  */
 
@@ -274,7 +274,10 @@ struct DocumentToolbar: ToolbarContent {
 #if !os(visionOS)
       ToolbarSpacer(.fixed, placement: .topBarLeading)
 #endif
-      ToolbarItem(placement: .topBarLeading) { undoButton }
+      ToolbarItemGroup(placement: .topBarLeading) {
+        undoButton
+        redoButton
+      }
     }
     if model.compact {
       /* Everything else in one menu, as nothing else fits beside the most used items. */
@@ -310,9 +313,10 @@ struct DocumentToolbar: ToolbarContent {
 #if !os(visionOS)
     ToolbarSpacer(.fixed, placement: .topBarTrailing)
 #endif
-    /* Undo, Share and More together. */
+    /* Undo, Redo, Share and More together. */
     ToolbarItemGroup(placement: .topBarTrailing) {
       undoButton
+      redoButton
       Menu("Share", systemImage: "square.and.arrow.up") { shareMenu }
         .background(ShareSource(commands: commands))
         .prefetchingBlenderMenu(Self.importRoute)
@@ -341,6 +345,15 @@ struct DocumentToolbar: ToolbarContent {
     }
     .disabled(!model.canUndo)
     .accessibilityIdentifier("blender.undo")
+  }
+
+  /** Blender's Ctrl+Shift+Z, in sight beside Undo: without a keyboard nothing else redoes. */
+  private var redoButton: some View {
+    Button { Operators.run("ED_OT_redo") } label: {
+      Label { Text("Redo") } icon: { iconImage(wm_apple_ios_icon("operator.ED_OT_redo", "arrow.uturn.forward")) }
+    }
+    .disabled(!model.canRedo)
+    .accessibilityIdentifier("blender.redo")
   }
 
   /** The node editors, each opening the node editor on its tree, docked along the bottom, and the

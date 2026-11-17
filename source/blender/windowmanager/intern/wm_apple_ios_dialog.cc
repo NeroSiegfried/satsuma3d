@@ -6,6 +6,7 @@
 
 #  include "WM_api.hh"
 #  include "WM_apple_ios.hh"
+#  include "WM_native_ui.hh"
 #  include "wm_event_system.hh"
 
 #  include "BKE_context.hh"
@@ -200,6 +201,14 @@ void WM_apple_ios_reports(wmWindow *win, ReportList *reports, int minimum_level)
     if (report->type < minimum_level) {
       continue;
     }
+    if (report->type < RPT_ERROR) {
+      /* Information and warnings are said in passing; only errors stop the person. What Blender
+       * logs of operators and properties run is not for them. */
+      if (ELEM(report->type, RPT_INFO, RPT_WARNING)) {
+        WM_native_ui_notice(report->type, report->message);
+      }
+      continue;
+    }
     if (!dialog.message.empty()) {
       dialog.message += "\n\n";
     }
@@ -211,6 +220,24 @@ void WM_apple_ios_reports(wmWindow *win, ReportList *reports, int minimum_level)
   }
   BKE_reports_unlock(reports);
   if (!dialog.message.empty()) {
+    dialog.actions.push_back({IFACE_("OK")});
+    dialog.preferred_action = 0;
+    wm_apple_ios_dialog_begin(win->runtime->ghostwin, ++next_request, dialog, nullptr);
+  }
+}
+
+void WM_apple_ios_report(wmWindow *win, const Report *report)
+{
+  if (report == nullptr || report->message == nullptr) {
+    return;
+  }
+  if (ELEM(report->type, RPT_INFO, RPT_WARNING)) {
+    WM_native_ui_notice(report->type, report->message);
+  }
+  else if (report->type >= RPT_ERROR && win && win->runtime->ghostwin) {
+    wmIOSDialog dialog;
+    dialog.title = report->typestr;
+    dialog.message = report->message;
     dialog.actions.push_back({IFACE_("OK")});
     dialog.preferred_action = 0;
     wm_apple_ios_dialog_begin(win->runtime->ghostwin, ++next_request, dialog, nullptr);

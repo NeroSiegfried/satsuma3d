@@ -118,6 +118,10 @@ void WM_native_ui_navigation_hover_set(bool active);
  * of.
  * \{ */
 
+/** A line of the session's log (see `WM_native_ui_session_log`), from the interface's own code:
+ * \a kind such as "layout" or "reveal". Safe from any thread. */
+void WM_native_ui_log(const char *kind, const char *text);
+
 /** How much of the window's height, from the top, the interface's top bar covers. */
 void WM_native_ui_top_bar_set(float fraction);
 /** How much of the window's height, from the bottom, the asset pane and timeline cover. */

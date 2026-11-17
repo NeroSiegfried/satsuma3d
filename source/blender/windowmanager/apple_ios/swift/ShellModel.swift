@@ -111,7 +111,7 @@ final class ShellModel {
     NativeViews.shared.send(toolbar, target: key, op: op, value: value, phase: phase)
   }
 
-  /** The editing mode, such as `objectmode`, `edit_mesh` or `sculpt`. */
+  /** The editing mode as Blender's context names it, such as `objectmode`, `mesh_edit` or `sculpt_mode`. */
   var mode: String { toolbar.top?.label ?? "" }
   /** Blender's tools for the mode, in groups: `nil` separates two groups. */
   var tools: [ToolItem?] {
@@ -200,6 +200,19 @@ final class ShellModel {
     guard let node = node("drag_hint") else { return nil }
     return DragHint(text: node.label, done: node.content(Blender_NativeUI_Data.self)?
       .value(type: Blender_NativeUI_BoolValue.self)?.value ?? false)
+  }
+  /** Blender's latest short messages, as JSON, see #ShellMessages. */
+  var notices: String { text("notices") ?? "" }
+  /** The messages showing at the top of the viewport. */
+  @ObservationIgnored let messages = ShellMessages()
+  /** Run what a message's button names: `mode:<MODE>` or `action:<id>`. */
+  func perform(_ target: String) {
+    if target.hasPrefix("mode:") {
+      send("mode", .set_, .text(String(target.dropFirst(5))))
+    }
+    else if target.hasPrefix("action:") {
+      send(target, .invoke)
+    }
   }
   var canUndo: Bool { node("undo")?.enabled ?? false }
   var canRedo: Bool { node("redo")?.enabled ?? false }

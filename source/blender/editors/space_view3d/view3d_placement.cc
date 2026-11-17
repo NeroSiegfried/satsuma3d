@@ -27,6 +27,7 @@
 #include "RNA_define.hh"
 
 #include "WM_api.hh"
+#include "WM_native_interface.hh"
 #include "WM_toolsystem.hh"
 
 #include "ED_gizmo_utils.hh"
@@ -162,6 +163,8 @@ struct InteractivePlaceData {
 
   /** When activated without a tool. */
   bool wait_for_input;
+  /** Under a touch interface, the finger that sets the depth is down: lifting it confirms. */
+  bool depth_press_held;
 
   /* WORKAROUND: We need to remove #SCE_SNAP_TO_GRID temporarily. */
   short *snap_to_ptr;
@@ -1115,7 +1118,15 @@ static wmOperatorStatus view3d_interactive_add_modal(bContext *C,
   }
   else if (ipd->step_index == STEP_DEPTH) {
     if (ELEM(event->type, ipd->launch_event, LEFTMOUSE)) {
-      if (event->val == KM_PRESS) {
+      /* Without hover, a press confirming at once would set a depth that was never seen: under
+       * a touch interface the press starts dragging the depth and lifting confirms it. */
+      const bool touch = WM_native_awaits_press(nullptr);
+      if (touch && event->val == KM_PRESS) {
+        ipd->depth_press_held = true;
+      }
+      const bool confirm = touch ? (event->val == KM_RELEASE && ipd->depth_press_held) :
+                                   (event->val == KM_PRESS);
+      if (confirm) {
         /* Restore snap mode. */
         *ipd->snap_to_ptr = ipd->snap_to_restore;
 

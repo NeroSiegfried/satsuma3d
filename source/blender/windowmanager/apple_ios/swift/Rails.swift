@@ -255,7 +255,30 @@ struct ToolGroupCorner: Shape {
   }
 }
 
+/**
+ * A rail item's highlight, and where the corner mark of a tool group sits inside it, in one place
+ * so the two cannot disagree. Blender's style draws its selection as Blender's rounded square, with
+ * the mark in its corner as on the desktop; the glass style's capsule takes the mark further in,
+ * along the diagonal, so it sits wholly on the highlight.
+ */
+struct RailItemShape: Shape {
+  var glass: Bool
+
+  init(glass: Bool = ShellStyle.current == .glass) { self.glass = glass }
+
+  func path(in rect: CGRect) -> Path {
+    glass ? Capsule().path(in: rect) :
+      RoundedRectangle(cornerRadius: ShellStyle.radius, style: .continuous).path(in: rect)
+  }
+
+  /** The mark's side, and its inset from the item's trailing and bottom edges. On the capsule's
+   * 26 point end, 13 points in leaves at least 5 points of highlight around a 6 point mark. */
+  var markSize: CGFloat { glass ? 6 : 7 }
+  var markInset: CGFloat { glass ? 13 : 8 }
+}
+
 struct RailItemView: View {
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
   let item: RailItem
   let selected: Bool
   let emphasized: Bool
@@ -298,28 +321,31 @@ struct RailItemView: View {
     .background {
       if selected {
         /* The selection slides from item to item. */
-        Capsule()
+        shape
           .fill(.clear)
-          .panelGlass(.tinted(.blue), in: Capsule())
+          .panelGlass(.tinted(.blue), in: shape)
           .matchedGeometryEffect(id: "selection", in: namespace)
       }
       else if emphasized {
-        Capsule().fill(.clear).panelGlass(in: Capsule())
+        shape.fill(.clear).panelGlass(in: shape)
       }
     }
     .overlay(alignment: .bottomTrailing) {
       if item.grouped {
-        /* As Blender's toolbar marks a group: a small triangle filling the button's corner. */
+        /* As Blender's toolbar marks a group: a small triangle in the button's corner, wholly on
+         * the highlight when selected. */
         ToolGroupCorner()
           .fill(selected ? Color.white : Color.primary.opacity(0.6))
-          .frame(width: 7, height: 7)
-          .padding(.trailing, inRow ? 7 : 9)
-          .padding(.bottom, 7)
+          .frame(width: shape.markSize, height: shape.markSize)
+          .padding(.trailing, shape.markInset)
+          .padding(.bottom, shape.markInset)
           .accessibilityHidden(true)
       }
     }
-    .contentShape(Capsule())
+    .contentShape(shape)
   }
+
+  private var shape: RailItemShape { RailItemShape(glass: style == ShellStyle.glass.rawValue) }
 }
 
 struct Rail: View {
@@ -459,8 +485,8 @@ struct Rail: View {
       .simultaneousGesture(pressSelect(item), including: state.listVisible && !state.pressSelecting ? .subviews : .all)
       .accessibilityAddTraits(.isButton)
       .accessibilityAction { tap(item) }
-    /* The system's own highlight under a hovering Pencil or pointer. */
-    .hoverHighlight(Capsule())
+    /* The system's own highlight under a hovering Pencil or pointer, the selection's shape. */
+    .hoverHighlight(RailItemShape(glass: style == ShellStyle.glass.rawValue))
     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { state.setFrame($0, for: item.id) }
     .onDisappear { state.setFrame(nil, for: item.id) }
     .onHover { inside in
@@ -954,6 +980,7 @@ struct ToolRails: View {
       let arrange = { (dial: Bool) -> (SidebarContent, RailLayout) in
         let content = SidebarContent(brush: model.brush,
                                      buttons: model.direction?.hidden != true || model.transforming,
+                                     selecting: model.direction == nil && !model.transforming,
                                      smooth: model.direction?.smooth == true && !model.transforming,
                                      dial: dial, face: faceControlShown)
         return (content, RailLayout(safe: safe, tray: model.bottomTray, tools: tools, toolCount: toolItems.count,
@@ -988,6 +1015,7 @@ struct ToolRails: View {
                }) { item in
             model.activateBrush(item.id)
           }
+          .layoutZone("brushes")
           .position(carriedCenter(.brushes, size: CGSize(width: layout.brushWidth, height: layout.brushHeight)) ??
                     layout.brushCenter)
           .transition(.opacity)
@@ -1001,6 +1029,7 @@ struct ToolRails: View {
              }) { item in
           ShellModel.current?.setTool(item.id)
         }
+        .layoutZone("tools")
         .position(carriedCenter(.tools, size: CGSize(width: layout.toolWidth, height: layout.toolHeight)) ??
                   layout.toolCenter)
         .onChange(of: layout.toolsCompact) { _, compact in
@@ -1039,6 +1068,7 @@ struct ToolRails: View {
             .scaleEffect(lifted ? 1.06 : 1)
             .shadow(color: .black.opacity(lifted ? 0.32 : 0), radius: lifted ? 20 : 0, y: lifted ? 12 : 0)
             .animation(.spring(response: 0.25, dampingFraction: 0.8), value: lifted)
+            .layoutZone("sidebar")
             .position(carriedCenter(.sidebar, size: sidebarSize) ?? layout.sidebarCenter)
             /* An open tool list takes the edge: the sidebar steps aside until it closes. */
             .offset(x: layout.sidebarTucked ? (layout.sidebarLeading ? -96 : 96) : 0)
@@ -1054,6 +1084,14 @@ struct ToolRails: View {
             .position(x: safe.midX, y: safe.minY + 34)
             .transition(.opacity.combined(with: .move(edge: .top)))
         }
+        /* Blender's reports and why a command did not run, under the bar or the drag hint. */
+        let messagesTop: CGFloat = model.dragHint == nil ? 12 : 68
+        ShellMessagesView(messages: model.messages) { model.perform($0) }
+          .layoutZone("messages")
+          .frame(maxWidth: max(0, safe.width - 2 * layout.leadingCorner - 32))
+          /* Hung from its top, so a second message adds below rather than moving the first. */
+          .frame(width: safe.width, height: max(0, safe.height - messagesTop), alignment: .top)
+          .position(x: safe.midX, y: safe.minY + messagesTop + max(0, safe.height - messagesTop) / 2)
 #if !os(visionOS)
         if FaceControl.shared.running {
           /* Below the bar, while the face plays the brush. */
@@ -1090,6 +1128,16 @@ struct ToolRails: View {
       .onChange(of: model.activeBrush) { _, _ in
         updateSqueezePalette(toolItems: toolItems, brushItems: brushItems)
       }
+      .onChange(of: model.notices, initial: true) { _, notices in model.messages.take(notices) }
+      .onChange(of: gizmoFrame, initial: true) { _, gizmo in
+        let origin = proxy.frame(in: .global).origin
+        LayoutChecker.shared.set("gizmo", gizmo.offsetBy(dx: origin.x, dy: origin.y))
+      }
+      .onChange(of: model.topBarBottom, initial: true) { _, bottom in
+        LayoutChecker.shared.set("header", CGRect(x: 0, y: 0, width: proxy.frame(in: .global).maxX, height: bottom))
+      }
+      /* A forgotten Extend or Subtract must not make the next mode's taps look broken. */
+      .onChange(of: model.objectMode) { _, _ in intent.resetLatch() }
       .onChange(of: [model.canUndo, model.canRedo]) { _, _ in
         updateSqueezePalette(toolItems: toolItems, brushItems: brushItems)
       }
@@ -1372,6 +1420,12 @@ final class SelectIntentState {
 
   /** The one shown on. */
   private(set) var active: SelectIntent = .none
+  /** Where Blender selects: Set, Extend or Subtract, as a select tool's Mode, chosen with a tap
+   * and kept until changed, so a keyboard's Shift and Ctrl are not needed. Holding Extend or
+   * Subtract still acts only while held. Back to Set when the mode changes. */
+  private(set) var latched: SelectIntent = .none
+  /** The buttons are hidden, by a tool that does not select: nothing is sent, the latch kept. */
+  @ObservationIgnored private var suspended = false
   /** The Smooth button is held: strokes smooth, as with Shift, until it is let go. */
   var smoothing = false {
     didSet { if smoothing != oldValue { apply() } }
@@ -1396,6 +1450,7 @@ final class SelectIntentState {
     if (next == nil) != (strokes == nil) {
       /* Selecting and stroking each start at rest. */
       held = .none
+      latched = .none
       strokesInverted = false
       pendingInverted = nil
     }
@@ -1414,9 +1469,30 @@ final class SelectIntentState {
   func release(_ intent: SelectIntent) {
     guard held == intent else { return }
     held = .none
-    if strokes != nil && Date().timeIntervalSince(pressed) < 0.3 {
-      choose(intent)
+    if Date().timeIntervalSince(pressed) < 0.3 {
+      if strokes != nil {
+        choose(intent)
+      }
+      else {
+        /* A tap latches it; a hold was only for as long as it was held. */
+        latched = intent
+        Haptics.selection()
+      }
     }
+    apply()
+  }
+
+  /** Back to Set, as when the mode changes or a document opens. */
+  func resetLatch() {
+    guard latched != .none else { return }
+    latched = .none
+    apply()
+  }
+
+  /** The buttons came back: the latch applies again. */
+  func resume() {
+    guard suspended else { return }
+    suspended = false
     apply()
   }
 
@@ -1438,6 +1514,7 @@ final class SelectIntentState {
   func clear() {
     held = .none
     strokesInverted = false
+    suspended = true
     apply()
   }
 
@@ -1453,8 +1530,8 @@ final class SelectIntentState {
       else { intent = strokesInverted ? .subtract : .none }
     }
     else {
-      active = held
-      intent = held
+      active = held == .none ? latched : held
+      intent = suspended ? .none : active
     }
     WM_native_ui_select_intent_set(smoothing ? 3 : Int32(intent.rawValue))
   }
@@ -1852,6 +1929,8 @@ struct SidebarContent: Equatable {
   var size = false
   var strength = false
   var buttons = false
+  /** Where Blender selects, the buttons are Set, Extend and Subtract: three, not two. */
+  var selecting = false
   var smooth = false
   /** The brush's color, below the sliders. */
   var color = false
@@ -1861,8 +1940,11 @@ struct SidebarContent: Equatable {
   /** Size and strength as rings, where the edge has no room for sliders or they were pinched in. */
   var dial = false
 
-  init(brush: BrushSettings?, buttons: Bool, smooth: Bool = false, dial: Bool = false, face: Bool = false) {
+  init(brush: BrushSettings?, buttons: Bool, selecting: Bool = false, smooth: Bool = false, dial: Bool = false,
+       face: Bool = false)
+  {
     self.dial = dial
+    self.selecting = selecting && buttons
     size = brush?["size"] != nil
     strength = brush?["strength"] != nil
     color = brush?.color != nil
@@ -1880,7 +1962,7 @@ struct SidebarContent: Equatable {
   var sliderHeight: CGFloat { dial ? 52 : 148 }
   /** The + and -, Smooth and Face Control below them, each 52 high. */
   var buttonsHeight: CGFloat {
-    let count = (buttons ? 2 : 0) + (smooth ? 1 : 0) + (face ? 1 : 0)
+    let count = (buttons ? (selecting ? 3 : 2) : 0) + (smooth ? 1 : 0) + (face ? 1 : 0)
     return count == 0 ? 0 : CGFloat(count) * 52 + CGFloat(count - 1) * 4
   }
 
@@ -1967,8 +2049,10 @@ struct PaintSidebar: View {
             .background(Capsule().fill(Color.primary.opacity(0.08)))
           }
           else if content.buttons {
-            button(.add, symbol: "plus", marquee: true, label: "Add to Selection")
-            button(.subtract, symbol: "minus", marquee: true, label: "Subtract from Selection")
+            /* A select tool's Mode, as Blender names it: one always on, a tap keeps it. */
+            button(.none, symbol: "square.dashed", marquee: false, label: "Set", icon: "SELECT_SET")
+            button(.add, symbol: "plus", marquee: true, label: "Extend", icon: "SELECT_EXTEND")
+            button(.subtract, symbol: "minus", marquee: true, label: "Subtract", icon: "SELECT_SUBTRACT")
           }
           if content.smooth { smoothButton }
 #if !os(visionOS)
@@ -1990,11 +2074,12 @@ struct PaintSidebar: View {
       state.update(strokes: direction)
     }
     .onChange(of: content.buttons) { _, shown in
-      if !shown { state.clear() }
+      if shown { state.resume() } else { state.clear() }
     }
     .onChange(of: content.smooth) { _, shown in
       if !shown { state.smoothing = false }
     }
+    .onAppear { state.resume() }
     .onDisappear { state.clear() }
     .accessibilityElement(children: .contain)
     .accessibilityIdentifier("blender.sidebar")
@@ -2100,15 +2185,29 @@ struct PaintSidebar: View {
 
   /** With \a marquee, \a symbol sits in a dashed square, so + and - for the selection mirror each
    * other: there is no minus.square.dashed to go with plus.square.dashed. */
-  private func button(_ intent: SelectIntent, symbol: String, marquee: Bool, label: String) -> some View {
+  private func button(_ intent: SelectIntent, symbol: String, marquee: Bool, label: String,
+                      icon: String? = nil) -> some View
+  {
     let on = state.active == intent
-    return DirectionSymbol.view(marquee ? "square.dashed" : symbol)
-      .font(.system(size: 20, weight: .semibold))
-      .overlay {
-        if marquee {
-          Image(systemName: symbol).font(.system(size: 10, weight: .bold))
-        }
+    let blenderIcon = icon.flatMap { BlenderIcon.image($0) }
+    return Group {
+      if let blenderIcon {
+        /* Blender's own icon for the select mode, tinted as the symbols are. */
+        Image(uiImage: blenderIcon.withRenderingMode(.alwaysTemplate))
+          .resizable()
+          .scaledToFit()
+          .frame(width: 22, height: 22)
       }
+      else {
+        DirectionSymbol.view(marquee ? "square.dashed" : symbol)
+          .font(.system(size: 20, weight: .semibold))
+          .overlay {
+            if marquee {
+              Image(systemName: symbol).font(.system(size: 10, weight: .bold))
+            }
+          }
+      }
+    }
       .foregroundStyle(on ? Color.white : Color.primary)
       .frame(minWidth: 52, maxWidth: horizontal ? 52 : .infinity, minHeight: 52, maxHeight: 52)
       .contentTransition(.symbolEffect(.replace))
@@ -2137,8 +2236,14 @@ struct PaintSidebar: View {
       .accessibilityElement()
       .accessibilityLabel(label)
       .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
-      .accessibilityAction { if state.strokes != nil { state.choose(intent) } }
-      .accessibilityIdentifier("blender.select-intent.\(intent == .add ? "add" : "subtract")")
+      .accessibilityAction {
+        if state.strokes != nil { state.choose(intent) }
+        else {
+          state.press(intent)
+          state.release(intent)
+        }
+      }
+      .accessibilityIdentifier("blender.select-intent.\(intent == .add ? "add" : intent == .subtract ? "subtract" : "set")")
   }
 }
 

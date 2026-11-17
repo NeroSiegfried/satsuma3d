@@ -75,6 +75,7 @@
 #include "WM_keymap.hh"
 #include "WM_message.hh"
 #include "WM_native_interface.hh"
+#include "WM_native_ui.hh"
 #ifdef WITH_NATIVE_UI
 #  include "WM_native_ui.hh"
 #endif
@@ -1006,6 +1007,9 @@ static void wm_event_handler_ui_cancel(bContext *C)
  * Access to #wmWindowManager.reports
  * \{ */
 
+/** Set while reports a native interface was already given are moved to the window manager. */
+static bool wm_reports_native_handled = false;
+
 void WM_report_banner_show(wmWindowManager *wm, wmWindow *win)
 {
   if (win == nullptr) {
@@ -1025,6 +1029,16 @@ void WM_report_banner_show(wmWindowManager *wm, wmWindow *win)
 
   ReportTimerInfo *rti = MEM_new<ReportTimerInfo>(__func__);
   wm_reports->reporttimer->customdata = rti;
+
+  /* A native interface has no status bar to show the banner in: it shows the report itself.
+   * Operators' reports were handed over as they were moved here. */
+  if (!wm_reports_native_handled) {
+    if (const wmNativeInterface *native = WM_native_interface(); native && native->report_added) {
+      if (const Report *report = BKE_reports_last_displayable(wm_reports)) {
+        native->report_added(win, report);
+      }
+    }
+  }
 }
 
 void WM_report_banners_cancel(Main *bmain)
@@ -1054,15 +1068,19 @@ void WM_reports_from_reports_move(wmWindowManager *wm, ReportList *reports)
   }
 
   /* Add reports to the global list, otherwise they are not seen. */
-  if (const wmNativeInterface *native = WM_native_interface(); native && native->reports_added) {
+  const wmNativeInterface *native = WM_native_interface();
+  if (native && native->reports_added) {
+    /* From information up: the interface chooses how to show each kind. */
     native->reports_added(wm->runtime->winactive ? wm->runtime->winactive :
                                                    static_cast<wmWindow *>(wm->windows.first),
                           reports,
-                          RPT_WARNING);
+                          RPT_INFO);
   }
   BKE_reports_move_to_reports(&wm->runtime->reports, reports);
 
+  wm_reports_native_handled = native && native->reports_added;
   WM_report_banner_show(wm, nullptr);
+  wm_reports_native_handled = false;
 }
 
 void WM_global_report(eReportType type, const char *message)
@@ -1342,6 +1360,13 @@ static void wm_operator_finished(bContext *C,
     if (G.debug & G_DEBUG_WM) {
       std::string pystring = WM_operator_pystring(C, op, false, true);
       BKE_report(CTX_wm_reports(C), RPT_OPERATOR, pystring.c_str());
+    }
+    if (wm->op_undo_depth == 0) {
+      if (const wmNativeInterface *native = WM_native_interface();
+          native && native->operator_finished)
+      {
+        native->operator_finished(C, op);
+      }
     }
 
     if (do_register) {
@@ -2738,6 +2763,13 @@ static eHandlerActionFlag wm_handler_operator_call(bContext *C,
 
         /* Important to run 'wm_operator_finished' before setting the context members to null. */
         if (retval & OPERATOR_FINISHED) {
+          if (event->type == LEFTMOUSE && event->val == KM_PRESS &&
+              WM_native_awaits_press(nullptr))
+          {
+            /* A touch has no hover: an operation that ends as a finger lands may have jumped to
+             * it and ended at once. Logged to find those that need waiting for the press. */
+            WM_native_ui_session_log("modal", (std::string("ended on touch-down ") + op->type->idname).c_str());
+          }
           const bool has_undo_step = (undo_id_prev != wm_operator_undo_active_id(wm));
           const bool has_register = (register_id_prev != wm_operator_register_active_id(wm));
 

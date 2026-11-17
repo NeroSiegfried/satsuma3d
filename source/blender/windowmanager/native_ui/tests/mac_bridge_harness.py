@@ -18,10 +18,12 @@ import bpy
 argv = sys.argv[sys.argv.index("--") + 1:]
 sys.path.insert(0, argv[0])
 REPORT = argv[1]
+SCENARIO = argv[2] if len(argv) > 2 else "actions"
 
 import flatbuffers  # noqa: E402
 from Blender.NativeUI import (  # noqa: E402
-    Button, ButtonStyle, Command, Commands, Content, Group, Node, Op, Param, Subscribe, TextValue, Updates, Value,
+    BoolValue, Button, ButtonStyle, Choice, Command, Commands, Content, Group, Node, Op, Param, Subscribe, TextValue,
+    Updates, Value,
 )
 
 lib = ctypes.CDLL(None)
@@ -49,10 +51,23 @@ def text_param(builder, key, value):
     return Param.End(builder)
 
 
+def bool_param(builder, key, value):
+    k = builder.CreateString(key)
+    BoolValue.Start(builder)
+    BoolValue.AddValue(builder, value)
+    bv = BoolValue.End(builder)
+    Param.Start(builder)
+    Param.AddKey(builder, k)
+    Param.AddValueType(builder, Value.Value.BoolValue)
+    Param.AddValue(builder, bv)
+    return Param.End(builder)
+
+
 def subscribe(view, **params):
     builder = flatbuffers.Builder(256)
     name = builder.CreateString(view)
-    offsets = [text_param(builder, key, value) for key, value in params.items()]
+    offsets = [bool_param(builder, key, value) if isinstance(value, bool) else text_param(builder, key, value)
+               for key, value in params.items()]
     Subscribe.StartParamsVector(builder, len(offsets))
     for offset in reversed(offsets):
         builder.PrependUOffsetTRelative(offset)
@@ -112,6 +127,12 @@ def decode_node(raw):
                 params[s(param.Key())] = s(tv.Value())
         if params:
             entry["params"] = params
+    elif node.ContentType() == Content.Content.Choice:
+        table = node.Content()
+        choice = Choice.Choice()
+        choice.Init(table.Bytes, table.Pos)
+        entry.update(value=s(choice.Value()),
+                     options=[s(choice.Options(i).Value()) for i in range(choice.OptionsLength())])
     return s(node.Key()), entry
 
 
@@ -171,7 +192,7 @@ def finish(status):
     bpy.ops.wm.quit_blender()
 
 
-def tick():
+def tick_actions():
     global step
     try:
         pump()
@@ -194,10 +215,19 @@ def tick():
             report["steps"].append({"name": "after_subdivision_invoke", "ack": acks.get(7),
                                     "has_subsurf": any(m.type == 'SUBSURF' for m in cube.modifiers),
                                     "palette": tree(subs["palette"])})
+            # Reveal Hidden needs a 3D View for its poll, so it is exercised here, not in ctest.
+            cube.hide_set(True)
+            invoke(subs["palette"], "action:object.reveal", 8)
+        elif step == 11:
+            report["steps"].append({"name": "after_reveal_invoke", "ack": acks.get(8),
+                                    "cube_visible": not cube.hide_get()})
+            cube.hide_set(False)
+            bpy.context.view_layer.objects.active = cube
+            cube.select_set(True)
             bpy.ops.object.mode_set(mode='EDIT')
             bpy.context.tool_settings.mesh_select_mode = (False, True, False)
             bpy.ops.mesh.select_all(action='SELECT')
-        elif step == 13:
+        elif step == 15:
             report["steps"].append({"name": "edit_edges", "trees": {name: tree(sub) for name, sub in subs.items()
                                                                      if name != "toolbar"}})
             finish("done")
@@ -212,4 +242,89 @@ def tick():
     return 0.25
 
 
-bpy.app.timers.register(tick, first_interval=1.0)
+def count(node):
+    return 1 + sum(count(child) for child in node.get("children", []))
+
+
+def labels(node, out=None):
+    out = [] if out is None else out
+    if node.get("label"):
+        out.append(node["label"])
+    for child in node.get("children", []):
+        labels(child, out)
+    return out
+
+
+# Every tab of Properties, the 3D Viewport's sidebar tabs among them, in every mode: each is
+# asked for and must come back. A tab that reads something the mode lacks would crash here.
+TAB_MODES = ("object", "edit_mesh", "sculpt", "edit_curve", "edit_armature", "pose")
+
+
+def enter(mode):
+    if bpy.context.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+    cube = bpy.data.objects["Cube"]
+    if mode in {"object", "edit_mesh", "sculpt"}:
+        bpy.ops.object.select_all(action='DESELECT')
+        cube.select_set(True)
+        bpy.context.view_layer.objects.active = cube
+        if mode == "edit_mesh":
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.select_all(action='SELECT')
+        elif mode == "sculpt":
+            bpy.ops.object.mode_set(mode='SCULPT')
+    elif mode == "edit_curve":
+        bpy.ops.curve.primitive_bezier_curve_add(enter_editmode=True)
+    elif mode == "edit_armature":
+        bpy.ops.object.armature_add(enter_editmode=True)
+    elif mode == "pose":
+        bpy.ops.object.mode_set(mode='POSE')
+
+
+def tick_tabs():
+    global step
+    try:
+        pump()
+        step += 1
+        if step == 1:
+            enter("object")
+            subs["OBJECT"] = subscribe("properties", tab="OBJECT", properties=True)
+        elif step == 4:
+            top = tree(subs["OBJECT"]) or {}
+            tabs = next((n.get("options") for n in top.get("children", []) if n["key"] == "tabs"), None)
+            if not tabs:
+                report["error"] = "Properties lists no tabs"
+                finish("error")
+                return None
+            report["tabs"] = tabs
+            for tab in tabs:
+                if tab not in subs:
+                    subs[tab] = subscribe("properties", tab=tab, properties=True)
+        elif step > 4 and (step - 5) % 4 == 3:
+            mode = TAB_MODES[(step - 5) // 4]
+            trees = {tab: tree(sub) for tab, sub in subs.items()}
+            missing = [tab for tab, top in trees.items() if top is None]
+            entry = {"name": mode, "context": bpy.context.mode, "missing": missing,
+                     "nodes": {tab: count(top) for tab, top in trees.items() if top},
+                     "item": labels(trees.get("SIDEBAR:Item") or {}),
+                     "view": labels(trees.get("SIDEBAR:View") or {})}
+            report["steps"].append(entry)
+            if missing:
+                report["error"] = "No view for " + ", ".join(missing) + " in " + mode
+                finish("error")
+                return None
+            if mode == TAB_MODES[-1]:
+                finish("done")
+                return None
+            enter(TAB_MODES[TAB_MODES.index(mode) + 1])
+        if step > 80:
+            finish("timeout")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.25
+
+
+bpy.app.timers.register(tick_tabs if SCENARIO == "tabs" else tick_actions, first_interval=1.0)

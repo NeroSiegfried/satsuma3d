@@ -67,8 +67,9 @@ for action in actions.ACTIONS:
     if action.menu:
         check(hasattr(bpy.types, action.menu), f"{action.menu} is a menu")
 check(len(actions._BY_ID) == len(actions.ACTIONS), "Action ids are unique")
-check(not any("clear" in action.op and "_clear" in action.op for action in actions.ACTIONS if
-              action.op.startswith("object.")), "No esoteric object transform clearing")
+check(not any(action.op in {"object.location_clear", "object.rotation_clear", "object.scale_clear",
+                            "object.origin_clear"} for action in actions.ACTIONS),
+      "No esoteric object transform clearing")
 modes = set(bpy.types.Context.bl_rna.properties['mode'].enum_items.keys())
 check(modes == set(actions.MODE_MENUS), "Every mode has a More... entry: " +
       str(sorted(modes ^ set(actions.MODE_MENUS))))
@@ -217,6 +218,31 @@ check(actions.run(bpy.context, "mesh.inset"), "Run Inset")
 bpy.ops.object.mode_set(mode='OBJECT')
 check(len(cube.data.polygons) > faces, "Inset changed the mesh")
 check(not actions.run(bpy.context, "mesh.inset"), "A stale action does not run outside its context")
+why = actions.run_reported(bpy.context, "mesh.inset")
+check(why.startswith("Inset") and len(why) > len("Inset"), "A stale action says why it did not run: " + why)
+check(actions.run_reported(bpy.context, "no.such_action") == "", "An unknown action says nothing")
+cube.hide_set(True)
+check(applies('object.reveal'), "Hidden objects offer Reveal Hidden")
+# Reveal's poll needs a 3D View, which a background run has not: it is run in the Mac harness.
+check(actions._BY_ID["object.reveal"].op == "object.hide_view_clear", "Reveal Hidden runs Blender's Alt+H")
+why = actions.run_reported(bpy.context, "object.reveal")
+check(why == "" or why.endswith("Object Mode") or why.startswith("Reveal Hidden"),
+      "Reveal Hidden runs or says why: " + why)
+cube.hide_set(False)
+check(not applies('object.reveal'), "Nothing hidden, nothing to reveal")
+bpy.context.view_layer.objects.active = cube
+cube.select_set(True)
+bpy.ops.object.mode_set(mode='EDIT')
+bpy.ops.mesh.select_all(action='DESELECT')
+mesh = bmesh.from_edit_mesh(cube.data)
+mesh.verts.ensure_lookup_table()
+mesh.verts[0].select_set(True)
+mesh.select_flush_mode()
+bmesh.update_edit_mesh(cube.data)
+bpy.context.tool_settings.mesh_select_mode = (True, False, False)
+why = actions._BY_ID["mesh.connect"].reason(actions._State(bpy.context, "builtin.move"))
+check(why == "Connect: select at least 2 vertices", "A dimmed action names what it needs: " + why)
+bpy.ops.object.mode_set(mode='OBJECT')
 
 bpy.ops.object.mode_set(mode='SCULPT')
 check(titles("builtin_brush.Draw")[:2] == ["Invert Mask", "Clear Mask"], "Sculpt keeps its mask actions")

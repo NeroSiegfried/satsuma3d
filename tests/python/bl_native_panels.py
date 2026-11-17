@@ -222,4 +222,29 @@ check(len(bpy.data.objects) == count + 2 and not failed(), 'Duplicate several ob
 request_ids('delete')
 check('Light' not in bpy.data.objects and 'Stand' not in bpy.data.objects and not failed(),
       'Delete several objects')
+
+# Item's Transform in Edit Mode: the median of the selected vertices, read and moved.
+import bmesh
+from mathutils import Vector
+bpy.ops.object.select_all(action='DESELECT')
+cube.hide_set(False)
+cube.select_set(True)
+bpy.context.view_layer.objects.active = cube
+cube.location = (2.0, 0.0, 0.0)
+bpy.context.view_layer.update()
+bpy.ops.object.mode_set(mode='EDIT')
+bpy.ops.mesh.select_all(action='SELECT')
+window_manager = bpy.context.window_manager
+window_manager.native_item_space = 'LOCAL'
+check(Vector(window_manager.native_item_median).length < 1e-5, 'Median of a whole cube is its origin, locally')
+window_manager.native_item_space = 'GLOBAL'
+check((Vector(window_manager.native_item_median) - Vector((2.0, 0.0, 0.0))).length < 1e-5, 'Median in global space')
+window_manager.native_item_median = (2.0, 0.0, 1.5)
+mesh = bmesh.from_edit_mesh(cube.data)
+check(abs(sum(vert.co.z for vert in mesh.verts) / len(mesh.verts) - 1.5) < 1e-5, 'Typing a median moves the vertices')
+window_manager.native_item_space = 'LOCAL'
+check((Vector(window_manager.native_item_median) - Vector((0.0, 0.0, 1.5))).length < 1e-5, 'Median in local space')
+bpy.ops.mesh.select_all(action='DESELECT')
+check(tuple(window_manager.native_item_median) == (0.0, 0.0, 0.0), 'Nothing selected has no median')
+bpy.ops.object.mode_set(mode='OBJECT')
 print('PASS: native scene panels ' + json.dumps(checks))

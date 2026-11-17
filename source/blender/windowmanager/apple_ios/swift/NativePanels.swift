@@ -649,8 +649,9 @@ struct PanelSection: View {
           if let icon = BlenderIcon.image(panel.icon) {
             Image(uiImage: icon).resizable().scaledToFit().frame(width: 18, height: 18)
           }
+          /* Blender's panel name: wraps rather than being cut. */
           Text(title ?? panel.label)
-            .lineLimit(1)
+            .lineLimit(2)
             .foregroundStyle(active ? PanelStyle.tint : .primary)
           Spacer(minLength: 0)
         }

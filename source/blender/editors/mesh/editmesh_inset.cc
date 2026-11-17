@@ -29,6 +29,7 @@
 #include "RNA_define.hh"
 
 #include "WM_api.hh"
+#include "WM_native_interface.hh"
 #include "WM_types.hh"
 
 #include "UI_interface.hh"
@@ -68,6 +69,9 @@ struct InsetData {
 
   /* modal only */
   int launch_event;
+  /** Waiting for the finger to land, see #WM_native_awaits_press; then lifting confirms. */
+  bool awaits_press;
+  bool release_confirms;
   float mcenter[2];
   void *draw_handle_pixel;
 };
@@ -350,6 +354,8 @@ static wmOperatorStatus edbm_inset_invoke(bContext *C, wmOperator *op, const wmE
   opdata = static_cast<InsetData *>(op->customdata);
 
   opdata->launch_event = WM_userdef_event_type_from_keymap_type(event->type);
+  opdata->awaits_press = WM_native_awaits_press(event);
+  opdata->release_confirms = false;
 
   /* initialize mouse values */
   if (!ed::transform::calculateTransformCenter(
@@ -392,8 +398,29 @@ static wmOperatorStatus edbm_inset_modal(bContext *C, wmOperator *op, const wmEv
     edbm_inset_cancel(C, op);
     return OPERATOR_CANCELLED;
   }
-  if ((event->type == opdata->launch_event) && (event->val == KM_RELEASE) &&
-      RNA_boolean_get(op->ptr, "release_confirm"))
+  if (opdata->awaits_press) {
+    /* Without hover, nothing to follow until a finger lands; where it lands, the thickness
+     * starts from its current value, and lifting confirms. */
+    if (event->type == MOUSEMOVE) {
+      return OPERATOR_RUNNING_MODAL;
+    }
+    if (WM_native_event_is_left_press(event)) {
+      opdata->awaits_press = false;
+      opdata->release_confirms = true;
+      const float mlen[2] = {opdata->mcenter[0] - event->mval[0],
+                             opdata->mcenter[1] - event->mval[1]};
+      opdata->initial_length = len_v2(mlen);
+      opdata->old_thickness = RNA_float_get(op->ptr, "thickness");
+      opdata->old_depth = RNA_float_get(op->ptr, "depth");
+      return OPERATOR_RUNNING_MODAL;
+    }
+    if (event->type == LEFTMOUSE && event->val == KM_RELEASE) {
+      return OPERATOR_RUNNING_MODAL;
+    }
+  }
+  if (((event->type == opdata->launch_event) && (event->val == KM_RELEASE) &&
+       RNA_boolean_get(op->ptr, "release_confirm")) ||
+      (opdata->release_confirms && event->type == LEFTMOUSE && event->val == KM_RELEASE))
   {
     edbm_inset_calc(op);
     edbm_inset_exit(C, op);

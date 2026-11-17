@@ -35,6 +35,21 @@ func assetTypeIcon(_ type: String?) -> UIImage? {
   return UIImage(systemName: "shippingbox")
 }
 
+/** The Starter library's shapes that Edit Mesh adds as primitives of the edited mesh, as its Add
+ * menu would; see `bridge_asset_edit_mesh_primitive`. */
+private let editMeshPrimitives: Set<String> = ["Plane", "Grid", "Cube", "UV Sphere", "Ico Sphere", "Cylinder",
+                                               "Cone", "Torus", "Circle"]
+
+/** Whether Blender adds \a item in \a mode (the active object's, such as `EDIT`): objects and
+ * collections only in Object Mode, as Blender's drop does, except the Starter shapes in Edit Mode
+ * of a mesh. A dimmed tile still answers a tap, saying why. */
+@MainActor
+func assetAddable(_ item: AssetItem, mode: String, contextMode: String) -> Bool {
+  guard item.type == "Object" || item.type == "Collection", mode != "OBJECT" else { return true }
+  return contextMode == "mesh_edit" && item.type == "Object" && item.library == "Starter" &&
+    editMeshPrimitives.contains(item.name)
+}
+
 /** What tapping an asset does, matching where Blender's drop boxes accept it. */
 private func assetAddTitle(_ type: String?) -> String {
   switch type {
@@ -280,6 +295,8 @@ struct AssetTile: View {
   let item: AssetItem
 
   var body: some View {
+    let model = ShellModel.current
+    let addable = model.map { assetAddable(item, mode: $0.objectMode, contextMode: $0.mode) } ?? true
     Button {
       store.add(item)
     } label: {
@@ -292,6 +309,8 @@ struct AssetTile: View {
           .foregroundStyle(.primary)
           .frame(width: assetTile + 8)
       }
+      /* Dimmed where Blender would not add it; a tap says why and offers the mode. */
+      .opacity(addable ? 1 : 0.45)
     }
     .buttonStyle(AssetTileStyle())
     .accessibilityLabel(item.string("name") ?? "")

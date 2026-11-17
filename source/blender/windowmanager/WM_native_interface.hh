@@ -29,6 +29,7 @@ enum class AlertIcon : int8_t;
 }
 
 struct PropertyRNA;
+struct Report;
 struct ReportList;
 struct bContext;
 struct wmKeyConfig;
@@ -64,6 +65,10 @@ struct wmNativeInterface {
   void (*state_changed)() = nullptr;
   /** Reports added to the window manager, at least `minimum_type`, for the interface to show. */
   void (*reports_added)(wmWindow *win, ReportList *reports, int minimum_type) = nullptr;
+  /** A report added to the window manager's own list, by other than an operator's reports. */
+  void (*report_added)(wmWindow *win, const Report *report) = nullptr;
+  /** An operator finished, run by a person or a script rather than by another operator. */
+  void (*operator_finished)(bContext *C, wmOperator *op) = nullptr;
 
   /**
    * The interface shows the last operation's properties itself: operators are registered for
@@ -169,5 +174,15 @@ struct wmNativeInterface {
 /** The registered native interface, or null for Blender's own. */
 const wmNativeInterface *WM_native_interface();
 void WM_native_interface_set(const wmNativeInterface *native);
+
+/**
+ * An operation that follows the pointer, started by \a event, should wait for the first press:
+ * under a touch interface, which has no hover, when it was started without a button held down
+ * (from a menu, a button or a key). That press is where it starts measuring, not a confirmation,
+ * and lifting confirms, as for a tool's drag.
+ */
+bool WM_native_awaits_press(const wmEvent *event);
+/** Whether \a event is a left press, also once a modal key-map has turned it into an item. */
+bool WM_native_event_is_left_press(const wmEvent *event);
 
 }  // namespace blender

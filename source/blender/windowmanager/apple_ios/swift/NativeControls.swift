@@ -104,6 +104,8 @@ struct NativeNumberField: View {
           .multilineTextAlignment(.trailing)
           .font(numberFont)
           .focused($focused)
+          .selectsAllOnFocus(focused)
+          .liftsAboveKeyboard(focused)
           .submitLabel(.done)
           .onSubmit { commit() }
           .keyboardAccessory {
@@ -625,6 +627,8 @@ struct NativeTextField: View {
       .multilineTextAlignment(.trailing)
       .autocorrectionDisabled()
       .focused($focused)
+      .selectsAllOnFocus(focused)
+      .liftsAboveKeyboard(focused)
       .submitLabel(.done)
       .padding(.horizontal, 8)
       .frame(minHeight: 40)
@@ -959,13 +963,7 @@ struct NativeChoice: View {
         segmented.controlSize(.mini)
       }
       else {
-        FractionRow(fraction: 0.53) {
-          Text(node.label)
-            .lineLimit(2)
-            .frame(maxWidth: .infinity, alignment: .leading)
-          segmented
-        }
-        .frame(minHeight: 44)
+        ladder
       }
     }
     else if compact {
@@ -988,7 +986,12 @@ struct NativeChoice: View {
       .accessibilityLabel(label)
     }
     else {
-      /* The system's menu picker: the current choice in the tint, the choices in a menu. */
+      menuRow
+    }
+  }
+
+  /** The system's menu picker: the current choice in the tint, the choices in a menu. */
+  private var menuRow: some View {
       FractionRow(fraction: 0.53) {
         Text(node.label)
           .lineLimit(2)
@@ -1017,7 +1020,107 @@ struct NativeChoice: View {
         .frame(maxWidth: .infinity, alignment: .trailing)
       }
       .frame(minHeight: 44)
+  }
+
+  /* ---- Choices drawn as a row: the fit ladder ----
+   * Blender's own names are never cut. A row of choices takes the first form its names fit:
+   * (a) beside the label, (b) under it at full width, (c) a grid of toggles three to a row, as
+   * Blender draws `color_type`, (d) a menu. Fitting is measured with the control's font. */
+
+  /** The row's width, as laid out: the ladder's step follows it. */
+  @State private var rowWidth: CGFloat = 0
+
+  private enum LadderStep { case beside, under, grid, menu }
+
+  private static let segmentFont = UIFontMetrics(forTextStyle: .footnote)
+    .scaledFont(for: UIFont.systemFont(ofSize: 13, weight: .semibold))
+
+  /** The widest choice's segment: its name with the segment's padding, or an icon. */
+  private var segmentWidth: CGFloat {
+    let icons = options.allSatisfy { BlenderIcon.image($0.icon) != nil }
+    if icons { return 18 + 24 }
+    let widest = options.map { (($0.label ?? "") as NSString).size(withAttributes: [.font: Self.segmentFont]).width }
+      .max() ?? 0
+    return widest.rounded(.up) + 24
+  }
+
+  private var step: LadderStep {
+    /* Before the first layout, under the label: it fits more than beside it. */
+    let width = rowWidth > 0 ? rowWidth : 320
+    /* The system's segmented control makes every segment as wide as the widest. */
+    let row = segmentWidth * CGFloat(options.count) + 2
+    if row <= (width * 0.53).rounded() { return .beside }
+    if row <= width { return .under }
+    let columns = CGFloat(min(3, options.count))
+    if (segmentWidth + 8) * columns - 8 + 4 <= width { return .grid }
+    return .menu
+  }
+
+  @ViewBuilder private var ladder: some View {
+    Group {
+      switch step {
+        case .beside:
+          FractionRow(fraction: 0.53) {
+            Text(node.label)
+              .lineLimit(2)
+              .frame(maxWidth: .infinity, alignment: .leading)
+            segmented
+          }
+          .frame(minHeight: 44)
+        case .under:
+          VStack(alignment: .leading, spacing: 6) {
+            Text(node.label)
+            segmented
+          }
+          .padding(.vertical, 4)
+        case .grid:
+          VStack(alignment: .leading, spacing: 6) {
+            Text(node.label)
+            toggleGrid
+          }
+          .padding(.vertical, 4)
+        case .menu:
+          menuRow
+      }
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+      if abs(width - rowWidth) >= 1 { rowWidth = width }
+    }
+  }
+
+  /** The choices as toggle buttons, three to a row, the chosen one in Blender's selection blue. */
+  private var toggleGrid: some View {
+    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: min(3, options.count)),
+              spacing: 4) {
+      ForEach(Array(options.enumerated()), id: \.offset) { _, option in
+        let on = isChecked(option)
+        Button {
+          model.set(node, .text(option.value ?? ""))
+        } label: {
+          HStack(spacing: 4) {
+            if let image = BlenderIcon.image(option.icon) {
+              Image(uiImage: image).resizable().scaledToFit().frame(width: 16, height: 16)
+            }
+            Text(option.label ?? "")
+              .font(.footnote.weight(on ? .semibold : .regular))
+              .lineLimit(1)
+              .fixedSize()
+          }
+          /* With the grid's spacing, a 44 point target. */
+          .frame(maxWidth: .infinity, minHeight: 40)
+          .foregroundStyle(on ? Color.white : ShellStyle.text)
+          .background(on ? ShellStyle.selection : ShellStyle.widget,
+                      in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+          .contentShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
+      }
+    }
+    .disabled(!node.enabled)
+    .opacity(node.enabled ? 1 : 0.5)
+    .accessibilityLabel(label)
   }
 
   /** The choice by its position. */
@@ -1078,7 +1181,7 @@ struct PreviewChoiceButton: View {
       if compact {
         HStack(spacing: 6) {
           PreviewThumbnail(path: current?.preview, size: 20, cornerRadius: 5)
-          Text(name).font(.caption).lineLimit(1).foregroundStyle(.primary)
+          Text(name).font(.caption).lineLimit(1).truncationMode(.middle).foregroundStyle(.primary)
         }
         .padding(.leading, 4)
         .padding(.trailing, 8)
@@ -1382,7 +1485,8 @@ struct PreviewGrid: View {
                 PreviewThumbnail(path: option.preview, size: 80)
                 Text(option.label ?? "")
                   .font(.caption2)
-                  .lineLimit(1)
+                  .lineLimit(2)
+                  .truncationMode(.middle)
                   .foregroundStyle(current ? PanelStyle.tint : .secondary)
               }
               .padding(4)

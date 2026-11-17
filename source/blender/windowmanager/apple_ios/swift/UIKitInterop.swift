@@ -623,6 +623,149 @@ extension View {
   }
 }
 
+/* -------------------------------------------------------------------- */
+/** \name The keyboard
+ *
+ * The bottom of the viewport holds the operation's settings, where the keyboard opens. While one
+ * of their fields is typed into they rise above it, and come back down after. A floating or split
+ * keyboard, or a hardware one with only its shortcut bar, covers nothing there: nothing moves.
+ * \{ */
+
+@MainActor
+@Observable
+final class KeyboardLift {
+  static let shared = KeyboardLift()
+
+  /** How much of the key window's bottom the docked keyboard covers, in points. */
+  private(set) var overlap: CGFloat = 0
+  /** A field of the bottom strip is being typed into. */
+  var editingInStrip = false
+
+  private init() {
+    let center = NotificationCenter.default
+    center.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { note in
+      let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+      MainActor.assumeIsolated { KeyboardLift.shared.update(frame) }
+    }
+    center.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { _ in
+      MainActor.assumeIsolated { KeyboardLift.shared.update(nil) }
+    }
+  }
+
+  private func update(_ screenFrame: CGRect?) {
+    var covered: CGFloat = 0
+    if let screenFrame,
+       let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first
+    {
+      let screen = window.screen.bounds
+      /* Docked: along the screen's bottom, its full width, taller than a shortcut bar. */
+      let docked = screenFrame.maxY >= screen.maxY - 1 && screenFrame.width >= screen.width - 1 &&
+        screenFrame.height > 120
+      if docked {
+        let frame = window.convert(screenFrame, from: window.screen.coordinateSpace)
+        covered = max(0, window.bounds.maxY - frame.minY)
+      }
+    }
+    if covered != overlap {
+      withAnimation(.easeOut(duration: 0.25)) { overlap = covered }
+    }
+  }
+
+  /** How far the strip rises: above the keyboard while its field is typed into. */
+  var stripLift: CGFloat { editingInStrip ? overlap : 0 }
+}
+
+private struct InOperationStripKey: EnvironmentKey {
+  static let defaultValue = false
+}
+
+extension EnvironmentValues {
+  /** Inside the bottom strip of operation settings, which rises above the keyboard. */
+  var inOperationStrip: Bool {
+    get { self[InOperationStripKey.self] }
+    set { self[InOperationStripKey.self] = newValue }
+  }
+}
+
+/** Tells the strip one of its fields is typed into, so it rises above the keyboard. */
+private struct LiftsAboveKeyboard: ViewModifier {
+  let focused: Bool
+  @Environment(\.inOperationStrip) private var inStrip
+
+  func body(content: Content) -> some View {
+    content
+      .onChange(of: focused) { _, focused in
+        if inStrip { KeyboardLift.shared.editingInStrip = focused }
+      }
+      .onDisappear {
+        if inStrip && focused { KeyboardLift.shared.editingInStrip = false }
+      }
+  }
+}
+
+extension View {
+  /** On a field: while focused inside the operation strip, the strip rises above the keyboard. */
+  func liftsAboveKeyboard(_ focused: Bool) -> some View { modifier(LiftsAboveKeyboard(focused: focused)) }
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Layout checker
+ *
+ * The controls over the viewport are placed by different views; each new one has collided with
+ * another. Each zone reports its frame here, and any two that overlap are written to the session's
+ * log as `layout: <a> ∩ <b>`, at most once a minute each, so overlaps nobody has reported yet are
+ * found. It changes nothing on screen, and checks half a second after the frames settle.
+ * \{ */
+
+@MainActor
+final class LayoutChecker {
+  static let shared = LayoutChecker()
+
+  private var frames: [String: CGRect] = [:]
+  private var logged: [String: Date] = [:]
+  private var scheduled = false
+
+  func set(_ zone: String, _ frame: CGRect?) {
+    let next = frame.flatMap { $0.width >= 1 && $0.height >= 1 ? $0 : nil }
+    guard frames[zone] != next else { return }
+    frames[zone] = next
+    guard !scheduled else { return }
+    scheduled = true
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+      MainActor.assumeIsolated { self?.check() }
+    }
+  }
+
+  private func check() {
+    scheduled = false
+    let zones = frames.keys.sorted()
+    let now = Date()
+    for (i, a) in zones.enumerated() {
+      for b in zones[(i + 1)...] {
+        guard let fa = frames[a], let fb = frames[b] else { continue }
+        let overlap = fa.intersection(fb)
+        guard !overlap.isNull, overlap.width > 1, overlap.height > 1 else { continue }
+        let key = "\(a) ∩ \(b)"
+        if let last = logged[key], now.timeIntervalSince(last) < 60 { continue }
+        logged[key] = now
+        WM_native_ui_log("layout", "\(key) \(Int(overlap.width))x\(Int(overlap.height)) at \(Int(overlap.minX)),\(Int(overlap.minY))")
+      }
+    }
+  }
+}
+
+extension View {
+  /** Report this control's frame, in the window, as one of the zones over the viewport. */
+  func layoutZone(_ zone: String) -> some View {
+    onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { LayoutChecker.shared.set(zone, $0) }
+      .onDisappear { LayoutChecker.shared.set(zone, nil) }
+  }
+}
+
+/** \} */
+
 /** An item's name, as the tool rail shows it beside the item held: on the panels' surface. */
 struct ShellNameLabel: View {
   let text: String
@@ -742,6 +885,17 @@ extension View {
   func pointerHighlight() -> some View { self.hoverEffect(.highlight) }
 
   /** The system's highlight under a hovering Pencil or pointer, in `shape`. */
+  /** Typing replaces: a field's text is selected as it takes focus, as clicking into a field does
+   * in Blender. The selection waits for the field to become the first responder. */
+  func selectsAllOnFocus(_ focused: Bool) -> some View {
+    onChange(of: focused) { _, isFocused in
+      guard isFocused else { return }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        UIApplication.shared.sendAction(#selector(UIResponder.selectAll(_:)), to: nil, from: nil, for: nil)
+      }
+    }
+  }
+
   func hoverHighlight<S: Shape>(_ shape: S) -> some View {
     self.contentShape(.hoverEffect, shape).hoverEffect(.highlight)
   }

@@ -904,6 +904,12 @@ struct TransInfo {
    * (`launch_event` is set to the corresponding mouse button then.)
    */
   bool is_launch_event_drag;
+  /**
+   * Started without a held button under a touch interface (from a menu, a button or a key): the
+   * first press is where the transform starts measuring, not its confirmation, and lifting
+   * confirms. See #WM_native_awaits_press.
+   */
+  bool awaits_press;
 
   bool is_orient_default_overwrite;
 

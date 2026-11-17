@@ -223,6 +223,8 @@ wmNativeInterface native_interface_create()
   wmNativeInterface native;
   native.state_changed = WM_native_ui_tag_changed;
   native.reports_added = WM_apple_ios_reports;
+  native.report_added = WM_apple_ios_report;
+  native.operator_finished = WM_native_ui_operator_finished;
   native.replaces_redo_panel = [] { return !WM_native_ui_desktop_mode(); };
   native.operator_registered = ui::native_redo_operator_register;
   native.operator_freed = ui::native_redo_operator_free;

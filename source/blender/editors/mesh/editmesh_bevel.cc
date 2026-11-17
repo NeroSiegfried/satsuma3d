@@ -31,6 +31,7 @@
 #include "RNA_prototypes.hh"
 
 #include "WM_api.hh"
+#include "WM_native_interface.hh"
 #include "WM_types.hh"
 
 #include "UI_interface.hh"
@@ -92,6 +93,9 @@ struct BevelData {
 
   /* modal only */
   int launch_event;
+  /** Waiting for the finger to land, see #WM_native_awaits_press; then lifting confirms. */
+  bool awaits_press;
+  bool release_confirms;
   float mcenter[2];
   void *draw_handle_pixel;
   short value_mode; /* Which value does mouse movement and numeric input affect? */
@@ -530,6 +534,8 @@ static wmOperatorStatus edbm_bevel_invoke(bContext *C, wmOperator *op, const wmE
   BevelData *opdata = static_cast<BevelData *>(op->customdata);
 
   opdata->launch_event = WM_userdef_event_type_from_keymap_type(event->type);
+  opdata->awaits_press = WM_native_awaits_press(event);
+  opdata->release_confirms = false;
 
   /* initialize mouse values */
   float center_3d[3];
@@ -714,6 +720,26 @@ static wmOperatorStatus edbm_bevel_modal(bContext *C, wmOperator *op, const wmEv
   short etype = event->type;
   short eval = event->val;
 
+  if (opdata->awaits_press) {
+    /* Without hover, nothing to follow until a finger lands; where it lands, the width starts
+     * from its current value, and lifting confirms. */
+    if (etype == MOUSEMOVE) {
+      return OPERATOR_RUNNING_MODAL;
+    }
+    if (WM_native_event_is_left_press(event)) {
+      opdata->awaits_press = false;
+      opdata->release_confirms = true;
+      edbm_bevel_calc_initial_length(op, event, true);
+      return OPERATOR_RUNNING_MODAL;
+    }
+    if (etype == LEFTMOUSE && eval == KM_RELEASE) {
+      return OPERATOR_RUNNING_MODAL;
+    }
+  }
+  if (opdata->release_confirms && etype == LEFTMOUSE && eval == KM_RELEASE) {
+    etype = EVT_MODAL_MAP;
+    eval = BEV_MODAL_CONFIRM;
+  }
   /* When activated from toolbar, need to convert left-mouse release to confirm. */
   if (ELEM(etype, LEFTMOUSE, opdata->launch_event) && (eval == KM_RELEASE) &&
       RNA_boolean_get(op->ptr, "release_confirm"))

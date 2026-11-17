@@ -32,6 +32,7 @@
 #include "SEQ_transform.hh"
 
 #include "WM_api.hh"
+#include "WM_native_interface.hh"
 #include "WM_message.hh"
 
 #include "UI_interface_icons.hh"
@@ -1052,6 +1053,28 @@ static void tool_settings_update_snap_toggle(TransInfo *t)
 
 wmOperatorStatus transformEvent(TransInfo *t, wmOperator *op, const wmEvent *event)
 {
+  if (t->awaits_press) {
+    /* Without hover, the pointer moves only as a finger lands: nothing to follow until then. */
+    if (event->type == MOUSEMOVE) {
+      return OPERATOR_RUNNING_MODAL;
+    }
+    if (WM_native_event_is_left_press(event)) {
+      /* Where the finger lands is where the move starts: it slides from there, and lifting
+       * confirms. Return, the bar's Confirm and Escape keep working before it lands. */
+      t->awaits_press = false;
+      t->mval = float2(event->mval);
+      transform_input_reset(t, t->mval);
+      t->flag |= T_RELEASE_CONFIRM;
+      t->launch_event = LEFTMOUSE;
+      t->is_launch_event_drag = false;
+      return OPERATOR_RUNNING_MODAL;
+    }
+    /* The release of the tap that started it, if Blender saw that tap. */
+    if (event->type == LEFTMOUSE && event->val == KM_RELEASE) {
+      return OPERATOR_RUNNING_MODAL;
+    }
+  }
+
   bool is_navigating = t->vod ? (static_cast<RegionView3D *>(t->region->regiondata))->rflag &
                                     RV3D_NAVIGATING :
                                 false;
@@ -2006,6 +2029,7 @@ bool initTransform(bContext *C, TransInfo *t, wmOperator *op, const wmEvent *eve
   unit_m3(t->spacemtx);
 
   initTransInfo(C, t, op, event);
+  t->awaits_press = t->spacetype == SPACE_VIEW3D && WM_native_awaits_press(event);
 
   if (!G.background) {
     if (t->spacetype == SPACE_VIEW3D) {
