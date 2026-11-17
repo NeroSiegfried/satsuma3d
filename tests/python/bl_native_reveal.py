@@ -130,6 +130,30 @@ answer = reveal.after_operator(bpy.context, "OBJECT_OT_hide_view_set", "bpy.ops.
 check(answer["show"] == "message" and answer["text"] == "Hide Selected" and answer["button"].endswith(
     "action:object.reveal"), "Hide offers Reveal: %s" % answer)
 
+# 4. Commands acting onto the active object say when they had nothing to act on (the owner's
+# Parent with Automatic Weights with only the armature selected), and where parenting to an
+# armature put its results.
+for ob in list(bpy.data.objects):
+    bpy.data.objects.remove(ob)
+mesh = bpy.data.objects.new("Body", bpy.data.meshes.new("Body"))
+rig = bpy.data.objects.new("Rig", bpy.data.armatures.new("Rig"))
+for ob in (mesh, rig):
+    bpy.context.scene.collection.objects.link(ob)
+layer = bpy.context.view_layer
+layer.objects.active = rig
+rig.select_set(True)
+mesh.select_set(False)
+for idname in reveal.TO_ACTIVE:
+    answer = reveal.after_operator(bpy.context, idname, "bpy.ops.%s(type='ARMATURE_AUTO')" % idname)
+    check(answer["show"] == "message" and answer["level"] == "warning" and "Extend" in answer["text"],
+          "%s with nothing else selected warns: %s" % (idname, answer))
+mesh.select_set(True)
+answer = reveal.after_operator(bpy.context, "OBJECT_OT_parent_set", "bpy.ops.object.parent_set(type='ARMATURE_AUTO')")
+check(answer["level"] == "info" and "Body parented to Rig with automatic weights" in answer["text"] and
+      "Modifiers" in answer["text"] and "Object Data" in answer["text"], "Automatic weights says where: %s" % answer)
+check(reveal.after_operator(bpy.context, "OBJECT_OT_parent_set", "bpy.ops.object.parent_set(type='OBJECT')")["show"]
+      == "operation", "Plain parenting keeps its settings")
+
 counts = collections.Counter(shows(idname) for idname in operators)
 print("reveal: " + json.dumps(counts, sort_keys=True))
 print('PASS: native reveal ' + json.dumps(checks[:4] + ["%d table rows" % len(TABLE)]))

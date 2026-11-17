@@ -201,12 +201,60 @@ def classify(idname, call=""):
     return None
 
 
-def after_operator(_context, idname, call, label=""):
+# Commands that act from the other selected objects onto the active one, as Parent: with nothing
+# selected but the active object they finish having done nothing, and Blender says nothing.
+TO_ACTIVE = {
+    "object.parent_set": "parent",
+    "object.parent_no_inverse_set": "parent",
+    "object.track_set": "target",
+    "object.make_links_data": "source",
+    "object.make_links_scene": "source",
+    "object.constraint_add_with_targets": "owner",
+}
+
+
+def _outcome(context, idname, call):
+    """What the result of a finished command says beyond its rule, or None: a command of
+    `TO_ACTIVE` that had nothing to act on, and parenting with automatic weights, whose results
+    (the Armature modifier, the vertex groups) are on the children, not the active armature."""
+    role = TO_ACTIVE.get(idname)
+    if role is None:
+        return None
+    active = context.view_layer.objects.active if context.view_layer else None
+    others = [ob for ob in context.selected_objects if ob != active]
+    if active is None or not others:
+        return {
+            "show": "message", "level": "warning", "focus": "", "button": "", "why": "nothing to act on",
+            "text": ("Nothing was done: this needs two selections. Tap the object to change first, then turn "
+                     "on Extend and tap the {:s} last, so it is the active one.").format(
+                         "armature" if "ARMATURE" in call else role),
+        }
+    if idname == "object.parent_set" and "ARMATURE" in call:
+        names = ", ".join(ob.name for ob in others[:3]) + ("…" if len(others) > 3 else "")
+        weights = "with automatic weights" if "ARMATURE_AUTO" in call else (
+            "with empty groups" if "ARMATURE_NAME" in call else "")
+        return {
+            "show": "message", "level": "info", "focus": "", "button": "", "why": "parented to an armature",
+            "text": ("{:s} parented to {:s} {:s}. Select {:s} to see its Armature modifier (Properties, "
+                     "Modifiers) and vertex groups (Properties, Object Data).").format(
+                         names, active.name, weights, "it" if len(others) == 1 else "one").replace("  ", " "),
+        }
+    return None
+
+
+def after_operator(context, idname, call, label=""):
     """What to show after the operator `idname` finished, as called by `call`: a dict of `show`,
-    `focus`, `text`, `button` and `why`, for the bridge's `reveal`."""
+    `focus`, `text`, `button`, `why` and `level`, for the bridge's `reveal`."""
+    try:
+        outcome = _outcome(context, _python_idname(idname), call)
+    except Exception:
+        outcome = None
+    if outcome is not None:
+        outcome["rule"] = "outcome"
+        return outcome
     rule = classify(idname, call)
     if rule is None:
-        return {"show": "operation", "focus": "", "text": "", "button": "", "why": "", "rule": ""}
+        return {"show": "operation", "focus": "", "text": "", "button": "", "why": "", "rule": "", "level": ""}
     return {
         "show": rule.show,
         "focus": rule.focus,
@@ -214,6 +262,7 @@ def after_operator(_context, idname, call, label=""):
         "button": rule.button,
         "why": rule.why,
         "rule": rule.pattern.pattern[:60],
+        "level": "",
     }
 
 

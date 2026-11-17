@@ -4938,7 +4938,7 @@ static void bridge_reveal_after(bContext *C, wmOperator *op, const std::string &
   const std::string show(bridge_text(*answer, "show"));
   std::string json = "{\"number\":" + std::to_string(++bridge_reveal_number) + ",\"operator\":\"" +
                      bridge_json_escape(op->type->idname) + "\"";
-  for (const char *key : {"show", "focus", "text", "button", "why"}) {
+  for (const char *key : {"show", "focus", "text", "button", "why", "level"}) {
     json += std::string(",\"") + key + "\":\"" +
             bridge_json_escape(std::string(bridge_text(*answer, key))) + "\"";
   }

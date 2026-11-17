@@ -69,19 +69,21 @@ final class RevealCoordinator {
     let show = entry["show"] as? String ?? "none"
     let text = entry["text"] as? String ?? ""
     let button = entry["button"] as? String ?? ""
+    let level = entry["level"] as? String ?? ""
     /* A hint said once is not said again this session. */
     if entry["focus"] as? String == "once" {
       guard !said.contains(text) else { return }
       said.insert(text)
     }
-    act(show, idname: idname, text: text, button: button, model: model)
+    act(show, idname: idname, text: text, button: button, level: level, model: model)
   }
 
-  private func act(_ show: String, idname: String, text: String, button: String, model: ShellModel) {
+  private func act(_ show: String, idname: String, text: String, button: String, level messageLevel: String = "",
+                   model: ShellModel) {
     let level = Self.level
     var done = "nothing"
     defer { WM_native_ui_log("reveal", "\(idname): \(show) -> \(done)") }
-    if level == .off {
+    if level == .off && messageLevel != "warning" {
       done = "off in Settings"
       return
     }
@@ -113,9 +115,11 @@ final class RevealCoordinator {
         open(editor: target)
         done = "editor " + target
       case "message":
-        guard level == .all, !text.isEmpty else { return }
+        /* A warning says a command did nothing, which no setting silences. */
+        guard level == .all || messageLevel == "warning", !text.isEmpty else { return }
         let pieces = button.split(separator: "\t", maxSplits: 1).map(String.init)
-        model.messages.say(text, button: pieces.first, target: pieces.count > 1 ? pieces[1] : nil)
+        model.messages.say(text, level: messageLevel.isEmpty ? "info" : messageLevel, button: pieces.first,
+                           target: pieces.count > 1 ? pieces[1] : nil)
         done = "message"
       default:
         done = "nothing"
