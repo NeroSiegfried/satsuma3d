@@ -316,14 +316,18 @@ struct QuickActionsRow: View {
        * Blender places the gizmo, but beside the window's sides. */
       /* Clear of the navigation gizmo's hotspot where it is along the bottom, which Blender places
        * in fractions of the viewport: on the right, or the left for the left hand. */
+      /* The gizmo with its buttons, and the touch hotspot around the gizmo, which reaches further. */
       let gizmo = model.navigationGizmo
-      let gizmoBottom = gizmo.count != 3 || gizmo[1] > 0.5
-      let gizmoLeft = gizmo.count == 3 && gizmo[0] < 0.5
+      let footprint = model.navigationFrame(in: geometry.size)
+      let gizmoBottom = footprint.map { $0.midY > geometry.size.height / 2 } ?? true
+      let gizmoLeft = footprint.map { $0.midX < width / 2 } ?? false
       let gizmoReach = gizmo.count == 3 ? max(44, gizmo[2] * width + 10) : 0
+      let reachLeft = min(footprint?.minX ?? width, gizmo.count == 3 ? gizmo[0] * width - gizmoReach : width)
+      let reachRight = max(footprint?.maxX ?? 0, gizmo.count == 3 ? gizmo[0] * width + gizmoReach : 0)
       let laneLeading = max(model.sideInsets.left + ShellMetrics.railLeading + model.toolRailWidth + 12,
-                            gizmoBottom && gizmoLeft ? gizmo[0] * width + gizmoReach + 12 : 0)
+                            gizmoBottom && gizmoLeft ? reachRight + 12 : 0)
       let hotspot = min(!gizmoBottom || gizmoLeft ? width :
-                          gizmo.count == 3 ? gizmo[0] * width - gizmoReach : width - ShellMetrics.gizmoReserve,
+                          footprint != nil ? reachLeft : width - ShellMetrics.gizmoReserve,
                         width - model.sideInsets.right)
       let laneWidth = max(0, hotspot - 12 - laneLeading)
       let wide = width >= ShellMetrics.wideRow

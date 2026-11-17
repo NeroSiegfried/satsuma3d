@@ -184,14 +184,14 @@ def seed(strip):
 
 
 vertex = titles("builtin.move")
-check(seed(vertex) == ["Connect", "Merge", "Bevel Vertices", "Make Edge/Face", "Dissolve", "Delete"],
+check(seed(vertex) == ["Subdivide", "Connect", "Merge", "Bevel Vertices", "Make Edge/Face", "Dissolve", "Delete"],
       "The vertex strip is the seed: " + str(vertex))
 check("mesh.rip" in palette_items("builtin.move") and palette_items("builtin.move")["mesh.rip"]["tool"] ==
       "builtin.rip_region", "Rip activates its tool from the palette")
 
 bpy.context.tool_settings.mesh_select_mode = (False, True, False)
 edge = titles("builtin.move")
-check(seed(edge) == ["Bevel", "Loop Cut", "Bridge Loops", "Subdivide", "Dissolve", "Delete"],
+check(seed(edge) == ["Subdivide", "Bevel", "Loop Cut", "Bridge Loops", "Dissolve", "Delete"],
       "The edge strip is the seed: " + str(edge))
 items = palette_items("builtin.move")
 check("mesh.loop_select" in items and "mesh.ring_select" in items and "mesh.mark_seam" in items,
@@ -199,7 +199,7 @@ check("mesh.loop_select" in items and "mesh.ring_select" in items and "mesh.mark
 
 bpy.context.tool_settings.mesh_select_mode = (False, False, True)
 face = titles("builtin.move")
-check(seed(face) == ["Inset", "Bevel", "Subdivide", "Separate", "Dissolve", "Delete"],
+check(seed(face) == ["Subdivide", "Inset", "Bevel", "Separate", "Dissolve", "Delete"],
       "The face strip is the seed: " + str(face))
 groups = [group["group"] for group in palette("builtin.move")]
 check("Normals & Shading" in groups and "Vertex" not in groups, "The face palette: " + str(groups))

@@ -121,11 +121,11 @@ struct ToolSettingItem: View {
         .toggleStyle(.button)
         .disabled(!node.enabled)
       case .toggle:
-        /* A switch beside its name in the bar; a checkmark item in its overflow menu. */
+        /* Blender's checkbox beside its name in the bar; a checkmark item in its overflow menu. */
         Toggle(isOn: Binding(get: { model.bool(node) }, set: { model.set(node, .bool($0)) })) {
           Text(title)
         }
-        .toggleStyle(.switch)
+        .toggleStyle(BlenderCheckboxStyle())
         .fixedSize()
         .disabled(!node.enabled)
       case .button:
@@ -281,12 +281,13 @@ struct StripColumn: View {
   @ViewBuilder
   private var control: some View {
     switch node.kind {
-      /* A switch, not the button the toolbar would make of a toggle. */
+      /* Blender's checkbox under its caption, not the button the toolbar would make of a toggle. */
       case .toggle:
-        NativeSwitch(model: model, node: node)
-          .toggleStyle(.switch)
-          .scaleEffect(0.7)
-          .frame(width: 40, height: 24)
+        Toggle(isOn: Binding(get: { model.bool(node) }, set: { model.set(node, .bool($0)) })) { EmptyView() }
+          .toggleStyle(BlenderCheckboxStyle())
+          .disabled(!node.enabled)
+          .accessibilityLabel(node.label)
+          .frame(height: 24)
       case .button:
         NativeButton(model: model, node: node, compact: true)
       case .choice:

@@ -470,6 +470,7 @@ public struct DocumentWindow: View {
   /** The split as the divider is dragged, kept once it is let go. */
   @State private var imageSplitDrag: Double?
   @Environment(\.horizontalSizeClass) private var sizeClass
+  @AppStorage(ShellStyle.key) private var interfaceStyle = ShellStyle.blender.rawValue
 
   /** The native controls are hidden in full screen, and over Blender's own interface. */
   private var controlsShown: Bool { !model.desktop && !model.interfaceHidden }
@@ -541,6 +542,7 @@ public struct DocumentWindow: View {
         }
         .toolbar(controlsShown ? .visible : .hidden, for: .navigationBar)
         .toolbarTitleDisplayMode(.inline)
+        .headerSurface(interfaceStyle)
         /* As an editor's: the tool's settings are the bar's middle items, which the system lays
          * out in the room there is, the rest in its overflow menu. */
         .toolbarRole(.editor)
@@ -605,6 +607,7 @@ public struct DocumentWindow: View {
         }
         .toolbar(controlsShown ? .visible : .hidden, for: .navigationBar)
         .toolbarTitleDisplayMode(.inline)
+        .headerSurface(interfaceStyle)
         .onChange(of: sizeClass, initial: true) { _, size in model.compact = size == .compact }
 #if os(visionOS)
         .visionOrnaments(model: model, shown: controlsShown && model.windowVisible)

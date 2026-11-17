@@ -948,13 +948,9 @@ struct ToolRails: View {
       let safe = CGRect(origin: .zero, size: proxy.size).inset(by: insets)
       let toolItems = RailItem.tools(model.tools, mode: model.mode)
       let brushItems = RailItem.brushes(model.brushes)
-      /* The navigation gizmo, in whichever corner it is. */
-      let gizmo = model.navigationGizmo
+      /* The navigation gizmo with its buttons, in whichever corner it is. */
       let gizmoFrame = !gizmoShown ? CGRect(x: safe.minX, y: safe.maxY + 1000, width: 0, height: 0) :
-        gizmo.count == 3 ?
-        CGRect(x: CGFloat(gizmo[0]) * proxy.size.width, y: CGFloat(gizmo[1]) * proxy.size.height, width: 0, height: 0)
-          .insetBy(dx: -CGFloat(gizmo[2]) * proxy.size.width, dy: -CGFloat(gizmo[2]) * proxy.size.width) :
-        CGRect(x: safe.maxX - 100, y: safe.maxY - 100, width: 80, height: 80)
+        model.navigationFrame(in: proxy.size) ?? CGRect(x: safe.maxX - 100, y: safe.maxY - 100, width: 80, height: 80)
       let arrange = { (dial: Bool) -> (SidebarContent, RailLayout) in
         let content = SidebarContent(brush: model.brush,
                                      buttons: model.direction?.hidden != true || model.transforming,
@@ -3027,8 +3023,10 @@ struct RailLayout: Equatable {
       guard toolsHere || brushesHere || sidebarHere else { continue }
       /* The gizmo's corner left free in its row. */
       let gizmoRow = (row == .bottom) == gizmoBottom
-      let minX = safe.minX + max(lane(true), gizmoRow && gizmoLeading ? ShellMetrics.gizmoReserve : 0)
-      let maxX = safe.maxX - max(lane(false), gizmoRow && !gizmoLeading ? ShellMetrics.gizmoReserve : 0)
+      /* As far in as the gizmo and its buttons reach. */
+      let reserve = gizmoLeading ? gizmo.maxX - safe.minX + gap : safe.maxX - gizmo.minX + gap
+      let minX = safe.minX + max(lane(true), gizmoRow && gizmoLeading ? max(ShellMetrics.gizmoReserve, reserve) : 0)
+      let maxX = safe.maxX - max(lane(false), gizmoRow && !gizmoLeading ? max(ShellMetrics.gizmoReserve, reserve) : 0)
       /* The sidebar keeps its length, at the end of the row; the rails scroll in what is left. */
       let sidebarLength = sidebarHere ? sidebar.height + (toolsHere || brushesHere ? gap : 0) : 0
       let room = max(compact, maxX - minX - sidebarLength)

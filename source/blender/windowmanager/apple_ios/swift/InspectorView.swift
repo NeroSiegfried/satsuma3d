@@ -79,6 +79,7 @@ struct ToolSettingPopover<Content: View>: View {
         .frame(idealWidth: 320, idealHeight: 380)
         .presentationCompactAdaptation(.popover)
         .tint(PanelStyle.tint)
+        .popoverSurface()
     }
   }
 }

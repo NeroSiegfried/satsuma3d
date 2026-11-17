@@ -396,6 +396,8 @@ ACTIONS = [
            _mesh("EDGE", exclude=("FACE",)), group="Edge"),
     Action("mesh.extrude_verts", "Extrude", "view3d.edit_mesh_extrude_move_normal", "ops.mesh.extrude_region_move",
            _mesh("VERT", exclude=("EDGE", "FACE")), group="Vertex"),
+    # Every select mode, after Extrude as in Blender's context menus; it needs a whole edge.
+    Action("mesh.subdivide", "Subdivide", "mesh.subdivide", "MESH_GRID", _mesh(edges=1), group="Mesh"),
     # Vertices.
     Action("mesh.connect", "Connect", "mesh.vert_connect_path", "IPO_LINEAR", _mesh("VERT", verts=2), group="Vertex"),
     Action("mesh.merge_center", "Merge", "mesh.merge", "AUTOMERGE_OFF", _mesh("VERT", verts=2),
@@ -422,7 +424,6 @@ ACTIONS = [
     Action("mesh.loop_cut", "Loop Cut", "", "ops.mesh.loopcut_slide", _mesh("EDGE", exclude=("FACE",)), tool="builtin.loop_cut",
            group="Edge"),
     Action("mesh.bridge", "Bridge Loops", "mesh.bridge_edge_loops", "MESH_CYLINDER", _mesh("EDGE", edges=2), group="Edge"),
-    Action("mesh.subdivide", "Subdivide", "mesh.subdivide", "MESH_GRID", _mesh("EDGE", "FACE", edges=1), group="Mesh"),
     Action("mesh.separate", "Separate", "mesh.separate", "MOD_EXPLODE", _mesh("FACE", faces=1), {"type": 'SELECTED'},
            group="Mesh"),
     Action("mesh.dissolve_edges", "Dissolve", "mesh.dissolve_edges", "MOD_DECIM",

@@ -536,6 +536,8 @@ enum ShellStyle: String {
   static let selection = Color(red: 0x47 / 255, green: 0x72 / 255, blue: 0xb3 / 255)
   static let tooltip = Color(red: 0x19 / 255, green: 0x19 / 255, blue: 0x19 / 255)
   static let text = Color(red: 0xe6 / 255, green: 0xe6 / 255, blue: 0xe6 / 255)
+  /** A checkbox's or field's inside while off. */
+  static let widget = Color(red: 0x54 / 255, green: 0x54 / 255, blue: 0x54 / 255)
   /** Blender rounds its regions and widgets a little, not into capsules. */
   static let radius: CGFloat = 6
 }
@@ -552,6 +554,72 @@ struct ShellShape: Shape {
       return Capsule().path(in: rect)
     }
     return RoundedRectangle(cornerRadius: ShellStyle.radius, style: .continuous).path(in: rect)
+  }
+}
+
+/** Blender's checkbox beside its name, as its headers and panels draw a setting that is on or off:
+ * padded so it never meets the edge of what holds it. */
+struct BlenderCheckboxStyle: ToggleStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    Button { configuration.isOn.toggle() } label: {
+      HStack(spacing: 6) {
+        ZStack {
+          RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(configuration.isOn ? ShellStyle.selection : ShellStyle.widget)
+          RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .strokeBorder(ShellStyle.outline, lineWidth: 1)
+          if configuration.isOn {
+            Image(systemName: "checkmark")
+              .font(.system(size: 10, weight: .bold))
+              .foregroundStyle(.white)
+          }
+        }
+        .frame(width: 16, height: 16)
+        configuration.label
+          .lineLimit(1)
+      }
+      .padding(.horizontal, 8)
+      .padding(.vertical, 4)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(.isToggle)
+    .accessibilityValue(configuration.isOn ? "On" : "Off")
+  }
+}
+
+/** A popover's surface in the chosen style: Blender's region grey and light text, or the system's. */
+private struct PopoverSurface: ViewModifier {
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
+
+  func body(content: Content) -> some View {
+    if style == ShellStyle.glass.rawValue {
+      content
+    }
+    else {
+      content
+        .presentationBackground(ShellStyle.region)
+        .environment(\.colorScheme, .dark)
+    }
+  }
+}
+
+extension View {
+  /** On a popover's content, see #PopoverSurface. */
+  func popoverSurface() -> some View { modifier(PopoverSurface()) }
+
+  /** The document's top bar in the chosen style: in Blender's, its header, the theme's grey with
+   * light items; the system's glass otherwise. */
+  func headerSurface(_ style: String) -> some View {
+    let blender = style != ShellStyle.glass.rawValue
+#if os(visionOS)
+    return self
+#else
+    return self
+      .toolbarBackground(ShellStyle.region, for: .navigationBar)
+      .toolbarBackgroundVisibility(blender ? .visible : .automatic, for: .navigationBar)
+      .toolbarColorScheme(blender ? .dark : nil, for: .navigationBar)
+#endif
   }
 }
 

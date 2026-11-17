@@ -2697,6 +2697,39 @@ void bridge_toolbar_view_build(bContext *C,
                                1.0 - (region->winrct.ymin + y - cover) / (height - cover),
                                radius / width};
       data("navigation_gizmo", Span<double>(gizmo, 3));
+
+      /* All the gizmo takes, its zoom, move, camera and projection buttons too where they show,
+       * which the native controls keep clear of: as `view3d_gizmo_navigate.cc` stacks them, a
+       * column at the view's edge leading away from the gizmo's corner, at most four. */
+      float x0 = x - radius, x1 = x + radius, y0 = y - radius, y1 = y + radius;
+      if (!bridge_navigation_minimal && (U.uiflag & USER_SHOW_GIZMO_NAVIGATE)) {
+        const float mini = (28.0f + 2.0f) * U.scale_factor;
+        float from_axis = mini * 0.75f;
+        switch (eUserpref_MiniAxisType(U.mini_axis_type)) {
+          case USER_MINI_AXIS_TYPE_GIZMO:
+            from_axis = inset * 2.2f;
+            break;
+          case USER_MINI_AXIS_TYPE_MINIMAL:
+            from_axis = (U.widget_unit * 2.0f) + (U.rvisize * U.scale_factor * 1.6f);
+            break;
+          case USER_MINI_AXIS_TYPE_NONE:
+            break;
+        }
+        const float column = bridge_navigation_left ? visible.xmin + mini * 0.75f :
+                                                      visible.xmax - mini * 0.75f;
+        const float first = bridge_navigation_top ? visible.ymax - from_axis : visible.ymin + from_axis;
+        const float last = first + (bridge_navigation_top ? -3.0f : 3.0f) * mini;
+        x0 = std::min(x0, column - mini * 0.5f);
+        x1 = std::max(x1, column + mini * 0.5f);
+        y0 = std::min({y0, first - mini * 0.5f, last - mini * 0.5f});
+        y1 = std::max({y1, first + mini * 0.5f, last + mini * 0.5f});
+      }
+      /* Its left, top, right and bottom as fractions of the window from the top left. */
+      const double footprint[4] = {(region->winrct.xmin + x0) / width,
+                                   1.0 - (region->winrct.ymin + y1 - cover) / (height - cover),
+                                   (region->winrct.xmin + x1) / width,
+                                   1.0 - (region->winrct.ymin + y0 - cover) / (height - cover)};
+      data("navigation_footprint", Span<double>(footprint, 4));
     }
   }
   if (view3d && scene) {

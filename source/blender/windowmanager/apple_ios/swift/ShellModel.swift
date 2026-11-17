@@ -233,6 +233,22 @@ final class ShellModel {
   /** Blender's navigation gizmo: its center and radius, in fractions of the window's width and
    * height (center) and width (radius). */
   var navigationGizmo: [Double] { floats("navigation_gizmo") }
+  /** All the navigation gizmo takes with its buttons, as fractions of the window from the top left:
+   * left, top, right and bottom. */
+  var navigationFootprint: [Double] { floats("navigation_footprint") }
+
+  /** The navigation gizmo and its buttons in a window of \a size, or nil before Blender says. */
+  func navigationFrame(in size: CGSize) -> CGRect? {
+    let f = navigationFootprint
+    guard f.count == 4 else {
+      let g = navigationGizmo
+      guard g.count == 3 else { return nil }
+      let r = g[2] * size.width
+      return CGRect(x: g[0] * size.width - r, y: g[1] * size.height - r, width: r * 2, height: r * 2)
+    }
+    return CGRect(x: f[0] * size.width, y: f[1] * size.height,
+                  width: (f[2] - f[0]) * size.width, height: (f[3] - f[1]) * size.height)
+  }
   /** The color the viewport is cleared to, as red, green and blue in display space. */
   var viewportBackground: [Double] { floats("viewport_background") }
   /** The modes the active object has, as Blender's header lists them, and the current one. */

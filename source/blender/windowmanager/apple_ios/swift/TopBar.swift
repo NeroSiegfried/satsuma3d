@@ -220,8 +220,20 @@ struct DocumentToolbar: ToolbarContent {
   let shell: ShellPanels
   let commands: ShellCommands
   @AppStorage(FaceControl.shownKey) private var faceControlShown = false
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
 
   var body: some ToolbarContent {
+#if os(visionOS)
+    items
+#else
+    /* In Blender's style the items sit on its header's grey, as its own header's buttons do,
+     * without the system's glass around them. */
+    items.sharedBackgroundVisibility(style == ShellStyle.glass.rawValue ? .automatic : .hidden)
+#endif
+  }
+
+  @ToolbarContentBuilder
+  private var items: some ToolbarContent {
     if model.documentsAvailable {
       /* Back to the documents is navigation, not a tool: its own glass, as the system's back
        * button. */
@@ -692,6 +704,7 @@ extension View {
     @Bindable var model = model
     return popover(isPresented: $model.shadingOpen) {
       shell.panels.shadingContent(model: model) { model.shadingOpen = false }
+        .popoverSurface()
     }
     .onChange(of: model.shadingOpen) { _, shown in shell.panels.setShadingShown(shown) }
   }
