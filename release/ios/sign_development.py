@@ -4,10 +4,12 @@
 
 """Sign a device build for development and, optionally, install it on a connected iPad.
 
-For development only: every Mach-O in the app is signed where it is, without the framework
-packaging `prepare_testflight.py` does for App Store builds, so desktop-style Python extension
-bundles load as they are. Uses the app's free-team entitlements by default, which the profile must
-grant; pass `--entitlements entitlements.plist` with a paid team.
+For development only: every Mach-O in the app is signed where it is, frameworks and app
+extensions as bundles, inner code first. It signs either layout: the installed app as it is
+(loose libraries; desktop-style Python extension bundles load as they are), or one
+`prepare_testflight.py` has packaged as frameworks, to run the App Store layout on a device with a
+development profile (ROUND5 8F.3). Uses the app's free-team entitlements by default, which the
+profile must grant; pass `--entitlements entitlements.plist` with a paid team.
 
     python3 sign_development.py /path/to/Blender.app /path/to/Signed.app \
         --profile profile.mobileprovision --identity "Apple Development: ..." [--install UDID]
