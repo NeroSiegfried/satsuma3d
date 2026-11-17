@@ -17,6 +17,9 @@
  * - `stack <actions|operation|item> <open|fold>`: open or fold a piece of the bottom row, see
  *   #BottomStackState (`operation open` opens the last operation's strip, if there is one);
  * - `tab <ID>`: open Properties on a tab, such as `tab MATERIAL` or `tab SIDEBAR:Item`;
+ * - `op <IDNAME> [name=value ...]`: run a Blender operator, as a button runs it;
+ * - `pad open|close`: the number pad of a waiting operation;
+ * - `panel <key end> open|close`: a Properties panel, such as `panel PT_surface open`;
  * - `wait <seconds>`;
  * - `shot <name>`: every window of the scene, drawn into `tmp/shots/<name>.png`.
  *
@@ -64,7 +67,7 @@ enum ShellSnapshots {
       WM_native_ui_log("snapshot", "script in \(scratch ? "scratch document" : "a person's document") \((path as NSString).lastPathComponent)")
       for step in steps {
         let verb = step.split(separator: " ").first.map(String.init) ?? ""
-        if !scratch && ["send", "tool"].contains(verb) {
+        if !scratch && ["send", "tool", "op", "panel"].contains(verb) {
           WM_native_ui_log("snapshot", "refused outside the scratch document: \(step)")
           continue
         }
@@ -139,6 +142,30 @@ enum ShellSnapshots {
         panels.setInspectorShown(true)
         try? await Task.sleep(for: .milliseconds(600))
         panels.properties.selectTab(tab)
+        try? await Task.sleep(for: .seconds(1))
+      case "op":
+        /* A Blender operator, as a button runs it: `op OBJECT_OT_modifier_add type=BEVEL`. */
+        guard let name = words.first else { break }
+        var properties: [String: NativeValue] = [:]
+        for pair in words.dropFirst().joined(separator: " ").split(separator: " ") {
+          let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
+          guard parts.count == 2 else { continue }
+          properties[parts[0]] = Double(parts[1]).map { .float($0) } ?? .text(parts[1])
+        }
+        Operators.run(name, properties)
+        try? await Task.sleep(for: .milliseconds(600))
+      case "pad":
+        /* The number pad of a waiting operation, as its 123 button shows it. */
+        withAnimation(.easeOut(duration: 0.18)) { NumberPadState.shared.shown = words.first == "open" }
+        try? await Task.sleep(for: .milliseconds(600))
+      case "panel":
+        /* A Properties panel opened or closed by the end of its key: `panel PT_surface open`. */
+        guard words.count >= 2, let properties = SwiftScenePanels.current?.properties,
+              let panel = properties.panels.first(where: { $0.key.hasSuffix(words[0]) }) else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        properties.setOpen(panel, words[1] == "open")
         try? await Task.sleep(for: .seconds(1))
       case "wait":
         try? await Task.sleep(for: .seconds(Double(words.first ?? "") ?? 0.5))

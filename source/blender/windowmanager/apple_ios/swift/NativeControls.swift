@@ -769,30 +769,6 @@ struct BlenderExpandedChoice: View {
 }
 
 /** A switch, which also runs a button Blender draws as a checkbox. */
-struct NativeSwitch: View {
-  let model: PanelsModel
-  let node: NativeNode
-
-  var body: some View {
-    /* Read here, so the switch follows the value it shows. */
-    let on = model.bool(node)
-    let mixed = model.isMixed(node)
-    HStack(spacing: 8) {
-      if mixed {
-        /* Switches have no mixed state: off, with the dash the other controls show. */
-        Text("—").foregroundStyle(.secondary).accessibilityHidden(true)
-      }
-      Toggle(node.label, isOn: Binding(
-        get: { on && !mixed },
-        set: { model.set(node, .bool($0)) }))
-        .labelsHidden()
-        .tint(nativeAnimationColor(node.node.animation) ?? Color(uiColor: .systemGreen))
-        .disabled(!node.enabled)
-        .accessibilityValue(mixed ? "Mixed" : "")
-    }
-  }
-}
-
 struct NativeButton: View {
   let model: PanelsModel
   let node: NativeNode

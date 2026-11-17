@@ -1170,7 +1170,9 @@ struct PanelHeaderControls: View {
         Group {
           switch control.kind {
             case .toggle:
-              NativeSwitch(model: model, node: control)
+              /* As Blender's header draws it (ROUND5 7C: one way to draw a setting): its own icon
+               * as a toggle button, else a checkbox; the panel's name is the label. */
+              PanelHeaderToggle(model: model, node: control)
             case .button:
               HeaderButton(model: model, node: control)
             default:
@@ -1181,6 +1183,30 @@ struct PanelHeaderControls: View {
         .fixedSize()
       }
     }
+  }
+}
+
+/** A toggle in a panel's header: Blender's icon toggle, or its checkbox without a name. */
+struct PanelHeaderToggle: View {
+  let model: PanelsModel
+  let node: NativeNode
+
+  var body: some View {
+    let on = model.bool(node)
+    let mixed = model.isMixed(node)
+    let icon = node.icon.flatMap { $0.isEmpty || $0.hasPrefix("CHECKBOX") ? nil : BlenderIcon.image($0) }
+    Group {
+      if let icon {
+        BlenderToggleButton(name: node.label, icon: icon, isOn: on && !mixed) { model.set(node, .bool(!on)) }
+      }
+      else {
+        Toggle(isOn: Binding(get: { on && !mixed }, set: { model.set(node, .bool($0)) })) { EmptyView() }
+          .toggleStyle(BlenderCheckboxStyle())
+          .accessibilityLabel(node.label)
+      }
+    }
+    .disabled(!node.enabled)
+    .accessibilityValue(mixed ? "Mixed" : "")
   }
 }
 

@@ -190,10 +190,13 @@ check('"path"' in (SWIFT.parents[2] / 'editors/interface/interface_native_proper
 
 # 7C: a setting is drawn one way. Properties' rows use the widgets of the bars (BlenderWidgets.swift):
 # no system slider, switch, colour well or menu picker in a row, and no light system field as a
-# control's fill. The rows are ControlRow and the views it draws, up to NativeSwitch, which only
-# panel headers use.
+# control's fill. The rows are ControlRow and the views it draws, up to NativeButton. Panel headers
+# too: their toggles are Blender's checkbox or icon toggle, not the system's switch.
 controls = code['NativeControls.swift']
-rows = controls[controls.index('struct ControlRow'):controls.index('struct NativeSwitch')]
+rows = controls[controls.index('struct ControlRow'):controls.index('struct NativeButton')]
+check('struct NativeSwitch' not in controls and 'NativeSwitch(' not in panels
+      and 'PanelHeaderToggle(' in panels,
+      "Panel headers draw toggles with Blender's widgets, not the system switch (ROUND5 7C)")
 check('Slider(' not in rows and 'ColorPicker(' not in controls and 'UIColorWell' not in controls,
       "Properties' rows draw no system slider and no colour well (ROUND5 7C)")
 check('.pickerStyle(.menu)' not in controls, "No system menu picker in Properties' rows (ROUND5 7C)")
