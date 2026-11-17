@@ -1078,6 +1078,7 @@ struct ToolRails: View {
           ShellModel.current?.setTool(item.id)
         }
         .layoutZone("tools")
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { model.toolsFrame = $0 }
         .position(carriedCenter(.tools, size: CGSize(width: layout.toolWidth, height: layout.toolHeight)) ??
                   layout.toolCenter)
         .onChange(of: layout.toolsCompact) { _, compact in
@@ -1182,7 +1183,8 @@ struct ToolRails: View {
         let origin = proxy.frame(in: .global).origin
         LayoutChecker.shared.set("gizmo", gizmo.offsetBy(dx: origin.x, dy: origin.y))
       }
-      .onChange(of: model.topBarBottom, initial: true) { _, bottom in
+      /* The header itself; the tool settings row under it is a zone of its own. */
+      .onChange(of: model.navigationBarBottom, initial: true) { _, bottom in
         LayoutChecker.shared.set("header", CGRect(x: 0, y: 0, width: proxy.frame(in: .global).maxX, height: bottom))
       }
       /* A forgotten Extend or Subtract must not make the next mode's taps look broken. */

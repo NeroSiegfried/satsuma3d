@@ -788,7 +788,8 @@ struct ToolSettingsTransformItems: View {
           }
         } label: {
           Label {
-            Text(setting.title)
+            /* The value chosen, as Blender's header shows it; the setting's name where none is. */
+            Text(selected?.title ?? setting.title)
           } icon: {
             iconImage(selected.flatMap { setting.image($0) } ??
                       (setting.key == "snap" && value == "mixed" ? wm_apple_ios_icon("control.Snapping", "magnet") :
@@ -847,22 +848,14 @@ struct EditorMenus: View {
 
   var body: some View {
     let items = (menus.items[Self.route] ?? []).filter { $0.submenu && !$0.disabled }
-    ViewThatFits(in: .horizontal) {
-      HStack(spacing: 0) {
-        ForEach(items) { item in
-          Menu { BlenderMenuItems(route: item.route) } label: { Text(item.title) }
-            .accessibilityIdentifier("blender.menu.\(item.title)")
-        }
+    /* Text menus side by side, as the desktop's header; a narrow window has them in More. */
+    HStack(spacing: 0) {
+      ForEach(items) { item in
+        Menu { BlenderMenuItems(route: item.route) } label: { Text(item.title) }
+          .accessibilityIdentifier("blender.menu.\(item.title)")
       }
-      Menu {
-        ForEach(items) { item in
-          Menu(item.title) { BlenderMenuItems(route: item.route) }
-        }
-      } label: {
-        Text("Menus")
-      }
-      .accessibilityIdentifier("blender.menus")
     }
+    .fixedSize()
     .prefetchingBlenderMenu(Self.route)
   }
 }

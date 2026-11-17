@@ -3179,8 +3179,10 @@ bool GHOST_WindowIOS::makeKeyWindow()
     else {
       rootWindow.hidden = YES;
     }
-    surface->setVisible(rootWindow.windowScene.activationState ==
-                        UISceneActivationStateForegroundActive);
+    /* On screen in the foreground, focused or not, see #ghost_window_on_screen. */
+    surface->setVisible(!rootWindow.hidden &&
+                        rootWindow.windowScene.activationState != UISceneActivationStateBackground &&
+                        rootWindow.windowScene.activationState != UISceneActivationStateUnattached);
   });
 
   IOS_WINDOW_LOG(@"Key Window: (ui_View)%p (mtkView)%p con(%p) (win=%p)",

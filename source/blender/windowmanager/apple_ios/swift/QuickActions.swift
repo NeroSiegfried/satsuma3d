@@ -361,6 +361,17 @@ struct QuickActionsRow: View {
     return own + CommandSearch.shared.pinnedActions.filter { !ids.contains(String($0.id.dropFirst("pin:".count))) }
   }
 
+  /** How far the row rises to stay clear of a tool rail lying along the bottom under it, measured
+   * from the rail's own frame, so the two never overlap whatever placed them. */
+  private func railLift(in window: CGRect) -> CGFloat {
+    let rail = model.toolsFrame
+    guard rail.width > rail.height, rail.midY > window.midY else { return 0 }
+    let base = max(model.safeAreaInsets.bottom + ShellMetrics.rowBottom + model.bottomTray + model.bottomRailHeight,
+                   KeyboardLift.shared.stripLift + 8)
+    let rowBottom = window.maxY - base
+    return max(0, rowBottom - rail.minY + 8)
+  }
+
   /** An operation waits for keys: the bar is its modal bar. */
   private var modalRunning: Bool { actions.contains { $0.modalKey } }
 
@@ -492,7 +503,8 @@ struct QuickActionsRow: View {
       }
       /* Above the keyboard while one of the strip's fields is typed into; the viewport stays. */
       .padding(.bottom, max(model.safeAreaInsets.bottom + ShellMetrics.rowBottom + model.bottomTray +
-                              model.bottomRailHeight, KeyboardLift.shared.stripLift + 8))
+                              model.bottomRailHeight, KeyboardLift.shared.stripLift + 8) +
+               railLift(in: geometry.frame(in: .global)))
       .ignoresSafeArea(edges: .bottom)
     }
     .ignoresSafeArea(edges: .horizontal)

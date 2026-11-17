@@ -42,6 +42,9 @@ struct ToolSettingsRow: View {
           }
         }
         .labelStyle(.titleAndIcon)
+        /* Blender's text colour, not the system's blue. */
+        .tint(Color.primary)
+        .foregroundStyle(Color.primary)
         .padding(.horizontal, 8)
         .frame(height: 44)
       }

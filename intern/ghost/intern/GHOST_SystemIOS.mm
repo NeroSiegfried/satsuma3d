@@ -476,22 +476,29 @@ void GHOST_ios_unregister_window(UIWindow *window)
   [[NSNotificationCenter defaultCenter] postNotificationName:@"BlenderSceneActive" object:scene];
 }
 
+/* Inactive is not hidden: in a window beside others, or under Control Center, the scene is still
+ * on screen while another has focus, and is resized there. Blender keeps drawing until the scene
+ * leaves the foreground; stopping on resigning left the viewport empty after a resize, with its
+ * gizmos and everything Blender feeds the interface gone. */
 - (void)sceneWillResignActive:(UIScene *)scene
 {
-  engine_active.store(false);
-  [[NSNotificationCenter defaultCenter] postNotificationName:@"BlenderSceneInactive" object:scene];
+  UNUSED_VARS(scene);
 }
 
 - (void)sceneWillEnterForeground:(UIScene *)scene
 {
-  UNUSED_VARS(scene);
   app_in_background.store(false);
+  engine_active.store(true);
+  GHOST_ios_engine_wake();
+  [[NSNotificationCenter defaultCenter] postNotificationName:@"BlenderSceneActive" object:scene];
 }
 
 - (void)sceneDidEnterBackground:(UIScene *)scene
 {
-  UNUSED_VARS(scene);
   app_in_background.store(true);
+  /* No GPU work once in the background, which iOS ends the app for. */
+  engine_active.store(false);
+  [[NSNotificationCenter defaultCenter] postNotificationName:@"BlenderSceneInactive" object:scene];
   /* iOS may end a background app at any moment without telling it. Keep the app running long
    * enough to write the auto-save of any unsaved work. */
   UIApplication *application = UIApplication.sharedApplication;
@@ -581,9 +588,19 @@ void GHOST_ios_unregister_window(UIWindow *window)
   [super dealloc];
 }
 
+/** Drawn while on screen: its scene in the foreground, active or not, and the window shown. A
+ * window in a scene beside others is not key while another has focus, and still shows. */
+static bool ghost_window_on_screen(GHOST_WindowIOS *window)
+{
+  UIWindow *root = window->rootWindow;
+  return root && !root.hidden && root.windowScene &&
+         root.windowScene.activationState != UISceneActivationStateBackground &&
+         root.windowScene.activationState != UISceneActivationStateUnattached;
+}
+
 - (void)sceneActive:(NSNotification *)notification
 {
-  if (_window && _window->surface && _window->rootWindow.isKeyWindow) {
+  if (_window && _window->surface && ghost_window_on_screen(_window)) {
     _window->surface->setVisible(true);
   }
 }
@@ -591,7 +608,7 @@ void GHOST_ios_unregister_window(UIWindow *window)
 - (void)windowBecameKey:(NSNotification *)notification
 {
   if (_window && _window->surface && notification.object == _window->rootWindow &&
-      _window->rootWindow.windowScene.activationState == UISceneActivationStateForegroundActive)
+      ghost_window_on_screen(_window))
   {
     _window->surface->setVisible(true);
   }

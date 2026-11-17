@@ -344,6 +344,8 @@ final class ShellModel {
   var toolRailWidth: CGFloat = 64
   /** A tool or brush row along the bottom, which the quick actions rise above. */
   var bottomRailHeight: CGFloat = 0
+  /** The tool rail's frame in the window, which the action bar keeps clear of. */
+  var toolsFrame: CGRect = .zero
   /** A narrow window, such as a phone's: the toolbar keeps its most used items and puts the rest
    * in one menu. */
   var compact = false
