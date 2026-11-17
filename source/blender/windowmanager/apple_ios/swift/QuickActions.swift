@@ -78,6 +78,14 @@ struct QuickAction: Identifiable, Equatable {
       return
     }
     model.send(id, .invoke)
+    /* Adding a modifier: its settings are in Properties, which opens on them. */
+    if operatorName == "OBJECT_OT_native_modifier_toggle" && !selected,
+       UserDefaults.standard.object(forKey: SettingsModel.redoOpensKey) as? Bool ?? true,
+       let panels = SwiftScenePanels.current
+    {
+      panels.setInspectorShown(true)
+      panels.properties.selectTab("MODIFIER")
+    }
   }
 
   var axisColor: Color {
@@ -281,6 +289,23 @@ struct QuickActionsRow: View {
   /** The actions' own width in the bar, measured ahead of opening it. */
   @State private var actionItemsWidth: CGFloat = 0
   @AppStorage(SettingsModel.showQuickActionsKey) private var showQuickActions = true
+  @AppStorage(SettingsModel.redoOpensKey) private var redoOpens = true
+
+  /** Whether an operation's settings open by themselves: not for moving in the viewport, selecting,
+   * strokes or the view, which happen all the time and are adjusted by doing them again. */
+  static func opensItself(_ idname: String?) -> Bool {
+    guard let idname, !idname.isEmpty else { return false }
+    let lower = idname.lowercased()
+    for prefix in ["VIEW3D_OT_", "VIEW2D_OT_", "ED_OT_", "SCREEN_OT_", "WM_OT_", "UI_OT_"]
+      where idname.hasPrefix(prefix) { return false }
+    /* The transforms dragged in the viewport; Mirror and the others chosen from a menu open. */
+    if idname.hasPrefix("TRANSFORM_OT_") && !["TRANSFORM_OT_mirror", "TRANSFORM_OT_tosphere",
+                                               "TRANSFORM_OT_shear", "TRANSFORM_OT_bend"].contains(idname) {
+      return false
+    }
+    return !lower.contains("select") && !lower.contains("stroke") && !lower.contains("_hide") &&
+      !lower.contains("_reveal")
+  }
 
   private var actions: [QuickAction] {
     showQuickActions ? QuickAction.list(model.actions) : []
@@ -332,10 +357,13 @@ struct QuickActionsRow: View {
       let laneWidth = max(0, hotspot - 12 - laneLeading)
       let wide = width >= ShellMetrics.wideRow
       let pillWidth = redoTitle.map(redoPillWidth) ?? 0
-      let barWidth = actionsBarWidth(maxWidth: laneWidth - (redoPillTitle != nil ? 8 + pillWidth : 0))
+      /* With the actions open, the last operation's name and settings sit above them, so neither
+       * covers the other; folded, its pill follows the Actions pill in the row. */
+      let redoAbove = actionsOpen && !actions.isEmpty
+      let pillInRow = redoPillTitle != nil && !redoAbove
+      let barWidth = actionsBarWidth(maxWidth: laneWidth)
       let actionsWidth = actions.isEmpty ? 0 : actionsOpen ? barWidth : ShellMetrics.actionsPillWidth
-      /* The redo pill follows the actions in the row. */
-      let rowWidth = actionsWidth + (redoPillTitle != nil ? (actionsWidth > 0 ? 8 : 0) + pillWidth : 0)
+      let rowWidth = actionsWidth + (pillInRow ? (actionsWidth > 0 ? 8 : 0) + pillWidth : 0)
       /* Folded, the pills rest beside the tool rail; open, the row centers on the viewport,
        * staying in the lane. */
       let rowX = actionsOpen ?
@@ -352,10 +380,26 @@ struct QuickActionsRow: View {
             }
             if let title = redoTitle {
               redoMorph(title: title, frame: redoOpen ?
-                          stripFrame(width: width, laneLeading: laneLeading, laneWidth: laneWidth, wide: wide,
-                                     actionsWidth: actionsWidth) :
+                          stripFrame(width: width, laneLeading: laneLeading, laneWidth: laneWidth,
+                                     wide: wide && !redoAbove, actionsWidth: actionsWidth) :
+                          redoAbove ?
+                          CGRect(x: rowX + actionsWidth - pillWidth,
+                                 y: -(ShellMetrics.barHeight / 2 + 8 + ShellMetrics.buttonHeight / 2),
+                                 width: pillWidth, height: ShellMetrics.buttonHeight) :
                           CGRect(x: rowX + rowWidth - pillWidth, y: 0, width: pillWidth,
                                  height: ShellMetrics.buttonHeight))
+            }
+            /* The held action's name, as the tool rail names its tools: above everything else in
+             * the row, clear of the finger and of the last operation above the bar. */
+            if let heldName {
+              let above: CGFloat = redoTitle == nil ? 0 : redoOpen ? 60 + 8 : ShellMetrics.buttonHeight + 8
+              ShellNameLabel(text: heldName.text)
+                .alignmentGuide(.leading) { d in
+                  d.width / 2 - min(max(rowX + heldName.x, d.width / 2 + 8), width - d.width / 2 - 8)
+                }
+                .offset(y: -(ShellMetrics.barHeight / 2 + 10 + above + 18))
+                .zIndex(2)
+                .transition(.opacity)
             }
           }
           .frame(width: width, height: ShellMetrics.rowHeight, alignment: .leading)
@@ -367,9 +411,17 @@ struct QuickActionsRow: View {
     }
     .ignoresSafeArea(edges: .horizontal)
     .onChange(of: redo.operationKey) { _, key in
-      /* Another operation arrives folded. */
-      if redoOpenID != key { redoOpenID = nil }
+      /* Another operation arrives folded, unless its settings open by themselves. */
+      withAnimation(animation) {
+        if redoOpens, let key, Self.opensItself(redo.operation?.idname) {
+          redoOpenID = key
+        }
+        else if redoOpenID != key {
+          redoOpenID = nil
+        }
+      }
     }
+    .animation(.easeOut(duration: 0.12), value: heldName?.text)
     .onChange(of: redo.operation?.shown, initial: true) { _, requests in
       /* Asked to open (F9, the Edit menu): open for this operation. */
       if let requests, let seen = redoShowRequests, requests > seen, !redo.operationColumns.isEmpty {
@@ -422,11 +474,8 @@ struct QuickActionsRow: View {
   }
 
   private func toggleActions() {
-    withAnimation(animation) {
-      actionsOpen.toggle()
-      /* Only one may be open: the actions fold the strip. */
-      if actionsOpen { redoOpenID = nil }
-    }
+    /* The strip stays open: it moves above the actions. */
+    withAnimation(animation) { actionsOpen.toggle() }
   }
 
   /**
@@ -499,16 +548,6 @@ struct QuickActionsRow: View {
     .clipShape(ShellShape())
     /* Not interactive glass once open, which would take the touches of the actions on it. */
     .panelGlass(interactive: !actionsOpen, in: Capsule())
-    /* Outside the bar's clipping and its scrolling, above the held action. */
-    .overlay(alignment: .topLeading) {
-      if let heldName {
-        BlenderTooltip(text: heldName.text)
-          .alignmentGuide(.leading) { $0.width / 2 - heldName.x }
-          .alignmentGuide(.top) { $0.height + 8 }
-          .transition(.opacity)
-      }
-    }
-    .animation(.easeOut(duration: 0.12), value: heldName?.text)
     .offset(x: frame.minX)
     .animation(animation, value: actions)
   }
@@ -567,10 +606,7 @@ struct QuickActionsRow: View {
       }
       else {
         Button {
-          withAnimation(animation) {
-            redoOpenID = redo.operationKey
-            actionsOpen = false
-          }
+          withAnimation(animation) { redoOpenID = redo.operationKey }
         } label: {
           Text(title)
             .lineLimit(1)

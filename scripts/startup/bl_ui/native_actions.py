@@ -726,7 +726,8 @@ class OBJECT_OT_native_modifier_toggle(bpy.types.Operator):
 
     bl_idname = "object.native_modifier_toggle"
     bl_label = "Toggle Modifier"
-    bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
+    # Not registered: its only setting is which modifier; the shell opens the modifier's settings.
+    bl_options = {'UNDO', 'INTERNAL'}
 
     type: EnumProperty(
         name="Type",

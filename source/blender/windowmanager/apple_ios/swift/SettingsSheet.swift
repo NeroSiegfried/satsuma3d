@@ -29,6 +29,9 @@ enum TouchInput: String, CaseIterable, Identifiable {
 final class SettingsModel: ObservableObject {
   static let fingerUsesToolKey = "BlenderFingerUsesTool"
   static let showQuickActionsKey = "BlenderShowQuickActions"
+  /** An operation's settings open by themselves after it runs, as Blender's Adjust Last Operation
+   * panel does; viewport moves, selecting and strokes excepted. */
+  static let redoOpensKey = "BlenderRedoOpensItself"
   static let hoverHighlightKey = "BlenderHoverHighlight"
 
   /** Blender's active keymap preset, from the toolbar snapshot. */
@@ -313,6 +316,7 @@ private struct IPadSettingsPage: View {
 #endif
   @AppStorage(SettingsModel.navigationTopKey) private var navigationTop = false
   @AppStorage(ShellStyle.key) private var interfaceStyle = ShellStyle.blender.rawValue
+  @AppStorage(SettingsModel.redoOpensKey) private var redoOpens = true
   @AppStorage(SettingsModel.navigationStyleKey) private var navigationStyle = "blender"
   /** Read as it changes by the app's event handling, see `show_touches` in `GHOST_SystemIOS.mm`. */
   @AppStorage("BlenderShowTouches") private var showTouches = false
@@ -451,13 +455,15 @@ private struct IPadSettingsPage: View {
 
       Section {
         Toggle("Quick Actions", isOn: $model.showQuickActions)
+        Toggle("Open Operation Settings Automatically", isOn: $redoOpens)
         Toggle("Hover Highlighting", isOn: $model.hoverHighlight)
         Toggle("Show Touches", isOn: $showTouches)
       } header: {
         Text("Interface")
       } footer: {
         Text("Quick Actions are buttons for common actions on the selection, above the bottom of "
-          + "the viewport. Hover Highlighting outlines what Apple Pencil or the pointer is over. "
+          + "the viewport. Operation settings, such as Subdivide's number of cuts, open after it runs, "
+          + "as Blender's Adjust Last Operation panel; adding a modifier opens its settings in Properties. Hover Highlighting outlines what Apple Pencil or the pointer is over. "
           + "Show Touches draws a circle under each finger, for recordings and demonstrations.")
       }
 

@@ -623,6 +623,24 @@ extension View {
   }
 }
 
+/** An item's name, as the tool rail shows it beside the item held: on the panels' surface. */
+struct ShellNameLabel: View {
+  let text: String
+
+  var body: some View {
+    Text(text)
+      .font(.subheadline)
+      .foregroundStyle(.primary)
+      .lineLimit(1)
+      .padding(.horizontal, 14)
+      .padding(.vertical, 8)
+      .panelGlass(in: Capsule())
+      .fixedSize()
+      .allowsHitTesting(false)
+      .accessibilityHidden(true)
+  }
+}
+
 /** Blender's tooltip: light text in a dark box. */
 struct BlenderTooltip: View {
   let text: String
