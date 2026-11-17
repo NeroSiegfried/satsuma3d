@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "release" / "ios"))
 
 from archive_testflight import APP_ENTITLEMENTS, signing_entitlements
 from check_numpy_replacements import check as check_replacements
-from prepare_testflight import check_artwork, dependencies, macho_type, prepare
+from prepare_testflight import check_artwork, check_prepared, dependencies, macho_type, prepare
 from required_reason_apis import MANIFEST, manifest_for, scan
 
 
@@ -93,8 +93,48 @@ class TestFlightPackagingTest(unittest.TestCase):
         self.assertEqual(extension.with_name(extension.name + '.origin').read_text().strip(),
                          str(marker.relative_to(output)))
         self.assertIn('@rpath/Example.1.framework/Example.1', dependencies(extension))
+        self.assertEqual(check_prepared(output), [])
         with self.assertRaises(ValueError):
             prepare(self.app, output, {})
+
+    def test_prepared_layout_check(self):
+        """ROUND5 8F.2: the layout check finds a loose library, a second binary in a framework and a
+        marker that names nothing."""
+        library = self.lib / 'libExample.1.dylib'
+        self.compile('lib', 'int example(void) { return 42; }', '-dynamiclib',
+                     '-Wl,-install_name,@rpath/libExample.1.dylib', '-o', library)
+        self.compile('app', 'int example(void); int main(void) { return example(); }',
+                     library, '-o', self.app / 'Test')
+        modules = self.app / 'Assets/5.1/python/lib/python3.13/site-packages/demo'
+        modules.mkdir(parents=True)
+        self.compile('module', 'int native(void) { return 1; }', '-dynamiclib', '-o', modules / '_native.abi3.so')
+        output = self.root / 'Output.app'
+        prepare(self.app, output, {})
+        self.assertEqual(check_prepared(output), [])
+        framework = output / 'Frameworks/Example.1.framework'
+        (framework / 'Extra').write_bytes((framework / 'Example.1').read_bytes())
+        (output / 'Assets/stray.dylib').write_bytes(b'')
+        marker = output / 'Assets/5.1/python/lib/python3.13/site-packages/demo/_native.fwork'
+        marker.write_text('Frameworks/missing.framework/missing\n')
+        problems = '\n'.join(check_prepared(output))
+        self.assertIn('Example.1.framework: holds 2 binaries', problems)
+        self.assertIn('loose library Assets/stray.dylib', problems)
+        self.assertIn('_native.fwork names no framework binary', problems)
+
+    def test_without_plugins(self):
+        """Decision 36: a tester build leaves the thumbnail extension out."""
+        self.compile('app', 'int main(void) { return 0; }', '-o', self.app / 'Test')
+        appex = self.app / 'PlugIns/Thumbnailer.appex'
+        appex.mkdir(parents=True)
+        (appex / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleExecutable': 'thumbnailer'}))
+        self.compile('appex', 'int main(void) { return 0; }', '-o', appex / 'thumbnailer')
+        library = self.lib / 'libExample.dylib'
+        self.compile('lib', 'int example(void) { return 42; }', '-dynamiclib',
+                     '-Wl,-install_name,@rpath/libExample.dylib', '-o', library)
+        output = self.root / 'Output.app'
+        prepare(self.app, output, {}, without_plugins=True)
+        self.assertFalse((output / 'PlugIns').exists())
+        self.assertTrue(appex.is_dir())
 
     def test_relocates_app_extension_dependencies(self):
         library = self.lib / 'libExample.1.dylib'
@@ -270,6 +310,23 @@ class IdentityTest(unittest.TestCase):
         if not (app / 'Info.plist').is_file():
             self.skipTest('No installed iPad app at ' + str(app))
         check_artwork(app)
+
+    def test_prepared_apps(self):
+        """ROUND5 8F.2: the prepared apps beside the checkout, when there are any: the development
+        one (`build_ios_device/prepared`) and the tester one `build_testflight.sh` makes."""
+        apps = [self.ROOT.parent / folder / 'prepared/Blender.app'
+                for folder in ('build_ios_device', 'build_ios_testflight')]
+        apps = [app for app in apps if (app / 'Info.plist').is_file()]
+        if not apps:
+            self.skipTest('No prepared iPad app beside the checkout')
+        for app in apps:
+            with self.subTest(app=str(app)):
+                self.assertEqual(check_prepared(app), [])
+                self.assertEqual(scan(app)[1], [])
+                check_artwork(app)
+                numpy = sorted((app / 'Frameworks').glob('numpy.*.framework'))
+                self.assertEqual(len(numpy), 19)
+                self.assertEqual(len(list(app.rglob('*.fwork'))), len(numpy))
 
 
 if __name__ == '__main__':

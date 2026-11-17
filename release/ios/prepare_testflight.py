@@ -93,7 +93,46 @@ def write_privacy_manifest(framework, binary, app_reasons):
     (framework / MANIFEST).write_bytes(plistlib.dumps(manifest_for(used, app_reasons)))
 
 
-def _prepare(source, output, replacements):
+def check_prepared(app):
+    """The ways a prepared \a app breaks the framework layout; empty when it holds (ROUND5 8F.2).
+
+    No loose `.dylib` or `.so`; each framework holds exactly one Mach-O, its `CFBundleExecutable`,
+    with an install name of `@rpath/<name>.framework/<name>`; each `.fwork` marker names a
+    framework binary whose `.origin` names the marker back; no `_CodeSignature` left from the
+    input. Privacy manifests and Blender's artwork are checked by `required_reason_apis.scan` and
+    `check_artwork`.
+    """
+    app = Path(app)
+    problems = [f'loose library {path.relative_to(app)}' for path in sorted(app.rglob('*'))
+                if path.suffix in ('.dylib', '.so')]
+    frameworks = sorted((app / 'Frameworks').glob('*.framework'))
+    if not frameworks:
+        problems.append('no frameworks')
+    for framework in frameworks:
+        name = framework.name.removesuffix('.framework')
+        info = plistlib.loads((framework / 'Info.plist').read_bytes()) if (framework / 'Info.plist').is_file() else {}
+        if info.get('CFBundleExecutable') != name or info.get('CFBundlePackageType') != 'FMWK':
+            problems.append(f'{framework.name}: Info.plist does not name {name} as a framework executable')
+        binaries = [path for path in framework.rglob('*') if path.is_file() and macho_type(path) is not None]
+        if binaries != [framework / name]:
+            problems.append(f'{framework.name}: holds {len(binaries)} binaries, expected only {name}')
+            continue
+        identity = run('xcrun', 'otool', '-D', str(framework / name)).splitlines()[1:]
+        if identity != [f'@rpath/{name}.framework/{name}']:
+            problems.append(f'{framework.name}: install name {identity}')
+    for marker in sorted(app.rglob('*.fwork')):
+        binary = app / marker.read_text().strip()
+        if not (binary.is_file() and binary.parent.parent == app / 'Frameworks'):
+            problems.append(f'{marker.relative_to(app)} names no framework binary')
+            continue
+        origin = binary.with_name(binary.name + '.origin')
+        if not origin.is_file() or origin.read_text().strip() != str(marker.relative_to(app)):
+            problems.append(f'{origin.relative_to(app)} does not name {marker.relative_to(app)}')
+    problems += [f'leftover signature {path.relative_to(app)}' for path in app.rglob('_CodeSignature')]
+    return problems
+
+
+def _prepare(source, output, replacements, without_plugins=False):
     source, output = source.resolve(), output.resolve()
     if output.exists() or source == output or source in output.parents:
         raise ValueError('Output must be a new directory outside the input app')
@@ -137,6 +176,10 @@ def _prepare(source, output, replacements):
     check_artwork(source)
     app_reasons = declared(source) or {}
     shutil.copytree(source, output, symlinks=True)
+    if without_plugins:
+        # App extensions, such as the thumbnailer, need App IDs and profiles of their own
+        # (decision 36: the first tester builds ship without it).
+        shutil.rmtree(output / 'PlugIns', ignore_errors=True)
     frameworks = output / 'Frameworks'
     frameworks.mkdir(exist_ok=True)
     binaries = [output / info['CFBundleExecutable']]
@@ -212,17 +255,20 @@ def _prepare(source, output, replacements):
                 relative = dependency.removeprefix('@rpath/')
                 if not (frameworks / relative).is_file() and not relative.startswith('libswift'):
                     raise ValueError(f'Missing packaged dependency: {dependency}')
+    problems = check_prepared(output)
+    if problems:
+        raise ValueError('The prepared app breaks the framework layout:\n  ' + '\n  '.join(problems))
     return len(libraries)
 
 
-def prepare(source, output, replacements):
+def prepare(source, output, replacements, without_plugins=False):
     source, output = source.resolve(), output.resolve()
     if output.exists() or source == output or source in output.parents:
         raise ValueError('Output must be a new directory outside the input app')
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='testflight-', dir=output.parent) as temporary:
         staged = Path(temporary) / output.name
-        count = _prepare(source, staged, replacements)
+        count = _prepare(source, staged, replacements, without_plugins)
         staged.rename(output)
     print(f'Packaged {count} frameworks into {output}')
 
@@ -232,6 +278,8 @@ def main():
     parser.add_argument('source', type=Path)
     parser.add_argument('output', type=Path)
     parser.add_argument('--replacement-directory', type=Path)
+    parser.add_argument('--without-plugins', action='store_true',
+                        help='Leave out app extensions, such as the thumbnailer, which need App IDs of their own')
     args = parser.parse_args()
     replacements = {}
     if args.replacement_directory:
@@ -240,7 +288,7 @@ def main():
                 if path.name in replacements:
                     raise ValueError(f'Duplicate replacement: {path.name}')
                 replacements[path.name] = path
-    prepare(args.source, args.output, replacements)
+    prepare(args.source, args.output, replacements, args.without_plugins)
 
 
 if __name__ == '__main__':
