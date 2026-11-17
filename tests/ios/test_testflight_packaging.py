@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "release" / "ios"))
 
 from archive_testflight import APP_ENTITLEMENTS, signing_entitlements
+from check_numpy_replacements import check as check_replacements
 from prepare_testflight import check_artwork, dependencies, macho_type, prepare
 from required_reason_apis import MANIFEST, manifest_for, scan
 
@@ -177,6 +178,50 @@ class TestFlightPackagingTest(unittest.TestCase):
         self.manifest(self.app, NSPrivacyAccessedAPICategoryFileTimestamp=['C617.1'])
         with self.assertRaisesRegex(ValueError, 'gives no reason'):
             prepare(self.app, self.root / 'Rejected.app', {})
+
+
+@unittest.skipUnless(sys.platform == 'darwin', 'Requires the iPhoneOS SDK')
+class NumpyReplacementsTest(unittest.TestCase):
+    """ROUND5 8F.1: a relinked module must be an iOS MH_DYLIB named and exporting as the bundled one."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
+
+    def module(self, path, kind, minimum='26.0', symbol='PyInit__demo'):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        source = self.root / 'module.c'
+        source.write_text(f'void *{symbol}(void) {{ return 0; }}')
+        subprocess.run(['xcrun', '--sdk', 'iphoneos', 'clang', '-arch', 'arm64', '-isysroot', self.sdk,
+                        f'-miphoneos-version-min={minimum}', kind, str(source), '-o', str(path)],
+                       check=True, capture_output=True)
+
+    def problems(self):
+        return [problem for _, problems in check_replacements(self.root / 'bundled/numpy', self.root / 'out', '26.0')
+                for problem in problems]
+
+    def test_check(self):
+        self.module(self.root / 'bundled/numpy/core/_demo.cpython-313-darwin.so', '-bundle')
+        replacement = self.root / 'out/numpy/core/_demo.cpython-313-arm64-iphoneos.so'
+        self.module(replacement, '-bundle')
+        self.assertIn('not MH_DYLIB', self.problems())
+        replacement.unlink()
+        self.module(replacement, '-dynamiclib')
+        self.assertEqual(self.problems(), [])
+        replacement.unlink()
+        self.module(replacement, '-dynamiclib', minimum='27.0')
+        self.assertIn('minos 27.0, expected 26.0', self.problems())
+        replacement.unlink()
+        self.module(replacement, '-dynamiclib', symbol='PyInit__other')
+        self.assertTrue(any(problem.startswith('exports') for problem in self.problems()))
+        replacement.unlink()
+        # The Mac's file suffix: the module is missing under the name the app installs.
+        self.module(replacement.with_name('_demo.cpython-313-darwin.so'), '-dynamiclib')
+        problems = self.problems()
+        self.assertTrue(any(problem.startswith('no replacement') for problem in problems))
+        self.assertIn('replaces no bundled module', problems)
 
 
 class IdentityTest(unittest.TestCase):
