@@ -347,16 +347,22 @@ struct DocumentToolbar: ToolbarContent {
       ToolbarSpacer(.fixed, placement: .topBarTrailing)
 #endif
     }
-    /* Undo, Redo, Repeat, Share and More together; Undo, Redo and More at every width. */
+    /* What can fold away comes first, so nothing after it moves when it does. */
+    if shown.repeatLast || shown.share {
+      ToolbarItemGroup(placement: .topBarTrailing) {
+        if shown.repeatLast { repeatButton }
+        if shown.share {
+          Menu("Share", systemImage: "square.and.arrow.up") { shareMenu }
+            .background(ShareSource(commands: commands))
+            .accessibilityIdentifier("blender.share")
+        }
+      }
+    }
+    /* Undo, Redo and More last, at the window's trailing edge, at every width and in every mode:
+     * Undo and Redo are tapped again and again, so they never move. */
     ToolbarItemGroup(placement: .topBarTrailing) {
       undoButton
       redoButton
-      if shown.repeatLast { repeatButton }
-      if shown.share {
-        Menu("Share", systemImage: "square.and.arrow.up") { shareMenu }
-          .background(ShareSource(commands: commands))
-          .accessibilityIdentifier("blender.share")
-      }
       moreButton
     }
   }
