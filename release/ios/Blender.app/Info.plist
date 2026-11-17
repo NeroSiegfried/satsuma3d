@@ -70,10 +70,10 @@
 		<dict>
 			<key>CFBundleIconFiles</key>
 			<array>
-				<string>blender_liquid_glass60x60</string>
+				<string>${IOS_APP_ICON_NAME}60x60</string>
 			</array>
 			<key>CFBundleIconName</key>
-			<string>blender_liquid_glass</string>
+			<string>${IOS_APP_ICON_NAME}</string>
 		</dict>
 	</dict>
 	<key>CFBundleIcons~ipad</key>
@@ -82,11 +82,11 @@
 		<dict>
 			<key>CFBundleIconFiles</key>
 			<array>
-				<string>blender_liquid_glass60x60</string>
-				<string>blender_liquid_glass76x76</string>
+				<string>${IOS_APP_ICON_NAME}60x60</string>
+				<string>${IOS_APP_ICON_NAME}76x76</string>
 			</array>
 			<key>CFBundleIconName</key>
-			<string>blender_liquid_glass</string>
+			<string>${IOS_APP_ICON_NAME}</string>
 		</dict>
 	</dict>
 	<key>CFBundleIdentifier</key>

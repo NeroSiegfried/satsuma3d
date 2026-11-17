@@ -397,8 +397,11 @@ else()
       set(IOS_APP_ICON ${CMAKE_SOURCE_DIR}/release/visionos/AppIcon.xcassets)
       set(IOS_APP_ICON_NAME AppIcon)
     else()
-      set(IOS_APP_ICON ${CMAKE_SOURCE_DIR}/release/darwin/blender_liquid_glass.icon)
-      set(IOS_APP_ICON_NAME blender_liquid_glass)
+      # The app's icon, an Icon Composer document; not Blender's (ROUND5 8B, decision 34).
+      set(IOS_APP_ICON ${CMAKE_SOURCE_DIR}/release/ios/platypus.icon CACHE PATH
+        "The iPad app's icon: an Icon Composer `.icon` document")
+      set(IOS_APP_ICON_NAME platypus CACHE STRING
+        "The name the icon is compiled under (CFBundleIconName)")
     endif()
 
     # The document launcher's Suzanne and logo are drawn with RealityKit and SwiftUI, which only

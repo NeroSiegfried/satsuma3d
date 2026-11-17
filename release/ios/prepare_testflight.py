@@ -60,6 +60,23 @@ def verify_platform(binary, minimum_os):
         raise ValueError(f'{binary} requires {minimum.group(1)}, above app minimum {minimum_os}')
 
 
+# Blender's logo and icon artwork, which the app must not carry (ROUND5 8B, decision 34).
+BLENDER_ARTWORK = ('blender_liquid_glass*', 'blender_icon.icns', 'blender_logo_mono.svg')
+BLENDER_ICON_NAME = 'blender_liquid_glass'
+
+
+def check_artwork(app):
+    """Refuse an app that carries Blender's icon or logo, or names Blender's icon as its own."""
+    found = sorted(str(path.relative_to(app)) for pattern in BLENDER_ARTWORK for path in app.rglob(pattern))
+    if found:
+        raise ValueError("The app carries Blender's artwork: " + ', '.join(found))
+    info = plistlib.loads((app / 'Info.plist').read_bytes())
+    for key in ('CFBundleIcons', 'CFBundleIcons~ipad'):
+        name = info.get(key, {}).get('CFBundlePrimaryIcon', {}).get('CFBundleIconName')
+        if name == BLENDER_ICON_NAME:
+            raise ValueError(f"The app's icon is Blender's ({key} names {name})")
+
+
 def _prepare(source, output, replacements):
     source, output = source.resolve(), output.resolve()
     if output.exists() or source == output or source in output.parents:
@@ -101,6 +118,7 @@ def _prepare(source, output, replacements):
                 libraries[real] = (name, replacement)
                 canonical[real] = real
         aliases[path.name] = libraries[canonical[real]][0]
+    check_artwork(source)
     shutil.copytree(source, output, symlinks=True)
     frameworks = output / 'Frameworks'
     frameworks.mkdir(exist_ok=True)

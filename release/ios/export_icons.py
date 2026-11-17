@@ -33,6 +33,8 @@ ICON_HEADER = ROOT / "source/blender/editors/include/UI_icons.hh"
 DARK_THEME = ROOT / "release/datafiles/userdef/userdef_default_theme.c"
 LIGHT_THEME = ROOT / "scripts/presets/interface_theme/Blender_Light.xml"
 TOOL_POINT_SIZE = 36
+# The icons that are Blender's logo, left out of the app.
+LOGO_GLYPHS = {"blender", "blender_logo_large"}
 
 
 def element(name, attrs=None, parent=None):
@@ -428,6 +430,8 @@ def export_catalog(source, manifest, output, header=ICON_HEADER, dark_theme=DARK
     names = set(mapping.values())
     # Projected menus carry Blender icon names, including icons absent from the toolbar.
     names.update(path.stem for path in (source / "icons_svg").glob("*.svg"))
+    # Blender's logo is not an interface glyph: the app carries none of its artwork (ROUND5 8B).
+    names -= LOGO_GLYPHS
     tool_names = {name for key, name in mapping.items() if key.startswith("tool.")}
     # Native tool groups use ToolDef.icon directly, including context-dependent tools.
     tool_names.update(path.stem for path in (source / "icons").glob("*.dat"))

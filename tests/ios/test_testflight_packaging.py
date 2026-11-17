@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "release" / "ios"))
 
 from archive_testflight import APP_ENTITLEMENTS, signing_entitlements
-from prepare_testflight import dependencies, macho_type, prepare
+from prepare_testflight import check_artwork, dependencies, macho_type, prepare
 
 
 class ArchiveEntitlementsTest(unittest.TestCase):
@@ -120,6 +120,54 @@ class TestFlightPackagingTest(unittest.TestCase):
             prepare(self.app, self.root / 'Rejected.app', {})
         self.assertTrue((self.lib / 'bad.so').exists())
         self.assertFalse((self.root / 'Rejected.app').exists())
+
+    def test_refuses_blender_artwork(self):
+        """ROUND5 8B: a prepared app holds none of Blender's icon or logo files, nor its icon's name."""
+        self.compile('app', 'int main(void) { return 0; }', '-o', self.app / 'Test')
+        for name in ('blender_logo_mono.svg', 'blender_liquid_glass60x60@2x.png', 'blender_icon.icns'):
+            (self.app / name).write_bytes(b'artwork')
+            with self.assertRaisesRegex(ValueError, "Blender's artwork"):
+                prepare(self.app, self.root / 'Rejected.app', {})
+            (self.app / name).unlink()
+        info = plistlib.loads((self.app / 'Info.plist').read_bytes())
+        info['CFBundleIcons~ipad'] = {'CFBundlePrimaryIcon': {'CFBundleIconName': 'blender_liquid_glass'}}
+        (self.app / 'Info.plist').write_bytes(plistlib.dumps(info))
+        with self.assertRaisesRegex(ValueError, "icon is Blender's"):
+            prepare(self.app, self.root / 'Rejected.app', {})
+        self.assertFalse((self.root / 'Rejected.app').exists())
+
+
+class IdentityTest(unittest.TestCase):
+    """ROUND5 8A/8B: the iPad app's template names the configured identity and icon, not Blender's."""
+    ROOT = Path(__file__).resolve().parents[2]
+
+    def test_info_plist_template(self):
+        text = (self.ROOT / 'release/ios/Blender.app/Info.plist').read_text()
+        info = plistlib.loads(text.encode())
+        self.assertEqual(info['CFBundleName'], '${IOS_PRODUCT_NAME}')
+        self.assertEqual(info['CFBundleDisplayName'], '${IOS_PRODUCT_NAME}')
+        for key in ('PlatypusBlenderVersion', 'PlatypusSourceURL', 'PlatypusSourceCommit'):
+            self.assertIn(key, info)
+        for key in ('CFBundleIcons', 'CFBundleIcons~ipad'):
+            self.assertEqual(info[key]['CFBundlePrimaryIcon']['CFBundleIconName'], '${IOS_APP_ICON_NAME}')
+        self.assertNotIn('liquid_glass', text)
+
+    def test_icon_is_the_apps(self):
+        cmake = (self.ROOT / 'source/creator/CMakeLists.txt').read_text()
+        self.assertIn('release/ios/platypus.icon CACHE PATH', cmake)
+        self.assertIn('set(IOS_APP_ICON_NAME platypus CACHE STRING', cmake)
+        self.assertNotIn('blender_logo_mono.svg\n    )', cmake)
+        icon = self.ROOT / 'release/ios/platypus.icon'
+        self.assertTrue((icon / 'icon.json').is_file())
+        for layer in (icon / 'Assets').iterdir():
+            self.assertNotIn('Blender', layer.name)
+
+    def test_installed_app(self):
+        """The app Xcode last built, when there is one beside the checkout (`deploy_ipad.sh`'s)."""
+        app = self.ROOT.parent / 'build_ios_device/bin/Release/Blender.app'
+        if not (app / 'Info.plist').is_file():
+            self.skipTest('No installed iPad app at ' + str(app))
+        check_artwork(app)
 
 
 if __name__ == '__main__':
