@@ -192,6 +192,14 @@ final class PanelsModel {
     return view.children(of: path)
   }
 
+  /** The Properties tab of the active tool, first of the 3D view sidebar's group. */
+  static let toolTab = "TOOL"
+  /** One of the 3D view sidebar's categories (Item, View, add-ons'), which the bridge sends as
+   * tabs named `SIDEBAR:<category>` (`interface_native_properties.cc`). */
+  static func isSidebarCategory(_ tab: String) -> Bool { tab.hasPrefix("SIDEBAR:") }
+  /** The Tool tab or one of the sidebar's: the group whose strip of words shows (decision 41). */
+  static func inSidebarGroup(_ tab: String) -> Bool { tab == toolTab || isSidebarCategory(tab) }
+
   func selectTab(_ tab: String) {
     guard tab != currentTab else { return }
     chosenTab = tab
@@ -372,8 +380,9 @@ struct PanelRow: Identifiable {
 /**
  * Blender's Properties editor (ROUND5 7B, decision 28): its tabs in a column at the leading edge,
  * the active tab's name as the title, Blender's context path under it, and the tab's panels, each
- * one box. The 3D Viewport sidebar's tabs, which have names and no icons, stay a strip above the
- * panels, where a column of words would not fit.
+ * one box. The 3D Viewport sidebar's tabs, which have names and no icons, are a strip of words
+ * above the panels only while the Tool tab or one of them is open, reading Tool · Item · View ·
+ * …, the open one lit (ROUND5 7E/E1, decision 41); Properties' own tabs have no strip.
  */
 struct PropertiesPanel: View {
   let model: PanelsModel
@@ -381,14 +390,16 @@ struct PropertiesPanel: View {
   @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
 
   var body: some View {
-    let named = model.tabItems.contains { BlenderIcon.image($0.icon) == nil }
+    /* The sidebar's group: the Tool tab, which has an icon, and the sidebar's categories. */
+    let strip = PanelsModel.inSidebarGroup(model.currentTab) &&
+      model.tabItems.contains { PanelsModel.isSidebarCategory($0.id) }
     VStack(spacing: 0) {
       PanelHeader(title: model.tabTitle ?? "Properties", close: close) { EmptyView() }
       HStack(alignment: .top, spacing: 0) {
         PropertiesTabColumn(model: model)
           .zIndex(1)
         VStack(spacing: 0) {
-          if named {
+          if strip {
             PanelsTabs(model: model, namedOnly: true)
               .padding(.horizontal, 8)
               .frame(height: 40)
@@ -450,7 +461,10 @@ struct PropertiesTabColumn: View {
   }
 
   private func cell(_ tab: PanelTab, glass: Bool) -> some View {
-    let selected = tab.id == model.currentTab
+    /* The Tool tab stays lit while one of the sidebar's tabs is open: they are one group, its
+     * strip of words above the panels (decision 41). */
+    let selected = tab.id == model.currentTab ||
+      tab.id == PanelsModel.toolTab && PanelsModel.isSidebarCategory(model.currentTab)
     /* Rounded on its leading side; the active one reaches the column's trailing edge, where the
      * content begins. */
     let shape = UnevenRoundedRectangle(topLeadingRadius: glass ? 8 : ShellStyle.radius,
@@ -551,7 +565,8 @@ struct PropertiesContextPath: View {
 
 struct PanelsTabs: View {
   let model: PanelsModel
-  /** Only the tabs named rather than drawn as icons, beside the Properties editor's column. */
+  /** Only the 3D view sidebar's group (Tool, Item, View, …) as words, beside the Properties
+   * editor's column while one of them is open (decision 41). */
   var namedOnly = false
   /** Whether more tabs lie past the leading and trailing edges, which fade there. */
   @State private var more = (leading: false, trailing: false)
@@ -566,7 +581,8 @@ struct PanelsTabs: View {
   }
 
   var body: some View {
-    let tabs = model.tabs.filter { !namedOnly || BlenderIcon.image($0.icon) == nil }
+    /* Beside the column: the sidebar's group, Tool first, all as words (decision 41). */
+    let tabs = model.tabs.filter { !namedOnly || PanelsModel.inSidebarGroup($0.value ?? "") }
     ScrollViewReader { reader in
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 2) {
@@ -579,7 +595,7 @@ struct PanelsTabs: View {
             } label: {
               Group {
                 /* Selected tabs draw a white glyph on the blue highlight, as iOS does. */
-                if let image = BlenderIcon.image(tab.icon, themed: !selected) {
+                if !namedOnly, let image = BlenderIcon.image(tab.icon, themed: !selected) {
                   Image(uiImage: image).resizable().scaledToFit().frame(width: 22, height: 22)
                 }
                 else {
@@ -962,7 +978,8 @@ struct PanelBody: View {
         }
       }
       if shadingHint, let shell = ShellModel.current,
-         let entry = ShadingHint.entry(tab: model.currentTab, shading: shell.shading)
+         let entry = ShadingHint.entry(tab: model.currentTab, shading: shell.shading,
+                                       path: model.pathItems.map { $0.icon ?? "" })
       {
         ShadingHintRow(entry: entry)
       }

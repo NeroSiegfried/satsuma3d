@@ -357,6 +357,12 @@ final class ShellModel {
   var widthClass: WidthClass = .wide
   /** How far the header has folded into More, see #HeaderLadder: 6 shows everything. */
   var headerRung = HeaderLadder.widest
+  /** How many of the editor's menus stand side by side in the header, the rest in More Menus at
+   * their end; 0 for the Menus button alone (ROUND5 7E/E2). */
+  var headerMenus = Int.max
+  /** How much more width the next wider header would need, by #HeaderLadder's estimate; nil at the
+   * widest. The header's spare check compares the room it measures with it. */
+  var headerNextExtra: CGFloat?
   /** A phone's or a narrow window's layout: the header at its last rung, the tool settings row
    * in More. */
   var compact: Bool { widthClass == .compact }

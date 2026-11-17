@@ -195,19 +195,23 @@ enum ShadingHint {
     /** The button's title, and the shading it switches to, as Blender's shading type names it. */
     let button: String
     let shading: String
+    /** The data-block the line is about, by the icon of its type in Blender's context path: no
+     * line while there is none, such as a material slot left empty (ROUND5 7E/E6). */
+    let needs: Set<String>
   }
 
   /** By Properties tab. */
   static let table: [String: Entry] = [
     "MATERIAL": Entry(hiddenIn: ["solid", "wireframe"], text: "Solid view shows Viewport Display colours, not this material.",
-                      button: "Material Preview", shading: "MATERIAL"),
+                      button: "Material Preview", shading: "MATERIAL", needs: ["MATERIAL_DATA", "MATERIAL"]),
     "WORLD": Entry(hiddenIn: ["solid", "wireframe"], text: "Solid view does not show the world.", button: "Rendered",
-                   shading: "RENDERED"),
+                   shading: "RENDERED", needs: ["WORLD_DATA", "WORLD"]),
   ]
 
-  /** What to say on \a tab while the viewport shows \a shading, if anything. */
-  static func entry(tab: String, shading: String) -> Entry? {
-    guard let entry = table[tab], entry.hiddenIn.contains(shading) else { return nil }
+  /** What to say on \a tab while the viewport shows \a shading, if anything: only while the
+   * context path (\a path, its elements' icons, as `MATERIAL_DATA`, the type's RNA icon) holds what the line is about. */
+  static func entry(tab: String, shading: String, path: [String]) -> Entry? {
+    guard let entry = table[tab], entry.hiddenIn.contains(shading), !entry.needs.isDisjoint(with: path) else { return nil }
     return entry
   }
 

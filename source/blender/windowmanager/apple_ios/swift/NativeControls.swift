@@ -24,18 +24,9 @@ extension Blender_NativeUI_Number {
    * (`precision`, which the bridge sends from `ui_but_calc_float_precision`), so `1.143` and
    * `1.000`, never a float's noise. */
   func format(_ value: Double) -> String {
-    let formatter = NumberFormatter()
-    formatter.numberStyle = .decimal
-    formatter.usesGroupingSeparator = false
-    formatter.roundingMode = .halfUp
-    let decimals = integer ? 0 : Int(precision)
-    formatter.minimumFractionDigits = decimals
-    formatter.maximumFractionDigits = decimals
     var shown = value * shownFactor
     if integer { shown = shown.rounded() }
-    let text = formatter.string(from: NSNumber(value: shown)) ?? "\(shown)"
-    guard let unit, !unit.isEmpty else { return text }
-    return text + " " + unit
+    return BlenderNumberText.format(shown, decimals: integer ? 0 : Int(precision), unit: unit)
   }
 
   /** The value in full, as it is typed into or copied: up to six decimals, trailing zeros dropped,
@@ -187,6 +178,13 @@ struct NativeNumberField: View {
     .pointerHighlight()
     .onHover { hovering = $0 }
     .onTapGesture { beginEditing() }
+    /* A snapshot script's `edit` step, as a tap (ROUND5 7E.7). */
+    .onReceive(NotificationCenter.default.publisher(for: NumberFieldEditRequest.notification)) { note in
+      guard let request = note.object as? NumberFieldEditRequest, request.claimedBy == nil,
+            request.matches(node), editable else { return }
+      request.claimedBy = node.key
+      beginEditing()
+    }
     .background(PresentationAnchor(anchor: scrubAnchor))
     .gesture(ScrubGesture(enabled: draggable, anchor: scrubAnchor,
                           began: beginScrub, changed: changeScrub, ended: endScrub))
@@ -570,15 +568,64 @@ struct BlenderPropertySplit<Control: View>: View {
   let name: String?
   var icon: String? = nil
   var locked = false
+  /** The name level with the control's first row (a widget's 44-point hit row), not centred on a
+   * control that may wrap into rows, as Blender aligns a property's name with its first line. */
+  var firstRow = false
   @ViewBuilder let control: () -> Control
 
   var body: some View {
-    FractionRow(fraction: 0.6, spacing: 8) {
+    FractionRow(fraction: 0.6, spacing: 8, aligned: firstRow ? .top : .center) {
       BlenderSplitName(name: name, icon: icon, locked: locked)
+        .frame(minHeight: firstRow ? 44 : nil)
       control()
         .frame(maxWidth: .infinity, minHeight: 32)
     }
     .frame(minHeight: 32)
+  }
+}
+
+/**
+ * Cells of equal width, \a columns to a row, joined, as Blender's aligned `grid_flow`. Its
+ * ideal width is \a columns times the widest cell's, so `ViewThatFits` passes it over when a cell
+ * would not fit; given a width, the cells share it.
+ */
+struct EqualCellGrid: Layout {
+  let columns: Int
+  var spacing: CGFloat = 1
+  /** Between rows. A widget's face is 32 points in a 44-point hit row: -11 sets the faces 1 point
+   * apart, joined as Blender's grid is, their hit rows sharing the gap. */
+  var rowSpacing: CGFloat = -11
+
+  private func cellWidth(_ proposal: ProposedViewSize, _ subviews: Subviews) -> CGFloat {
+    if let width = proposal.width, width.isFinite {
+      return max(0, (width - spacing * CGFloat(columns - 1)) / CGFloat(columns))
+    }
+    return subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
+  }
+
+  private func rowHeight(_ cell: CGFloat, _ subviews: Subviews) -> CGFloat {
+    subviews.map { $0.sizeThatFits(ProposedViewSize(width: cell, height: nil)).height }.max() ?? 0
+  }
+
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    guard columns > 0, !subviews.isEmpty else { return .zero }
+    let cell = cellWidth(proposal, subviews)
+    let rows = (subviews.count + columns - 1) / columns
+    let height = rowHeight(cell, subviews)
+    return CGSize(width: cell * CGFloat(columns) + spacing * CGFloat(columns - 1),
+                  height: height * CGFloat(rows) + rowSpacing * CGFloat(rows - 1))
+  }
+
+  func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    guard columns > 0, !subviews.isEmpty else { return }
+    let cell = max(0, (bounds.width - spacing * CGFloat(columns - 1)) / CGFloat(columns))
+    let height = rowHeight(cell, subviews)
+    for (index, subview) in subviews.enumerated() {
+      let row = index / columns, column = index % columns
+      subview.place(at: CGPoint(x: bounds.minX + CGFloat(column) * (cell + spacing),
+                                y: bounds.minY + CGFloat(row) * (height + rowSpacing)),
+                    anchor: .topLeading, proposal: ProposedViewSize(width: cell, height: height))
+    }
   }
 }
 
@@ -720,7 +767,8 @@ struct BlenderChoiceRow: View {
       NativeChoice(model: model, node: node)
     }
     else if choice?.style == .expanded && options.count >= 2 {
-      BlenderPropertySplit(name: node.label) { BlenderExpandedChoice(model: model, node: node) }
+      /* The name at the first row's height, should the options wrap into two (decision 43). */
+      BlenderPropertySplit(name: node.label, firstRow: true) { BlenderExpandedChoice(model: model, node: node) }
     }
     else {
       BlenderPropertySplit(name: node.label) { BlenderChoiceWidget(model: model, node: node, fills: true) }
@@ -729,7 +777,9 @@ struct BlenderChoiceRow: View {
 }
 
 /** A choice Blender draws expanded: its options as joined toggle buttons on one line while their
- * names fit, else Blender's own fallback, a column of them. No name is cut. */
+ * names fit; else two rows of equal, joined cells, as Blender's aligned `grid_flow` (half the
+ * options to a row, rounded up), as the shading popover's six Colors are three by two; a column
+ * only when one option will not fit a cell (ROUND5 7E/E4, decision 43). No name is cut. */
 struct BlenderExpandedChoice: View {
   let model: PanelsModel
   let node: NativeNode
@@ -745,14 +795,29 @@ struct BlenderExpandedChoice: View {
 
   var body: some View {
     let icons = options.allSatisfy { BlenderIcon.image($0.icon) != nil }
+    let columns = (options.count + 1) / 2
     ViewThatFits(in: .horizontal) {
       HStack(spacing: 1) { buttons(icons: icons, vertical: false) }
         .fixedSize(horizontal: true, vertical: false)
+      EqualCellGrid(columns: columns) { cells(icons: icons, columns: columns) }
       VStack(spacing: 1) { buttons(icons: icons, vertical: true) }
     }
     .disabled(!node.enabled)
     .accessibilityElement(children: .contain)
     .accessibilityLabel(node.label)
+  }
+
+  /** The options as cells of a grid \a columns wide, each as wide as its cell. */
+  @ViewBuilder
+  private func cells(icons: Bool, columns: Int) -> some View {
+    ForEach(Array(options.enumerated()), id: \.offset) { index, option in
+      BlenderToggleButton(name: option.label ?? "", icon: icons ? BlenderIcon.image(option.icon) : nil,
+                          text: icons ? nil : option.label, isOn: isChecked(option), fills: true,
+                          corners: .cell(index, of: options.count, columns: columns)) {
+        model.set(node, .text(option.value ?? ""))
+        Haptics.selection()
+      }
+    }
   }
 
   @ViewBuilder

@@ -60,19 +60,19 @@ enum WidthClass: Int, Comparable {
  * \{ */
 
 /** Which of the header's items show at a width. From the widest rung down, each moves the least
- * essential items into More: Share; File and Edit; the editor's menus fold into one Menus button;
- * the sidebar menu and Repeat; Menus and viewport shading; Properties and the selection mode.
- * Mode, Assets, Search, Undo, Redo and More never leave. */
+ * essential items into More: Share; File and Edit; then the editor's menus, one at a time from the
+ * last, into a button at their end (More Menus), the button alone reading Menus once all are in
+ * it (ROUND5 7E/E2, decision 42); the sidebar menu and Repeat; Menus and viewport shading;
+ * Properties and the selection mode. Mode, Assets, Search, Undo, Redo and More never leave. */
 enum HeaderLadder {
   static let widest = 6
 
   struct Shown: Equatable {
     var share: Bool
     var fileEdit: Bool
-    /** View, Select, Add, Object… side by side. */
-    var menusExpanded: Bool
-    /** The editor's menus in one Menus button. */
-    var menusButton: Bool
+    /** The editor's menus in the header: some side by side (#State.menus) and the rest in one
+     * button at their end, or all in that button. */
+    var editorMenus: Bool
     var sidebar: Bool
     var repeatLast: Bool
     var shading: Bool
@@ -81,53 +81,97 @@ enum HeaderLadder {
   }
 
   static func shows(_ rung: Int) -> Shown {
-    Shown(share: rung >= 6, fileEdit: rung >= 5, menusExpanded: rung >= 4, menusButton: rung == 2 || rung == 3,
-          sidebar: rung >= 3, repeatLast: rung >= 3, shading: rung >= 2, properties: rung >= 1,
-          selectMode: rung >= 1)
+    Shown(share: rung >= 6, fileEdit: rung >= 5, editorMenus: rung >= 2, sidebar: rung >= 3, repeatLast: rung >= 3,
+          shading: rung >= 2, properties: rung >= 1, selectMode: rung >= 1)
   }
 
-  private static func text(_ title: String) -> CGFloat {
-    ceil((title as NSString).size(withAttributes: [.font: UIFont.preferredFont(forTextStyle: .body)]).width) + 24
+  /** A rung and how many of the editor's menus stand side by side at it, in Blender's order. */
+  struct State: Equatable {
+    var rung: Int
+    var menus: Int
   }
 
-  /** The width the header needs at \a rung: each item as it draws, and the spacers between the
-   * groups. An estimate, which the header check (`layout: … header clipped`) keeps honest. */
-  static func need(_ rung: Int, modeTitle: String, menus: [String], editMesh: Bool, documents: Bool) -> CGFloat {
-    let shown = shows(rung)
-    let icon: CGFloat = 52, spacer: CGFloat = 16, group: CGFloat = 8
-    var width: CGFloat = 32 + 24 /* margins, slack */
-    if documents { width += icon + spacer }
-    if shown.fileEdit { width += text("File") + text("Edit") + group + spacer }
-    if shown.sidebar { width += icon + spacer }
-    width += 30 + text(modeTitle) + icon + group /* mode and Assets */
-    if shown.menusExpanded { width += menus.reduce(0) { $0 + text($1) } + group }
-    else if shown.menusButton { width += text("Menus") + group }
-    width += icon + group /* Search */
-    if shown.selectMode && editMesh { width += 152 + spacer }
-    width += spacer /* between the sides */
-    if shown.shading { width += icon + spacer }
-    if shown.properties { width += icon + spacer }
-    width += icon * 2 + group /* Undo, Redo */
+  /** Every state from the widest down, for \a count menus: all of them at rungs 6, 5 and 4, then
+   * rung 4 with one fewer at a time down to one, then rungs 3 to 1 with none (the Menus button). */
+  static func states(menus count: Int) -> [State] {
+    var states = [State(rung: 6, menus: count), State(rung: 5, menus: count)]
+    states += stride(from: count, through: min(1, count), by: -1).map { State(rung: 4, menus: $0) }
+    states += [3, 2, 1].map { State(rung: $0, menus: 0) }
+    return states
+  }
+
+  /** A text item's width: its title in the body font and the toolbar's padding around it. */
+  static func text(_ title: String) -> CGFloat {
+    ceil((title as NSString).size(withAttributes: [.font: UIFont.preferredFont(forTextStyle: .body)]).width) + 32
+  }
+
+  /**
+   * The width the header needs in \a state: each item as it draws. The terms are the iPad's, read
+   * from its screenshots at 1366 points (2026-11-17): a button and the gap after it take 56
+   * points; a text item its title and 32; a group of text items 12 more; the bar's margins 20.
+   * The mode draws as its icon only (a toolbar `Label`), so its name is not counted. Two checks
+   * keep this honest on the device: `layout: … header clipped` when it is too small, and
+   * `layout: … header spare` when it is too large (#DocumentWindow).
+   */
+  static func need(_ state: State, menus: [String], editMesh: Bool, documents: Bool) -> CGFloat {
+    let shown = shows(state.rung)
+    let icon: CGFloat = 56, gap: CGFloat = 12
+    var width: CGFloat = 20 /* the bar's margins */
+    if documents { width += icon }
+    if shown.fileEdit { width += text("File") + text("Edit") + gap }
+    if shown.sidebar { width += icon }
+    width += icon * 2 /* mode and Assets */
+    if shown.editorMenus {
+      let side = min(max(state.menus, 0), menus.count)
+      if side > 0 {
+        width += menus.prefix(side).reduce(0) { $0 + text($1) } + gap
+        if side < menus.count { width += icon /* More Menus */ }
+      }
+      else {
+        width += text("Menus") + gap
+      }
+    }
+    width += icon /* Search */
+    if shown.selectMode && editMesh { width += 160 }
+    width += 16 /* between the sides */
+    if shown.shading { width += icon }
+    if shown.properties { width += icon }
+    width += icon * 2 /* Undo, Redo */
     if shown.repeatLast { width += icon }
     if shown.share { width += icon }
     width += icon /* More */
     return width
   }
 
-  /** The widest rung that fits \a width; a wider one only once it fits with 16 points to spare. */
-  static func rung(width: CGFloat, phone: Bool, previous: Int, modeTitle: String, menus: [String], editMesh: Bool,
-                   documents: Bool) -> Int
+  /** The widest state that fits \a width; a wider one than \a previous only once it fits with
+   * 16 points to spare, so a window dragged along a threshold does not flicker. */
+  static func state(width: CGFloat, phone: Bool, previous: State, menus: [String], editMesh: Bool,
+                    documents: Bool) -> State
   {
-    guard !phone else { return 0 }
-    for rung in stride(from: widest, to: 0, by: -1) {
-      let need = need(rung, modeTitle: modeTitle, menus: menus, editMesh: editMesh, documents: documents)
-      if width >= need + (rung > previous ? 16 : 0) { return rung }
+    guard !phone else { return State(rung: 0, menus: 0) }
+    let all = states(menus: menus.count)
+    /* A previous state of another mode's menus (or none yet) asks no margin, as the widest. */
+    let previousIndex = all.firstIndex(of: previous) ?? 0
+    for (index, state) in all.enumerated() {
+      let need = need(state, menus: menus, editMesh: editMesh, documents: documents)
+      if width >= need + (index < previousIndex ? 16 : 0) { return state }
     }
-    return 0
+    return State(rung: 0, menus: 0)
+  }
+
+  /** How much more the next wider state than \a state needs, by the estimate; nil at the widest.
+   * The header's spare check compares what it measures with it. */
+  static func nextExtra(_ state: State, menus: [String], editMesh: Bool, documents: Bool) -> CGFloat? {
+    let all = states(menus: menus.count)
+    /* Rung 0 is a phone's or a compact window's, chosen by its width class, not by room. */
+    guard state.rung > 0, let index = all.firstIndex(of: state), index > 0 else { return nil }
+    return need(all[index - 1], menus: menus, editMesh: editMesh, documents: documents) -
+      need(state, menus: menus, editMesh: editMesh, documents: documents)
   }
 }
 
-/** Keeps the model's width class and header rung for the window's width, the mode and its menus. */
+/** Keeps the model's width class, header rung and menus side by side for the window's width, the
+ * mode and its menus. */
 struct HeaderLadderTracker: ViewModifier {
   let model: ShellModel
   @Environment(\.horizontalSizeClass) private var sizeClass
@@ -141,12 +185,16 @@ struct HeaderLadderTracker: ViewModifier {
     guard width > 0 else { return }
     let phone = UIDevice.current.userInterfaceIdiom == .phone || sizeClass == .compact && width < 500
     let widthClass = WidthClass.of(width: width, phone: phone, previous: model.widthClass)
-    let modeTitle = model.modes.first { $0.id == model.objectMode }?.label ?? "Object Mode"
-    let rung = widthClass == .compact ? 0 :
-      HeaderLadder.rung(width: width, phone: phone, previous: model.headerRung, modeTitle: modeTitle, menus: menus,
-                        editMesh: model.mode == "mesh_edit", documents: true)
+    let editMesh = model.mode == "mesh_edit"
+    let previous = HeaderLadder.State(rung: model.headerRung, menus: model.headerMenus)
+    let state = widthClass == .compact ? HeaderLadder.State(rung: 0, menus: 0) :
+      HeaderLadder.state(width: width, phone: phone, previous: previous, menus: menus, editMesh: editMesh,
+                         documents: true)
     if model.widthClass != widthClass { model.widthClass = widthClass }
-    if model.headerRung != rung { model.headerRung = rung }
+    if model.headerRung != state.rung { model.headerRung = state.rung }
+    if model.headerMenus != state.menus { model.headerMenus = state.menus }
+    let extra = HeaderLadder.nextExtra(state, menus: menus, editMesh: editMesh, documents: true)
+    if model.headerNextExtra != extra { model.headerNextExtra = extra }
   }
 
   func body(content: Content) -> some View {
@@ -555,7 +603,29 @@ enum ShellLayout {
         }
       }
     }
-    WM_native_ui_log("selftest", "\(layouts) layouts, \(overlaps) overlaps; \(outside) beyond the window, \(short) slots too short")
+    /* The header at each width, with Object Mode's four editor menus and Edit Mode's eight
+     * (ROUND5 7E/E2): the state chosen, and that its estimate fits the window. */
+    var headersOver = 0
+    let menuSets: [(String, [String], Bool)] = [
+      ("object", ["View", "Select", "Add", "Object"], false),
+      ("edit", ["View", "Select", "Add", "Mesh", "Vertex", "Edge", "Face", "UV"], true),
+    ]
+    for size in sizes where WidthClass.of(width: size.width, phone: false, previous: .wide) != .compact {
+      for (mode, menus, editMesh) in menuSets {
+        let state = HeaderLadder.state(width: size.width, phone: false,
+                                       previous: HeaderLadder.State(rung: HeaderLadder.widest, menus: menus.count),
+                                       menus: menus, editMesh: editMesh, documents: true)
+        let need = HeaderLadder.need(state, menus: menus, editMesh: editMesh, documents: true)
+        say("header \(Int(size.width)) \(mode):", "rung \(state.rung), \(state.menus) of \(menus.count) menus, " +
+            "needs \(Int(need))")
+        if state.rung > 0 && need > size.width {
+          headersOver += 1
+          say("header \(Int(size.width)) \(mode): outside", "needs \(Int(need))")
+        }
+      }
+    }
+    WM_native_ui_log("selftest", "\(layouts) layouts, \(overlaps) overlaps; \(outside) beyond the window, \(short) slots too short; " +
+                     "\(headersOver) headers too wide")
   }
 
   /** \} */

@@ -1022,10 +1022,14 @@ extension View {
   }
 }
 
-/** Blender's arrow at each end of a bar that has more past it, over a short fade, see
- * `shellScrollEdge`. It takes no touches. */
-private struct ScrollMoreMarks: ViewModifier {
+/** Blender's arrow at each end of a bar that has more past it, see `shellScrollEdge`. In Blender's
+ * style the arrow has its own ground: a #width strip of the bar's colour, so the content ends
+ * before it, as the arrow in Blender's long menus sits on the menu's colour (ROUND5 7E/E3). Under
+ * glass it sits on the glass's own soft edge. It takes no touches. */
+struct ScrollMoreMarks: ViewModifier {
   let horizontal: Bool
+  /** The strip the arrow stands on in Blender's style. */
+  static let width: CGFloat = 20
   @State private var before = false
   @State private var after = false
   @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
@@ -1056,12 +1060,10 @@ private struct ScrollMoreMarks: ViewModifier {
   private func mark(start: Bool) -> some View {
     let icon = horizontal ? (start ? "TRIA_LEFT" : "TRIA_RIGHT") : (start ? "TRIA_UP" : "TRIA_DOWN")
     let symbol = horizontal ? (start ? "chevron.left" : "chevron.right") : (start ? "chevron.up" : "chevron.down")
-    /* Blender's region fades under the arrow; glass softens its own edge. */
-    let surface = style == ShellStyle.glass.rawValue ? Color.clear : ShellStyle.region
+    let glass = style == ShellStyle.glass.rawValue
     return ZStack {
-      LinearGradient(colors: [surface, surface.opacity(0)],
-                     startPoint: horizontal ? (start ? .leading : .trailing) : (start ? .top : .bottom),
-                     endPoint: horizontal ? (start ? .trailing : .leading) : (start ? .bottom : .top))
+      /* Blender's style: the bar's own colour, solid, so nothing shows under the arrow. */
+      if !glass { ShellStyle.region }
       Group {
         if let image = BlenderIcon.image(icon) {
           Image(uiImage: image).resizable().scaledToFit()
@@ -1073,7 +1075,7 @@ private struct ScrollMoreMarks: ViewModifier {
       .frame(width: 10, height: 10)
       .foregroundStyle(Color.primary.opacity(0.7))
     }
-    .frame(width: horizontal ? 28 : nil, height: horizontal ? nil : 28)
+    .frame(width: horizontal ? (glass ? 28 : Self.width) : nil, height: horizontal ? nil : (glass ? 28 : Self.width))
     .allowsHitTesting(false)
     .accessibilityHidden(true)
   }

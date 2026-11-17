@@ -23,6 +23,9 @@
  * - `popover shading|close`: the 3D View's shading popover;
  * - `prefs open|close`: Preferences;
  * - `about open|close`: About and Licences, as the app menu and the launcher open it (ROUND5 8C);
+ * - `edit <identifier>`: put a number field into editing, as a tap does, so a shot shows the full
+ *   value it is typed from (ROUND5 7E.7): the first field shown whose node key ends in it, or
+ *   whose `<property>.<label>` it is, such as `location.X` or `scale.X`; logged either way;
  * - `wait <seconds>`;
  * - `shot <name>`: every window of the scene, drawn into `tmp/shots/<name>.png`.
  *
@@ -34,6 +37,23 @@
 
 import SwiftUI
 import UIKit
+
+/** A script's `edit` step: the first number field shown that matches takes it. */
+@MainActor
+final class NumberFieldEditRequest {
+  static let notification = Notification.Name("ShellSnapshotEditNumber")
+  let identifier: String
+  /** The key of the field that began editing. */
+  var claimedBy: String?
+
+  init(identifier: String) { self.identifier = identifier }
+
+  /** Whether \a node is the one asked for. */
+  func matches(_ node: NativeNode) -> Bool {
+    node.key == identifier || node.key.hasSuffix(identifier) ||
+      "\(node.node.property ?? "").\(node.label)" == identifier
+  }
+}
 
 @MainActor
 enum ShellSnapshots {
@@ -193,6 +213,16 @@ enum ShellSnapshots {
           SwiftAbout.dismiss()
         }
         try? await Task.sleep(for: .seconds(1))
+      case "edit":
+        guard let identifier = words.first else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        let request = NumberFieldEditRequest(identifier: identifier)
+        NotificationCenter.default.post(name: NumberFieldEditRequest.notification, object: request)
+        try? await Task.sleep(for: .milliseconds(800))
+        WM_native_ui_log("snapshot", request.claimedBy.map { "edit \(identifier): editing \($0)" } ??
+                         "edit \(identifier): no number field shown matches")
       case "wait":
         try? await Task.sleep(for: .seconds(Double(words.first ?? "") ?? 0.5))
       case "shot":

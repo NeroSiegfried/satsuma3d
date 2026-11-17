@@ -482,4 +482,37 @@ check(len(re.findall(r'static func warning\(freeBytes', '\n'.join(p.read_text(en
 check('apple_ios/swift/SaveSpace.swift' in (ROOT / 'source/creator/CMakeLists.txt').read_text(encoding='utf-8'),
       "SaveSpace.swift is built into the app")
 
+# 7E: what the first run on the iPad showed.
+panels = code['NativePanels.swift']
+properties_panel = panels[panels.index('struct PropertiesPanel'):panels.index('struct PropertiesTabColumn')]
+check('PanelsModel.inSidebarGroup(model.currentTab)' in properties_panel and 'BlenderIcon.image($0.icon) == nil' not in
+      properties_panel, "E1: the sidebar's strip of words shows only on Tool and the sidebar's tabs (decision 41)")
+check('tab.id == PanelsModel.toolTab && PanelsModel.isSidebarCategory(model.currentTab)' in panels,
+      "E1: the Tool tab's icon stays lit for the sidebar's group")
+shell_layout = code['ShellLayout.swift']
+top_bar_code = code['TopBar.swift']
+check('menusExpanded' not in shell_layout + top_bar_code and 'menusButton' not in shell_layout + top_bar_code and
+      'struct State' in shell_layout and 'EditorMenus(sideBySide: model.headerMenus)' in top_bar_code and
+      '"More Menus"' in (SWIFT / 'TopBar.swift').read_text(encoding='utf-8'),
+      "E2: the editor's menus fold one at a time into More Menus, not all at once (decision 42)")
+check('text(modeTitle)' not in shell_layout, "E2: the header's estimate does not count the mode's name, which it does not draw")
+check('header spare' in (SWIFT / 'DocumentWindow.swift').read_text(encoding='utf-8') and '"edit", ["View", "Select", "Add", "Mesh", "Vertex", "Edge", '
+      '"Face", "UV"]' in (SWIFT / 'ShellLayout.swift').read_text(encoding='utf-8'),
+      "E2: a header with room to spare is logged, and the self-test has Edit Mode's eight menus")
+interop = code['UIKitInterop.swift']
+marks = interop[interop.index('struct ScrollMoreMarks'):interop.index('func makePanelGlass')]
+check('LinearGradient' not in marks and 'if !glass { ShellStyle.region }' in marks,
+      "E3: in Blender's style a bar's more-arrow stands on a strip of the bar's colour, not over the content")
+controls = code['NativeControls.swift']
+expanded = controls[controls.index('struct BlenderExpandedChoice'):controls.index('struct NativeButton:')]
+check('EqualCellGrid(columns: columns)' in expanded and 'firstRow: true' in controls,
+      "E4: an expanded choice that does not fit one row wraps into two joined rows (decision 43)")
+check('BlenderNumberText.format(' in controls,
+      "E5: numbers are printed by BlenderNumberText (no sign on a zero), tested by tests/ios/test_number_text.py")
+check('static func entry(tab: String, shading: String, path: [String])' in code['RevealCoordinator.swift'] and
+      'path: model.pathItems.map' in panels,
+      "E6: the shading line needs what it is about in the context path (a material in the slot)")
+check('case "edit":' in (SWIFT / 'Snapshots.swift').read_text(encoding='utf-8') and 'NumberFieldEditRequest.notification' in controls,
+      "7E.7: the snapshot step `edit <identifier>` puts a number field into editing")
+
 print('PASS: native shell sources ' + json.dumps(checks))

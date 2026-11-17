@@ -44,6 +44,23 @@ enum BlenderWidgetColors {
   static let textInner = Color(red: 0x1d / 255, green: 0x1d / 255, blue: 0x1d / 255)
 }
 
+/** The rounded corners of a cell in a grid of joined widgets, as Blender's aligned `grid_flow`. */
+struct WidgetCorners: Equatable {
+  var topLeading = false, topTrailing = false, bottomLeading = false, bottomTrailing = false
+
+  /** The cell at \a index of \a count, filled row by row \a columns to a row: the grid's outer
+   * corners are rounded, joined edges square. */
+  static func cell(_ index: Int, of count: Int, columns: Int) -> WidgetCorners {
+    let rows = (count + columns - 1) / columns
+    let row = index / columns, column = index % columns
+    let lastInRow = column == columns - 1 || index == count - 1
+    /* Nothing below it: the last row, or a cell of the row above past the last row's end. */
+    let nothingBelow = row == rows - 1 || index + columns >= count
+    return WidgetCorners(topLeading: row == 0 && column == 0, topTrailing: row == 0 && lastInRow,
+                         bottomLeading: row == rows - 1 && column == 0, bottomTrailing: nothingBelow && lastInRow)
+  }
+}
+
 /** Where the widget at \a index of \a count joined ones sits. */
 func widgetJoin(_ index: Int, _ count: Int) -> WidgetJoin {
   count <= 1 ? .alone : index == 0 ? .first : index == count - 1 ? .last : .middle
@@ -55,8 +72,17 @@ struct WidgetShape: Shape {
   let join: WidgetJoin
   let glass: Bool
   var vertical = false
+  /** A cell of a grid of joined widgets: which of its corners are the grid's, rounded. */
+  var corners: WidgetCorners? = nil
 
   func path(in rect: CGRect) -> Path {
+    if let corners {
+      let r = glass ? min(10, rect.height / 2) : ShellStyle.radius
+      return UnevenRoundedRectangle(topLeadingRadius: corners.topLeading ? r : 0,
+                                    bottomLeadingRadius: corners.bottomLeading ? r : 0,
+                                    bottomTrailingRadius: corners.bottomTrailing ? r : 0,
+                                    topTrailingRadius: corners.topTrailing ? r : 0, style: .continuous).path(in: rect)
+    }
     let r = glass ? (vertical && join != .alone ? min(10, rect.height / 2) : rect.height / 2) : ShellStyle.radius
     let start = join == .alone || join == .first ? r : 0
     let end = join == .alone || join == .last ? r : 0
@@ -85,6 +111,8 @@ struct BlenderWidgetFace: View {
   var fills = false
   /** Joined top to bottom rather than side by side. */
   var vertical = false
+  /** A cell of a grid of joined widgets, see #WidgetCorners. */
+  var corners: WidgetCorners? = nil
   @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
 
   private var glass: Bool { style == ShellStyle.glass.rawValue }
@@ -137,10 +165,11 @@ struct BlenderWidgetFace: View {
     .foregroundStyle(foreground)
     .padding(.horizontal, 8)
     .frame(minWidth: minWidth, maxWidth: fills ? .infinity : nil, minHeight: 32)
-    .background(WidgetShape(join: join, glass: glass, vertical: vertical).fill(fill))
+    .background(WidgetShape(join: join, glass: glass, vertical: vertical, corners: corners).fill(fill))
     .overlay {
       if !glass {
-        WidgetShape(join: join, glass: false, vertical: vertical).strokeBorder(BlenderWidgetColors.outline, lineWidth: 1)
+        WidgetShape(join: join, glass: false, vertical: vertical, corners: corners)
+          .strokeBorder(BlenderWidgetColors.outline, lineWidth: 1)
       }
     }
     .opacity(dimmed ? 0.5 : 1)
@@ -200,12 +229,14 @@ struct BlenderToggleButton: View {
   var vertical = false
   /** As wide as what holds it. */
   var fills = false
+  /** A cell of a grid of joined options, see #WidgetCorners. */
+  var corners: WidgetCorners? = nil
   let action: () -> Void
 
   var body: some View {
     Button(action: action) {
       BlenderWidgetFace(icon: icon, text: text, on: isOn, join: join, minWidth: minWidth, fills: fills,
-                        vertical: vertical)
+                        vertical: vertical, corners: corners)
     }
     .buttonStyle(.plain)
     .help(name)

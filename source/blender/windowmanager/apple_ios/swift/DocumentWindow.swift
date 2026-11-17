@@ -216,15 +216,49 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     /* Blender keeps the navigation gizmo below it: in window pixels, sent on every layout (an
      * atomic store, which redraws only on a change), so a resize can never leave it stale. */
     WM_native_ui_top_bar_set(Float(bottom * model.pointScale))
-    if let header, header.bounds.width != headerCheckedWidth {
+    /* On a new width, and on a new state of the header at the same width (another mode's
+     * menus), once it has settled. */
+    let state = "\(model.headerRung) \(model.headerMenus) \(model.mode)"
+    if let header, header.bounds.width != headerCheckedWidth || state != headerCheckedState {
       headerCheckedWidth = header.bounds.width
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak header] in
-        if let header { Self.checkHeaderClipping(header) }
+      headerCheckedState = state
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak header, weak self] in
+        guard let header, let self else { return }
+        Self.checkHeaderClipping(header)
+        self.checkHeaderSpare(header)
       }
     }
   }
 
   private var headerCheckedWidth: CGFloat = 0
+  private var headerCheckedState = ""
+
+  /** The reverse of the clipping check (ROUND5 7E/E2): a header folded below its widest with
+   * more room left between its sides than the next wider state needs by #HeaderLadder's
+   * estimate, and more than 48 points, logs `layout: … header spare N at rung R`: an estimate
+   * too cautious is caught as a clipped one is. The room is measured between the leading
+   * items' end and the trailing items' start, less the 16 points the estimate keeps there. */
+  private func checkHeaderSpare(_ bar: UINavigationBar) {
+    guard let extra = model.headerNextExtra else { return }
+    var leadingEnd: CGFloat = 0
+    var trailingStart = bar.bounds.width
+    var pending: [UIView] = bar.subviews
+    while let current = pending.popLast() {
+      guard !current.isHidden, current.alpha > 0.01 else { continue }
+      let frame = current.convert(current.bounds, to: bar)
+      /* The bar's own backgrounds span it; an item is narrower than half of it. */
+      if frame.width > 1, frame.width < bar.bounds.width / 2, frame.height > 1 {
+        if frame.midX < bar.bounds.midX { leadingEnd = max(leadingEnd, frame.maxX) }
+        else { trailingStart = min(trailingStart, frame.minX) }
+      }
+      pending.append(contentsOf: current.subviews)
+    }
+    let spare = trailingStart - leadingEnd - 16
+    guard spare > 48, spare > extra else { return }
+    let menus = model.headerMenus == Int.max ? "all" : "\(model.headerMenus)"
+    LayoutChecker.shared.report("header spare", "\(LayoutChecker.shared.conditions) header spare \(Int(spare)) " +
+                                  "at rung \(model.headerRung), menus \(menus), next needs \(Int(extra)) more")
+  }
 
   /** Any of the header's controls cut by its edges, logged as `layout: … header clipped`: the
    * header ladder's width estimates (#HeaderLadder) must keep this from happening. */

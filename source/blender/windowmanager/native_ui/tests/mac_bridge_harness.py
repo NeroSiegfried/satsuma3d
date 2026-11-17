@@ -853,7 +853,8 @@ def tick_material():
         elif step == 4:
             nodes = _material_nodes()
             report["no_slots"] = {"rows": len(nodes.get("list", {}).get("children", [])),
-                                  "reference": nodes.get("reference", {}).get("key")}
+                                  "reference": nodes.get("reference", {}).get("key"),
+                                  "path_icons": [icon for _name, icon in path_of(tree(subs["MATERIAL"]))]}
             # C5: New on the material's reference, as its ＋ New does.
             invoke(subs["MATERIAL"], nodes["reference"]["key"], 31, op=Op.Op.Add)
         elif step == 7:
@@ -867,7 +868,8 @@ def tick_material():
                 "reference_actions": {k: reference.get(k) for k in
                                       ("name", "users", "can_new", "can_unlink", "can_single_user", "can_fake_user",
                                        "choices")},
-                "link": nodes.get("link") and {k: nodes["link"].get(k) for k in ("key", "role", "value", "options")}}
+                "link": nodes.get("link") and {k: nodes["link"].get(k) for k in ("key", "role", "value", "options")},
+                "path_icons": [icon for _name, icon in path_of(tree(subs["MATERIAL"]))]}
             set_text(subs["MATERIAL"], nodes["link"]["key"], "OBJECT", 32)
         elif step == 10:
             nodes = _material_nodes()
@@ -913,6 +915,12 @@ def tick_material():
             actions = report["after_new"]["reference_actions"]
             if not (actions["can_new"] and actions["can_unlink"]):
                 problems.append("the reference lists no New or Unlink")
+            # ROUND5 7E/E6: the shell's Solid-view line keys on the material in the context path
+            # (`ShadingHint.Entry.needs`): there with a material, absent with none.
+            if "MATERIAL_DATA" in report["no_slots"]["path_icons"]:
+                problems.append("the path names a material with no slot")
+            if "MATERIAL_DATA" not in report["after_new"]["path_icons"]:
+                problems.append("the path does not name the new material (MATERIAL_DATA)")
             if report["assign"]["material_index"][0] != 1 or any(report["assign"]["material_index"][1:]):
                 problems.append("Assign did not give the selected face the active slot")
             report["problems"] = problems

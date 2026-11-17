@@ -317,14 +317,10 @@ struct DocumentToolbar: ToolbarContent {
         .help("Assets")
         .accessibilityIdentifier("blender.assets")
     }
-    if shown.menusExpanded {
+    if shown.editorMenus {
       /* Blender's header menus for the mode, as on the desktop: View, Select, Add, Object, or
-       * Mesh, Vertex, Edge, Face and UV. */
-      ToolbarItem(placement: .topBarLeading) { EditorMenus() }
-    }
-    else if shown.menusButton {
-      /* Folded into one button before they go into More. */
-      ToolbarItem(placement: .topBarLeading) { EditorMenusButton() }
+       * Mesh, Vertex, Edge, Face and UV; as many as fit, the rest in one button at their end. */
+      ToolbarItem(placement: .topBarLeading) { EditorMenus(sideBySide: model.headerMenus) }
     }
     /* Search, as F3: any command by its name. */
     ToolbarItem(placement: .topBarLeading) {
@@ -570,7 +566,7 @@ struct DocumentToolbar: ToolbarContent {
    * and the tool settings, as a phone has no room for them elsewhere. */
   @ViewBuilder
   private var overflowMenu: some View {
-    if !shown.menusExpanded && !shown.menusButton {
+    if !shown.editorMenus {
       /* Blender's header menus, as one submenu each. */
       Section {
         ForEach((BlenderMenus.shared.items[EditorMenus.route] ?? []).filter { $0.submenu && !$0.disabled }) { item in
@@ -956,37 +952,40 @@ struct MirrorToggles: View {
 struct EditorMenus: View {
   /** A menu by its name is its own route, see `BlenderMenus.route`. */
   static let route = "VIEW3D_MT_editor_menus"
+  /** How many stand side by side, in Blender's order; the rest open from one button at their end,
+   * which reads Menus when it holds them all (ROUND5 7E/E2, decision 42). */
+  var sideBySide = Int.max
   private let menus = BlenderMenus.shared
 
   var body: some View {
     let items = (menus.items[Self.route] ?? []).filter { $0.submenu && !$0.disabled }
-    /* Text menus side by side, as the desktop's header; a narrow window has them in More. */
+    let shown = min(max(sideBySide, 0), items.count)
+    /* Text menus side by side, as the desktop's header. */
     HStack(spacing: 0) {
-      ForEach(items) { item in
+      ForEach(items.prefix(shown)) { item in
         Menu { BlenderMenuItems(route: item.route) } label: { Text(item.title) }
           .accessibilityIdentifier("blender.menu.\(item.title)")
+      }
+      if shown < items.count {
+        Menu {
+          ForEach(items.dropFirst(shown)) { item in
+            Menu(item.title) { BlenderMenuItems(route: item.route) }
+          }
+        } label: {
+          if shown == 0 {
+            Text("Menus")
+          }
+          else {
+            Image(systemName: "chevron.right.2")
+          }
+        }
+        .accessibilityLabel(shown == 0 ? "Menus" : "More Menus")
+        .help(shown == 0 ? "Menus" : "More Menus")
+        .accessibilityIdentifier("blender.menus")
       }
     }
     .fixedSize()
     .prefetchingBlenderMenu(Self.route)
-  }
-}
-
-/** The editor's menus in one button, before they go into More, see #HeaderLadder. */
-struct EditorMenusButton: View {
-  private let menus = BlenderMenus.shared
-
-  var body: some View {
-    let items = (menus.items[EditorMenus.route] ?? []).filter { $0.submenu && !$0.disabled }
-    Menu {
-      ForEach(items) { item in
-        Menu(item.title) { BlenderMenuItems(route: item.route) }
-      }
-    } label: {
-      Text("Menus")
-    }
-    .prefetchingBlenderMenu(EditorMenus.route)
-    .accessibilityIdentifier("blender.menus")
   }
 }
 
