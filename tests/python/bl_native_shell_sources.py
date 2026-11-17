@@ -188,4 +188,33 @@ check('"path"' in (SWIFT.parents[2] / 'editors/interface/interface_native_proper
       and 'ED_buttons_native_context_path' in bridge,
       "The bridge sends Blender's context path as a `path` group (ROUND5 7B)")
 
+# 7C: a setting is drawn one way. Properties' rows use the widgets of the bars (BlenderWidgets.swift):
+# no system slider, switch, colour well or menu picker in a row, and no light system field as a
+# control's fill. The rows are ControlRow and the views it draws, up to NativeSwitch, which only
+# panel headers use.
+controls = code['NativeControls.swift']
+rows = controls[controls.index('struct ControlRow'):controls.index('struct NativeSwitch')]
+check('Slider(' not in rows and 'ColorPicker(' not in controls and 'UIColorWell' not in controls,
+      "Properties' rows draw no system slider and no colour well (ROUND5 7C)")
+check('.pickerStyle(.menu)' not in controls, "No system menu picker in Properties' rows (ROUND5 7C)")
+
+
+def after_call(text, start):
+    """The end of the call whose name starts at \a start, with its trailing closure."""
+    i = balanced(text, text.index('(', start), '(', ')')
+    while i < len(text) and text[i] in ' \t':
+        i += 1
+    return balanced(text, i, '{', '}') if i < len(text) and text[i] == '{' else i
+
+
+bare_toggles = [m.start() for m in re.finditer(r'\bToggle\(', rows)
+                if 'BlenderCheckboxStyle' not in rows[after_call(rows, m.start()):after_call(rows, m.start()) + 80]]
+check(not bare_toggles, "Every toggle in a row is Blender's checkbox (BlenderCheckboxStyle) (ROUND5 7C)")
+check('PanelStyle.field' not in rows, "No row fills a control with the system field (PanelStyle.field) (ROUND5 7C)")
+check(all(name not in controls for name in ('struct NativeVectorRow', 'struct NativeToggleGroup', 'struct NativeSlider',
+                                              'struct NativeColorSwatch', 'struct NativeColorPicker')),
+      "The system-control rows are gone: vectors, toggle groups, sliders and colours draw with Blender's widgets")
+check('NativeNumberField(model: model, node: node, widget: .alone)' in rows and 'BlenderVectorField(' in rows,
+      "Numbers and vectors in Properties are Blender's fields (ROUND5 7C)")
+
 print('PASS: native shell sources ' + json.dumps(checks))

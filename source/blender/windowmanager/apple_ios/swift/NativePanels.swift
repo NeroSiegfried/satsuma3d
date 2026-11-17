@@ -931,15 +931,37 @@ struct PanelBody: View {
       if panel.kind == .panel, let name = header.first(where: { $0.role == .name }) {
         PanelStackOptions(model: model, name: name, toggles: PanelStackOptions.secondary(header))
       }
-      ForEach(model.body(of: panel)) { node in
-        if node.kind == .panel {
-          SubPanel(model: model, panel: node)
+      ForEach(Self.runs(model.body(of: panel)), id: \.first!.key) { run in
+        if run.count > 1 {
+          /* Buttons side by side, as Assign, Select and Deselect: joined (ROUND5 7C). */
+          NativeButtonRow(model: model, buttons: run)
+        }
+        else if run[0].kind == .panel {
+          SubPanel(model: model, panel: run[0])
         }
         else {
-          ControlRow(model: model, node: node)
+          ControlRow(model: model, node: run[0])
         }
       }
     }
+  }
+
+  /** The body's nodes, one to a row, but for buttons that follow one another with text of their
+   * own, which Blender lays out in one row (two to four of them). */
+  static func runs(_ nodes: [NativeNode]) -> [[NativeNode]] {
+    var runs: [[NativeNode]] = []
+    func joinable(_ node: NativeNode) -> Bool {
+      node.kind == .button && node.content(Blender_NativeUI_Button.self)?.iconOnly != true && !node.label.isEmpty
+    }
+    for node in nodes {
+      if joinable(node), let last = runs.last, last.count < 4, last.allSatisfy(joinable) {
+        runs[runs.count - 1].append(node)
+      }
+      else {
+        runs.append([node])
+      }
+    }
+    return runs
   }
 }
 

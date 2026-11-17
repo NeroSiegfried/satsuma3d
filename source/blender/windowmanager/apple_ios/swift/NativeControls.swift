@@ -93,6 +93,8 @@ struct NativeNumberField: View {
   var widget: WidgetJoin? = nil
   /** Its name inside the field, leading, as a vector's X, Y and Z. */
   var inlineLabel: String? = nil
+  /** Joined top to bottom rather than side by side, as a vector's fields in Properties. */
+  var vertical = false
 
   @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
   @State private var editing = false
@@ -211,7 +213,7 @@ struct NativeNumberField: View {
   @ViewBuilder
   private var fieldBackground: some View {
     if let widget {
-      let shape = WidgetShape(join: widget, glass: glass)
+      let shape = WidgetShape(join: widget, glass: glass, vertical: vertical)
       ZStack(alignment: .leading) {
         shape.fill(widgetFill)
         if let number, number.slider, !mixed {
@@ -359,48 +361,6 @@ extension Blender_NativeUI_Number {
   }
 }
 
-struct NativeSlider: View {
-  let model: PanelsModel
-  let node: NativeNode
-  @State private var dragging: Double?
-  @State private var start = 0.0
-  @State private var lastPreview: CFTimeInterval = 0
-
-  var body: some View {
-    if let number = node.number {
-      /* Read here, so the slider follows the value it shows. */
-      let fraction = dragging ?? number.fraction(of: model.number(node))
-      Slider(value: Binding(
-        get: { fraction },
-        set: { fraction in
-          dragging = fraction
-          if CACurrentMediaTime() - lastPreview >= 1.0 / 60.0 {
-            model.set(node, .float(value(number, fraction)), phase: .update)
-            lastPreview = CACurrentMediaTime()
-          }
-        }), in: 0...1, onEditingChanged: { began in
-          if began {
-            start = model.number(node)
-            lastPreview = 0
-            return
-          }
-          guard let fraction = dragging else { return }
-          let result = value(number, fraction)
-          model.set(node, .float(result), phase: result == start ? .cancel : .end)
-          dragging = nil
-        })
-        .tint(nativeAnimationColor(node.node.animation) ?? PanelStyle.tint)
-        .disabled(!node.enabled)
-        .accessibilityLabel(node.label)
-    }
-  }
-
-  private func value(_ number: Blender_NativeUI_Number, _ fraction: Double) -> Double {
-    let value = number.value(atFraction: fraction)
-    return number.integer ? value.rounded() : value
-  }
-}
-
 /** \} */
 
 /* -------------------------------------------------------------------- */
@@ -519,7 +479,15 @@ extension View {
   }
 }
 
-/** A control as a form row: its label and the control. */
+/**
+ * A control as a row of Blender's Properties editor (ROUND5 7C, decision 29): Blender's property
+ * split, the name right-aligned in the leading 40 % and the widget in the rest, rows 32 points
+ * tall, with the widgets every bar uses (#BlenderWidgets): a number is Blender's field, filled to
+ * its value when it is a slider; a vector three fields stacked and joined; a toggle Blender's
+ * checkbox with its name; a choice Blender's dropdown, or joined toggles where Blender draws it
+ * expanded; a colour Blender's colour bar; text Blender's text field; a button Blender's. A name
+ * that does not fit wraps; it is never cut.
+ */
 struct ControlRow: View {
   let model: PanelsModel
   let node: NativeNode
@@ -529,35 +497,30 @@ struct ControlRow: View {
       switch node.kind {
         case .group:
           switch node.group?.layout ?? .column {
-            case .row: NativeVectorRow(model: model, group: node)
-            case .joined: NativeToggleGroup(model: model, group: node)
+            case .row:
+              BlenderVectorRow(model: model, group: node)
+            case .joined:
+              split(node.label) { BlenderJoinedToggles(model: model, group: node) }
             default:
-              VStack(spacing: 0) {
+              PanelColumn(spacing: 4) {
                 ForEach(model.children(of: node)) { ControlRow(model: model, node: $0) }
               }
           }
         case .toggle:
-          labeled(width: nil) { NativeSwitch(model: model, node: node) }
+          split(nil) { BlenderPropertyToggle(model: model, node: node) }
         case .number:
-          if node.number?.slider == true {
-            /* The name, the slider, then the number, on one line. */
-            labeled(width: 0.66) {
-              HStack(spacing: 8) {
-                NativeSlider(model: model, node: node)
-                NativeNumberField(model: model, node: node, compact: true, scrubs: false)
-                  .frame(width: 64)
-              }
-            }
-          }
-          else {
-            labeled { NativeNumberField(model: model, node: node) }
+          split(node.label, lock: true) {
+            NativeNumberField(model: model, node: node, widget: .alone)
           }
         case .textfield:
-          labeled { NativeTextField(model: model, node: node) }
+          split(node.label) { NativeTextField(model: model, node: node) }
         case .choice:
-          NativeChoice(model: model, node: node)
+          BlenderChoiceRow(model: model, node: node)
         case .color:
-          labeled(width: nil) { NativeColorSwatch(model: model, node: node) }
+          split(node.label) {
+            BlenderColorButton(model: model, node: node)
+              .frame(height: 32)
+          }
         case .ramp:
           NativeRamp(model: model, node: node)
             .padding(.vertical, 6)
@@ -575,18 +538,16 @@ struct ControlRow: View {
             .padding(.vertical, 4)
         case .menubutton:
           NativeMenuButton(model: model, node: node)
-            .frame(maxWidth: .infinity, minHeight: 44)
         case .button:
           NativeButton(model: model, node: node)
         case .label:
-          HStack {
-            Text(node.label)
-            Spacer(minLength: 8)
-            Text(model.text(node)).foregroundStyle(.secondary)
+          split(node.label) {
+            Text(model.text(node))
+              .font(.subheadline)
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+              .frame(maxWidth: .infinity, alignment: .leading)
           }
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
-          .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
         default:
           EmptyView()
       }
@@ -594,41 +555,216 @@ struct ControlRow: View {
     .controlActions(model, node)
   }
 
-  @ViewBuilder
-  private func labeled<Control: View>(width: CGFloat? = 0.53, @ViewBuilder control: () -> Control) -> some View {
-    let title = HStack(spacing: 10) {
-      if let icon = BlenderIcon.image(node.node.leadingIcon) {
-        Image(uiImage: icon)
-          .resizable()
-          .scaledToFit()
-          .frame(width: 22, height: 22)
-          .foregroundStyle(.secondary)
+  private func split<Control: View>(_ name: String?, lock: Bool = false, @ViewBuilder control: @escaping () -> Control)
+    -> some View
+  {
+    BlenderPropertySplit(name: name, icon: node.node.leadingIcon,
+                         locked: lock ? model.attached(node, .lock).map { model.bool($0) } ?? false : false,
+                         control: control)
+  }
+}
+
+/** Blender's property split (`use_property_split`): the name right-aligned in the leading 40 %,
+ * wrapping rather than being cut, and the widget in the rest, at least 32 points tall. */
+struct BlenderPropertySplit<Control: View>: View {
+  let name: String?
+  var icon: String? = nil
+  var locked = false
+  @ViewBuilder let control: () -> Control
+
+  var body: some View {
+    FractionRow(fraction: 0.6, spacing: 8) {
+      BlenderSplitName(name: name, icon: icon, locked: locked)
+      control()
+        .frame(maxWidth: .infinity, minHeight: 32)
+    }
+    .frame(minHeight: 32)
+  }
+}
+
+/** The name column of Blender's property split: right-aligned, wrapping rather than being cut. */
+struct BlenderSplitName: View {
+  let name: String?
+  var icon: String? = nil
+  var locked = false
+
+  var body: some View {
+    HStack(spacing: 4) {
+      Spacer(minLength: 0)
+      if let image = BlenderIcon.image(icon) {
+        Image(uiImage: image).resizable().scaledToFit().frame(width: 16, height: 16).foregroundStyle(.secondary)
       }
-      Text(node.label)
-        .lineLimit(2)
-        .frame(maxWidth: .infinity, alignment: .leading)
-      if let lock = model.attached(node, .lock), model.bool(lock) {
+      if let name, !name.isEmpty {
+        Text(name)
+          .font(.subheadline)
+          .foregroundStyle(.primary.opacity(0.8))
+          .multilineTextAlignment(.trailing)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      if locked {
         Image(systemName: "lock.fill")
           .font(.caption2)
           .foregroundStyle(.secondary)
           .accessibilityLabel("Locked")
       }
     }
-    Group {
-      if let width {
-        FractionRow(fraction: width) {
-          title
-          control()
+  }
+}
+
+/** A vector such as Location, as Blender's Properties draws it: its name beside the first of its
+ * fields, the fields stacked and joined, X, Y and Z inside each; its mode, such as Rotation's,
+ * below as a dropdown of its own. */
+struct BlenderVectorRow: View {
+  let model: PanelsModel
+  let group: NativeNode
+
+  var body: some View {
+    let items = model.children(of: group).filter { $0.role == .none_ }
+    let numbers = items.filter { $0.number != nil }
+    PanelColumn(spacing: 4) {
+      if numbers.count == items.count {
+        FractionRow(fraction: 0.6, spacing: 8, aligned: .top) {
+          BlenderSplitName(name: group.label)
+            .frame(minHeight: 32)
+          BlenderVectorField(model: model, group: group, axis: .vertical)
         }
       }
       else {
-        HStack(spacing: 10) {
-          title
-          control()
+        /* A row of numbers and toggles, such as a minimum with its switch: each as it is. */
+        ForEach(items) { ControlRow(model: model, node: $0) }
+      }
+      if let mode = model.attached(group, .mode) {
+        BlenderPropertySplit(name: mode.label.isEmpty ? "Mode" : mode.label) {
+          BlenderChoiceWidget(model: model, node: mode, fills: true)
         }
+        .controlActions(model, mode)
       }
     }
-    .frame(minHeight: 44)
+  }
+}
+
+/** Toggles Blender draws joined, such as Mirror's X Y Z, as its joined toggle buttons. */
+struct BlenderJoinedToggles: View {
+  let model: PanelsModel
+  let group: NativeNode
+
+  var body: some View {
+    let items = model.children(of: group)
+    HStack(spacing: 1) {
+      ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+        let mixed = model.isMixed(item)
+        let on = !mixed && model.bool(item)
+        BlenderToggleButton(name: "\(group.label) \(item.label)", icon: nil, text: item.shortLabel, isOn: on,
+                            join: widgetJoin(index, items.count), fills: true) {
+          model.set(item, .bool(!on))
+          Haptics.selection()
+        }
+        .disabled(!item.enabled)
+        .controlActions(model, item)
+        .accessibilityValue(mixed ? "Mixed" : "")
+      }
+    }
+  }
+}
+
+/** A toggle as Blender's Properties draws it: its checkbox with its name beside it, in the widget
+ * column; with an icon of its own, a toggle button lit while on. */
+struct BlenderPropertyToggle: View {
+  let model: PanelsModel
+  let node: NativeNode
+
+  private var ownIcon: UIImage? {
+    guard let icon = node.icon, !icon.isEmpty, !icon.hasPrefix("CHECKBOX") else { return nil }
+    return BlenderIcon.image(icon)
+  }
+
+  var body: some View {
+    let on = model.bool(node)
+    let mixed = model.isMixed(node)
+    Group {
+      if let ownIcon {
+        BlenderToggleButton(name: node.label, icon: ownIcon, text: node.label, isOn: on && !mixed, fills: true) {
+          model.set(node, .bool(!on))
+        }
+      }
+      else {
+        Toggle(isOn: Binding(get: { on && !mixed }, set: { model.set(node, .bool($0)) })) {
+          Text(mixed ? "\(node.label) —" : node.label)
+            .font(.subheadline)
+            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .toggleStyle(BlenderCheckboxStyle())
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+    }
+    .disabled(!node.enabled)
+    .accessibilityValue(mixed ? "Mixed" : "")
+  }
+}
+
+/** A choice in Properties, by how Blender draws it: things to do as a menu; a preview grid; the
+ * viewport shading's modes as the system's segments; Blender's options side by side, joined while
+ * their names fit, else a column of them; otherwise Blender's dropdown in the widget column. */
+struct BlenderChoiceRow: View {
+  let model: PanelsModel
+  let node: NativeNode
+
+  private var options: [Blender_NativeUI_Option] { node.choice?.allOptions.filter { $0.value != nil } ?? [] }
+
+  var body: some View {
+    let choice = node.choice
+    if choice?.style == .actions || (model.mode == .shading && node.node.property == "type") ||
+      options.contains(where: { !($0.preview ?? "").isEmpty })
+    {
+      NativeChoice(model: model, node: node)
+    }
+    else if choice?.style == .expanded && options.count >= 2 {
+      BlenderPropertySplit(name: node.label) { BlenderExpandedChoice(model: model, node: node) }
+    }
+    else {
+      BlenderPropertySplit(name: node.label) { BlenderChoiceWidget(model: model, node: node, fills: true) }
+    }
+  }
+}
+
+/** A choice Blender draws expanded: its options as joined toggle buttons on one line while their
+ * names fit, else Blender's own fallback, a column of them. No name is cut. */
+struct BlenderExpandedChoice: View {
+  let model: PanelsModel
+  let node: NativeNode
+
+  private var options: [Blender_NativeUI_Option] { node.choice?.allOptions.filter { $0.value != nil } ?? [] }
+
+  private func isChecked(_ option: Blender_NativeUI_Option) -> Bool {
+    guard !model.isMixed(node), let value = option.value else { return false }
+    let current = model.text(node)
+    if node.choice?.multiple == true { return current.split(separator: ",").contains { $0 == value } }
+    return value == current
+  }
+
+  var body: some View {
+    let icons = options.allSatisfy { BlenderIcon.image($0.icon) != nil }
+    ViewThatFits(in: .horizontal) {
+      HStack(spacing: 1) { buttons(icons: icons, vertical: false) }
+        .fixedSize(horizontal: true, vertical: false)
+      VStack(spacing: 1) { buttons(icons: icons, vertical: true) }
+    }
+    .disabled(!node.enabled)
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel(node.label)
+  }
+
+  @ViewBuilder
+  private func buttons(icons: Bool, vertical: Bool) -> some View {
+    ForEach(Array(options.enumerated()), id: \.offset) { index, option in
+      BlenderToggleButton(name: option.label ?? "", icon: icons ? BlenderIcon.image(option.icon) : nil,
+                          text: icons ? nil : option.label, isOn: isChecked(option),
+                          join: widgetJoin(index, options.count), vertical: vertical, fills: vertical) {
+        model.set(node, .text(option.value ?? ""))
+        Haptics.selection()
+      }
+    }
   }
 }
 
@@ -660,37 +796,44 @@ struct NativeSwitch: View {
 struct NativeButton: View {
   let model: PanelsModel
   let node: NativeNode
-  var compact = false
+  var join = WidgetJoin.alone
 
   var body: some View {
     let button = node.content(Blender_NativeUI_Button.self)
     /* Its icon alone where Blender shows only that, its label still read out. */
-    let symbol = BlenderIcon.symbol(node.icon)
-    let iconOnly = button?.iconOnly == true && (symbol != nil || BlenderIcon.image(node.icon) != nil)
-    Button(role: button?.style == .destructive ? .destructive : nil) {
+    let iconOnly = button?.iconOnly == true && BlenderIcon.image(node.icon) != nil
+    let destructive = button?.style == .destructive
+    Button(role: destructive ? .destructive : nil) {
       model.send(node, .invoke)
     } label: {
-      Group {
-        if iconOnly, let symbol {
-          Image(systemName: symbol)
-        }
-        else if iconOnly {
-          IconView(name: node.icon)
-        }
-        else {
-          Label {
-            Text(node.label)
-          } icon: {
-            IconView(name: node.icon)
-          }
+      BlenderWidgetFace(icon: BlenderIcon.image(node.icon), text: iconOnly ? nil : node.label, on: false, join: join,
+                        fills: !iconOnly)
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(node.label)
+    .help(node.label)
+    .disabled(!node.enabled)
+    .opacity(node.enabled ? 1 : 0.5)
+  }
+}
+
+/** Buttons Blender draws side by side, such as a material slot's Assign, Select and Deselect:
+ * joined on one line while their names fit, else stacked. */
+struct NativeButtonRow: View {
+  let model: PanelsModel
+  let buttons: [NativeNode]
+
+  var body: some View {
+    ViewThatFits(in: .horizontal) {
+      HStack(spacing: 1) {
+        ForEach(Array(buttons.enumerated()), id: \.element.id) { index, node in
+          NativeButton(model: model, node: node, join: widgetJoin(index, buttons.count))
         }
       }
-      .frame(maxWidth: compact ? nil : .infinity, alignment: .leading)
+      VStack(spacing: 4) {
+        ForEach(buttons) { NativeButton(model: model, node: $0) }
+      }
     }
-    .accessibilityLabel(node.label)
-    .buttonStyle(.borderless)
-    .disabled(!node.enabled)
-    .frame(minHeight: compact ? 26 : 44)
   }
 }
 
@@ -731,9 +874,18 @@ struct NativeMenuButton: View {
   let node: NativeNode
 
   var body: some View {
-    let name = menuName(node)
-    BlenderMenuButton(property: ["menu": name, "label": node.label, "icon": node.icon ?? "",
-                                 "tab": model.currentTab, "editable": node.enabled ? 1 : 0])
+    /* Blender's menu button, such as a node socket's link: a dropdown the row's width. */
+    let route = BlenderMenus.route(menuName(node), tab: model.currentTab)
+    Menu {
+      BlenderMenuItems(route: route)
+    } label: {
+      BlenderWidgetFace(icon: BlenderIcon.image(node.icon), text: node.label, arrow: true, fills: true)
+    }
+    .menuIndicator(.hidden)
+    .buttonStyle(.plain)
+    .disabled(!node.enabled)
+    .prefetchingBlenderMenu(route)
+    .accessibilityLabel(node.label)
   }
 }
 
@@ -743,16 +895,24 @@ struct NativeTextField: View {
   @State private var text = ""
   @FocusState private var focused: Bool
 
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
+
   var body: some View {
+    /* Blender's text widget (`wcol_text`): dark inside, its outline, the text leading. */
+    let glass = style == ShellStyle.glass.rawValue
+    let shape = WidgetShape(join: .alone, glass: glass)
     TextField(node.label, text: $text, prompt: model.isMixed(node) ? Text("—") : nil)
-      .multilineTextAlignment(.trailing)
+      .font(.subheadline)
+      .multilineTextAlignment(.leading)
       .autocorrectionDisabled()
       .focused($focused)
       .selectsAllOnFocus(focused)
       .liftsAboveKeyboard(focused)
       .submitLabel(.done)
       .padding(.horizontal, 8)
-      .frame(minHeight: 40)
+      .frame(minHeight: 32)
+      .background(glass ? Color.primary.opacity(focused ? 0.18 : 0.08) : BlenderWidgetColors.textInner, in: shape)
+      .overlay { if !glass { shape.strokeBorder(BlenderWidgetColors.outline, lineWidth: 1) } }
       .disabled(!node.enabled)
       .onAppear { text = shown }
       .onChange(of: shown) { _, newValue in
@@ -775,19 +935,6 @@ struct NativeTextField: View {
 /* -------------------------------------------------------------------- */
 /** \name Colors
  * \{ */
-
-struct NativeColorSwatch: View {
-  let model: PanelsModel
-  let node: NativeNode
-
-  var body: some View {
-    NativeColorPicker(model: model, node: node)
-      .frame(width: 44, height: 44)
-      .disabled(!node.enabled)
-      .accessibilityLabel(node.label)
-      .accessibilityValue(model.isMixed(node) ? "Mixed" : "")
-  }
-}
 
 /** A color ramp: its colors in a bar, its stops as handles below. A tap on a stop makes it the
  * active one, whose position and color are the controls after it; dragged sideways it moves,
@@ -958,74 +1105,6 @@ struct NativeRamp: View {
   }
 }
 
-/** The system's color well: it opens the system color picker, and takes and gives colors by
- * drag and drop. Picking previews live as one drag, which ends a moment after the color stops
- * changing, so it is one undo step. */
-struct NativeColorPicker: UIViewRepresentable {
-  let model: PanelsModel
-  let node: NativeNode
-
-  @MainActor final class Coordinator: NSObject {
-    var model: PanelsModel
-    var node: NativeNode
-    var picking = false
-    var lastPreview: CFTimeInterval = 0
-    var pending: [Double]?
-    var finish: DispatchWorkItem?
-
-    init(model: PanelsModel, node: NativeNode) {
-      self.model = model
-      self.node = node
-    }
-
-    @objc func changed(_ well: UIColorWell) {
-      let alpha = node.content(Blender_NativeUI_Color.self)?.alpha ?? false
-      guard let color = well.selectedColor, let components = colorComponents(color, alpha: alpha) else { return }
-      pending = components
-      picking = true
-      if CACurrentMediaTime() - lastPreview >= 1.0 / 60.0 {
-        model.set(node, .floats(components), phase: .update)
-        lastPreview = CACurrentMediaTime()
-      }
-      finish?.cancel()
-      let work = DispatchWorkItem { [weak self] in self?.end() }
-      finish = work
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
-    }
-
-    func end() {
-      guard picking, let pending else { return }
-      model.set(node, .floats(pending), phase: .end)
-      picking = false
-      self.pending = nil
-    }
-  }
-
-  func makeCoordinator() -> Coordinator { Coordinator(model: model, node: node) }
-
-  private func color() -> UIColor { blenderColor(model.floats(node).map { NSNumber(value: $0) }) }
-
-  func makeUIView(context: Context) -> UIColorWell {
-    let well = UIColorWell()
-    well.supportsAlpha = node.content(Blender_NativeUI_Color.self)?.alpha ?? false
-    well.title = node.label
-    well.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
-    well.selectedColor = color()
-    return well
-  }
-
-  func updateUIView(_ well: UIColorWell, context: Context) {
-    context.coordinator.model = model
-    context.coordinator.node = node
-    /* Blender's value, except while the picker is being used. */
-    if !context.coordinator.picking {
-      let color = color()
-      if well.selectedColor != color { well.selectedColor = color }
-    }
-    well.isEnabled = node.enabled
-  }
-}
-
 /** \} */
 
 /* -------------------------------------------------------------------- */
@@ -1077,15 +1156,9 @@ struct NativeChoice: View {
     else if options.contains(where: { !($0.preview ?? "").isEmpty }) {
       PreviewChoiceButton(model: model, node: node, compact: compact)
     }
-    else if choice?.style == .expanded && (2...6).contains(options.count) && (!compact || segmentsFit) {
-      /* Choices Blender draws as a row (a brush's Add and Subtract, the selection modes): one tap
-       * each, with the system's sliding selection. */
-      if compact {
-        segmented.controlSize(.mini)
-      }
-      else {
-        ladder
-      }
+    else if compact && choice?.style == .expanded && (2...6).contains(options.count) && segmentsFit {
+      /* Choices Blender draws as a row, in a list's row: one tap each. */
+      segmented.controlSize(.mini)
     }
     else if compact {
       /* A glass button showing the current choice's icon, with the choices in a menu. */
@@ -1107,141 +1180,9 @@ struct NativeChoice: View {
       .accessibilityLabel(label)
     }
     else {
-      menuRow
+      /* A row of Properties: Blender's widgets. */
+      BlenderChoiceRow(model: model, node: node)
     }
-  }
-
-  /** The system's menu picker: the current choice in the tint, the choices in a menu. */
-  private var menuRow: some View {
-      FractionRow(fraction: 0.53) {
-        Text(node.label)
-          .lineLimit(2)
-          .frame(maxWidth: .infinity, alignment: .leading)
-        Group {
-          if mixed {
-            /* The menu picker's look, with the dash its selection can't show. */
-            Menu {
-              Picker(label, selection: chosen) { choices }.pickerStyle(.inline)
-            } label: {
-              HStack(spacing: 4) {
-                Text("—")
-                Image(systemName: "chevron.up.chevron.down").imageScale(.small)
-              }
-            }
-            .accessibilityLabel(label)
-            .accessibilityValue("Mixed")
-          }
-          else {
-            Picker(label, selection: chosen) { choices }
-              .pickerStyle(.menu)
-              .labelsHidden()
-          }
-        }
-        .disabled(!node.enabled)
-        .frame(maxWidth: .infinity, alignment: .trailing)
-      }
-      .frame(minHeight: 44)
-  }
-
-  /* ---- Choices drawn as a row: the fit ladder ----
-   * Blender's own names are never cut. A row of choices takes the first form its names fit:
-   * (a) beside the label, (b) under it at full width, (c) a grid of toggles three to a row, as
-   * Blender draws `color_type`, (d) a menu. Fitting is measured with the control's font. */
-
-  /** The row's width, as laid out: the ladder's step follows it. */
-  @State private var rowWidth: CGFloat = 0
-
-  private enum LadderStep { case beside, under, grid, menu }
-
-  private static let segmentFont = UIFontMetrics(forTextStyle: .footnote)
-    .scaledFont(for: UIFont.systemFont(ofSize: 13, weight: .semibold))
-
-  /** The widest choice's segment: its name with the segment's padding, or an icon. */
-  private var segmentWidth: CGFloat {
-    let icons = options.allSatisfy { BlenderIcon.image($0.icon) != nil }
-    if icons { return 18 + 24 }
-    let widest = options.map { (($0.label ?? "") as NSString).size(withAttributes: [.font: Self.segmentFont]).width }
-      .max() ?? 0
-    return widest.rounded(.up) + 24
-  }
-
-  private var step: LadderStep {
-    /* Before the first layout, under the label: it fits more than beside it. */
-    let width = rowWidth > 0 ? rowWidth : 320
-    /* The system's segmented control makes every segment as wide as the widest. */
-    let row = segmentWidth * CGFloat(options.count) + 2
-    if row <= (width * 0.53).rounded() { return .beside }
-    if row <= width { return .under }
-    let columns = CGFloat(min(3, options.count))
-    if (segmentWidth + 8) * columns - 8 + 4 <= width { return .grid }
-    return .menu
-  }
-
-  @ViewBuilder private var ladder: some View {
-    Group {
-      switch step {
-        case .beside:
-          FractionRow(fraction: 0.53) {
-            Text(node.label)
-              .lineLimit(2)
-              .frame(maxWidth: .infinity, alignment: .leading)
-            segmented
-          }
-          .frame(minHeight: 44)
-        case .under:
-          VStack(alignment: .leading, spacing: 6) {
-            Text(node.label)
-            segmented
-          }
-          .padding(.vertical, 4)
-        case .grid:
-          VStack(alignment: .leading, spacing: 6) {
-            Text(node.label)
-            toggleGrid
-          }
-          .padding(.vertical, 4)
-        case .menu:
-          menuRow
-      }
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
-      if abs(width - rowWidth) >= 1 { rowWidth = width }
-    }
-  }
-
-  /** The choices as toggle buttons, three to a row, the chosen one in Blender's selection blue. */
-  private var toggleGrid: some View {
-    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: min(3, options.count)),
-              spacing: 4) {
-      ForEach(Array(options.enumerated()), id: \.offset) { _, option in
-        let on = isChecked(option)
-        Button {
-          model.set(node, .text(option.value ?? ""))
-        } label: {
-          HStack(spacing: 4) {
-            if let image = BlenderIcon.image(option.icon) {
-              Image(uiImage: image).resizable().scaledToFit().frame(width: 16, height: 16)
-            }
-            Text(option.label ?? "")
-              .font(.footnote.weight(on ? .semibold : .regular))
-              .lineLimit(1)
-              .fixedSize()
-          }
-          /* With the grid's spacing, a 44 point target. */
-          .frame(maxWidth: .infinity, minHeight: 40)
-          .foregroundStyle(on ? Color.white : ShellStyle.text)
-          .background(on ? ShellStyle.selection : ShellStyle.widget,
-                      in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-          .contentShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(on ? .isSelected : [])
-      }
-    }
-    .disabled(!node.enabled)
-    .opacity(node.enabled ? 1 : 0.5)
-    .accessibilityLabel(label)
   }
 
   /** The choice by its position. */
@@ -1360,13 +1301,11 @@ struct ActionMenuRow: View {
         }
       }
     } label: {
-      Label {
-        Text(node.label)
-      } icon: {
-        IconView(name: node.icon, symbol: "plus")
-      }
-      .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+      BlenderWidgetFace(icon: BlenderIcon.image(node.icon) ?? UIImage(systemName: "plus"), text: node.label,
+                        arrow: true, fills: true)
     }
+    .menuIndicator(.hidden)
+    .buttonStyle(.plain)
     .disabled(!node.enabled)
   }
 
@@ -1395,131 +1334,6 @@ struct ActionMenuRow: View {
 /** \name Groups
  * \{ */
 
-/** A vector such as Location: its caption over a field per component. */
-struct NativeVectorRow: View {
-  let model: PanelsModel
-  let group: NativeNode
-
-  var body: some View {
-    let items = model.children(of: group).filter { $0.role != .mode }
-    VStack(alignment: .leading, spacing: 0) {
-      caption
-      HStack(spacing: 4) {
-        ForEach(items) { item in
-          HStack(spacing: 4) {
-            Text(item.label)
-              .font(.caption.weight(.semibold))
-              .foregroundStyle(axisColor(item.label))
-              .fixedSize()
-            if let lock = model.attached(item, .lock), model.bool(lock) {
-              Image(systemName: "lock.fill").font(.system(size: 9)).foregroundStyle(.secondary)
-            }
-            if item.kind == .toggle {
-              NativeSwitch(model: model, node: item)
-            }
-            else {
-              NativeNumberField(model: model, node: item, compact: true, height: 40)
-            }
-          }
-          .frame(maxWidth: .infinity)
-          .controlActions(model, item, component: true)
-        }
-      }
-      .frame(minHeight: 44)
-    }
-  }
-
-  @ViewBuilder
-  private var caption: some View {
-    if let mode = model.attached(group, .mode), let choice = mode.choice {
-      let options = choice.allOptions.filter { $0.value != nil }
-      let value = model.text(mode)
-      let current = options.firstIndex { $0.value == value } ?? -1
-      /* The mode, such as Rotation's XYZ Euler, as a small picker at the caption's end. */
-      HStack(spacing: 6) {
-        Text(group.label)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        Spacer(minLength: 0)
-        Picker(group.label, selection: Binding(
-          get: { current },
-          set: { index in
-            guard options.indices.contains(index), index != current else { return }
-            model.set(mode, .text(options[index].value ?? ""))
-          })) {
-          ForEach(Array(options.enumerated()), id: \.offset) { index, option in
-            Text(option.label ?? "").tag(index)
-          }
-        }
-        .pickerStyle(.menu)
-        .labelsHidden()
-        .controlSize(.mini)
-        .buttonBorderShape(.capsule)
-        .fixedSize()
-        .disabled(!mode.enabled)
-        .accessibilityLabel("\(group.label) Mode")
-      }
-      .frame(height: Self.captionHeight)
-    }
-    else {
-      Text(group.label).font(.caption).foregroundStyle(.secondary)
-        .frame(height: Self.captionHeight)
-    }
-  }
-
-  /** Every caption is as tall, whether or not it has a mode, so Location, Rotation and Scale are
-   * spaced evenly. */
-  private static let captionHeight: CGFloat = 20
-}
-
-/** Toggles shown together, such as Mirror X Y Z: tinted while on. */
-struct NativeToggleGroup: View {
-  let model: PanelsModel
-  let group: NativeNode
-
-  var body: some View {
-    HStack(spacing: 10) {
-      Text(group.label)
-        .font(.body)
-        .foregroundStyle(.primary)
-        .frame(maxWidth: .infinity, alignment: .leading)
-      HStack(spacing: 2) {
-        ForEach(model.children(of: group)) { item in
-          let mixed = model.isMixed(item)
-          let on = !mixed && model.bool(item)
-          Button {
-            model.set(item, .bool(!on))
-            Haptics.selection()
-          } label: {
-            let title = item.shortLabel
-            /* An axis letter in a square, as Mirror's; a word as wide as it is. */
-            let letter = title.count <= 1
-            Text(title)
-              .font(letter ? .system(size: 15, weight: .semibold, design: .monospaced) :
-                .system(size: 14, weight: .semibold))
-              .lineLimit(1)
-              .fixedSize()
-              .foregroundStyle(on ? Color.white : .primary)
-              .padding(.horizontal, letter ? 0 : 8)
-              .frame(minWidth: 36, minHeight: 30, maxHeight: 30)
-              .background(on ? Color.accentColor : mixed ? Color.accentColor.opacity(0.25) : .clear,
-                          in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-          }
-          .buttonStyle(.plain)
-          .disabled(!item.enabled)
-          .controlActions(model, item)
-          .accessibilityLabel("\(group.label) \(item.label)")
-          .accessibilityValue(mixed ? "Mixed" : "")
-          .accessibilityAddTraits(on ? .isSelected : [])
-        }
-      }
-      .padding(2)
-      .background(PanelStyle.field, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-    .frame(minHeight: 44)
-  }
-}
-
 /** \} */
 
 /* -------------------------------------------------------------------- */
@@ -1530,6 +1344,8 @@ struct NativeToggleGroup: View {
 struct FractionRow: Layout {
   var fraction: CGFloat
   var spacing: CGFloat = 10
+  /** Where the two sit against each other: centred, or along their tops. */
+  var aligned = VerticalAlignment.center
 
   private func widths(_ width: CGFloat) -> (lead: CGFloat, control: CGFloat) {
     let control = (width * fraction).rounded()
@@ -1548,6 +1364,13 @@ struct FractionRow: Layout {
   func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
     guard subviews.count == 2 else { return }
     let (lead, control) = widths(bounds.width)
+    if aligned == .top {
+      subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.minY), anchor: .topLeading,
+                        proposal: ProposedViewSize(width: lead, height: nil))
+      subviews[1].place(at: CGPoint(x: bounds.maxX, y: bounds.minY), anchor: .topTrailing,
+                        proposal: ProposedViewSize(width: control, height: nil))
+      return
+    }
     subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
                       proposal: ProposedViewSize(width: lead, height: bounds.height))
     subviews[1].place(at: CGPoint(x: bounds.maxX, y: bounds.midY), anchor: .trailing,

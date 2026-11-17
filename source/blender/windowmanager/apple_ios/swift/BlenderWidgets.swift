@@ -40,6 +40,8 @@ enum BlenderWidgetColors {
   static let numInnerActive = Color(red: 0x22 / 255, green: 0x22 / 255, blue: 0x22 / 255)
   /** `wcol_numslider`: a slider's filled part. */
   static let sliderFill = Color(red: 0x47 / 255, green: 0x72 / 255, blue: 0xb3 / 255)
+  /** `wcol_text`: a text field's inside. */
+  static let textInner = Color(red: 0x1d / 255, green: 0x1d / 255, blue: 0x1d / 255)
 }
 
 /** Where the widget at \a index of \a count joined ones sits. */
@@ -47,17 +49,23 @@ func widgetJoin(_ index: Int, _ count: Int) -> WidgetJoin {
   count <= 1 ? .alone : index == 0 ? .first : index == count - 1 ? .last : .middle
 }
 
-/** A widget's outline: Blender's 6-point rounding, or a capsule in glass; joined edges square. */
+/** A widget's outline: Blender's 6-point rounding, or a capsule in glass; joined edges square.
+ * Joined side by side, or (\a vertical) stacked, as a vector's fields in Properties. */
 struct WidgetShape: Shape {
   let join: WidgetJoin
   let glass: Bool
+  var vertical = false
 
   func path(in rect: CGRect) -> Path {
-    let r = glass ? rect.height / 2 : ShellStyle.radius
-    let lead = join == .alone || join == .first ? r : 0
-    let trail = join == .alone || join == .last ? r : 0
-    return UnevenRoundedRectangle(topLeadingRadius: lead, bottomLeadingRadius: lead, bottomTrailingRadius: trail,
-                                  topTrailingRadius: trail, style: .continuous).path(in: rect)
+    let r = glass ? (vertical && join != .alone ? min(10, rect.height / 2) : rect.height / 2) : ShellStyle.radius
+    let start = join == .alone || join == .first ? r : 0
+    let end = join == .alone || join == .last ? r : 0
+    if vertical {
+      return UnevenRoundedRectangle(topLeadingRadius: start, bottomLeadingRadius: end, bottomTrailingRadius: end,
+                                    topTrailingRadius: start, style: .continuous).path(in: rect)
+    }
+    return UnevenRoundedRectangle(topLeadingRadius: start, bottomLeadingRadius: start, bottomTrailingRadius: end,
+                                  topTrailingRadius: end, style: .continuous).path(in: rect)
   }
 }
 
@@ -73,6 +81,10 @@ struct BlenderWidgetFace: View {
   /** Shown but not in effect, as a dropdown beside a toggle that is off. */
   var dimmed = false
   var minWidth: CGFloat = 32
+  /** As wide as what holds it, as a widget in Properties' column: the text leading, ▾ trailing. */
+  var fills = false
+  /** Joined top to bottom rather than side by side. */
+  var vertical = false
   @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
 
   private var glass: Bool { style == ShellStyle.glass.rawValue }
@@ -99,10 +111,22 @@ struct BlenderWidgetFace: View {
           .frame(width: 18, height: 18)
       }
       if let text, !text.isEmpty {
-        Text(text)
-          .font(.subheadline)
-          .lineLimit(1)
-          .fixedSize()
+        if fills {
+          /* A value in a column: it shrinks a little before it would be cut. */
+          Text(text)
+            .font(.subheadline)
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+        }
+        else {
+          Text(text)
+            .font(.subheadline)
+            .lineLimit(1)
+            .fixedSize()
+        }
+      }
+      if fills && arrow {
+        Spacer(minLength: 0)
       }
       if arrow {
         Image(systemName: "chevron.down")
@@ -112,11 +136,11 @@ struct BlenderWidgetFace: View {
     }
     .foregroundStyle(foreground)
     .padding(.horizontal, 8)
-    .frame(minWidth: minWidth, minHeight: 32)
-    .background(WidgetShape(join: join, glass: glass).fill(fill))
+    .frame(minWidth: minWidth, maxWidth: fills ? .infinity : nil, minHeight: 32)
+    .background(WidgetShape(join: join, glass: glass, vertical: vertical).fill(fill))
     .overlay {
       if !glass {
-        WidgetShape(join: join, glass: false).strokeBorder(BlenderWidgetColors.outline, lineWidth: 1)
+        WidgetShape(join: join, glass: false, vertical: vertical).strokeBorder(BlenderWidgetColors.outline, lineWidth: 1)
       }
     }
     .opacity(dimmed ? 0.5 : 1)
@@ -172,11 +196,16 @@ struct BlenderToggleButton: View {
   let isOn: Bool
   var join = WidgetJoin.alone
   var minWidth: CGFloat = 32
+  /** Joined top to bottom, as a column of Blender's expanded options. */
+  var vertical = false
+  /** As wide as what holds it. */
+  var fills = false
   let action: () -> Void
 
   var body: some View {
     Button(action: action) {
-      BlenderWidgetFace(icon: icon, text: text, on: isOn, join: join, minWidth: minWidth)
+      BlenderWidgetFace(icon: icon, text: text, on: isOn, join: join, minWidth: minWidth, fills: fills,
+                        vertical: vertical)
     }
     .buttonStyle(.plain)
     .help(name)
@@ -199,23 +228,66 @@ struct BlenderWidgetSeparator: View {
 /** \name Settings in a bar
  * \{ */
 
-/** A vector's components as Blender draws them in a row: joined number fields, each named inside
- * (X, Y, Z). */
+/** A vector's components as Blender draws them: joined number fields, each named inside (X, Y,
+ * Z); side by side in a bar, stacked top to bottom in Properties (\a axis), where a component's
+ * lock stays at its field's end. */
 struct BlenderVectorField: View {
   let model: PanelsModel
   let group: NativeNode
+  var axis = Axis.horizontal
 
   var body: some View {
     let items = model.children(of: group).filter { $0.role == .none_ && $0.number != nil }
-    HStack(spacing: 1) {
-      ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-        NativeNumberField(model: model, node: item, widget: widgetJoin(index, items.count), inlineLabel: item.shortLabel)
-          .frame(width: 84)
-          .controlActions(model, item, component: true)
-          .accessibilityLabel("\(group.label) \(item.label)")
+    if axis == .horizontal {
+      HStack(spacing: 1) {
+        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+          NativeNumberField(model: model, node: item, widget: widgetJoin(index, items.count), inlineLabel: item.shortLabel)
+            .frame(width: 84)
+            .controlActions(model, item, component: true)
+            .accessibilityLabel("\(group.label) \(item.label)")
+        }
+      }
+      .fixedSize()
+    }
+    else {
+      VStack(spacing: 1) {
+        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+          HStack(spacing: 2) {
+            NativeNumberField(model: model, node: item, widget: widgetJoin(index, items.count), inlineLabel: item.shortLabel,
+                              vertical: true)
+              .controlActions(model, item, component: true)
+              .accessibilityLabel("\(group.label) \(item.label)")
+            if let lock = model.attached(item, .lock) {
+              BlenderLockButton(model: model, lock: lock, name: "\(group.label) \(item.label)")
+            }
+          }
+        }
       }
     }
-    .fixedSize()
+  }
+}
+
+/** A component's lock at its field's end, as Blender's padlock beside Location's X. */
+struct BlenderLockButton: View {
+  let model: PanelsModel
+  let lock: NativeNode
+  let name: String
+
+  var body: some View {
+    let locked = model.bool(lock)
+    Button {
+      model.set(lock, .bool(!locked))
+      Haptics.selection()
+    } label: {
+      Image(systemName: locked ? "lock.fill" : "lock.open")
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(locked ? .primary : .secondary)
+        .frame(width: 24, height: 32)
+        .contentShape(Rectangle().inset(by: -6))
+    }
+    .buttonStyle(.plain)
+    .disabled(!lock.enabled)
+    .accessibilityLabel(locked ? "Unlock \(name)" : "Lock \(name)")
   }
 }
 
@@ -245,6 +317,8 @@ struct BlenderOptionIcon: View {
 struct BlenderChoiceWidget: View {
   let model: PanelsModel
   let node: NativeNode
+  /** As wide as its column, its name beside it in Properties' property split rather than in it. */
+  var fills = false
   @Environment(\.widgetsNamed) private var named
 
   private var title: String { node.shortLabel }
@@ -312,6 +386,10 @@ struct BlenderChoiceWidget: View {
           /* A data-block's name, the person's own: shortened in the middle if it must be. */
           Text(name).lineLimit(1).truncationMode(.middle)
         }
+      }
+      else if fills {
+        /* In Properties: the value's icon and name, ▾ at the column's end. */
+        BlenderWidgetFace(icon: BlenderIcon.image(current?.icon ?? node.icon), text: name, arrow: true, fills: true)
       }
       else {
         /* As Blender's `prop()` in its header: the setting's name, then a dropdown with the
@@ -422,11 +500,8 @@ struct BlenderSettingItem: View {
       case .color:
         HStack(spacing: 6) {
           caption(name)
-          NativeColorPicker(model: model, node: node)
+          BlenderColorButton(model: model, node: node)
             .frame(width: 32, height: 22)
-            .clipShape(WidgetShape(join: .alone, glass: false))
-            .overlay(WidgetShape(join: .alone, glass: false).strokeBorder(BlenderWidgetColors.outline, lineWidth: 1))
-            .accessibilityLabel(node.label)
         }
         .controlActions(model, node)
       case .menubutton:
@@ -438,6 +513,75 @@ struct BlenderSettingItem: View {
         .prefetchingBlenderMenu(route)
       default:
         EmptyView()
+    }
+  }
+}
+
+/**
+ * Blender's colour button: a bar holding the colour, its alpha shown over a checkerboard in its
+ * trailing half, inside the widget outline. A tap opens the system's colour picker, whose changes
+ * preview live as one step to undo, see #ColorPickerSession.
+ */
+struct BlenderColorButton: View {
+  let model: PanelsModel
+  let node: NativeNode
+  @State private var anchor = AnchorBox()
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
+
+  var body: some View {
+    let glass = style == ShellStyle.glass.rawValue
+    let shape = WidgetShape(join: .alone, glass: glass)
+    let values = model.floats(node)
+    let alpha = node.content(Blender_NativeUI_Color.self)?.alpha == true && values.count > 3 ? values[3] : 1
+    let color = Color(uiColor: blenderColor(values.map { NSNumber(value: $0) }))
+    let mixed = model.isMixed(node)
+    GeometryReader { proxy in
+      ZStack(alignment: .leading) {
+        color.opacity(1)
+        if alpha < 0.999 {
+          /* The colour as it covers what is behind it, as Blender's trailing half shows. */
+          HStack(spacing: 0) {
+            Color.clear
+            ZStack {
+              ColorCheckerboard()
+              color.opacity(alpha)
+            }
+            .frame(width: proxy.size.width / 2)
+          }
+        }
+        if mixed {
+          Text("—").font(.subheadline.weight(.semibold)).foregroundStyle(.white).frame(maxWidth: .infinity)
+        }
+      }
+    }
+    .clipShape(shape)
+    .overlay(shape.strokeBorder(glass ? Color.primary.opacity(0.2) : BlenderWidgetColors.outline, lineWidth: 1))
+    .contentShape(Rectangle())
+    .background(PresentationAnchor(anchor: anchor))
+    .onTapGesture {
+      guard node.enabled else { return }
+      ColorPickerSession(model: model, node: node).present(from: anchor)
+    }
+    .opacity(node.enabled ? 1 : 0.5)
+    .accessibilityElement()
+    .accessibilityLabel(node.label)
+    .accessibilityValue(mixed ? "Mixed" : "")
+    .accessibilityAddTraits(.isButton)
+  }
+}
+
+/** What shows through a colour that is not opaque. */
+struct ColorCheckerboard: View {
+  var body: some View {
+    Canvas { context, size in
+      let cell: CGFloat = 6
+      context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.white))
+      for row in 0..<Int(ceil(size.height / cell)) {
+        for column in stride(from: row % 2, to: Int(ceil(size.width / cell)), by: 2) {
+          context.fill(Path(CGRect(x: CGFloat(column) * cell, y: CGFloat(row) * cell, width: cell, height: cell)),
+                       with: .color(.gray.opacity(0.5)))
+        }
+      }
     }
   }
 }
