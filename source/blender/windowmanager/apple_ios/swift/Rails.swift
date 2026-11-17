@@ -1135,8 +1135,16 @@ struct ToolRails: View {
             .position(x: safe.midX, y: safe.minY + 34)
             .transition(.opacity.combined(with: .move(edge: .top)))
         }
+        else if !model.modalHint.isEmpty {
+          /* What a waiting operation writes in Blender's header, such as a move's values: at the
+           * top, where messages are, never over the controls along the bottom. */
+          ShellNameLabel(text: model.modalHint)
+            .layoutZone("modal hint")
+            .position(x: safe.midX, y: safe.minY + 34)
+            .transition(.opacity)
+        }
         /* Blender's reports and why a command did not run, under the bar or the drag hint. */
-        let messagesTop: CGFloat = model.dragHint == nil ? 12 : 68
+        let messagesTop: CGFloat = model.dragHint == nil && model.modalHint.isEmpty ? 12 : 68
         ShellMessagesView(messages: model.messages) { model.perform($0) }
           .layoutZone("messages")
           .frame(maxWidth: max(0, safe.width - 2 * max(layout.leadingCorner, layout.trailingCorner) - 32))

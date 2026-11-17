@@ -472,12 +472,10 @@ struct QuickActionsRow: View {
              * the bar. */
             if modalRunning {
               VStack(alignment: .leading, spacing: 8) {
+                /* The operation's own words (a move's values) are at the top, see #ToolRails. */
                 if NumberPadState.shared.shown {
                   NumberPad(model: model)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
-                }
-                if !model.modalHint.isEmpty {
-                  ShellNameLabel(text: model.modalHint)
                 }
               }
               .alignmentGuide(.top) { d in

@@ -2693,7 +2693,9 @@ static void bridge_modal_bar_build(
   });
 
   /* Its own keys, from its modal key map as the person has it. */
-  std::string hint = WM_operatortype_name(op->type, op->ptr);
+  /* Only what Blender writes in the header while it runs, such as a move's values: the
+   * operation's name alone says nothing the person does not know, and covered controls. */
+  std::string hint;
   wmKeyMap *keymap = op->type->modalkeymap ?
                          WM_keymap_active(CTX_wm_manager(C), op->type->modalkeymap) :
                          nullptr;
