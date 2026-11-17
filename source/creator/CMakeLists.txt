@@ -355,11 +355,11 @@ else()
     # and read from there by the shell (`AppIdentity`), never typed into its code.
     set(IOS_BUNDLE_VERSION "${BLENDER_VERSION}.${BLENDER_VERSION_PATCH}" CACHE STRING
       "iOS build number; increment for each TestFlight upload")
-    set(IOS_PRODUCT_NAME "Platypus 3D" CACHE STRING
+    set(IOS_PRODUCT_NAME "Satsuma 3D" CACHE STRING
       "The app's name on the Home Screen, in About and wherever it names itself")
     set(IOS_MARKETING_VERSION "0.1.0" CACHE STRING
       "The app's version (CFBundleShortVersionString), apart from Blender's")
-    set(IOS_SOURCE_URL "" CACHE STRING
+    set(IOS_SOURCE_URL "https://github.com/NeroSiegfried/satsuma3d" CACHE STRING
       "Where the app's complete source is published; required unless the bundle identifier ends in .dev")
     set(IOS_BLENDER_VERSION "${BLENDER_VERSION}.${BLENDER_VERSION_PATCH}")
     if(APPLE_TARGET_VISIONOS)
@@ -379,7 +379,7 @@ else()
         )
       endif()
     endif()
-    # The commit the app is built from; the build writes the current one, see `PlatypusSourceCommit`.
+    # The commit the app is built from; the build writes the current one, see `SatsumaSourceCommit`.
     execute_process(
       COMMAND git -C "${CMAKE_SOURCE_DIR}" rev-parse HEAD
       OUTPUT_VARIABLE IOS_SOURCE_COMMIT
@@ -1977,7 +1977,7 @@ elseif(APPLE)
         POST_BUILD
         COMMAND
           /bin/sh -c
-          "commit=$(git -C \"${CMAKE_SOURCE_DIR}\" rev-parse HEAD 2>/dev/null) && /usr/libexec/PlistBuddy -c \"Set :PlatypusSourceCommit $commit\" \"$<TARGET_BUNDLE_DIR:blender>/Info.plist\""
+          "commit=$(git -C \"${CMAKE_SOURCE_DIR}\" rev-parse HEAD 2>/dev/null) && /usr/libexec/PlistBuddy -c \"Set :SatsumaSourceCommit $commit\" \"$<TARGET_BUNDLE_DIR:blender>/Info.plist\""
         COMMENT "Writing the source commit into Info.plist"
         VERBATIM
       )

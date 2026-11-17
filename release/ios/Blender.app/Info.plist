@@ -105,11 +105,11 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>${IOS_BUNDLE_VERSION}</string>
-	<key>PlatypusBlenderVersion</key>
+	<key>SatsumaBlenderVersion</key>
 	<string>${IOS_BLENDER_VERSION}</string>
-	<key>PlatypusSourceURL</key>
+	<key>SatsumaSourceURL</key>
 	<string>${IOS_SOURCE_URL}</string>
-	<key>PlatypusSourceCommit</key>
+	<key>SatsumaSourceCommit</key>
 	<string>${IOS_SOURCE_COMMIT}</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>

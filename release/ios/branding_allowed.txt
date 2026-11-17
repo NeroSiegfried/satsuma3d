@@ -9,11 +9,16 @@
 # the bridge sends for an item of that menu (checked by the Mac harness's `menus` scenario).
 # Reasons: file type, keymap name, style name, credit, internal key.
 #
+# The app's old name, "Platypus", is held to the same rule (ROUND5 8I.1, decision 47): the app is
+# Satsuma 3D, and a "Platypus" a person can read fails the same checks. Internal names that
+# scripts or stored settings depend on keep it (`PLATYPUS_…`, `platypus-scratch`, the development
+# id `app.platypus3d.dev`); a capitalised one is listed here.
+#
 # `tests/python/bl_native_shell_sources.py` fails on a string holding "Blender" that is not here,
 # and on a line here whose string is no longer in its file. Swift interpolations, `\(…)`, are
 # left out of the string they sit in.
 
-AppIdentity.swift | internal key: Info.plist key holding the Blender version | PlatypusBlenderVersion
+AppIdentity.swift | internal key: Info.plist key holding the Blender version | SatsumaBlenderVersion
 BlenderIntents.swift | internal key: stored bookmark key | BlenderOpenDocument
 CommandSearch.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderPinnedCommands
 CommandSearch.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderRecentCommands
@@ -74,13 +79,15 @@ wm_apple_ios_launcher.mm | internal key: stored bookmark key | BlenderOpenDocume
 wm_apple_ios_launcher.mm | internal key: notification name | BlenderSceneInactive
 wm_apple_ios_launcher.mm | internal key: notification name | BlenderTemplatePresentation
 wm_apple_ios_launcher.mm | file type: the document type is "Blender File" | Create Blender File
-release/ios/Blender.app/Info.plist | internal key: Info.plist key holding the Blender version | PlatypusBlenderVersion
+release/ios/Blender.app/Info.plist | internal key: Info.plist key holding the Blender version | SatsumaBlenderVersion
 release/ios/Blender.app/Info.plist | file type: the document type's name | Blender File
 release/ios/Blender.app/Info.plist | internal key: CFBundleExecutable and the scene configuration's name, which no one sees | Blender
-release/ios/Blender.app/Info.plist | credit: CFBundleGetInfoString, "Platypus 3D 0.1.0, based on Blender 5.1.2" | ${IOS_PRODUCT_NAME} ${IOS_MARKETING_VERSION}, based on Blender ${IOS_BLENDER_VERSION}
+release/ios/Blender.app/Info.plist | credit: CFBundleGetInfoString, "Satsuma 3D 0.1.0, based on Blender 5.1.2" | ${IOS_PRODUCT_NAME} ${IOS_MARKETING_VERSION}, based on Blender ${IOS_BLENDER_VERSION}
 native_settings.py | keymap name: the identifier of Blender's keymap preset | Blender
 menu menubar | internal key: TOPBAR_MT_blender's title; the menu bar puts its items in the system's application menu and titles it with the app's name (wm_apple_ios_build_menu_bar) | Blender
 AboutSheet.swift | credit: About's "Based on Blender 5.1.2" | Based on Blender \(…)
 AboutSheet.swift | credit: what VoiceOver reads for About's title block | based on Blender \(…)
 AboutSheet.swift | credit: About's "not affiliated with or endorsed by the Blender Foundation" | the Blender Foundation.
 AboutSheet.swift | credit: About's credit to the Blender project | The Blender project and its contributors
+wm_apple_ios_launcher.mm | internal key: the developer check document's file name (PLATYPUS_SCRATCH_DOCUMENT launches only); its auto-saves are found by this prefix | PlatypusCheck
+wm_apple_ios_launcher.mm | internal key: developer log line for a scripted check launch | Platypus: scratch document %@

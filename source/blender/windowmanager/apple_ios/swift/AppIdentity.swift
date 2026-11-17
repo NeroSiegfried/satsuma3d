@@ -25,11 +25,11 @@ enum AppIdentity {
   /** The build number, as "1". */
   static let build: String = value("CFBundleVersion") ?? ""
   /** The version of Blender the app is based on, as "5.1.2". */
-  static let blenderVersion: String = value("PlatypusBlenderVersion") ?? ""
+  static let blenderVersion: String = value("SatsumaBlenderVersion") ?? ""
   /** Where the complete source is published; empty for a development build that has none yet. */
-  static let sourceURL: String = value("PlatypusSourceURL") ?? ""
+  static let sourceURL: String = value("SatsumaSourceURL") ?? ""
   /** The commit the app was built from. */
-  static let sourceCommit: String = value("PlatypusSourceCommit") ?? ""
+  static let sourceCommit: String = value("SatsumaSourceCommit") ?? ""
   /** A development build: its identifier ends in `.dev`. */
   static let isDevelopment: Bool = Bundle.main.bundleIdentifier?.hasSuffix(".dev") ?? false
 

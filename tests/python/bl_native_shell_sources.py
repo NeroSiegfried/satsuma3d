@@ -326,26 +326,37 @@ for relative in ('release/ios/Blender.app/Info.plist', 'release/ios/blender-thum
                                   for m in re.finditer(r'<(?:string|key)>([^<]*)</(?:string|key)>', text)]
 check(len(branding_sources) > 50, "The branding sweep reads the shell's sources")
 
+# 8I.1: the app's old name is caught the same way (decision 47): a user-visible "Platypus" is a
+# self-reference under a name the app no longer has. Internal names keep it in lower or upper case
+# (`platypus-scratch`, `PLATYPUS_…`), which this does not match.
+BRANDS = ('Blender', 'Platypus')
+
+
+def branded(text):
+    return any(word in text for word in BRANDS)
+
+
 allowed, bad_lines = {}, []
 REASONS = ('file type', 'keymap name', 'style name', 'credit', 'internal key')
 for number, line in enumerate((ROOT / 'release/ios/branding_allowed.txt').read_text(encoding='utf-8').splitlines(), 1):
     if not line.strip() or line.startswith('#'):
         continue
     parts = line.split(' | ', 2)
-    if len(parts) != 3 or not parts[1].startswith(REASONS) or 'Blender' not in parts[2]:
+    if len(parts) != 3 or not parts[1].startswith(REASONS) or not branded(parts[2]):
         bad_lines.append(number)
         continue
     allowed[(parts[0], parts[2])] = parts[1]
 for number in bad_lines:
     print('branding_allowed.txt:%d: not `<where> | <reason> | <text>` with a reason from %s' % (number, REASONS))
-check(not bad_lines, "Every line of branding_allowed.txt names where, a reason and a string holding \"Blender\"")
+check(not bad_lines, "Every line of branding_allowed.txt names where, a reason and a string holding \"Blender\" or \"Platypus\"")
 
 unlisted = ['%s:%d: %r' % (where, line, text) for where, found in branding_sources.items()
-            for line, text in found if 'Blender' in text and (where, text) not in allowed]
+            for line, text in found if branded(text) and (where, text) not in allowed]
 for offender in unlisted:
-    print('%s holds "Blender" and is not on release/ios/branding_allowed.txt: the app never calls itself '
-          'Blender; use AppIdentity.name, or list it there with its reason (ROUND5 8A.7)' % offender)
-check(not unlisted, "Every \"Blender\" string in the shell is on the allow-list")
+    print('%s holds "Blender" or "Platypus" and is not on release/ios/branding_allowed.txt: the app never '
+          'calls itself Blender, nor by its old name; use AppIdentity.name, or list it there with its reason '
+          '(ROUND5 8A.7, 8I.1)' % offender)
+check(not unlisted, "Every \"Blender\" or \"Platypus\" string in the shell is on the allow-list")
 found = {(where, text) for where, items in branding_sources.items() for _line, text in items}
 stale = sorted('%s | %s' % key for key in allowed if not key[0].startswith('menu ') and key not in found)
 for line in stale:

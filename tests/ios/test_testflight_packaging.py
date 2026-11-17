@@ -188,7 +188,7 @@ class IdentityTest(unittest.TestCase):
         info = plistlib.loads(text.encode())
         self.assertEqual(info['CFBundleName'], '${IOS_PRODUCT_NAME}')
         self.assertEqual(info['CFBundleDisplayName'], '${IOS_PRODUCT_NAME}')
-        for key in ('PlatypusBlenderVersion', 'PlatypusSourceURL', 'PlatypusSourceCommit'):
+        for key in ('SatsumaBlenderVersion', 'SatsumaSourceURL', 'SatsumaSourceCommit'):
             self.assertIn(key, info)
         for key in ('CFBundleIcons', 'CFBundleIcons~ipad'):
             self.assertEqual(info[key]['CFBundlePrimaryIcon']['CFBundleIconName'], '${IOS_APP_ICON_NAME}')

@@ -568,7 +568,8 @@ def walk_branding(mode):
                 branding["unlisted"].append("menu %s | %s (decision 35: not shown on iPad)" % (menu, label))
             if label == "Manual":
                 branding["help_read"] = True
-            if "Blender" in label:
+            # The app's old name is caught as "Blender" is (ROUND5 8I.1, decision 47).
+            if "Blender" in label or "Platypus" in label:
                 branding["seen"].add("menu %s | %s" % (menu, label))
                 if ("menu " + menu, label) not in allowed:
                     branding["unlisted"].append("menu %s | %s" % (menu, label))
