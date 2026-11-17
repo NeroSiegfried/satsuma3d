@@ -453,7 +453,8 @@ ACTIONS = [
            group="Normals & Shading", strip=False),
     Action("mesh.shade_flat", "Shade Flat", "mesh.faces_shade_flat", "MESH_ICOSPHERE", _mesh("FACE", faces=1),
            group="Normals & Shading", strip=False),
-    # Any selection.
+    # Any selection. Blender's Mirror menu: interactive, or across an axis at once.
+    Action("mesh.mirror", "Mirror", "", "MOD_MIRROR", _mesh(verts=1), menu="VIEW3D_MT_mirror", group="Transform"),
     Action("mesh.duplicate", "Duplicate", "mesh.duplicate", "DUPLICATE", _mesh(verts=1), group="Mesh",
            strip=False),
     Action("mesh.hide", "Hide", "mesh.hide", "HIDE_ON", _mesh(verts=1), {"unselected": False}, group="Mesh",
@@ -549,9 +550,13 @@ ACTIONS = [
            lambda s: s.mode == 'PAINT_GREASE_PENCIL', group="Grease Pencil"),
 
     # Curves, armatures and Grease Pencil strokes in Edit Mode.
+    Action("curve.mirror", "Mirror", "", "MOD_MIRROR", lambda s: s.mode in {'EDIT_CURVE', 'EDIT_SURFACE'},
+           menu="VIEW3D_MT_mirror", group="Transform", strip=False),
     Action("curve.subdivide", "Subdivide", "curve.subdivide", "MESH_GRID", lambda s: s.mode == 'EDIT_CURVE', group="Curve"),
     Action("curve.switch_direction", "Switch Direction", "curve.switch_direction", "ARROW_LEFTRIGHT",
            lambda s: s.mode == 'EDIT_CURVE', group="Curve"),
+    Action("armature.mirror", "Mirror", "", "MOD_MIRROR", lambda s: s.mode == 'EDIT_ARMATURE',
+           menu="VIEW3D_MT_mirror", group="Transform", strip=False),
     Action("armature.subdivide", "Subdivide", "armature.subdivide", "BONE_DATA", lambda s: s.mode == 'EDIT_ARMATURE',
            group="Armature"),
     Action("armature.duplicate", "Duplicate", "armature.duplicate", "DUPLICATE",
