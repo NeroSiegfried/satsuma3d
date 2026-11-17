@@ -30,7 +30,7 @@ def main():
     parser.add_argument("--flatc", required=True)
     parser.add_argument("--flatbuffers-python", required=True,
                         help="A directory holding the `flatbuffers` Python package")
-    parser.add_argument("--scenario", default="actions", choices=("actions", "tabs", "menus", "mirror", "reveal"),
+    parser.add_argument("--scenario", default="actions", choices=("actions", "tabs", "menus", "mirror", "reveal", "knife"),
                         help="`actions`: the palette, long press and radial. `tabs`: every Properties tab in every mode")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory() as directory:

@@ -559,5 +559,59 @@ def tick_reveal():
     return 0.25
 
 
-bpy.app.timers.register({"tabs": tick_tabs, "reveal": tick_reveal, "menus": tick_menus, "mirror": tick_mirror}.get(SCENARIO, tick_actions),
+# The knife, as the Knife tool starts it: what the action bar offers while it waits (it must offer
+# a way to end it), then Cancel through the bar.
+def _view3d():
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == 'VIEW_3D':
+                region = next(r for r in area.regions if r.type == 'WINDOW')
+                return window, area, region
+    return None
+
+
+def _bar():
+    top = tree(subs["toolbar"]) or {}
+    row = next((n for n in top.get("children", []) if n["key"] == "actions"), {})
+    return [(n["key"], n.get("label")) for n in row.get("children", [])]
+
+
+def tick_knife():
+    global step
+    try:
+        pump()
+        step += 1
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            subs["toolbar"] = subscribe("toolbar")
+            bpy.ops.object.mode_set(mode='EDIT')
+        elif step == 3:
+            report["before"] = _bar()
+            window, area, region = _view3d()
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                report["invoke"] = list(bpy.ops.mesh.knife_tool('INVOKE_DEFAULT'))
+            report["modal_handlers"] = [h for h in ["running"]]
+        elif step == 6:
+            report["during"] = _bar()
+            report["hint"] = next((n.get("value") for n in (tree(subs["toolbar"]) or {}).get("children", [])
+                                   if n["key"] == "modal_hint"), None)
+            keys = [k for k, _ in report["during"]]
+            report["unique_keys"] = len(keys) == len(set(keys))
+            # Cancel is Escape: the shell sends it as a key; through the bridge it is the same key.
+            report["cancel_target"] = "modal:cancel" if "modal:cancel" in keys else None
+            invoke(subs["toolbar"], "modalkey:ESC", 77)
+        elif step == 9:
+            report["after"] = _bar()
+            report["ack"] = acks.get(77)
+            report["mode"] = bpy.context.mode
+            finish("done")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
+bpy.app.timers.register({"tabs": tick_tabs, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

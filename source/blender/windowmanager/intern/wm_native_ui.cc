@@ -2701,6 +2701,7 @@ static void bridge_modal_bar_build(
                                            nullptr;
   if (keymap && items) {
     Set<int> shown;
+    Set<std::string> keys;
     for (wmKeyMapItem &kmi : keymap->items) {
       if ((kmi.flag & KMI_INACTIVE) || kmi.propvalue == 0 || shown.contains(kmi.propvalue)) {
         continue;
@@ -2709,6 +2710,11 @@ static void bridge_modal_bar_build(
       if (ISMOUSE_MOTION(type) || ISMOUSE_BUTTON(type) || ISNDOF(type) || ISTIMER(type) ||
           ELEM(type, EVT_RETKEY, EVT_PADENTER, EVT_ESCKEY))
       {
+        continue;
+      }
+      /* Held while dragging, as the knife's Shift (midpoints) and Ctrl (no snapping), or taking
+       * effect on release: a button presses and releases at once, so it would do nothing. */
+      if (ISKEYMODIFIER(type) || kmi.val == KM_RELEASE) {
         continue;
       }
       if (keymap->poll_modal_item && !keymap->poll_modal_item(op, kmi.propvalue)) {
@@ -2742,6 +2748,10 @@ static void bridge_modal_bar_build(
         key += "oskey+";
       }
       key += event_id;
+      /* One button a key: a view's keys are unique. */
+      if (!keys.add(key)) {
+        continue;
+      }
       const std::string label = CTX_IFACE_(BLT_I18NCONTEXT_ID_WINDOWMANAGER, name);
       builder.add(row, "modalkey:" + key, [&](ViewBuffer &buffer, NodeFields &fields) {
         fields.label = label;
@@ -3420,7 +3430,10 @@ bool bridge_toolbar_view_live(const views::protocol::Command &command)
   const StringRef target = command.target()->string_view();
   return ELEM(target, "orientation", "pivot", "snap", "proportional", "mirror", "mirror_topology") ||
          ELEM(target, "snap_on", "snap_element", "proportional_on", "proportional_falloff", "automerge") ||
-         target == "direction" || target.startswith("brush:") || target.startswith("axis:");
+         target == "direction" || target.startswith("brush:") || target.startswith("axis:") ||
+         /* The waiting operation's own keys are for it: held back until it ends, they never
+          * reach it (the knife's Undo and Escape did nothing). */
+         target.startswith("modalkey:");
 }
 
 /** \} */
@@ -4972,6 +4985,7 @@ extern "C" void WM_native_ui_test_install_hooks()
   static wmNativeInterface hooks;
   if (WM_native_interface() == nullptr) {
     hooks.operator_finished = WM_native_ui_operator_finished;
+    hooks.state_changed = WM_native_ui_tag_changed;
     WM_native_interface_set(&hooks);
   }
 }
@@ -5799,6 +5813,17 @@ void WM_native_ui_flush_commands(bContext *C)
     bridge_context_pop(C, context_store);
   }
 
+  {
+    /* An operator starting or ending a wait for input (the knife, a loop cut, anything modal
+     * started from a tool or a menu) sends no notifier, so the toolbar would keep the ordinary
+     * actions and offer no way to end it: rebuild it whenever the waiting operator changes. */
+    static const wmOperator *waiting_seen = nullptr;
+    const wmOperator *waiting = bridge_waiting_operator(CTX_wm_window(C));
+    if (waiting != waiting_seen) {
+      waiting_seen = waiting;
+      wm::native_ui::view_type_dirty("toolbar");
+    }
+  }
   bridge_changed = false;
   bridge_volume_build(C);
   {
