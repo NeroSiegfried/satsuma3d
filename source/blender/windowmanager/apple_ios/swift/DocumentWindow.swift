@@ -68,10 +68,12 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     commands.settings?.fingerUsesToolChanged = { [weak commands] useTool in
       commands?.setFingerUsesTool(useTool)
     }
-    /* Industry Compatible is the iPad's default keymap; switch once, then respect the choice. */
-    if !UserDefaults.standard.bool(forKey: "BlenderKeymapDefaulted") {
-      UserDefaults.standard.set(true, forKey: "BlenderKeymapDefaulted")
-      BlenderSettings.set("keymap", .text("Industry_Compatible"))
+    /* Blender's own keymap is the default, as on the desktop: a keyboard attached does what a
+     * Blender user expects. Switched once (also on iPads that were set to Industry Compatible by
+     * the first launch of earlier builds), then the choice in Settings is respected. */
+    if !UserDefaults.standard.bool(forKey: "BlenderKeymapDefaultedBlender") {
+      UserDefaults.standard.set(true, forKey: "BlenderKeymapDefaultedBlender")
+      BlenderSettings.set("keymap", .text("Blender"))
     }
     if UserDefaults.standard.object(forKey: SettingsModel.hoverHighlightKey) as? Bool == false {
       BlenderSettings.set("hover_highlight", .bool(false))

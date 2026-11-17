@@ -35,7 +35,7 @@ final class SettingsModel: ObservableObject {
   static let hoverHighlightKey = "BlenderHoverHighlight"
 
   /** Blender's active keymap preset, from the toolbar snapshot. */
-  @Published var keymap = "Industry_Compatible"
+  @Published var keymap = "Blender"
   @Published var touchInput: TouchInput {
     didSet {
       guard touchInput != oldValue else { return }
