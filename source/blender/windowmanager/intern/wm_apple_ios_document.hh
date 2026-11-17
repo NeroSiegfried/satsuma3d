@@ -14,6 +14,9 @@
 
 #include "BLO_writefile.hh"
 
+#include <optional>
+#include <string>
+
 namespace blender {
 
 struct ARegion;
@@ -56,5 +59,22 @@ bool wm_apple_ios_file_write(bContext *C,
                              eBLO_WritePathRemap remap_mode,
                              bool use_save_as_copy,
                              ReportList *reports);
+
+/** What to say before a save when the volume is low, see #wm_apple_ios_save_space_warning. */
+struct wmIOSSaveSpaceWarning {
+  std::string title;
+  std::string detail;
+  std::string save_anyway;
+  std::string cancel;
+};
+
+/**
+ * Free space before Save and Save As (ROUND5 8I.5, decision 45): the warning to show before
+ * writing the file at \a filepath (empty for one never saved) when the volume has less room than
+ * the larger of twice the file's last saved size and 200 MB, from `SaveSpace.swift`, the one
+ * rule. Nothing when there is room, or when the free space cannot be read, which is logged as
+ * `save free space unknown` and lets the save go ahead.
+ */
+std::optional<wmIOSSaveSpaceWarning> wm_apple_ios_save_space_warning(const char *filepath);
 
 }  // namespace blender

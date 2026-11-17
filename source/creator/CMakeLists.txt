@@ -480,6 +480,7 @@ else()
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/ToolSettingsRow.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/ItemCard.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/RevealCoordinator.swift
+      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/SaveSpace.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/Snapshots.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/ShellPanels.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/SqueezePalette.swift

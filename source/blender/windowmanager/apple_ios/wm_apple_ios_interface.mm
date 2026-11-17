@@ -11,6 +11,8 @@
 
 #import "wm_apple_ios_interface.hh"
 
+#include "../intern/wm_apple_ios_document.hh"
+
 /* Semantic keys in release/ios/blender_icons.json select Blender artwork without
  * conflating SF Symbols reused for different tools. UIImage caches the assets;
  * tool artwork retains its colors, while interface icons use UIKit template tinting. */
@@ -153,6 +155,34 @@ UIImage *blenderIOSMenuIcon(NSDictionary *item)
   }
   return WMIOSBlenderIcon(name, NO);
 }
+
+/* Free space before a save, from the Swift interface, see `SaveSpace.swift` (ROUND5 8I.5). */
+@interface NSObject (WMIOSSaveSpace)
++ (NSArray<NSString *> *)warningForSavingAt:(NSString *)path;
+@end
+
+namespace blender {
+
+std::optional<wmIOSSaveSpaceWarning> wm_apple_ios_save_space_warning(const char *filepath)
+{
+  @autoreleasepool {
+    NSArray<NSString *> *answer = [(id)blenderIOSSwiftClass(@"WMIOSSaveSpace")
+        warningForSavingAt:filepath ? @(filepath) : @""];
+    NSString *status = answer.firstObject;
+    if ([status isEqualToString:@"low"] && answer.count == 5) {
+      WM_native_ui_log("save", [answer[1] UTF8String]);
+      return wmIOSSaveSpaceWarning{
+          answer[1].UTF8String, answer[2].UTF8String, answer[3].UTF8String, answer[4].UTF8String};
+    }
+    if (![status isEqualToString:@"room"]) {
+      /* Never block a save on a reading that failed: say so in the log, and save. */
+      WM_native_ui_log("save", "free space unknown");
+    }
+    return std::nullopt;
+  }
+}
+
+}  // namespace blender
 
 /* Blender's menus, from the Swift interface, see `SwiftMenus` in `BlenderMenus.swift`. */
 @interface NSObject (WMIOSSwiftMenus)

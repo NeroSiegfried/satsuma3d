@@ -45,10 +45,24 @@ final class ShellCommands {
   func saveDocumentAs() {
     guard let document = wm_apple_ios_open_document() else { return }
     /* Save a copy wherever the person picks, as Files apps do for Save As. */
-    document.save(to: document.fileURL, for: .forOverwriting) { [weak self] _ in
-      let picker = UIDocumentPickerViewController(forExporting: [document.fileURL], asCopy: true)
-      self?.presenter?.present(picker, animated: true)
+    let save = { [weak self] in
+      document.save(to: document.fileURL, for: .forOverwriting) { [weak self] _ in
+        let picker = UIDocumentPickerViewController(forExporting: [document.fileURL], asCopy: true)
+        self?.presenter?.present(picker, animated: true)
+      }
     }
+    /* Free space first (ROUND5 8I.5, decision 45): when it is low, the person chooses. */
+    let space = SaveSpace.warning(forSavingAt: document.fileURL.path)
+    guard space.first == "low", space.count == 5 else {
+      if space.first != "room" { WM_native_ui_log("save", "free space unknown") }
+      save()
+      return
+    }
+    WM_native_ui_log("save", space[1])
+    let alert = UIAlertController(title: space[1], message: space[2], preferredStyle: .alert)
+    alert.addAction(UIAlertAction(title: space[4], style: .cancel))
+    alert.addAction(UIAlertAction(title: space[3], style: .default) { _ in save() })
+    presenter?.present(alert, animated: true)
   }
 
   func shareDocument() {

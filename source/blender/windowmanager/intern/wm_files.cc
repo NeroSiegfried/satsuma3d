@@ -3759,10 +3759,66 @@ static void save_set_filepath(bContext *C, wmOperator *op)
   }
 }
 
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+/** Set while Save Anyway runs the operator again, so it does not ask a second time. */
+static bool wm_save_space_answered = false;
+
+/**
+ * Free space before Save and Save As on iPad (ROUND5 8I.5, decision 45): when the volume is low,
+ * say so with Save Anyway and Cancel and return true, the operator then ending without writing;
+ * Save Anyway runs it again, with the same properties, as it was asked for. False when there is
+ * room, or the free space cannot be read (the save goes ahead), or no native alert can be shown.
+ * The rule is `SaveSpace.warning` in `SaveSpace.swift`.
+ */
+static bool wm_save_space_ask(bContext *C, wmOperator *op)
+{
+  if (wm_save_space_answered) {
+    return false;
+  }
+  const wmNativeInterface *native = WM_native_interface();
+  if (!native || !native->alert) {
+    return false;
+  }
+  const std::optional<wmIOSSaveSpaceWarning> warning = wm_apple_ios_save_space_warning(
+      BKE_main_blendfile_path(CTX_data_main(C)));
+  if (!warning) {
+    return false;
+  }
+  wmOperatorType *ot = op->type;
+  std::shared_ptr<IDProperty> properties(IDP_CopyProperty(op->properties),
+                                         [](IDProperty *idprops) { IDP_FreeProperty(idprops); });
+  wmNativeAlert alert;
+  alert.title = warning->title;
+  alert.message = warning->detail;
+  alert.actions = {{warning->cancel, wmNativeAlert::Role::Cancel}, {warning->save_anyway}};
+  alert.preferred_action = 0;
+  native->alert(
+      C,
+      alert,
+      [ot, properties](bContext *context, int action, uint64_t) {
+        if (action != 1) {
+          return;
+        }
+        PointerRNA ptr = RNA_pointer_create_discrete(nullptr, ot->srna, properties.get());
+        wm_save_space_answered = true;
+        WM_operator_name_call_ptr(context, ot, wm::OpCallContext::InvokeDefault, &ptr, nullptr);
+        wm_save_space_answered = false;
+      },
+      {},
+      "save_space");
+  return true;
+}
+#endif
+
 static wmOperatorStatus wm_save_as_mainfile_invoke(bContext *C,
                                                    wmOperator *op,
                                                    const wmEvent * /*event*/)
 {
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  if (wm_save_space_ask(C, op)) {
+    return OPERATOR_INTERFACE;
+  }
+#endif
 
   save_set_compress(op);
   save_set_filepath(C, op);
@@ -3987,6 +4043,12 @@ static wmOperatorStatus wm_save_mainfile_invoke(bContext *C,
   if (CTX_wm_window(C) == nullptr) {
     return OPERATOR_CANCELLED;
   }
+
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  if (wm_save_space_ask(C, op)) {
+    return OPERATOR_INTERFACE;
+  }
+#endif
 
   save_set_compress(op);
   save_set_filepath(C, op);

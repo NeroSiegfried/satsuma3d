@@ -462,4 +462,24 @@ check('G.f |= G_FLAG_INTERNET_OVERRIDE_PREF_OFFLINE;' in block[:600] and 'U.flag
 check('NO_ONLINE' in (SCRIPTS / 'startup/bl_ui/space_userpref.py').read_text(encoding='utf-8'),
       "Preferences' Network panel says on iPad why online access is off")
 
+# 8I.5: free space before Save and Save As (decision 45). One rule (`SaveSpace.warning`, tested by
+# tests/ios/test_save_space.py), asked by every way to save the document: Blender's Save and Save
+# As operators and the shell's Save As, each offering Save Anyway and Cancel.
+files_cc = (ROOT / 'source/blender/windowmanager/intern/wm_files.cc').read_text(encoding='utf-8')
+for invoke in ('wm_save_mainfile_invoke', 'wm_save_as_mainfile_invoke'):
+    body = files_cc[files_cc.index('static wmOperatorStatus %s(' % invoke):]
+    body = body[:body.index('\n}\n')]
+    check('wm_save_space_ask(C, op)' in body, "%s asks about free space first on iPad (ROUND5 8I.5)" % invoke)
+check('warning->save_anyway' in files_cc and 'warning->cancel' in files_cc,
+      "The operators' warning offers Save Anyway and Cancel (ROUND5 8I.5)")
+top_bar = (SWIFT / 'TopBar.swift').read_text(encoding='utf-8')
+save_as = top_bar[top_bar.index('func saveDocumentAs()'):top_bar.index('func shareDocument()')]
+check('SaveSpace.warning(forSavingAt:' in save_as and 'space[3]' in save_as and 'space[4]' in save_as,
+      "The shell's Save As asks about free space and offers Save Anyway and Cancel (ROUND5 8I.5)")
+check(len(re.findall(r'static func warning\(freeBytes', '\n'.join(p.read_text(encoding='utf-8')
+                                                                   for p in SWIFT.glob('*.swift')))) == 1,
+      "One function decides when space is low (ROUND5 8I.5)")
+check('apple_ios/swift/SaveSpace.swift' in (ROOT / 'source/creator/CMakeLists.txt').read_text(encoding='utf-8'),
+      "SaveSpace.swift is built into the app")
+
 print('PASS: native shell sources ' + json.dumps(checks))

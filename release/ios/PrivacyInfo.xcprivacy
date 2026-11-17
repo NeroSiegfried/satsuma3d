@@ -13,9 +13,11 @@
   SystemBootTime 35F9.1  elapsed time between events in the app: timers, animation playback,
                          double taps, render times
   UserDefaults   CA92.1  the app's own settings, which only it reads
-
-  DiskSpace (statfs, fstatfs, in the main executable, through Python's os.statvfs) is not
-  declared: no reason Apple lists is true of this app yet. See ROUND5 8D in the report.
+  DiskSpace      E174.1  before Save and Save As the app reads the free space of the volume it
+                         writes to, and when it is low says so with Save Anyway and Cancel
+                         (ROUND5 8I.5, `SaveSpace.swift`); the figure never leaves the device.
+                         The same category's calls through Python's os.statvfs (statfs,
+                         fstatfs) are the engine's, on the device only.
 -->
 <plist version="1.0">
 <dict>
@@ -50,6 +52,14 @@
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
 				<string>CA92.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>E174.1</string>
 			</array>
 		</dict>
 	</array>

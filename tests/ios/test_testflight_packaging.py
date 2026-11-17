@@ -214,6 +214,10 @@ class IdentityTest(unittest.TestCase):
         for entry in manifest['NSPrivacyAccessedAPITypes']:
             reasons = entry['NSPrivacyAccessedAPITypeReasons']
             self.assertTrue(reasons and set(reasons) <= REASONS[entry['NSPrivacyAccessedAPIType']], entry)
+        # ROUND5 8I.5: the free-space check before saving makes Apple's E174.1 true, and declared.
+        declared = {entry['NSPrivacyAccessedAPIType']: entry['NSPrivacyAccessedAPITypeReasons']
+                    for entry in manifest['NSPrivacyAccessedAPITypes']}
+        self.assertEqual(declared.get('NSPrivacyAccessedAPICategoryDiskSpace'), ['E174.1'])
 
     def test_installed_app(self):
         """The app Xcode last built, when there is one beside the checkout (`deploy_ipad.sh`'s)."""
