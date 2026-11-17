@@ -467,6 +467,13 @@ void WM_exit_ex(bContext *C, const bool do_python_exit, const bool do_user_exit_
    * Saving #BLENDER_QUIT_FILE is also not likely to be desired either. */
   BLI_assert(G.background ? (do_user_exit_actions == false) : true);
 
+#ifdef WITH_NATIVE_UI
+  WM_native_ui_session_log_flush(true);
+  if (BLI_getenv("PLATYPUS_SESSION_LOG")) {
+    printf("Session log writes: %d\n", WM_native_ui_session_log_writes());
+  }
+#endif
+
   if (C) {
     /* Run `exit_pre` Python handlers. */
     BKE_callback_exec_boolean(CTX_data_main(C), do_user_exit_actions, BKE_CB_EVT_EXIT_PRE);

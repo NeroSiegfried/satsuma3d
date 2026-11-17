@@ -250,6 +250,10 @@ struct DocumentToolbar: ToolbarContent {
 #endif
     }
     if !model.compact {
+      ToolbarItem(placement: .topBarLeading) { fileButton }
+#if !os(visionOS)
+      ToolbarSpacer(.fixed, placement: .topBarLeading)
+#endif
       ToolbarItem(placement: .topBarLeading) { sidebarMenu }
 #if !os(visionOS)
       ToolbarSpacer(.fixed, placement: .topBarLeading)
@@ -277,6 +281,7 @@ struct DocumentToolbar: ToolbarContent {
       ToolbarItemGroup(placement: .topBarLeading) {
         undoButton
         redoButton
+        repeatButton
       }
     }
     if model.compact {
@@ -317,10 +322,9 @@ struct DocumentToolbar: ToolbarContent {
     ToolbarItemGroup(placement: .topBarTrailing) {
       undoButton
       redoButton
+      repeatButton
       Menu("Share", systemImage: "square.and.arrow.up") { shareMenu }
         .background(ShareSource(commands: commands))
-        .prefetchingBlenderMenu(Self.importRoute)
-        .prefetchingBlenderMenu(Self.exportRoute)
         .accessibilityIdentifier("blender.share")
       Menu("More", systemImage: "ellipsis") { moreMenu }
         .accessibilityIdentifier("blender.actions")
@@ -354,6 +358,17 @@ struct DocumentToolbar: ToolbarContent {
     }
     .disabled(!model.canRedo)
     .accessibilityIdentifier("blender.redo")
+  }
+
+  /** Repeat Last, as Shift+R: the last operation again, such as another copy moved as far. */
+  private var repeatButton: some View {
+    Button { model.send("repeat", .invoke) } label: {
+      Label { Text(model.repeatTitle) } icon: { Image(systemName: "repeat") }
+    }
+    .disabled(!model.canRepeat)
+    .help(model.repeatTitle)
+    .accessibilityLabel(model.repeatTitle)
+    .accessibilityIdentifier("blender.repeat")
   }
 
   /** The node editors, each opening the node editor on its tree, docked along the bottom, and the
@@ -408,13 +423,13 @@ struct DocumentToolbar: ToolbarContent {
   static let importRoute = BlenderMenus.route("TOPBAR_MT_file_import")
   static let exportRoute = BlenderMenus.route("TOPBAR_MT_file_export")
 
-  /** Share: what leaves the document. Documents save themselves, so
-   * there is no Save; going back to the documents keeps the work. */
+  /** File, where a desktop user looks for it: saving a copy, and Blender's own Import and Export.
+   * Documents save themselves, so there is no Save; going back to the documents keeps the work. */
   @ViewBuilder
-  private var shareMenu: some View {
+  private var fileMenu: some View {
     Section {
-      Button("Share…", systemImage: "square.and.arrow.up") { commands.shareDocument() }
       Button("Save As…", systemImage: "doc.on.doc") { commands.saveDocumentAs() }
+      Button("Save as Template…", systemImage: "square.on.square") { commands.saveAsTemplate() }
     }
     /* Blender's own Import and Export menus, so every format it and its add-ons support is
      * listed. Their file browsers open the system's document picker. */
@@ -422,13 +437,28 @@ struct DocumentToolbar: ToolbarContent {
       Menu { BlenderMenuItems(route: Self.importRoute) } label: { blenderLabel("Import", "IMPORT") }
       Menu { BlenderMenuItems(route: Self.exportRoute) } label: { blenderLabel("Export", "EXPORT") }
     }
+  }
+
+  /** The File menu's button, first in the header after the documents, as on the desktop. */
+  private var fileButton: some View {
+    Menu { fileMenu } label: { Text("File") }
+      .prefetchingBlenderMenu(Self.importRoute)
+      .prefetchingBlenderMenu(Self.exportRoute)
+      .accessibilityIdentifier("blender.file")
+  }
+
+  /** Share: what leaves the document as it is, and its renders. */
+  @ViewBuilder
+  private var shareMenu: some View {
+    Section {
+      Button("Share…", systemImage: "square.and.arrow.up") { commands.shareDocument() }
+    }
     Section {
       Button("Render Image", systemImage: "photo") { commands.render?.renderAnimation(false) }
       Button("Render Animation", systemImage: "film") { commands.render?.renderAnimation(true) }
       /* Every earlier render, in the render sheet's film strip. */
       Button("Renders", systemImage: "photo.stack") { commands.render?.showRenders() }
     }
-    Button("Save as Template…", systemImage: "square.on.square") { commands.saveAsTemplate() }
   }
 
   private func blenderLabel(_ title: String, _ icon: String) -> some View {
@@ -516,6 +546,7 @@ struct DocumentToolbar: ToolbarContent {
         Button("Tool Settings", systemImage: "slider.horizontal.3") { model.toolSettingsOpen = true }
       }
     }
+    Menu { fileMenu } label: { Label("File", systemImage: "doc") }
     Menu { shareMenu } label: { Label("Share", systemImage: "square.and.arrow.up") }
     moreMenu
   }

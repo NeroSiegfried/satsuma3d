@@ -228,6 +228,7 @@ struct AssetsPane: View {
       .padding(.horizontal, 14)
       .frame(maxHeight: .infinity, alignment: .top)
     }
+    .shellScrollEdge(.horizontal)
     .dismissesKeyboardOnScroll(interactively: false)
     .overlay {
       if items.isEmpty {

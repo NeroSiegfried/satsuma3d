@@ -59,6 +59,7 @@ GROUPS = (
     "Grease Pencil",
     "Cursor",
     "View",
+    "Edit",
     "Cleanup",
     "Delete",
 )
@@ -337,6 +338,14 @@ def _modifier_on(kind):
     return checked
 
 
+def _has_copy(_s):
+    from bl_ui import native_clipboard
+    return native_clipboard.has_copy()
+
+
+_has_copy.why = lambda _s: "nothing copied yet"
+
+
 def _selecting(s):
     return s.selecting
 
@@ -351,8 +360,6 @@ ACTIONS = [
     Action("object.select_all", "Select All", "object.select_all", "SELECT_EXTEND", _object_empty,
            {"action": 'SELECT'}, group="Selection"),
     Action("object.add", "Add", "", "ADD", _object_empty, menu="VIEW3D_MT_add", group="Add"),
-    Action("object.paste", "Paste", "view3d.pastebuffer", "PASTEDOWN", lambda s: s.mode == 'OBJECT',
-           group="Object", strip=_object_empty),
 
     # Object Mode, a selection: the type-specific lead first.
     Action("object.active_camera", "Set Active Camera", "view3d.object_as_camera", "VIEW_CAMERA",
@@ -397,7 +404,10 @@ ACTIONS = [
            menu="OBJECT_MT_modifier_add", group="Modifiers", strip=False),
     Action("object.shade_flat", "Shade Flat", "object.shade_flat", "MESH_ICOSPHERE", _object(types=('MESH',)),
            group="Normals & Shading", strip=False),
-    Action("object.copy", "Copy", "view3d.copybuffer", "COPYDOWN", _object(), group="Object", strip=False),
+    # Blender's Copy Objects and Paste Objects (Ctrl+C, Ctrl+V): the strip keeps both in reach.
+    Action("object.copy", "Copy Objects", "view3d.copybuffer", "COPYDOWN", _object(), group="Object"),
+    Action("object.paste", "Paste Objects", "view3d.pastebuffer", "PASTEDOWN", lambda s: s.mode == 'OBJECT',
+           group="Object"),
     Action("object.keyframe", "Insert Keyframe", "anim.keyframe_insert", "DECORATE_KEYFRAME",
            lambda s: s.obj is not None and ((s.mode == 'OBJECT' and s.selected) or s.mode == 'POSE'),
            enabled=lambda s: s.mode == 'OBJECT' or bool(s.context.selected_pose_bones),
@@ -493,7 +503,12 @@ ACTIONS = [
     # Any selection. Blender's Mirror menu: interactive, or across an axis at once.
     Action("mesh.mirror", "Mirror", "", "MOD_MIRROR", _mesh(verts=1), menu="VIEW3D_MT_mirror", group="Transform"),
     Action("mesh.duplicate", "Duplicate", "mesh.duplicate_move", "DUPLICATE", _mesh(verts=1), invoke=True,
-           group="Mesh", strip=False),
+           group="Mesh"),
+    # Copy and Paste of geometry, which desktop Blender lacks: see `native_clipboard`. Paste moves
+    # what it adds, so Repeat Last stacks copies.
+    Action("mesh.copy", "Copy", "mesh.native_copy", "COPYDOWN", _mesh(verts=1), group="Mesh"),
+    Action("mesh.paste", "Paste", "mesh.native_paste_move", "PASTEDOWN", lambda s: s.mode == 'EDIT_MESH',
+           invoke=True, group="Mesh", enabled=_has_copy),
     Action("mesh.hide", "Hide", "mesh.hide", "HIDE_ON", _mesh(verts=1), {"unselected": False}, group="Mesh",
            strip=False),
     Action("mesh.delete_verts", "Delete", "mesh.delete", "TRASH", _mesh("VERT", verts=1), {"type": 'VERT'},
@@ -615,6 +630,17 @@ ACTIONS = [
            lambda s: s.mode == 'EDIT_ARMATURE', invoke=True, group="Armature"),
     Action("grease.duplicate", "Duplicate", "grease_pencil.duplicate_move", "DUPLICATE",
            lambda s: s.mode == 'EDIT_GREASE_PENCIL', invoke=True, group="Grease Pencil"),
+    Action("grease.copy", "Copy", "grease_pencil.copy", "COPYDOWN", lambda s: s.mode == 'EDIT_GREASE_PENCIL',
+           group="Grease Pencil"),
+    Action("grease.paste", "Paste", "grease_pencil.paste", "PASTEDOWN", lambda s: s.mode == 'EDIT_GREASE_PENCIL',
+           group="Grease Pencil"),
+    Action("curve.duplicate", "Duplicate", "curve.duplicate_move", "DUPLICATE", lambda s: s.mode == 'EDIT_CURVE',
+           invoke=True, group="Curve"),
+    # Edit menu, as on the desktop (Shift+R, and its history).
+    Action("edit.repeat_last", "Repeat Last", "screen.repeat_last", "FILE_REFRESH", _always, group="Edit",
+           strip=False),
+    Action("edit.repeat_history", "Repeat History", "screen.repeat_history", "RECOVER_LAST", _always,
+           invoke=True, group="Edit", strip=False),
     Action("grease.delete", "Delete", "grease_pencil.delete", "TRASH", lambda s: s.mode == 'EDIT_GREASE_PENCIL',
            group="Delete", destructive=True),
 ]
@@ -626,10 +652,11 @@ _INDEX = {action.id: index for index, action in enumerate(ACTIONS)}
 # shell's own Rename, which asks for the name and sends it to `rename_active`.
 _FIXED = {
     'OBJECT': ("object.copy", "object.paste", "object.duplicate", "rename", "object.delete"),
-    'EDIT_MESH': ("mesh.duplicate", "mesh.delete_verts", "mesh.delete_edges", "mesh.delete_faces"),
+    'EDIT_MESH': ("mesh.copy", "mesh.paste", "mesh.duplicate", "mesh.delete_verts", "mesh.delete_edges", "mesh.delete_faces"),
     'POSE': ("pose.copy", "pose.paste", "rename"),
     'EDIT_ARMATURE': ("armature.duplicate", "rename"),
-    'EDIT_GREASE_PENCIL': ("grease.duplicate", "grease.delete"),
+    'EDIT_GREASE_PENCIL': ("grease.copy", "grease.paste", "grease.duplicate", "grease.delete"),
+    'EDIT_CURVE': ("curve.duplicate",),
 }
 
 

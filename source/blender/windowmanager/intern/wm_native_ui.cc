@@ -439,6 +439,22 @@ static void bridge_operator_call_ptr(bContext *C, wmOperatorType *ot, PointerRNA
   }
 }
 
+/** The operator Repeat Last would run, as `repeat_last_exec` finds it, if it can run again. */
+wmOperator *bridge_repeatable_operator(bContext *C)
+{
+  wmWindowManager *wm = CTX_wm_manager(C);
+  if (wm == nullptr) {
+    return nullptr;
+  }
+  for (wmOperator *op = static_cast<wmOperator *>(wm->runtime->operators.last); op; op = op->prev) {
+    if (op->type->flag & OPTYPE_REGISTER) {
+      return WM_operator_repeat_check(C, op) ? op : nullptr;
+    }
+  }
+  return nullptr;
+}
+
+
 bool bridge_undo_available(bContext *C, const char *op_name = "ED_OT_undo")
 {
   wmWindow *win = CTX_wm_window(C);
@@ -2778,6 +2794,20 @@ void bridge_toolbar_view_build(bContext *C,
           buffer, views::protocol::ButtonStyle::Normal, op_name);
     });
   }
+  /* Repeat Last, as Shift+R: the last operator kept for redo, named, while it can run again. */
+  wmOperator *repeatable = bridge_repeatable_operator(C);
+  /* The label is a view of this string, which outlives the node's building. */
+  const std::string repeat_label = repeatable ?
+                                       std::string(IFACE_("Repeat")) + " " +
+                                           std::string(WM_operatortype_name(repeatable->type,
+                                                                            repeatable->ptr)) :
+                                       std::string(IFACE_("Repeat Last"));
+  builder.add(top, "repeat", [&](ViewBuffer &buffer, NodeFields &fields) {
+    fields.label = repeat_label;
+    fields.enabled = has_view3d && repeatable != nullptr;
+    return views::protocol::CreateButtonDirect(
+        buffer, views::protocol::ButtonStyle::Normal, "SCREEN_OT_repeat_last");
+  });
   /* Which undo step is active: it moves with every change an operator makes, and with undo and
    * redo, once per action rather than during one. Menus are built from the scene, so the
    * interface asks for them again when this changes, and only then. */
@@ -2981,6 +3011,15 @@ views::CommandResult bridge_toolbar_view_command(bContext *C,
   }
   if (set && StringRef(target).startswith("viewport:")) {
     return setting("viewport_toggle", std::string(target.substr(9)));
+  }
+  if (invoke && target == "repeat") {
+    if (bridge_repeatable_operator(C) == nullptr) {
+      r_error = "Nothing to repeat";
+      return views::CommandResult::Failed;
+    }
+    return views::operator_run(C, "SCREEN_OT_repeat_last", nullptr, r_error) ?
+               views::CommandResult::Done :
+               views::CommandResult::Failed;
   }
   if (invoke && ELEM(target, "undo", "redo")) {
     const char *op_name = target == "undo" ? "ED_OT_undo" : "ED_OT_redo";
@@ -4345,15 +4384,50 @@ static Vector<BridgeNotice> bridge_notices;
 static int bridge_notice_number = 0;
 static double bridge_notice_time = 0.0;
 
-void WM_native_ui_session_log(const char *kind, const char *text)
+/**
+ * The session's log is buffered: a line per write would dirty a page of flash each time, which
+ * iOS counts against the app. Written at most every ten seconds, and at once for anything that
+ * is not an operator or a report, when the app goes to the background, and at exit.
+ */
+struct SessionLog {
+  std::mutex mutex;
+  std::vector<std::string> lines;
+  /** The last line's kind and operator, and how many times in a row it came. */
+  std::string last_key;
+  int repeats = 1;
+  double last_write = 0.0;
+  int writes = 0;
+};
+
+static SessionLog &session_log()
+{
+  static SessionLog log;
+  return log;
+}
+
+static bool session_log_enabled()
 {
   static const bool asked_for = BLI_getenv("PLATYPUS_SESSION_LOG") != nullptr;
-  if (!asked_for && WM_native_ui_desktop_mode()) {
+  return asked_for || !WM_native_ui_desktop_mode();
+}
+
+/** Close the run of repeats on the last line. */
+static void session_log_close_run(SessionLog &log)
+{
+  if (log.repeats > 1 && !log.lines.empty()) {
+    log.lines.back() += " \u00d7" + std::to_string(log.repeats);
+  }
+  log.repeats = 1;
+  log.last_key.clear();
+}
+
+static void session_log_write(SessionLog &log)
+{
+  session_log_close_run(log);
+  log.last_write = BLI_time_now_seconds();
+  if (log.lines.empty()) {
     return;
   }
-  /* Blender's thread and the interface's both write. */
-  static std::mutex mutex;
-  std::scoped_lock lock(mutex);
   char path[FILE_MAX];
   BLI_path_join(path, sizeof(path), BKE_tempdir_base(), "platypus-session.log");
   /* Start again once it is large; the one before is kept beside it. */
@@ -4361,17 +4435,69 @@ void WM_native_ui_session_log(const char *kind, const char *text)
     const std::string previous = std::string(path) + ".1";
     BLI_rename_overwrite(path, previous.c_str());
   }
+  std::string text;
+  for (const std::string &line : log.lines) {
+    text += line;
+    text += '\n';
+  }
+  log.lines.clear();
   FILE *file = BLI_fopen(path, "a");
   if (file == nullptr) {
     return;
   }
-  const std::time_t now = std::time(nullptr);
-  std::tm local = {};
-  localtime_r(&now, &local);
-  char stamp[16] = "";
-  std::strftime(stamp, sizeof(stamp), "%H:%M:%S", &local);
-  fprintf(file, "%s %s %s\n", stamp, kind, text);
+  fwrite(text.data(), 1, text.size(), file);
   fclose(file);
+  log.writes++;
+}
+
+void WM_native_ui_session_log(const char *kind, const char *text)
+{
+  if (!session_log_enabled()) {
+    return;
+  }
+  SessionLog &log = session_log();
+  /* Blender's thread and the interface's both write. */
+  std::scoped_lock lock(log.mutex);
+  /* The kind and the operator's name, up to its arguments, if any. */
+  const std::string body(text ? text : "");
+  const std::string key = std::string(kind) + " " + body.substr(0, body.find('('));
+  if (key == log.last_key && !log.lines.empty()) {
+    log.repeats++;
+  }
+  else {
+    session_log_close_run(log);
+    const std::time_t now = std::time(nullptr);
+    std::tm local = {};
+    localtime_r(&now, &local);
+    char stamp[16] = "";
+    std::strftime(stamp, sizeof(stamp), "%H:%M:%S", &local);
+    log.lines.push_back(std::string(stamp) + " " + kind + " " + text);
+    log.last_key = key;
+  }
+  const bool routine = STREQ(kind, "op") || STREQ(kind, "info");
+  if (!routine || BLI_time_now_seconds() - log.last_write > 10.0) {
+    session_log_write(log);
+  }
+}
+
+void WM_native_ui_session_log_flush(const bool force)
+{
+  if (!session_log_enabled()) {
+    return;
+  }
+  SessionLog &log = session_log();
+  std::unique_lock lock(log.mutex, std::try_to_lock);
+  if (!lock.owns_lock() || log.lines.empty()) {
+    return;
+  }
+  if (force || BLI_time_now_seconds() - log.last_write > 10.0) {
+    session_log_write(log);
+  }
+}
+
+int WM_native_ui_session_log_writes()
+{
+  return session_log().writes;
 }
 
 extern "C" void WM_native_ui_log(const char *kind, const char *text)
@@ -4442,18 +4568,9 @@ static std::string bridge_operator_unavailable(bContext *C, wmOperatorType *ot)
 
 void WM_native_ui_operator_finished(bContext *C, wmOperator *op)
 {
-  /* Navigation runs many times a second while the view moves: not what the log is for. */
-  if (ELEM(StringRef(op->type->idname),
-           "VIEW3D_OT_zoom",
-           "VIEW3D_OT_rotate",
-           "VIEW3D_OT_move",
-           "VIEW3D_OT_dolly",
-           "VIEW3D_OT_view_roll",
-           "VIEW3D_OT_ndof_all",
-           "VIEW3D_OT_ndof_orbit",
-           "VIEW3D_OT_ndof_orbit_zoom",
-           "VIEW3D_OT_ndof_pan"))
-  {
+  /* What changes the document or is kept for redo: not the view moving many times a second, nor
+   * timers. */
+  if ((op->type->flag & (OPTYPE_REGISTER | OPTYPE_UNDO)) == 0) {
     return;
   }
   std::string line = WM_operator_pystring(C, op, false, true);
@@ -5275,6 +5392,7 @@ void WM_native_ui_flush_commands(bContext *C)
     WM_native_ui_views_flush(C);
     bridge_context_pop(C, context_store);
   }
+  WM_native_ui_session_log_flush(false);
 }
 
 }  // namespace blender

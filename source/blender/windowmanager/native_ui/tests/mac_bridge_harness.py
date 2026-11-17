@@ -230,6 +230,28 @@ def tick_actions():
         elif step == 15:
             report["steps"].append({"name": "edit_edges", "trees": {name: tree(sub) for name, sub in subs.items()
                                                                      if name != "toolbar"}})
+            invoke(subs["palette"], "action:mesh.subdivide", 9)
+        elif step == 18:
+            report["steps"].append({"name": "after_subdivide", "ack": acks.get(9), "verts": len(cube.data.vertices),
+                                    "repeat": [n for n in (tree(subs["toolbar"]) or {}).get("children", [])
+                                               if n["key"] == "repeat"]})
+            invoke(subs["toolbar"], "repeat", 10)
+        elif step == 21:
+            bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.ops.object.mode_set(mode='EDIT')
+            report["steps"].append({"name": "after_repeat_subdivide", "ack": acks.get(10),
+                                    "verts": len(cube.data.vertices)})
+            # Head heights: a copy moved up, then Repeat Last stacks the next one as far again.
+            bpy.ops.mesh.select_all(action='SELECT')
+            # As actions run it (`native_actions.run`): with undo, so Blender keeps it for Repeat Last.
+            bpy.ops.mesh.duplicate_move('EXEC_DEFAULT', True, TRANSFORM_OT_translate={"value": (0, 0, 2)})
+        elif step == 23:
+            invoke(subs["toolbar"], "repeat", 11)
+        elif step == 26:
+            bpy.ops.object.mode_set(mode='OBJECT')
+            zs = [v.co.z for v in cube.data.vertices]
+            report["steps"].append({"name": "after_repeat_duplicate", "ack": acks.get(11),
+                                    "verts": len(cube.data.vertices), "top": max(zs)})
             finish("done")
             return None
         if step > 40:

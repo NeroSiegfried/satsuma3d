@@ -55,6 +55,15 @@ final class ShellMessages {
     last = max(seen, numbers.max() ?? seen)
   }
 
+  /** A message of the interface's own, such as why a paste did nothing: numbered below Blender's,
+   * so the two never share an identity. */
+  @ObservationIgnored private var ownNumber = 0
+
+  func say(_ text: String, level: String = "info") {
+    ownNumber -= 1
+    show(ShellMessage(id: ownNumber, level: level, text: text, button: nil, target: nil))
+  }
+
   private func show(_ message: ShellMessage) {
     withAnimation(.easeOut(duration: 0.2)) {
       shown.append(message)

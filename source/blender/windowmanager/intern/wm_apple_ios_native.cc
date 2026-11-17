@@ -275,7 +275,11 @@ GHOST_IOSNativeInterface ghost_interface_create()
   GHOST_IOSNativeInterface native;
   native.engine_step = engine_step;
   native.engine_idle_seconds = WM_native_ui_engine_idle_seconds;
-  native.autosave_now = WM_apple_ios_autosave_now;
+  native.autosave_now = [](bContext *C) {
+    /* Going to the background, where iOS may end the app: the session's log too. */
+    WM_native_ui_session_log_flush(true);
+    WM_apple_ios_autosave_now(C);
+  };
   native.engine_busy = WM_native_ui_engine_busy;
   native.pencil_hover = WM_native_ui_stylus_hover_set;
   native.pencil_roll = WM_native_ui_stylus_roll_set;

@@ -256,25 +256,60 @@ struct ToolGroupCorner: Shape {
 }
 
 /**
- * A rail item's highlight, and where the corner mark of a tool group sits inside it, in one place
- * so the two cannot disagree. Blender's style draws its selection as Blender's rounded square, with
- * the mark in its corner as on the desktop; the glass style's capsule takes the mark further in,
- * along the diagonal, so it sits wholly on the highlight.
+ * A rail item's highlight and the corner mark of a tool group, in one place so the two cannot
+ * disagree. The highlight says "selected", the mark "more tools here": each has its own place.
+ * Blender's style draws Blender's rounded square over the whole cell, with the mark in its corner
+ * as on the desktop. The glass style's highlight is a circle inset in the cell, and the mark sits
+ * in the cell's corner, in the band the circle leaves, on the rail's own surface: a corner mark
+ * has no corner to sit in on a circle.
  */
 struct RailItemShape: Shape {
   var glass: Bool
+  /** Brushes' previews fill their cells, and brushes have no marks: the highlight does too. */
+  var fullCell = false
 
-  init(glass: Bool = ShellStyle.current == .glass) { self.glass = glass }
-
-  func path(in rect: CGRect) -> Path {
-    glass ? Capsule().path(in: rect) :
-      RoundedRectangle(cornerRadius: ShellStyle.radius, style: .continuous).path(in: rect)
+  init(glass: Bool = ShellStyle.current == .glass, fullCell: Bool = false) {
+    self.glass = glass
+    self.fullCell = fullCell
   }
 
-  /** The mark's side, and its inset from the item's trailing and bottom edges. On the capsule's
-   * 26 point end, 13 points in leaves at least 5 points of highlight around a 6 point mark. */
-  var markSize: CGFloat { glass ? 6 : 7 }
-  var markInset: CGFloat { glass ? 13 : 8 }
+  /** The highlight, in the cell's \a rect. */
+  func path(in rect: CGRect) -> Path {
+    let inset = rect.insetBy(dx: highlightInset, dy: highlightInset)
+    return glass ? Capsule().path(in: inset) :
+      RoundedRectangle(cornerRadius: ShellStyle.radius, style: .continuous).path(in: inset)
+  }
+
+  /** How far the highlight keeps from the cell's edges. */
+  var highlightInset: CGFloat { glass && !fullCell ? 6 : 0 }
+  /** The mark's side, and its inset from the cell's trailing and bottom edges. */
+  var markSize: CGFloat { 7 }
+  var markInset: CGFloat { glass ? 6 : 8 }
+  /** Whether the mark sits on the highlight (Blender) or apart from it (glass). */
+  var markOnHighlight: Bool { !glass }
+
+  /** The room between the mark and the highlight's edge, and between the mark and the rim of a
+   * closed rail, on a \a side point cell centred in a rail of \a railRadius. The mark's nearest
+   * point to the centre is the middle of its hypotenuse; its farthest, the right angle. */
+  func clearances(side: CGFloat, railRadius: CGFloat) -> (highlight: CGFloat, rim: CGFloat) {
+    let root2 = CGFloat(2).squareRoot()
+    let hypotenuse = (side / 2 - markInset - markSize / 2) * root2
+    let rightAngle = (side / 2 - markInset) * root2
+    return (glass ? hypotenuse - (side / 2 - highlightInset) : markInset, railRadius - rightAngle)
+  }
+
+  /** Logged once if a change brings the mark within 3 points of the highlight or the rim. */
+  @MainActor static let checked: Bool = {
+    for glass in [false, true] {
+      let shape = RailItemShape(glass: glass)
+      let room = shape.clearances(side: 52, railRadius: 32)
+      if room.highlight < 3 || room.rim < 3 {
+        WM_native_ui_log("layout", "rail mark \(glass ? "glass" : "blender"): \(room.highlight) from the highlight, " +
+                         "\(room.rim) from the rim")
+      }
+    }
+    return true
+  }()
 }
 
 struct RailItemView: View {
@@ -319,11 +354,14 @@ struct RailItemView: View {
     .padding(.trailing, showsTitle ? 14 : (brush ? 3 : 8))
     .frame(minWidth: inRow ? 52 : nil, maxWidth: inRow ? 52 : .infinity, minHeight: 52, maxHeight: 52)
     .background {
+      /* Titled, the highlight is a pill along the whole row; alone, the style's shape in the cell. */
       if selected {
         /* The selection slides from item to item. */
         shape
           .fill(.clear)
           .panelGlass(.tinted(.blue), in: shape)
+          /* A titled row's pill ends short of the mark in its corner. */
+          .padding(.trailing, showsTitle && item.grouped && !shape.markOnHighlight ? 8 : 0)
           .matchedGeometryEffect(id: "selection", in: namespace)
       }
       else if emphasized {
@@ -332,20 +370,23 @@ struct RailItemView: View {
     }
     .overlay(alignment: .bottomTrailing) {
       if item.grouped {
-        /* As Blender's toolbar marks a group: a small triangle in the button's corner, wholly on
-         * the highlight when selected. */
+        /* As Blender's toolbar marks a group: a small triangle in the button's corner. On
+         * Blender's square it is white on the selection, as on the desktop; under glass it keeps
+         * to the corner beside the circle, never on it. */
         ToolGroupCorner()
-          .fill(selected ? Color.white : Color.primary.opacity(0.6))
+          .fill(selected && shape.markOnHighlight ? Color.white : Color.primary.opacity(0.7))
           .frame(width: shape.markSize, height: shape.markSize)
           .padding(.trailing, shape.markInset)
           .padding(.bottom, shape.markInset)
           .accessibilityHidden(true)
       }
     }
-    .contentShape(shape)
+    /* The whole cell takes the touch, wherever the highlight is drawn. */
+    .contentShape(Rectangle())
+    .onAppear { _ = RailItemShape.checked }
   }
 
-  private var shape: RailItemShape { RailItemShape(glass: style == ShellStyle.glass.rawValue) }
+  private var shape: RailItemShape { RailItemShape(glass: style == ShellStyle.glass.rawValue, fullCell: brush) }
 }
 
 struct Rail: View {
@@ -486,7 +527,7 @@ struct Rail: View {
       .accessibilityAddTraits(.isButton)
       .accessibilityAction { tap(item) }
     /* The system's own highlight under a hovering Pencil or pointer, the selection's shape. */
-    .hoverHighlight(RailItemShape(glass: style == ShellStyle.glass.rawValue))
+    .hoverHighlight(RailItemShape(glass: style == ShellStyle.glass.rawValue, fullCell: brush))
     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { state.setFrame($0, for: item.id) }
     .onDisappear { state.setFrame(nil, for: item.id) }
     .onHover { inside in
@@ -741,16 +782,23 @@ struct Rail: View {
    * opened tool list up to dock it. */
   private var handle: some View {
     Button(action: collapse) {
-      /* One grabber, turning with the rail rather than swapped for another. */
+      /* A chevron pointing where the list folds to: down to the closed button at the bottom of a
+       * column; in a row, where the handle leads, on towards the row's middle. A bare bar read as
+       * a minus. */
       let row = edge.horizontal
-      Capsule()
-        .fill(Color.secondary)
-        .frame(width: row ? 5 : 28, height: row ? 28 : 5)
+      Image(systemName: row ? "chevron.compact.right" : "chevron.compact.down")
+        .font(.system(size: 20, weight: .semibold))
+        .foregroundStyle(.secondary)
         .frame(minWidth: row ? 44 : nil, maxWidth: row ? 44 : .infinity,
                minHeight: row ? nil : 44, maxHeight: row ? .infinity : 44)
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+    /* A hold names it, as a hold names a tool. */
+    .simultaneousGesture(LongPressGesture(minimumDuration: 0.4).onEnded { _ in
+      Haptics.selection()
+      label.show(brush ? "Collapse Brushes" : "Collapse Toolbar", item: active, rail: state, transient: true)
+    })
     .help(brush ? "Collapse Brushes" : "Collapse Toolbar")
     .accessibilityLabel(brush ? "Collapse Brushes" : "Collapse Toolbar")
     .accessibilityIdentifier(brush ? "blender.brushbar.handle" : "blender.toolbar.handle")
@@ -1043,7 +1091,7 @@ struct ToolRails: View {
         if !content.isEmpty {
           let lifted = sidebarDragStart != nil || carried?.what == .sidebar
           let sidebarEdge = layout.sidebarRow ?? (layout.sidebarLeading ? .leading : .trailing)
-          let sidebarSize = layout.sidebarRow != nil ? CGSize(width: content.height, height: PaintSidebar.width) :
+          let sidebarSize = layout.sidebarRow != nil ? CGSize(width: content.height, height: PaintSidebar.rowThickness) :
                                                        CGSize(width: PaintSidebar.width, height: content.height)
           PaintSidebar(state: intent, direction: model.direction, brush: model.brush, content: content,
                        leading: layout.sidebarLeading, transforming: model.transforming, window: model.window,
@@ -1214,7 +1262,7 @@ struct ToolRails: View {
     return Capsule()
       .fill(Color.secondary)
       .frame(width: row ? 5 : 24, height: row ? 24 : 5)
-      .frame(width: row ? 6 + content.handle : PaintSidebar.width, height: row ? PaintSidebar.width : 6 + content.handle)
+      .frame(width: row ? 6 + content.handle : PaintSidebar.width, height: row ? PaintSidebar.rowThickness : 6 + content.handle)
       .contentShape(Rectangle())
       .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
         .onChanged { value in
@@ -1308,7 +1356,8 @@ struct ToolRails: View {
           .padding(.horizontal, 14)
           .frame(height: rowHeight)
           .background {
-            if hovered { Capsule().fill(Color(uiColor: .systemBlue)) }
+            /* The style's selection, as the rail's own. */
+            if hovered { ShellShape().fill(.clear).panelGlass(.tinted(.blue), in: ShellShape()) }
           }
           .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
             tools.setFlyoutFrame($0, for: child.id)
@@ -1319,7 +1368,7 @@ struct ToolRails: View {
       }
       .padding(6)
       .frame(width: width)
-      .panelGlass(in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+      .panelGlass(in: ShellShape(glassRadius: 24))
       .position(center)
       .allowsHitTesting(false)
       .accessibilityIdentifier("blender.toolbar.group")
@@ -1960,10 +2009,10 @@ struct SidebarContent: Equatable {
   var buttonsOnly: Bool { (buttons || smooth) && !size && !strength && !color }
 
   var sliderHeight: CGFloat { dial ? 52 : 148 }
-  /** The + and -, Smooth and Face Control below them, each 52 high. */
+  /** The buttons, Smooth and Face Control below them, each a cell with its name. */
   var buttonsHeight: CGFloat {
     let count = (buttons ? (selecting ? 3 : 2) : 0) + (smooth ? 1 : 0) + (face ? 1 : 0)
-    return count == 0 ? 0 : CGFloat(count) * 52 + CGFloat(count - 1) * 4
+    return count == 0 ? 0 : CGFloat(count) * PaintSidebar.cellHeight + CGFloat(count - 1) * 4
   }
 
   /** Room at the top for the grabber that moves it, which the + and - alone don't have. */
@@ -1992,6 +2041,10 @@ struct PaintSidebar: View {
   /** In a row along the top or the bottom, its sliders on their sides. */
   var horizontal = false
   static let width: CGFloat = 64
+  /** A button: its icon on a highlight, its name under it. */
+  static let cellHeight: CGFloat = 56
+  /** Along the top or the bottom, as thick as a button and its margins. */
+  static let rowThickness: CGFloat = cellHeight + 12
 
   @State private var held: String?
 
@@ -2064,7 +2117,7 @@ struct PaintSidebar: View {
     }
     .padding(6)
     .padding(horizontal ? .leading : .top, content.handle)
-    .frame(width: horizontal ? content.height : Self.width, height: horizontal ? Self.width : content.height)
+    .frame(width: horizontal ? content.height : Self.width, height: horizontal ? Self.rowThickness : content.height)
     .panelGlass(in: RoundedRectangle(cornerRadius: 32, style: .continuous))
     .animation(UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: 0.32, dampingFraction: 0.84),
                value: state.active)
@@ -2092,17 +2145,12 @@ struct PaintSidebar: View {
     return Button {
       FaceControl.shared.toggle()
     } label: {
-      Image(systemName: on ? "face.smiling.inverse" : "face.smiling")
-        .font(.system(size: 20, weight: .semibold))
-        .foregroundStyle(on ? Color.white : Color.primary)
-        .frame(minWidth: 52, maxWidth: horizontal ? 52 : .infinity, minHeight: 52, maxHeight: 52)
-        .background {
-          if on { Capsule().fill(.clear).panelGlass(.tinted(.blue), in: Capsule()) }
-        }
-        .contentShape(Capsule())
+      cell("Face", on: on) {
+        Image(systemName: on ? "face.smiling.inverse" : "face.smiling")
+          .font(.system(size: 20, weight: .semibold))
+      }
     }
     .buttonStyle(.plain)
-    .hoverHighlight(Capsule())
     .accessibilityLabel("Face Control")
     .accessibilityHint("Your mouth sets the brush's strength, your eyebrows its size")
     .accessibilityAddTraits(on ? .isSelected : [])
@@ -2113,21 +2161,13 @@ struct PaintSidebar: View {
    * choose: a key to hold with one hand while the other strokes. */
   private var smoothButton: some View {
     let on = state.smoothing
-    return Image(systemName: "drop.halffull")
-      .font(.system(size: 19, weight: .semibold))
-      .foregroundStyle(on ? Color.white : Color.primary)
-      .frame(minWidth: 52, maxWidth: horizontal ? 52 : .infinity, minHeight: 52, maxHeight: 52)
-      .background {
-        if on {
-          Capsule().fill(.clear).panelGlass(.tinted(.blue), in: Capsule())
-            .transition(.opacity.combined(with: .scale(scale: 0.8)))
-        }
-      }
+    return cell("Smooth", on: on) {
+      Image(systemName: "drop.halffull")
+        .font(.system(size: 19, weight: .semibold))
+    }
       .scaleEffect(on ? 0.94 : 1)
       .animation(UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: 0.2, dampingFraction: 0.7),
                  value: on)
-      .contentShape(Capsule())
-      .hoverHighlight(Capsule())
       .onLongPressGesture(minimumDuration: .infinity, maximumDistance: .infinity, perform: {}) { down in
         state.smoothing = down
       }
@@ -2146,19 +2186,10 @@ struct PaintSidebar: View {
     /* The system has no magnet: Blender's own snapping icon then. */
     let icon = UIImage(systemName: symbol) != nil ? Image(systemName: symbol) :
       (BlenderIcon.image("SNAP_ON").map { Image(uiImage: $0.withRenderingMode(.alwaysTemplate)) } ?? Image(systemName: "dot.squareshape"))
-    return icon
-      .font(.system(size: 19, weight: .semibold))
-      .foregroundStyle(on ? Color.white : Color.primary)
-      .frame(minWidth: 52, maxWidth: horizontal ? 52 : .infinity, minHeight: 52, maxHeight: 52)
-      .background {
-        if on {
-          Capsule().fill(.clear).panelGlass(.tinted(.blue), in: Capsule())
-            .transition(.opacity.combined(with: .scale(scale: 0.8)))
-        }
-      }
+    return cell(label, on: on) {
+      icon.font(.system(size: 19, weight: .semibold))
+    }
       .scaleEffect(on ? 0.94 : 1)
-      .contentShape(Capsule())
-      .hoverHighlight(Capsule())
       .onLongPressGesture(minimumDuration: .infinity, maximumDistance: .infinity, perform: {}) { down in
         if down {
           held = key
@@ -2183,6 +2214,47 @@ struct PaintSidebar: View {
       .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
   }
 
+  /**
+   * One of the sidebar's buttons: its icon on a highlight, and under it its name in Blender's
+   * words, so each is known without trying it; a hold cannot name these, as holding is what some
+   * of them do. The whole cell takes the touch. With \a matched, the highlight slides between the
+   * buttons that share it.
+   */
+  private func cell<Icon: View>(_ name: String, on: Bool, matched: Bool = false,
+                                @ViewBuilder icon: () -> Icon) -> some View
+  {
+    VStack(spacing: 2) {
+      icon()
+        .foregroundStyle(on ? Color.white : Color.primary)
+        .frame(width: 40, height: 34)
+        .background {
+          if on {
+            if matched {
+              ShellShape()
+                .fill(.clear)
+                .panelGlass(.tinted(.blue), in: ShellShape())
+                .matchedGeometryEffect(id: "selection", in: selection)
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+            }
+            else {
+              ShellShape()
+                .fill(.clear)
+                .panelGlass(.tinted(.blue), in: ShellShape())
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+            }
+          }
+        }
+      Text(name)
+        .font(.system(size: 10, weight: .medium))
+        .lineLimit(1)
+        .fixedSize()
+        .foregroundStyle(Color.primary)
+    }
+    .frame(width: 52, height: Self.cellHeight)
+    .contentShape(Rectangle())
+    .hoverHighlight(RoundedRectangle(cornerRadius: 8, style: .continuous))
+  }
+
   /** With \a marquee, \a symbol sits in a dashed square, so + and - for the selection mirror each
    * other: there is no minus.square.dashed to go with plus.square.dashed. */
   private func button(_ intent: SelectIntent, symbol: String, marquee: Bool, label: String,
@@ -2190,7 +2262,7 @@ struct PaintSidebar: View {
   {
     let on = state.active == intent
     let blenderIcon = icon.flatMap { BlenderIcon.image($0) }
-    return Group {
+    return cell(label, on: on, matched: true) {
       if let blenderIcon {
         /* Blender's own icon for the select mode, tinted as the symbols are. */
         Image(uiImage: blenderIcon.withRenderingMode(.alwaysTemplate))
@@ -2208,21 +2280,8 @@ struct PaintSidebar: View {
           }
       }
     }
-      .foregroundStyle(on ? Color.white : Color.primary)
-      .frame(minWidth: 52, maxWidth: horizontal ? 52 : .infinity, minHeight: 52, maxHeight: 52)
       .contentTransition(.symbolEffect(.replace))
-      .background {
-        if on {
-          Capsule()
-            .fill(.clear)
-            .panelGlass(.tinted(.blue), in: Capsule())
-            .matchedGeometryEffect(id: "selection", in: selection)
-            .transition(.opacity.combined(with: .scale(scale: 0.8)))
-        }
-      }
       .scaleEffect(pressing == intent ? 0.94 : 1)
-      .contentShape(Capsule())
-      .hoverHighlight(Capsule())
       /* Never completes, so it reports the finger landing and lifting, however long it stays. */
       .onLongPressGesture(minimumDuration: .infinity, maximumDistance: .infinity, perform: {}) { down in
         pressing = down ? intent : nil

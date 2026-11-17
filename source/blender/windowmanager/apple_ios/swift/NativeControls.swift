@@ -338,14 +338,51 @@ struct NativeSlider: View {
 /** \name Rows
  * \{ */
 
-/** Lock and keyframe actions for a control, shown when touching and holding it. */
+/** Value, lock and keyframe actions for a control, shown when touching and holding it: what a
+ * pointer over it does on the desktop with Backspace, Ctrl+C and Ctrl+V. */
 struct ControlActions: View {
   let model: PanelsModel
   let node: NativeNode
   /** A component of a vector, such as Location's X: keyframes of it alone, or of them all. */
   var component = false
 
+  /** Whether a hold on \a node has anything to offer. */
+  static func offered(_ model: PanelsModel, _ node: NativeNode) -> Bool {
+    node.number != nil || node.kind == .textfield || node.node.animatable || model.attached(node, .lock) != nil
+  }
+
+  /** Its value as text, as copied: what the field shows, without grouping. */
+  private var copiedText: String? {
+    if let number = node.number {
+      return number.format(model.number(node), significant: 7)
+    }
+    return node.kind == .textfield ? model.text(node) : nil
+  }
+
   var body: some View {
+    if let copied = copiedText {
+      Section {
+        if let number = node.number {
+          Button {
+            model.set(node, .float(number.clamp(number.defaultValue)))
+          } label: {
+            Label("Reset to Default Value", systemImage: "arrow.counterclockwise")
+          }
+          .disabled(!node.enabled || model.number(node) == number.defaultValue)
+        }
+        Button {
+          UIPasteboard.general.string = copied
+        } label: {
+          Label("Copy Value", systemImage: "doc.on.doc")
+        }
+        Button {
+          paste()
+        } label: {
+          Label("Paste Value", systemImage: "doc.on.clipboard")
+        }
+        .disabled(!node.enabled || !UIPasteboard.general.hasStrings)
+      }
+    }
     if let lock = model.attached(node, .lock) {
       let locked = model.bool(lock)
       Button {
@@ -375,6 +412,21 @@ struct ControlActions: View {
     }
   }
 
+  /** Paste: a number as if typed into the field, so its unit and the locale's decimals parse. */
+  private func paste() {
+    guard let text = UIPasteboard.general.string else { return }
+    if let number = node.number {
+      guard let value = number.parse(text) else {
+        ShellModel.current?.messages.say("The copied text is not a number", level: "warning")
+        return
+      }
+      model.set(node, .float(number.clamp(number.integer ? value.rounded() : value)))
+    }
+    else {
+      model.set(node, .text(text))
+    }
+  }
+
   private func entry(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
     Button(action: action) {
       Label {
@@ -389,7 +441,7 @@ struct ControlActions: View {
 extension View {
   @ViewBuilder
   func controlActions(_ model: PanelsModel, _ node: NativeNode, component: Bool = false) -> some View {
-    if node.node.animatable || model.attached(node, .lock) != nil {
+    if ControlActions.offered(model, node) {
       self.contextMenu { ControlActions(model: model, node: node, component: component) }
     }
     else {

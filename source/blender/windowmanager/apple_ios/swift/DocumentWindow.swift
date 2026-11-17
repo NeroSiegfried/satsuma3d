@@ -29,10 +29,6 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
   private let pencilMenu: PencilMenu?
   private let pencilSource: GHOSTIOSPencilMenuDelegate
   private var stateTimer: Timer?
-  private var contextMenu: UIEditMenuInteraction?
-  /** One of Blender's menus, shown in place of its own popup where the pointer is: the context
-   * menu a right-click opens, Shift-A's Add menu, a pie, as on a Mac. */
-  private var blenderMenu: UIMenu?
   private var menuBarItems: NSArray = []
   private var menuBarRequested = false
   /** What Blender asks to show where the pointer is, in place of its own popup: from its `popup`
@@ -103,6 +99,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
                                            object: nil)
     shell.pullViews()
     NativeViews.shared.checkViews()
+    ShellSnapshots.start()
     SoakProbe.start(model: model, shell: shell)
     model.refreshWindowState()
     /* Snapshots arrive by notification. Whether the viewport has drawn is read from the
@@ -239,11 +236,8 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
 }
 
 /* Holding a finger on the viewport opens Blender's context menu there. */
-extension DocumentController: UIEditMenuInteractionDelegate, UIGestureRecognizerDelegate {
+extension DocumentController: UIGestureRecognizerDelegate {
   private func installContextMenu() {
-    let interaction = UIEditMenuInteraction(delegate: self)
-    metalView.addInteraction(interaction)
-    contextMenu = interaction
     /* A mouse or trackpad's secondary click goes to Blender, as on a Mac: its key-map opens the
      * context menu, which shows natively, see #pullMenuPopup. */
     let press = UILongPressGestureRecognizer(target: self, action: #selector(contextMenuPress(_:)))
@@ -280,7 +274,7 @@ extension DocumentController: UIEditMenuInteractionDelegate, UIGestureRecognizer
         NativeViews.shared.send(popupView, target: "choice", value: .text(value))
       }
       if request.sections.contains(where: { !$0.heading.isEmpty }) {
-        /* Its headings would be lost on an edit menu's strip. */
+        /* A long list with headings: a popover keeps them, at the same place a menu would be. */
         var top: UIViewController = self
         while let presented = top.presentedViewController { top = presented }
         weak var list: UIViewController?
@@ -289,55 +283,44 @@ extension DocumentController: UIEditMenuInteractionDelegate, UIGestureRecognizer
         host.modalPresentationStyle = .popover
         host.preferredContentSize = CGSize(width: 340, height: 520)
         host.popoverPresentationController?.sourceView = metalView
-        host.popoverPresentationController?.sourceRect = CGRect(origin: point, size: CGSize(width: 1, height: 1))
+        host.popoverPresentationController?.sourceRect = popupAnchor(point)
         top.present(host, animated: true)
       }
       else if let menu = BlenderMenus.enumMenu(request) {
-        blenderMenu = menu
-        contextMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+        ShellMenuPresenter.shared.present(menu, at: popupAnchor(point), in: metalView, kind: "choice " + request.title)
       }
       return
     }
     guard let menu = data("menu")?.value(type: Blender_NativeUI_TextValue.self)?.value else { return }
     Task { @MainActor in
       guard let items = await BlenderMenus.shared.fetch(BlenderMenus.route(menu)), !items.isEmpty else { return }
-      blenderMenu = BlenderMenus.uiMenu(items)
-      contextMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+      ShellMenuPresenter.shared.present(BlenderMenus.uiMenu(items), at: popupAnchor(point),
+                                        in: metalView, kind: "menu " + menu)
     }
   }
 
   @objc private func contextMenuPress(_ press: UILongPressGestureRecognizer) {
     /* Blender's own interface has its own context menus. */
     guard press.state == .began, !model.desktop else { return }
-    let configuration = UIEditMenuConfiguration(identifier: nil, sourcePoint: press.location(in: metalView))
-    contextMenu?.presentEditMenu(with: configuration)
+    let point = press.location(in: metalView)
+    let menu = wm_apple_ios_context_menu()
+    guard !menu.children.isEmpty else { return }
+    ShellMenuPresenter.shared.present(menu, at: CGRect(origin: point, size: CGSize(width: 1, height: 1)),
+                                      in: metalView, kind: "context menu")
+  }
+
+  /** Where a menu Blender pops up by itself is shown: at the control just tapped, which asked for
+   * it, or else where Blender's pointer is, in the viewport's points. */
+  private func popupAnchor(_ point: CGPoint) -> CGRect {
+    if let window = metalView.window, let tapped = ShellMenuPresenter.shared.recentTap() {
+      return metalView.convert(tapped, from: window.coordinateSpace)
+    }
+    return CGRect(origin: point, size: CGSize(width: 1, height: 1))
   }
 
   public func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
     /* Only a press or click that starts on the viewport itself, not on a control above it. */
     (touch.type == .direct || touch.type == .indirectPointer) && touch.view === metalView
-  }
-
-  public func editMenuInteraction(_ interaction: UIEditMenuInteraction,
-                                  menuFor configuration: UIEditMenuConfiguration,
-                                  suggestedActions: [UIMenuElement]) -> UIMenu?
-  {
-    if let blenderMenu { return blenderMenu }
-    let menu = wm_apple_ios_context_menu()
-    return menu.children.isEmpty ? nil : menu
-  }
-
-  public func editMenuInteraction(_ interaction: UIEditMenuInteraction,
-                                  willDismissMenuFor configuration: UIEditMenuConfiguration,
-                                  animator: any UIEditMenuInteractionAnimating)
-  {
-    blenderMenu = nil
-  }
-
-  public func editMenuInteraction(_ interaction: UIEditMenuInteraction,
-                                  targetRectFor configuration: UIEditMenuConfiguration) -> CGRect
-  {
-    CGRect(origin: configuration.sourcePoint, size: CGSize(width: 1, height: 1))
   }
 }
 

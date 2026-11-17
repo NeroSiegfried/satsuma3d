@@ -216,6 +216,9 @@ final class ShellModel {
   }
   var canUndo: Bool { node("undo")?.enabled ?? false }
   var canRedo: Bool { node("redo")?.enabled ?? false }
+  /** Repeat Last can run, and what it would repeat: "Repeat Extrude". */
+  var canRepeat: Bool { node("repeat")?.enabled ?? false }
+  var repeatTitle: String { node("repeat")?.label ?? "Repeat Last" }
   /** The text object being typed into: its style where the cursor is, alignment and font file. */
   var textObject: TextObjectStyle? {
     guard node("text") != nil else { return nil }

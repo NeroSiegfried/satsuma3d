@@ -48,6 +48,8 @@ struct QuickAction: Identifiable, Equatable {
   let key: String
   let icon: String
   let selected: Bool
+  /** The Blender menu it opens, such as `VIEW3D_MT_mirror`: shown as a menu at the item. */
+  var menu = ""
 
   var axis: Bool { ["X", "Y", "Z"].contains(key) }
 
@@ -55,10 +57,19 @@ struct QuickAction: Identifiable, Equatable {
   static func list(_ nodes: [NativeNode]) -> [QuickAction] {
     nodes.compactMap { node in
       guard let button = node.content(Blender_NativeUI_Button.self), !node.label.isEmpty else { return nil }
-      return QuickAction(id: node.key, title: node.label, operatorName: button.operator_ ?? "",
-                         key: button.key ?? "", icon: node.icon ?? "", selected: button.pressed)
+      let operatorName = button.operator_ ?? ""
+      var menu = ""
+      if operatorName == "WM_OT_call_menu" {
+        menu = (0..<button.paramsCount).compactMap { button.params(at: $0) }
+          .first { $0.key == "name" }?.value(type: Blender_NativeUI_TextValue.self)?.value ?? ""
+      }
+      return QuickAction(id: node.key, title: node.label, operatorName: operatorName,
+                         key: button.key ?? "", icon: node.icon ?? "", selected: button.pressed, menu: menu)
     }
   }
+
+  /** Its menu's route, for `BlenderMenuItems`. */
+  @MainActor var menuRoute: String { BlenderMenus.route(menu) }
 
   var image: UIImage? {
     if key == "RET" { return UIImage(systemName: "checkmark") }
@@ -175,7 +186,42 @@ struct QuickActionBarItem: View {
   /** Shown as its icon, where it has one: axis keys and actions without one keep their text. */
   private var image: UIImage? { action.axis ? nil : action.image }
 
+  /** The item's face, the same whether it runs or opens a menu. */
+  private var face: some View {
+    label
+      .padding(.horizontal, action.axis ? 12 : (image != nil ? 10 : 14))
+      .frame(height: ShellMetrics.barCircle)
+      .frame(minWidth: action.axis ? 52 : (image != nil ? ShellMetrics.barCircle : nil))
+      .background {
+        if action.selected {
+          Capsule().fill(action.axis ? action.axisColor : Color(uiColor: .systemBlue))
+        }
+      }
+      .contentShape(Capsule())
+  }
+
   var body: some View {
+    if action.menu.isEmpty {
+      runningItem
+    }
+    else {
+      /* A menu, as every menu of the shell: the system's list at the item, its title on top,
+       * which names it as a hold would. */
+      Menu {
+        Section(action.title) { BlenderMenuItems(route: action.menuRoute) }
+      } label: {
+        face
+      }
+      .menuStyle(.button)
+      .buttonStyle(QuickActionPressStyle(shape: Capsule()))
+      .prefetchingBlenderMenu(action.menuRoute)
+      .help(action.title)
+      .accessibilityLabel(action.title)
+      .accessibilityIdentifier("blender.action.\(action.id.dropFirst("action:".count))")
+    }
+  }
+
+  private var runningItem: some View {
     Button {
       if heldToName {
         heldToName = false
@@ -183,18 +229,11 @@ struct QuickActionBarItem: View {
       }
       action.run(in: model)
     } label: {
-      label
-        .padding(.horizontal, action.axis ? 12 : (image != nil ? 10 : 14))
-        .frame(height: ShellMetrics.barCircle)
-        .frame(minWidth: action.axis ? 52 : (image != nil ? ShellMetrics.barCircle : nil))
-        .background {
-          if action.selected {
-            Capsule().fill(action.axis ? action.axisColor : Color(uiColor: .systemBlue))
-          }
-        }
-        .contentShape(Capsule())
+      face
     }
     .buttonStyle(QuickActionPressStyle(shape: Capsule()))
+    /* A menu Blender opens for it, such as Merge's choices, opens beside it. */
+    .anchorsMenus()
     /* A hold names it, in a popover the bar's scrolling cannot clip; lifting the finger ends it. */
     .simultaneousGesture(
       LongPressGesture(minimumDuration: 0.4, maximumDistance: 12)

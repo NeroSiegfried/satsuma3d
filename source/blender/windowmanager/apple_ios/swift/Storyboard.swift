@@ -1596,20 +1596,14 @@ private struct EnclosingScrollView: UIViewRepresentable {
 
 /** \} */
 
-/** Shows the system's edit menu over its view each time `request` changes, as a selected item
- * does when tapped again. */
+/** Shows the system's menu over its view each time `request` changes, as a selected item does
+ * when tapped again; see #ShellMenuPresenter. */
 private struct EditMenuHost: UIViewRepresentable {
   let request: Int
   let menu: () -> UIMenu
 
-  final class Coordinator: NSObject, UIEditMenuInteractionDelegate {
-    var menu: () -> UIMenu = { UIMenu(children: []) }
+  final class Coordinator {
     var shown = 0
-
-    func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration,
-                             suggestedActions: [UIMenuElement]) -> UIMenu? {
-      menu()
-    }
   }
 
   func makeCoordinator() -> Coordinator { Coordinator() }
@@ -1617,17 +1611,16 @@ private struct EditMenuHost: UIViewRepresentable {
   func makeUIView(context: Context) -> UIView {
     let view = UIView()
     view.isUserInteractionEnabled = false
-    view.addInteraction(UIEditMenuInteraction(delegate: context.coordinator))
     context.coordinator.shown = request
     return view
   }
 
   func updateUIView(_ view: UIView, context: Context) {
-    context.coordinator.menu = menu
     guard request != context.coordinator.shown, request > 0 else { return }
     context.coordinator.shown = request
-    guard let interaction = view.interactions.compactMap({ $0 as? UIEditMenuInteraction }).first else { return }
-    let point = CGPoint(x: view.bounds.midX, y: view.bounds.minY)
-    interaction.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+    /* This view takes no touches, so the menu is shown from the window, over it. */
+    guard let window = view.window else { return }
+    ShellMenuPresenter.shared.present(menu(), at: window.convert(view.bounds, from: view), in: window,
+                                      kind: "storyboard")
   }
 }

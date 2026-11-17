@@ -92,6 +92,30 @@ struct MeshElemGizmo3D {
   EditMesh_PreSelElem *psel;
 };
 
+/**
+ * Whether the base a highlight was found on is still in the view layer. The bases are cached
+ * between pointer moves, and undo, adding or deleting an object rebuilds them: drawing from a
+ * freed base crashed (seen on the iPad, after undo and a select-mode change).
+ */
+static bool gizmo_preselect_base_valid(const bContext *C, Span<Base *> bases, const int index)
+{
+  if (index < 0 || index >= bases.size()) {
+    return false;
+  }
+  Scene *scene = CTX_data_scene(C);
+  ViewLayer *view_layer = CTX_data_view_layer(C);
+  if (scene == nullptr || view_layer == nullptr) {
+    return false;
+  }
+  BKE_view_layer_synced_ensure(scene, view_layer);
+  for (Base *base = (Base *)BKE_view_layer_object_bases_get(view_layer)->first; base; base = base->next) {
+    if (base == bases[index]) {
+      return base->object != nullptr && BKE_editmesh_from_object(base->object) != nullptr;
+    }
+  }
+  return false;
+}
+
 static void gizmo_preselect_elem_draw(const bContext *C, wmGizmo *gz)
 {
   if (!gizmo_preselect_poll_for_draw(C, gz)) {
@@ -100,6 +124,11 @@ static void gizmo_preselect_elem_draw(const bContext *C, wmGizmo *gz)
 
   MeshElemGizmo3D *gz_ele = reinterpret_cast<MeshElemGizmo3D *>(gz);
   if (gz_ele->base_index != -1) {
+    if (!gizmo_preselect_base_valid(C, gz_ele->bases, gz_ele->base_index)) {
+      gz_ele->base_index = -1;
+      gz_ele->bases.clear();
+      return;
+    }
     Object *ob = gz_ele->bases[gz_ele->base_index]->object;
     EDBM_preselect_elem_draw(gz_ele->psel, ob->object_to_world().ptr());
   }
@@ -337,6 +366,11 @@ static void gizmo_preselect_edgering_draw(const bContext *C, wmGizmo *gz)
 
   MeshEdgeRingGizmo3D *gz_ring = reinterpret_cast<MeshEdgeRingGizmo3D *>(gz);
   if (gz_ring->base_index != -1) {
+    if (!gizmo_preselect_base_valid(C, gz_ring->bases, gz_ring->base_index)) {
+      gz_ring->base_index = -1;
+      gz_ring->bases.clear();
+      return;
+    }
     Object *ob = gz_ring->bases[gz_ring->base_index]->object;
     EDBM_preselect_edgering_draw(gz_ring->psel, ob->object_to_world().ptr());
   }

@@ -137,7 +137,7 @@ bpy.ops.object.select_all(action='DESELECT')
 cube.select_set(True)
 bpy.context.view_layer.objects.active = cube
 menu = actions.long_press(bpy.context, "builtin.move")
-check([item["title"] for item in menu["fixed"]] == ["Copy", "Paste", "Duplicate", "Rename", "Delete"],
+check([item["title"] for item in menu["fixed"]] == ["Copy Objects", "Paste Objects", "Duplicate", "Rename", "Delete"],
       "Long press leads with Copy, Paste, Duplicate, Rename, Delete: " + str(menu["fixed"]))
 check(len(menu["actions"]) <= actions.LONG_PRESS_ACTIONS and
       not {item["title"] for item in menu["actions"]} & {"Duplicate", "Delete"},
@@ -185,14 +185,14 @@ def seed(strip):
 
 
 vertex = titles("builtin.move")
-check(seed(vertex) == ["Subdivide", "Connect", "Merge", "Bevel Vertices", "Make Edge/Face", "Dissolve", "Mirror", "Delete"],
+check(seed(vertex) == ["Subdivide", "Connect", "Merge", "Bevel Vertices", "Make Edge/Face", "Dissolve", "Mirror", "Duplicate", "Copy", "Delete"],
       "The vertex strip is the seed: " + str(vertex))
 check("mesh.rip" in palette_items("builtin.move") and palette_items("builtin.move")["mesh.rip"]["tool"] ==
       "builtin.rip_region", "Rip activates its tool from the palette")
 
 bpy.context.tool_settings.mesh_select_mode = (False, True, False)
 edge = titles("builtin.move")
-check(seed(edge) == ["Subdivide", "Bevel", "Loop Cut", "Bridge Loops", "Dissolve", "Mirror", "Delete"],
+check(seed(edge) == ["Subdivide", "Bevel", "Loop Cut", "Bridge Loops", "Dissolve", "Mirror", "Duplicate", "Copy", "Delete"],
       "The edge strip is the seed: " + str(edge))
 items = palette_items("builtin.move")
 check("mesh.loop_select" in items and "mesh.ring_select" in items and "mesh.mark_seam" in items,
@@ -200,12 +200,12 @@ check("mesh.loop_select" in items and "mesh.ring_select" in items and "mesh.mark
 
 bpy.context.tool_settings.mesh_select_mode = (False, False, True)
 face = titles("builtin.move")
-check(seed(face) == ["Subdivide", "Inset", "Bevel", "Separate", "Dissolve", "Mirror", "Delete"],
+check(seed(face) == ["Subdivide", "Inset", "Bevel", "Separate", "Dissolve", "Mirror", "Duplicate", "Copy", "Delete"],
       "The face strip is the seed: " + str(face))
 groups = [group["group"] for group in palette("builtin.move")]
 check("Normals & Shading" in groups and "Vertex" not in groups, "The face palette: " + str(groups))
 menu = actions.long_press(bpy.context, "builtin.move")
-check([item["title"] for item in menu["fixed"]] == ["Duplicate", "Delete"] and
+check([item["title"] for item in menu["fixed"]] == ["Copy", "Paste", "Duplicate", "Delete"] and
       menu["more"] == "VIEW3D_MT_edit_mesh_context_menu", "Edit Mesh long press: " + str(menu))
 
 mesh = bmesh.from_edit_mesh(cube.data)
@@ -255,4 +255,41 @@ bpy.ops.object.mode_set(mode='POSE')
 bpy.context.object.pose.bones[0].select = True
 check(applies('object.keyframe'), "Pose Mode offers the first keyframe before an action exists")
 check("Clear Transforms" in titles(), "Pose Mode offers pose actions")
+
+# Desktop staples bound to keys: what Ctrl+C, Ctrl+V, Ctrl+X, Shift+D and Shift+R run in the 3D
+# View's keymaps is a registry action, or an exception says why not.
+import sys
+sys.path.append(str(Path(__file__).resolve().parents[2] / 'scripts/presets/keyconfig/keymap_data'))
+import blender_default
+STAPLES = {("C", "ctrl"): "Ctrl+C", ("V", "ctrl"): "Ctrl+V", ("X", "ctrl"): "Ctrl+X",
+           ("D", "shift"): "Shift+D", ("R", "shift"): "Shift+R"}
+KEYMAPS = ("Screen", "3D View", "Object Mode", "Mesh", "Curve", "Armature", "Pose", "Grease Pencil Edit Mode")
+EXCEPTIONS = {
+    "Mesh Ctrl+V": "opens the Vertex menu, which the context menu and Search reach",
+    "Mesh Ctrl+X": "Dissolve by select mode: the strip's Dissolve",
+    "Curve Ctrl+X": "Dissolve Vertices: in the Delete menu",
+    "Armature Ctrl+X": "Dissolve: in the Delete menu",
+    "Grease Pencil Edit Mode Ctrl+X": "Dissolve: in the Delete menu",
+}
+registered = {action.op for action in actions.ACTIONS}
+table = []
+for name, _space, data in blender_default.generate_keymaps():
+    if name not in KEYMAPS:
+        continue
+    for idname, event, _props in data["items"]:
+        if not isinstance(event, dict):
+            continue
+        for (key, modifier), label in STAPLES.items():
+            others = [m for m in ("ctrl", "shift", "alt", "oskey") if m != modifier and event.get(m)]
+            if event.get("type") != key or not event.get(modifier) or others or event.get("value") != 'PRESS':
+                continue
+            where = name + " " + label
+            if where in EXCEPTIONS:
+                table.append((where, idname, "exception: " + EXCEPTIONS[where]))
+                continue
+            check(idname in registered, where + " (" + idname + ") is a registry action")
+            table.append((where, idname, "action"))
+for row in table:
+    print("staple: {:<24} {:<32} {}".format(*row))
+check(any(row[1] == "screen.repeat_last" for row in table), "Shift+R was found in the keymaps")
 print('PASS: native context actions ' + json.dumps(checks))

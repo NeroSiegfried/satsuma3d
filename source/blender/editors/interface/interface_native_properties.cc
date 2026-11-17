@@ -1668,12 +1668,15 @@ class Writer {
       });
     }
     else if (ELEM(type, PROP_INT, PROP_FLOAT)) {
-      double value, min, max;
+      double value, min, max, fallback;
       if (type == PROP_INT) {
         int minimum, maximum;
         RNA_property_int_range(ptr, prop, &minimum, &maximum);
         value = array ? RNA_property_int_get_index(ptr, prop, index) :
                         RNA_property_int_get(ptr, prop);
+        /* What Reset to Default Value gives, as Backspace over it does. */
+        fallback = array ? RNA_property_int_get_default_index(ptr, prop, index) :
+                           RNA_property_int_get_default(ptr, prop);
         min = minimum;
         max = maximum;
       }
@@ -1682,6 +1685,8 @@ class Writer {
         RNA_property_float_range(ptr, prop, &minimum, &maximum);
         value = array ? RNA_property_float_get_index(ptr, prop, index) :
                         RNA_property_float_get(ptr, prop);
+        fallback = array ? RNA_property_float_get_default_index(ptr, prop, index) :
+                           RNA_property_float_get_default(ptr, prop);
         min = minimum;
         max = maximum;
       }
@@ -1711,7 +1716,9 @@ class Writer {
             !slider                                         ? protocol::Scale::Linear :
             scale == PROP_SCALE_LOG && but.softmin > 0      ? protocol::Scale::Logarithmic :
             scale == PROP_SCALE_CUBIC                       ? protocol::Scale::Cubic :
-                                                              protocol::Scale::Linear);
+                                                              protocol::Scale::Linear,
+            0,
+            std::isfinite(fallback) ? fallback : 0.0);
       });
     }
     else if (type == PROP_STRING) {

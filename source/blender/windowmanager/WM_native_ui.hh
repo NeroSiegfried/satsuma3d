@@ -78,6 +78,11 @@ void WM_native_ui_notice(int level, const char *text, const char *button = "");
  * interface shows, or with `PLATYPUS_SESSION_LOG` in the environment.
  */
 void WM_native_ui_session_log(const char *kind, const char *text);
+/** Write what the session's log holds: at once with \a force, as the app goes to the background
+ * or ends, otherwise only when it last wrote ten seconds ago. */
+void WM_native_ui_session_log_flush(bool force);
+/** How many times the log was written, for tests. */
+int WM_native_ui_session_log_writes();
 /** An operator finished, see #wmNativeInterface::operator_finished. */
 void WM_native_ui_operator_finished(bContext *C, wmOperator *op);
 

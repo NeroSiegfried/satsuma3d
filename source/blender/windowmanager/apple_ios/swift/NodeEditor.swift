@@ -401,6 +401,7 @@ struct NodeEditorPanel: View {
       .font(.subheadline.weight(.medium))
       .lineLimit(1)
     }
+    .shellScrollEdge(.horizontal)
   }
 }
 
@@ -2732,43 +2733,20 @@ struct NodeAddSheet: View {
 
 /** \} */
 
-/** Shows a node's actions as the system's edit menu, above the node, as a selected object on a
- * canvas shows its own. */
+/** Shows a node's actions as the system's menu beside the node, as every menu of the shell is
+ * shown, see #ShellMenuPresenter. */
 @MainActor
-final class NodeMenuPresenter: NSObject, UIEditMenuInteractionDelegate {
+final class NodeMenuPresenter: NSObject {
   private weak var view: UIView?
-  private var interaction: UIEditMenuInteraction?
-  private var menu: UIMenu?
-  private var target: CGRect = .zero
 
   func attach(to view: UIView) {
-    guard self.view !== view else { return }
-    let interaction = UIEditMenuInteraction(delegate: self)
-    view.addInteraction(interaction)
     self.view = view
-    self.interaction = interaction
   }
 
   /** `around` is the node, in the canvas view's points. */
   func present(_ menu: UIMenu, around rect: CGRect) {
-    guard let interaction else { return }
-    self.menu = menu
-    target = rect
-    let configuration = UIEditMenuConfiguration(identifier: nil, sourcePoint: CGPoint(x: rect.midX, y: rect.minY))
-    configuration.preferredArrowDirection = .down
-    interaction.presentEditMenu(with: configuration)
-  }
-
-  func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration,
-                           suggestedActions: [UIMenuElement]) -> UIMenu?
-  {
-    menu
-  }
-
-  func editMenuInteraction(_ interaction: UIEditMenuInteraction,
-                           targetRectFor configuration: UIEditMenuConfiguration) -> CGRect
-  {
-    target
+    guard let view else { return }
+    ShellMenuPresenter.shared.present(menu, at: rect, in: view, kind: "node")
   }
 }
 

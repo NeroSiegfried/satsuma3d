@@ -469,3 +469,87 @@ final class SwiftMenus: NSObject {
     return item
   }
 }
+
+/* -------------------------------------------------------------------- */
+/** \name One way to show a menu
+ *
+ * Every list of choices is the system's vertical menu, at the thing that opened it. A SwiftUI
+ * `Menu` does that for its own button; this does it for menus Blender pops up by itself (a key,
+ * an add-on's `wm.call_menu`, an operator's choice) and for the viewport's hold: an invisible
+ * button moved to the anchor presents the menu as its own.
+ * \{ */
+
+@MainActor
+final class ShellMenuPresenter {
+  static let shared = ShellMenuPresenter()
+
+  /** A button that presents its menu and steps out of the way when it closes, so it never takes a
+   * touch meant for what is under it. */
+  private final class AnchorButton: UIButton {
+    override func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                         willEndFor configuration: UIContextMenuConfiguration,
+                                         animator: (any UIContextMenuInteractionAnimating)?)
+    {
+      super.contextMenuInteraction(interaction, willEndFor: configuration, animator: animator)
+      isUserInteractionEnabled = false
+    }
+  }
+
+  private lazy var button: AnchorButton = {
+    let button = AnchorButton(type: .custom)
+    button.showsMenuAsPrimaryAction = true
+    button.backgroundColor = .clear
+    button.isAccessibilityElement = false
+    button.isUserInteractionEnabled = false
+    return button
+  }()
+
+  /** The control tapped last, in the window's coordinates, and when. */
+  private var tapped: (frame: CGRect, at: Date)?
+
+  /** A control was tapped that may ask Blender for a menu: the menu opens beside it. */
+  func noteTap(_ frame: CGRect) {
+    tapped = (frame, Date())
+  }
+
+  /** The control tapped within the last second, which a menu arriving now belongs to. */
+  func recentTap() -> CGRect? {
+    guard let tapped, Date().timeIntervalSince(tapped.at) < 1 else { return nil }
+    return tapped.frame
+  }
+
+  /** Show \a menu as the system's menu at \a rect, in \a view's coordinates. */
+  func present(_ menu: UIMenu, at rect: CGRect, in view: UIView, kind: String) {
+    let button = self.button
+    if button.superview !== view {
+      button.removeFromSuperview()
+      view.addSubview(button)
+    }
+    button.frame = rect.width < 1 || rect.height < 1 ? rect.insetBy(dx: -0.5, dy: -0.5) : rect
+    button.menu = menu
+    view.bringSubviewToFront(button)
+    button.isUserInteractionEnabled = true
+    button.performPrimaryAction()
+    tapped = nil
+    WM_native_ui_log("menu", "\(kind) at \(Int(rect.midX)),\(Int(rect.midY))")
+  }
+}
+
+extension View {
+  /** Note this control's frame when tapped, so a menu Blender opens for it opens beside it. */
+  func anchorsMenus() -> some View {
+    modifier(MenuAnchorModifier())
+  }
+}
+
+private struct MenuAnchorModifier: ViewModifier {
+  @State private var frame = CGRect.zero
+
+  func body(content: Content) -> some View {
+    content
+      .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
+      .simultaneousGesture(TapGesture().onEnded { ShellMenuPresenter.shared.noteTap(frame) })
+  }
+}
+
+/** \} */

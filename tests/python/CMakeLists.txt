@@ -256,6 +256,21 @@ add_blender_test(
 )
 
 add_blender_test(
+  script_native_export
+  --python ${CMAKE_CURRENT_LIST_DIR}/bl_native_export.py
+)
+
+add_blender_test(
+  script_native_session_log
+  --python ${CMAKE_CURRENT_LIST_DIR}/bl_native_session_log.py
+)
+
+add_blender_test(
+  script_native_clipboard
+  --python ${CMAKE_CURRENT_LIST_DIR}/bl_native_clipboard.py
+)
+
+add_blender_test(
   script_bundled_modules
   --python ${CMAKE_CURRENT_LIST_DIR}/bl_bundled_modules.py -- --inside-blender
 )

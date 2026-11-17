@@ -14,6 +14,7 @@ _modules = [
     "native_actions",
     "native_addons",
     "native_brush",
+    "native_clipboard",
     "native_character",
     "native_intents",
     "native_panels",
@@ -138,6 +139,8 @@ def register():
     native_addons.register()
     from . import native_view_state
     native_view_state.register()
+    from . import native_clipboard
+    native_clipboard.register()
 
     from bpy.props import (
         EnumProperty,
@@ -202,6 +205,8 @@ def unregister():
     from bpy.utils import unregister_class
     from . import native_view_state
     native_view_state.unregister()
+    from . import native_clipboard
+    native_clipboard.unregister()
     for mod in reversed(_modules_loaded):
         for cls in reversed(mod.classes):
             if cls.is_registered:

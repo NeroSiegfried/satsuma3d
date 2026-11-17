@@ -957,14 +957,73 @@ extension View {
   }
 
   /** The edges of the shell's scrolling bars, one way for all of them: plain, as Blender's regions
-   * clip, or faded under glass; never the system's indicators. */
+   * clip, or faded under glass; never the system's indicators, which come and go. An end with more
+   * past it shows Blender's small arrow, as Blender's long menus do, until it is reached. */
   func shellScrollEdge(_ axes: Axis.Set) -> some View {
 #if os(visionOS)
     self.scrollIndicators(.hidden)
 #else
     self.scrollEdgeEffectStyle(ShellStyle.current == .glass ? .soft : .hard, for: axes == .horizontal ? .horizontal : .vertical)
       .scrollIndicators(.hidden)
+      .modifier(ScrollMoreMarks(horizontal: axes == .horizontal))
 #endif
+  }
+}
+
+/** Blender's arrow at each end of a bar that has more past it, over a short fade, see
+ * `shellScrollEdge`. It takes no touches. */
+private struct ScrollMoreMarks: ViewModifier {
+  let horizontal: Bool
+  @State private var before = false
+  @State private var after = false
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
+
+  func body(content: Content) -> some View {
+    content
+      .onScrollGeometryChange(for: [Bool].self) { geometry in
+        let offset = horizontal ? geometry.contentOffset.x + geometry.contentInsets.leading :
+          geometry.contentOffset.y + geometry.contentInsets.top
+        let length = horizontal ? geometry.contentSize.width : geometry.contentSize.height
+        let shown = horizontal ? geometry.containerSize.width - geometry.contentInsets.leading - geometry.contentInsets.trailing :
+          geometry.containerSize.height - geometry.contentInsets.top - geometry.contentInsets.bottom
+        return [offset > 4, offset + shown < length - 4]
+      } action: { _, ends in
+        withAnimation(.easeOut(duration: 0.15)) {
+          before = ends[0]
+          after = ends[1]
+        }
+      }
+      .overlay(alignment: horizontal ? .leading : .top) {
+        if before { mark(start: true).transition(.opacity) }
+      }
+      .overlay(alignment: horizontal ? .trailing : .bottom) {
+        if after { mark(start: false).transition(.opacity) }
+      }
+  }
+
+  private func mark(start: Bool) -> some View {
+    let icon = horizontal ? (start ? "TRIA_LEFT" : "TRIA_RIGHT") : (start ? "TRIA_UP" : "TRIA_DOWN")
+    let symbol = horizontal ? (start ? "chevron.left" : "chevron.right") : (start ? "chevron.up" : "chevron.down")
+    /* Blender's region fades under the arrow; glass softens its own edge. */
+    let surface = style == ShellStyle.glass.rawValue ? Color.clear : ShellStyle.region
+    return ZStack {
+      LinearGradient(colors: [surface, surface.opacity(0)],
+                     startPoint: horizontal ? (start ? .leading : .trailing) : (start ? .top : .bottom),
+                     endPoint: horizontal ? (start ? .trailing : .leading) : (start ? .bottom : .top))
+      Group {
+        if let image = BlenderIcon.image(icon) {
+          Image(uiImage: image).resizable().scaledToFit()
+        }
+        else {
+          Image(systemName: symbol).resizable().scaledToFit().fontWeight(.bold)
+        }
+      }
+      .frame(width: 10, height: 10)
+      .foregroundStyle(Color.primary.opacity(0.7))
+    }
+    .frame(width: horizontal ? 28 : nil, height: horizontal ? nil : 28)
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
   }
 }
 

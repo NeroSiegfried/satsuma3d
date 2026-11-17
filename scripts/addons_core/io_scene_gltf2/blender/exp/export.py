@@ -307,6 +307,9 @@ def __postprocess_with_gltfpack(export_settings):
         subprocess.run([gltfpack_binary_file_path] + options + parameters, check=True)
     except subprocess.CalledProcessError as _e:
         export_settings['log'].error("Calling gltfpack was not successful")
+    except (OSError, RuntimeError) as _e:
+        # Where programs cannot be started, as on iPadOS: the file is written without gltfpack.
+        export_settings['log'].error("gltfpack cannot run on this platform; exported without it")
 
 
 def __fix_json(obj, export_settings):
