@@ -595,14 +595,18 @@ struct DocumentToolbar: ToolbarContent {
             }
           }
         }
-        if MirrorToggles.available(model) {
-          Menu { MirrorToggles(model: model) } label: {
-            Label { Text("Mirror") } icon: { iconImage(BlenderIcon.image("MOD_MIRROR")) }
-          }
-        }
       }
       else if shell.panels.tools.hasToolSettings {
         Button("Tool Settings", systemImage: "slider.horizontal.3") { model.toolSettingsOpen = true }
+      }
+      /* Mirror, X-Axis Mirror or Symmetry, in every mode whose header has it, whatever the tool. */
+      if MirrorToggles.available(model) {
+        Menu { MirrorToggles(model: model) } label: {
+          Label { Text(model.transformSettings["mirror_label"] ?? "Mirror") } icon: {
+            iconImage(BlenderIcon.image("MOD_MIRROR"))
+          }
+        }
+        .accessibilityIdentifier("blender.setting.Mirror")
       }
     }
     Menu { fileMenu } label: { Label("File", systemImage: "doc") }
@@ -799,18 +803,9 @@ struct ToolSettingsTransformItems: View {
         .accessibilityValue(selected?.title ?? "")
         .accessibilityIdentifier("blender.setting.\(setting.title)")
       }
-      if hasMirror {
-        Menu { mirrorToggles } label: {
-          Label { Text("Mirror") } icon: { iconImage(BlenderIcon.image("MOD_MIRROR")) }
-        }
-        .accessibilityIdentifier("blender.setting.Mirror")
-      }
     }
   }
 
-  private var hasMirror: Bool { MirrorToggles.available(model) }
-
-  private var mirrorToggles: some View { MirrorToggles(model: model) }
 }
 
 /** The mode's mirror axes, as Blender's header has them in a popover; none outside modes that
@@ -857,5 +852,48 @@ struct EditorMenus: View {
     }
     .fixedSize()
     .prefetchingBlenderMenu(Self.route)
+  }
+}
+
+/** The mode's mirror axes inline, as Blender's header has them: the butterfly, its name, and a
+ * toggle button for each axis; Topology Mirror where the mode has it. */
+struct MirrorInline: View {
+  @Bindable var model: ShellModel
+
+  var body: some View {
+    let axes = Array(model.transformSettings["mirror_axes"] ?? "")
+    let on = model.transformSettings["mirror"] ?? ""
+    let label = model.transformSettings["mirror_label"] ?? "Mirror"
+    HStack(spacing: 4) {
+      iconImage(BlenderIcon.image("MOD_MIRROR"))
+      Text(label)
+        .font(.subheadline)
+      ForEach(axes, id: \.self) { axis in
+        let selected = on.contains(axis)
+        Button {
+          let next = axes.filter { $0 == axis ? !selected : on.contains($0) }
+          model.send("mirror", .set_, .text(next.map(String.init).joined(separator: ",")))
+        } label: {
+          Text(axis.uppercased())
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(selected ? Color.white : Color.primary)
+            .frame(minWidth: 30, minHeight: 30)
+            .background(selected ? ShellStyle.selection : ShellStyle.widget,
+                        in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(label) \(axis.uppercased())")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+      }
+      if let topology = model.transformSettings["mirror_topology"] {
+        Toggle("Topology", isOn: Binding(get: { topology == "on" },
+                                         set: { model.send("mirror_topology", .set_, .bool($0)) }))
+          .toggleStyle(BlenderCheckboxStyle())
+          .font(.subheadline)
+      }
+    }
+    .accessibilityElement(children: .contain)
+    .accessibilityIdentifier("blender.setting.Mirror")
   }
 }

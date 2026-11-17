@@ -934,6 +934,8 @@ struct BridgeMirror {
   const char *letters;
   /** The mesh, for Topology Mirror, in Edit Mode only. */
   std::optional<PointerRNA> topology;
+  /** What Blender's header calls it in the mode. */
+  const char *label = "Mirror";
 };
 
 static std::optional<BridgeMirror> bridge_mirror(Object *ob, const eContextObjectMode mode)
@@ -948,16 +950,45 @@ static std::optional<BridgeMirror> bridge_mirror(Object *ob, const eContextObjec
                        "xyz",
                        RNA_id_pointer_create(static_cast<ID *>(ob->data))};
     case CTX_MODE_EDIT_ARMATURE:
-      return BridgeMirror{
-          RNA_id_pointer_create(static_cast<ID *>(ob->data)), "use_mirror_", "x", std::nullopt};
+      return BridgeMirror{RNA_id_pointer_create(static_cast<ID *>(ob->data)),
+                          "use_mirror_",
+                          "x",
+                          std::nullopt,
+                          "X-Axis Mirror"};
     case CTX_MODE_POSE:
       if (ob->pose == nullptr) {
         return std::nullopt;
       }
       return BridgeMirror{RNA_pointer_create_discrete(&ob->id, RNA_Pose, ob->pose),
-                       "use_mirror_",
-                       "x",
-                       std::nullopt};
+                          "use_mirror_",
+                          "x",
+                          std::nullopt,
+                          "X-Axis Mirror"};
+    /* Painting and sculpting mirror across the mesh's own axes, as their headers' Symmetry. */
+    case CTX_MODE_SCULPT:
+    case CTX_MODE_PAINT_WEIGHT:
+    case CTX_MODE_PAINT_VERTEX:
+    case CTX_MODE_PAINT_TEXTURE:
+      if (ob->type != OB_MESH) {
+        return std::nullopt;
+      }
+      return BridgeMirror{RNA_id_pointer_create(static_cast<ID *>(ob->data)),
+                          "use_mirror_",
+                          "xyz",
+                          mode == CTX_MODE_PAINT_WEIGHT ?
+                              std::optional<PointerRNA>(
+                                  RNA_id_pointer_create(static_cast<ID *>(ob->data))) :
+                              std::nullopt,
+                          "Symmetry"};
+    case CTX_MODE_SCULPT_CURVES:
+      if (ob->type != OB_CURVES) {
+        return std::nullopt;
+      }
+      return BridgeMirror{RNA_id_pointer_create(static_cast<ID *>(ob->data)),
+                          "use_mirror_",
+                          "xyz",
+                          std::nullopt,
+                          "Symmetry"};
     default:
       return std::nullopt;
   }
@@ -2441,7 +2472,7 @@ void bridge_transform_build(const Scene *scene,
   }
   /* The axes there are, and which of them mirror, separated by commas. */
   builder.add(top, "mirror", [&](ViewBuffer &buffer, NodeFields &fields) {
-    fields.label = IFACE_("Mirror");
+    fields.label = IFACE_(mirror->label);
     OptionOffsets options;
     std::string value;
     for (const char *axis = mirror->letters; *axis; axis++) {

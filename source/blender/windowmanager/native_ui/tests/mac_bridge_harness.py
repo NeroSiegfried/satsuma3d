@@ -392,4 +392,47 @@ def tick_menus():
     return 0.25
 
 
-bpy.app.timers.register({"tabs": tick_tabs, "menus": tick_menus}.get(SCENARIO, tick_actions), first_interval=1.0)
+# The mirror or symmetry axes in every mode whose header has them, as Blender names them there.
+MIRROR_MODES = ("EDIT", "SCULPT", "WEIGHT_PAINT", "VERTEX_PAINT", "TEXTURE_PAINT", "ARMATURE_EDIT", "POSE")
+
+
+def tick_mirror():
+    global step
+    try:
+        pump()
+        step += 1
+        if step == 1:
+            subs["toolbar"] = subscribe("toolbar")
+            bpy.ops.object.armature_add()
+            report["armature"] = bpy.context.object.name
+        index = (step - 2) // 4
+        if step >= 2 and (step - 2) % 4 == 0 and index < len(MIRROR_MODES):
+            mode = MIRROR_MODES[index]
+            if bpy.context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            name = report["armature"] if mode in {"ARMATURE_EDIT", "POSE"} else "Cube"
+            ob = bpy.data.objects[name]
+            bpy.ops.object.select_all(action='DESELECT')
+            ob.select_set(True)
+            bpy.context.view_layer.objects.active = ob
+            bpy.ops.object.mode_set(mode='EDIT' if mode == "ARMATURE_EDIT" else mode)
+        elif step >= 2 and (step - 2) % 4 == 3 and index < len(MIRROR_MODES):
+            top = tree(subs["toolbar"]) or {}
+            node = next((n for n in top.get("children", []) if n["key"] == "mirror"), None)
+            report["steps"].append({"name": MIRROR_MODES[index], "context": bpy.context.mode,
+                                    "mirror": node and {"label": node["label"], "options": node.get("options")}})
+            if index == len(MIRROR_MODES) - 1:
+                finish("done")
+                return None
+        if step > 60:
+            finish("timeout")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.25
+
+
+bpy.app.timers.register({"tabs": tick_tabs, "menus": tick_menus, "mirror": tick_mirror}.get(SCENARIO, tick_actions),
+                        first_interval=1.0)

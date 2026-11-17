@@ -22,7 +22,16 @@ struct ToolSettingsRow: View {
       model.mode == "pose"
   }
 
-  var hasContent: Bool { transformMode || shell.panels.tools.hasToolSettings }
+  private var mirror: Bool { MirrorToggles.available(model) }
+
+  var hasContent: Bool { transformMode || mirror || shell.panels.tools.hasToolSettings }
+
+  private var divider: some View {
+    Rectangle()
+      .fill(Color.primary.opacity(0.2))
+      .frame(width: 1, height: 22)
+      .padding(.horizontal, 4)
+  }
 
   var body: some View {
     if hasContent {
@@ -31,11 +40,13 @@ struct ToolSettingsRow: View {
           if transformMode {
             ToolSettingsTransformItems(model: model)
           }
-          if transformMode && shell.panels.tools.hasToolSettings {
-            Rectangle()
-              .fill(Color.primary.opacity(0.2))
-              .frame(width: 1, height: 22)
-              .padding(.horizontal, 4)
+          /* Mirror, X-Axis Mirror or Symmetry, in every mode whose header has it. */
+          if mirror {
+            if transformMode { divider }
+            MirrorInline(model: model)
+          }
+          if (transformMode || mirror) && shell.panels.tools.hasToolSettings {
+            divider
           }
           if shell.panels.tools.hasToolSettings {
             ToolSettingsItems(model: shell.panels.tools)

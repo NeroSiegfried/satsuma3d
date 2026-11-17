@@ -294,6 +294,7 @@ final class ShellModel {
     }
     if let mirror = node("mirror")?.choice {
       settings["mirror_axes"] = mirror.allOptions.compactMap(\.value).joined()
+      settings["mirror_label"] = node("mirror")?.label ?? "Mirror"
       settings["mirror"] = (mirror.value ?? "").replacingOccurrences(of: ",", with: "")
     }
     if let topology = node("mirror_topology")?.toggle {
