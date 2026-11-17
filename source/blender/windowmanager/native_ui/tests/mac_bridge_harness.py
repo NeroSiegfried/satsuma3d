@@ -22,7 +22,7 @@ SCENARIO = argv[2] if len(argv) > 2 else "actions"
 
 import flatbuffers  # noqa: E402
 from Blender.NativeUI import (  # noqa: E402
-    BoolValue, Button, ButtonStyle, Choice, Command, Commands, Content, Group, Node, Op, Param, Subscribe, TextValue,
+    BoolValue, Button, ButtonStyle, Choice, Command, Commands, Content, Data, Group, Node, Op, Param, Subscribe, TextValue,
     Toggle, Updates, Value,
 )
 
@@ -163,6 +163,14 @@ def decode_node(raw):
         choice.Init(table.Bytes, table.Pos)
         entry.update(value=s(choice.Value()),
                      options=[s(choice.Options(i).Value()) for i in range(choice.OptionsLength())])
+    elif node.ContentType() == Content.Content.Data:
+        table = node.Content()
+        data = Data.Data()
+        data.Init(table.Bytes, table.Pos)
+        if data.ValueType() == Value.Value.TextValue:
+            tv = TextValue.TextValue()
+            tv.Init(data.Value().Bytes, data.Value().Pos)
+            entry.update(value=s(tv.Value()))
     elif node.ContentType() == Content.Content.Toggle:
         table = node.Content()
         toggle = Toggle.Toggle()
@@ -485,5 +493,71 @@ def tick_mirror():
     return 0.25
 
 
-bpy.app.timers.register({"tabs": tick_tabs, "menus": tick_menus, "mirror": tick_mirror}.get(SCENARIO, tick_actions),
+# What the app shows after commands (ROUND5 Stage 2A, the reveal rules): each case runs an
+# operator as the shell would and reads the toolbar's `reveal` answer. The iPad interface installs
+# the after-command hook; here the test entry does.
+def _reveal_cases():
+    import bmesh  # noqa: F401
+    def objects(*names):
+        bpy.ops.object.mode_set(mode='OBJECT') if bpy.context.mode != 'OBJECT' else None
+        bpy.ops.object.select_all(action='DESELECT')
+        for name in names:
+            bpy.data.objects[name].select_set(True)
+        bpy.context.view_layer.objects.active = bpy.data.objects[names[-1]]
+    return [
+        ("modifier_add", lambda: (objects("Cube"), bpy.ops.object.modifier_add('EXEC_DEFAULT', True, type='SUBSURF'))),
+        ("constraint_add", lambda: (objects("Cube"), bpy.ops.object.constraint_add('EXEC_DEFAULT', True, type='COPY_LOCATION'))),
+        ("material_slot_add", lambda: (objects("Cube"), bpy.ops.object.material_slot_add('EXEC_DEFAULT', True))),
+        ("vertex_group_add", lambda: (objects("Cube"), bpy.ops.object.vertex_group_add('EXEC_DEFAULT', True))),
+        ("hide_view_set", lambda: (objects("Cube"), bpy.ops.object.hide_view_set('EXEC_DEFAULT', True))),
+        ("hide_view_clear", lambda: bpy.ops.object.hide_view_clear('EXEC_DEFAULT', True)),
+        ("parent_one_selected", lambda: (objects("Armature"), bpy.ops.object.parent_set('EXEC_DEFAULT', True, type='ARMATURE_AUTO'))),
+        ("parent_auto_weights", lambda: (objects("Cube", "Armature"), bpy.ops.object.parent_set('EXEC_DEFAULT', True, type='ARMATURE_AUTO'))),
+        ("light_add", lambda: bpy.ops.object.light_add('EXEC_DEFAULT', True, type='POINT')),
+        ("subdivide", lambda: (objects("Cube"), bpy.ops.object.mode_set(mode='EDIT'),
+                               bpy.ops.mesh.select_all(action='SELECT'),
+                               bpy.ops.mesh.subdivide('EXEC_DEFAULT', True))),
+    ]
+
+
+def tick_reveal():
+    global step
+    try:
+        pump()
+        step += 1
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            subs["toolbar"] = subscribe("toolbar")
+            bpy.ops.object.armature_add(location=(3, 0, 0))
+            report["cases"] = _reveal_cases()
+            report["case"] = 0
+            return 0.25
+        cases = report["cases"]
+        index = report["case"]
+        if step % 2 == 0 and index < len(cases):
+            cases[index][1]()
+        elif step % 2 == 1 and index < len(cases):
+            top = tree(subs["toolbar"]) or {}
+            node = next((n for n in top.get("children", []) if n["key"] == "reveal"), None)
+            answer = json.loads(node["value"]) if node and node.get("value") else {}
+            report["steps"].append({"name": cases[index][0],
+                                    **{k: answer.get(k) for k in ("operator", "show", "text", "level", "why")}})
+            report["case"] = index + 1
+        if report["case"] >= len(cases):
+            del report["cases"]
+            finish("done")
+            return None
+        if step > 80:
+            del report["cases"]
+            finish("timeout")
+            return None
+    except Exception:
+        report.pop("cases", None)
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.25
+
+
+bpy.app.timers.register({"tabs": tick_tabs, "reveal": tick_reveal, "menus": tick_menus, "mirror": tick_mirror}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

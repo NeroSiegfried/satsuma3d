@@ -4964,6 +4964,18 @@ static void bridge_reveal_after(bContext *C, wmOperator *op, const std::string &
 
 /** \} */
 
+/** For the Mac bridge harness: install the after-command hook the iPad interface installs, so
+ * what is shown after each command can be checked without a device. Only where no native
+ * interface is installed. */
+extern "C" void WM_native_ui_test_install_hooks()
+{
+  static wmNativeInterface hooks;
+  if (WM_native_interface() == nullptr) {
+    hooks.operator_finished = WM_native_ui_operator_finished;
+    WM_native_interface_set(&hooks);
+  }
+}
+
 void WM_native_ui_operator_finished(bContext *C, wmOperator *op)
 {
   /* What changes the document or is kept for redo: not the view moving many times a second, nor
