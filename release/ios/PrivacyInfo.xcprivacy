@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The iPad app's privacy manifest (ROUND5 8D), installed at the app's root. No tracking, no
+  tracking domains, no data collected. The accessed-API categories are those
+  `release/ios/required_reason_apis.py` finds in the built app; the reasons are Apple's codes
+  (see that script's header for the pages), each true of this app:
+
+  FileTimestamp  C617.1  files inside the app's container (preferences, autosaves, the session
+                         log, templates, temporary files)
+                 3B52.1  files and folders the person chose (documents opened from the browser,
+                         images and libraries next to them)
+  SystemBootTime 35F9.1  elapsed time between events in the app: timers, animation playback,
+                         double taps, render times
+  UserDefaults   CA92.1  the app's own settings, which only it reads
+
+  DiskSpace (statfs, fstatfs, in the main executable, through Python's os.statvfs) is not
+  declared: no reason Apple lists is true of this app yet. See ROUND5 8D in the report.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+				<string>3B52.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

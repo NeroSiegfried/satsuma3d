@@ -18,6 +18,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from required_reason_apis import MANIFEST, categories_used, declared, manifest_for
+
 
 def run(*args):
     return subprocess.check_output(args, text=True).strip()
@@ -77,6 +79,20 @@ def check_artwork(app):
             raise ValueError(f"The app's icon is Blender's ({key} names {name})")
 
 
+def write_privacy_manifest(framework, binary, app_reasons):
+    """Give \a framework a privacy manifest declaring the required reason APIs its \a binary uses,
+    with the app's reasons for each (ROUND5 8D). Apple wants one in every bundle whose binary uses
+    them; the app's own does not cover a framework's."""
+    used = categories_used(binary)
+    if not used:
+        return
+    missing = sorted(category for category in used if not app_reasons.get(category))
+    if missing:
+        raise ValueError(f'{binary.name} uses {", ".join(missing)}, which the app\'s {MANIFEST} '
+                         'gives no reason for')
+    (framework / MANIFEST).write_bytes(plistlib.dumps(manifest_for(used, app_reasons)))
+
+
 def _prepare(source, output, replacements):
     source, output = source.resolve(), output.resolve()
     if output.exists() or source == output or source in output.parents:
@@ -119,6 +135,7 @@ def _prepare(source, output, replacements):
                 canonical[real] = real
         aliases[path.name] = libraries[canonical[real]][0]
     check_artwork(source)
+    app_reasons = declared(source) or {}
     shutil.copytree(source, output, symlinks=True)
     frameworks = output / 'Frameworks'
     frameworks.mkdir(exist_ok=True)
@@ -147,6 +164,7 @@ def _prepare(source, output, replacements):
         }
         (framework / 'Info.plist').write_bytes(plistlib.dumps(metadata))
         run('xcrun', 'install_name_tool', '-id', f'@rpath/{name}.framework/{name}', str(binary))
+        write_privacy_manifest(framework, binary, app_reasons)
         binaries.append(binary)
         if real.suffix == '.so':
             # The dependency build's ABI tag may differ from embedded Python's

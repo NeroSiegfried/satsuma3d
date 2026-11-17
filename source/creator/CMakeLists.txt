@@ -2001,6 +2001,12 @@ elseif(APPLE)
     )
     target_sources(blender PRIVATE ${IOS_ICON_MANIFEST})
     set(allresources ${storyboards} ${IOS_ICON_MANIFEST} ${IOS_LAUNCHER_RESOURCES} ${IOS_LAUNCHER_METAL})
+    if(NOT APPLE_TARGET_VISIONOS)
+      # The privacy manifest, at the app's root (ROUND5 8D). Checked against the built app by
+      # `release/ios/required_reason_apis.py`.
+      list(APPEND allresources ${CMAKE_SOURCE_DIR}/release/ios/PrivacyInfo.xcprivacy)
+      target_sources(blender PRIVATE ${CMAKE_SOURCE_DIR}/release/ios/PrivacyInfo.xcprivacy)
+    endif()
     set_target_properties(blender PROPERTIES RESOURCE "${allresources}")
 
     add_custom_command(

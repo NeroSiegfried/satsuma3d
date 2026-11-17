@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "release" / "ios"))
 
 from archive_testflight import APP_ENTITLEMENTS, signing_entitlements
 from prepare_testflight import check_artwork, dependencies, macho_type, prepare
+from required_reason_apis import MANIFEST, manifest_for, scan
 
 
 class ArchiveEntitlementsTest(unittest.TestCase):
@@ -136,6 +137,47 @@ class TestFlightPackagingTest(unittest.TestCase):
             prepare(self.app, self.root / 'Rejected.app', {})
         self.assertFalse((self.root / 'Rejected.app').exists())
 
+    def manifest(self, app, **reasons):
+        (app / MANIFEST).write_bytes(plistlib.dumps(manifest_for(reasons, reasons)))
+
+    def test_required_reason_apis(self):
+        """ROUND5 8D: each binary's required reason APIs are found, and its manifest must declare them."""
+        library = self.lib / 'libClock.dylib'
+        self.compile('lib', '#include <mach/mach_time.h>\nunsigned long long clock_now(void) '
+                     '{ return mach_absolute_time(); }', '-dynamiclib', '-Wl,-install_name,@rpath/libClock.dylib',
+                     '-o', library)
+        self.compile('app', '#include <sys/stat.h>\nunsigned long long clock_now(void);\n'
+                     'int main(void) { struct stat s; return stat("x", &s) + (int)clock_now(); }',
+                     library, '-o', self.app / 'Test')
+        usage, problems = scan(self.app)
+        self.assertEqual(usage['NSPrivacyAccessedAPICategoryFileTimestamp'], {'Test': ['stat']})
+        self.assertEqual(usage['NSPrivacyAccessedAPICategorySystemBootTime'],
+                         {'Assets/lib/libClock.dylib': ['mach_absolute_time']})
+        self.assertEqual(len(problems), 2)  # No manifest at all.
+        self.manifest(self.app, NSPrivacyAccessedAPICategoryFileTimestamp=['C617.1'])
+        problems = scan(self.app)[1]
+        self.assertEqual(len(problems), 1)
+        self.assertIn('NSPrivacyAccessedAPICategorySystemBootTime', problems[0])
+        self.manifest(self.app, NSPrivacyAccessedAPICategoryFileTimestamp=['C617.1'],
+                      NSPrivacyAccessedAPICategorySystemBootTime=['XXXX.1'])
+        self.assertIn('needs reasons from', scan(self.app)[1][0])
+        self.manifest(self.app, NSPrivacyAccessedAPICategoryFileTimestamp=['C617.1'],
+                      NSPrivacyAccessedAPICategorySystemBootTime=['35F9.1'])
+        self.assertEqual(scan(self.app)[1], [])
+        # Packaged, the library is a framework with its own manifest, holding its subset.
+        output = self.root / 'Output.app'
+        prepare(self.app, output, {})
+        framework = output / 'Frameworks/Clock.framework'
+        manifest = plistlib.loads((framework / MANIFEST).read_bytes())
+        self.assertEqual([entry['NSPrivacyAccessedAPIType'] for entry in manifest['NSPrivacyAccessedAPITypes']],
+                         ['NSPrivacyAccessedAPICategorySystemBootTime'])
+        self.assertFalse(manifest['NSPrivacyTracking'])
+        self.assertEqual(scan(output)[1], [])
+        # A framework using an API the app gives no reason for stops packaging.
+        self.manifest(self.app, NSPrivacyAccessedAPICategoryFileTimestamp=['C617.1'])
+        with self.assertRaisesRegex(ValueError, 'gives no reason'):
+            prepare(self.app, self.root / 'Rejected.app', {})
+
 
 class IdentityTest(unittest.TestCase):
     """ROUND5 8A/8B: the iPad app's template names the configured identity and icon, not Blender's."""
@@ -161,6 +203,17 @@ class IdentityTest(unittest.TestCase):
         self.assertTrue((icon / 'icon.json').is_file())
         for layer in (icon / 'Assets').iterdir():
             self.assertNotIn('Blender', layer.name)
+
+    def test_privacy_manifest(self):
+        """ROUND5 8D: the app's manifest tracks nothing, collects nothing, and names only Apple's reasons."""
+        from required_reason_apis import REASONS
+        manifest = plistlib.loads((self.ROOT / 'release/ios/PrivacyInfo.xcprivacy').read_bytes())
+        self.assertIs(manifest['NSPrivacyTracking'], False)
+        self.assertEqual(manifest['NSPrivacyTrackingDomains'], [])
+        self.assertEqual(manifest['NSPrivacyCollectedDataTypes'], [])
+        for entry in manifest['NSPrivacyAccessedAPITypes']:
+            reasons = entry['NSPrivacyAccessedAPITypeReasons']
+            self.assertTrue(reasons and set(reasons) <= REASONS[entry['NSPrivacyAccessedAPIType']], entry)
 
     def test_installed_app(self):
         """The app Xcode last built, when there is one beside the checkout (`deploy_ipad.sh`'s)."""
