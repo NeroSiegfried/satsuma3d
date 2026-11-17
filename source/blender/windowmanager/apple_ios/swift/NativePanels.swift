@@ -666,6 +666,7 @@ struct PanelsForm: View {
     /* Blender's panels: boxes 8 points from the editor's edges and 6 apart (ROUND5 7B). */
     PanelColumn(spacing: 6) {
       let style = model.textStyle
+      let first = model.panels.first?.key
       ForEach(model.panels) { panel in
         if let style, panel.key == "panel:DATA_PT_font" {
           /* A text object's font, styles and spacing together; Blender's Font panel stays below
@@ -685,7 +686,7 @@ struct PanelsForm: View {
           EmptyView()
         }
         else {
-          PanelSection(model: model, panel: panel)
+          PanelSection(model: model, panel: panel, shadingHint: panel.key == first && model.mode == .properties)
         }
       }
       if !model.status.isEmpty {
@@ -767,6 +768,9 @@ struct PanelSection: View {
   var title: String?
   /** Its controls alone, without its header or box, as in a popover of its own. */
   var bare = false
+  /** The first panel of a Properties tab: it ends saying what the viewport's shading hides of
+   * the tab, see #ShadingHint. */
+  var shadingHint = false
   /** Another of the stack's panels dragged over this one, which takes its place. */
   @State private var dropping = false
 
@@ -797,7 +801,7 @@ struct PanelSection: View {
           /* The body slides out from under its header: the box clips it as its height animates,
            * so it never passes over the header or the panel above. */
           if expanded && !nodes.isEmpty {
-            PanelBody(model: model, panel: panel, overflow: overflow)
+            PanelBody(model: model, panel: panel, overflow: overflow, shadingHint: shadingHint)
               .padding(.horizontal, 8)
               .padding(.top, fixed ? 8 : 0)
               .padding(.bottom, 8)
@@ -923,15 +927,21 @@ struct PanelBody: View {
   let model: PanelsModel
   let panel: NativeNode
   var overflow: String? = nil
+  /** Ends saying what the viewport's shading hides of the tab, see #ShadingHint. */
+  var shadingHint = false
 
   var body: some View {
+    let nodes = model.body(of: panel)
+    /* Where a data-block is linked from joins its row, as Blender draws a material slot's Link. */
+    let reference = nodes.first { $0.kind == .reference }
+    let link = reference == nil ? nil : nodes.first { $0.role == .link }
     PanelColumn(spacing: 4, overflow: overflow) {
       /* A modifier's or constraint's name and the rest of where it applies, open. */
       let header = model.header(of: panel)
       if panel.kind == .panel, let name = header.first(where: { $0.role == .name }) {
         PanelStackOptions(model: model, name: name, toggles: PanelStackOptions.secondary(header))
       }
-      ForEach(Self.runs(model.body(of: panel)), id: \.first!.key) { run in
+      ForEach(Self.runs(nodes.filter { $0 !== link }), id: \.first!.key) { run in
         if run.count > 1 {
           /* Buttons side by side, as Assign, Select and Deselect: joined (ROUND5 7C). */
           NativeButtonRow(model: model, buttons: run)
@@ -939,11 +949,31 @@ struct PanelBody: View {
         else if run[0].kind == .panel {
           SubPanel(model: model, panel: run[0])
         }
+        else if run[0] === reference {
+          ControlRow(model: model, node: run[0], link: link)
+        }
         else {
           ControlRow(model: model, node: run[0])
+          if let note = Self.assignNote(model, run[0]) {
+            PanelNote(text: note)
+          }
         }
       }
+      if shadingHint, let shell = ShellModel.current,
+         let entry = ShadingHint.entry(tab: model.currentTab, shading: shell.shading)
+      {
+        ShadingHintRow(entry: entry)
+      }
     }
+  }
+
+  /** Under a material's slots outside Edit Mode, with more than one slot: where faces are given
+   * one (ROUND5 7D.5). In Edit Mode, Assign, Select and Deselect are under the slots. */
+  static func assignNote(_ model: PanelsModel, _ node: NativeNode) -> String? {
+    guard node.kind == .list, node.key.contains("active_material_index"),
+          model.children(of: node).filter({ $0.kind == .row }).count > 1,
+          let mode = ShellModel.current?.mode, !mode.contains("edit") else { return nil }
+    return "Assign to faces in Edit Mode."
   }
 
   /** The body's nodes, one to a row, but for buttons that follow one another with text of their
@@ -962,6 +992,45 @@ struct PanelBody: View {
       }
     }
     return runs
+  }
+}
+
+/** A line of explanation under a panel's rows, in the secondary colour with Blender's info icon. */
+struct PanelNote: View {
+  let text: String
+
+  var body: some View {
+    HStack(alignment: .firstTextBaseline, spacing: 6) {
+      IconView(name: "INFO", symbol: "info.circle", size: 14)
+        .foregroundStyle(.secondary)
+      Text(text)
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      Spacer(minLength: 0)
+    }
+    .padding(.vertical, 2)
+    .accessibilityElement(children: .combine)
+  }
+}
+
+/** What the viewport's shading hides of the tab, and the button that shows it (#ShadingHint). */
+struct ShadingHintRow: View {
+  let entry: ShadingHint.Entry
+
+  var body: some View {
+    PanelColumn(spacing: 4) {
+      PanelNote(text: entry.text)
+      Button {
+        ShadingHint.apply(entry)
+        Haptics.selection()
+      } label: {
+        BlenderWidgetFace(icon: BlenderIcon.image(entry.shading == "MATERIAL" ? "SHADING_TEXTURE" : "SHADING_RENDERED"),
+                          text: entry.button, on: false, fills: true)
+      }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("blender.shading-hint")
+    }
   }
 }
 

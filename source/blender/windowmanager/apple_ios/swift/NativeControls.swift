@@ -491,6 +491,8 @@ extension View {
 struct ControlRow: View {
   let model: PanelsModel
   let node: NativeNode
+  /** Where a data-block is linked from, drawn at the end of its row (`Role.link`). */
+  var link: NativeNode? = nil
 
   var body: some View {
     Group {
@@ -525,11 +527,9 @@ struct ControlRow: View {
           NativeRamp(model: model, node: node)
             .padding(.vertical, 6)
         case .reference:
-          ReferenceRow(model: model, node: node)
-            .padding(.vertical, 4)
+          ReferenceRow(model: model, node: node, link: link)
         case .list:
           NativeList(model: model, node: node)
-            .padding(.vertical, 4)
         case .row:
           ItemRowView(model: model, node: node)
             .padding(.vertical, 4)

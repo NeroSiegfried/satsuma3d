@@ -217,4 +217,22 @@ check(all(name not in controls for name in ('struct NativeVectorRow', 'struct Na
 check('NativeNumberField(model: model, node: node, widget: .alone)' in rows and 'BlenderVectorField(' in rows,
       "Numbers and vectors in Properties are Blender's fields (ROUND5 7C)")
 
+# 7D: a data-block and its slots as Blender has them. Lists are Blender's list box with its
+# buttons in a column at the side (the pill above the rows is gone); the ID row is Blender's
+# template_ID, with where it is linked from at its end (the bridge's `Link` role); the table of
+# what the viewport's shading hides is one place.
+lists = code['NativeLists.swift']
+check('struct NativeListToolbar' not in lists and 'NativeListSideColumn(' in lists,
+      "Lists keep their buttons in Blender's side column, not a pill above the rows (ROUND5 7D)")
+check('templateID' in lists and 'ReferenceLinkDropdown(' in lists and 'link: link' in code['NativeControls.swift'],
+      "The ID row is Blender's template_ID with the Link dropdown at its end (ROUND5 7D)")
+check('Link,' in (SWIFT.parents[1] / 'native_ui/protocol.fbs').read_text(encoding='utf-8') and
+      'protocol::Role::Link' in bridge,
+      "The bridge sends a material slot's link with the Link role (ROUND5 7D)")
+check(code['RevealCoordinator.swift'].count('enum ShadingHint') == 1 and
+      'VIEW3D_OT_toggle_shading' in (SWIFT / 'RevealCoordinator.swift').read_text(encoding='utf-8') and
+      not any('VIEW3D_OT_toggle_shading' in path.read_text(encoding='utf-8') for path in sources()
+              if path.name != 'RevealCoordinator.swift'),
+      "What the shading hides is one table beside RevealCoordinator (ROUND5 7D, decision 30)")
+
 print('PASS: native shell sources ' + json.dumps(checks))

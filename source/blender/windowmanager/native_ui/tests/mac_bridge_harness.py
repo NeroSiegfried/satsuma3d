@@ -22,8 +22,8 @@ SCENARIO = argv[2] if len(argv) > 2 else "actions"
 
 import flatbuffers  # noqa: E402
 from Blender.NativeUI import (  # noqa: E402
-    BoolValue, Button, ButtonStyle, Choice, Command, Commands, Content, Data, Group, Node, Number, Op, Param, Subscribe,
-    TextValue, Toggle, Updates, Value,
+    BoolValue, Button, ButtonStyle, Choice, Command, Commands, Content, Data, Group, Node, Number, Op, Param, Reference,
+    Subscribe, TextValue, Toggle, Updates, Value,
 )
 
 lib = ctypes.CDLL(None)
@@ -80,14 +80,14 @@ def subscribe(view, **params):
     return lib.WM_native_ui_subscribe(data, len(data))
 
 
-def invoke(subscription, target, command_id):
+def invoke(subscription, target, command_id, op=None):
     builder = flatbuffers.Builder(256)
     t = builder.CreateString(target)
     Command.Start(builder)
     Command.AddId(builder, command_id)
     Command.AddSubscription(builder, subscription)
     Command.AddTarget(builder, t)
-    Command.AddOp(builder, Op.Op.Invoke)
+    Command.AddOp(builder, Op.Op.Invoke if op is None else op)
     c = Command.End(builder)
     Commands.StartCommandsVector(builder, 1)
     builder.PrependUOffsetTRelative(c)
@@ -176,6 +176,14 @@ def decode_node(raw):
         number = Number.Number()
         number.Init(table.Bytes, table.Pos)
         entry.update(value=number.Value(), integer=bool(number.Integer()), precision=number.Precision())
+    elif node.ContentType() == Content.Content.Reference:
+        table = node.Content()
+        reference = Reference.Reference()
+        reference.Init(table.Bytes, table.Pos)
+        entry.update(name=s(reference.Name()), users=reference.Users(), can_new=reference.CanNew(),
+                     can_unlink=reference.CanUnlink(), can_single_user=reference.CanSingleUser(),
+                     can_fake_user=reference.CanFakeUser(), fake_user=reference.FakeUser(),
+                     choices=reference.OptionsLength())
     elif node.ContentType() == Content.Content.Toggle:
         table = node.Content()
         toggle = Toggle.Toggle()
@@ -709,5 +717,118 @@ def tick_knife():
     return 0.3
 
 
-bpy.app.timers.register({"tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror}.get(SCENARIO, tick_actions),
+# Materials as the Material tab makes them (ROUND5 7D): with no slots, New makes one slot holding one
+# material (C5); the slot's Link is sent with its role, can be set and reads back; the material's
+# reference lists its actions; in Edit Mode, Assign gives the selected faces the active slot.
+def _material_nodes():
+    top = tree(subs["MATERIAL"]) or {}
+    found = {}
+
+    def walk(node):
+        content, role = node.get("content"), node.get("role")
+        if content == "Reference" and node["key"].endswith("active_material"):
+            found["reference"] = node
+        elif content == "Choice" and node.get("property") == "link":
+            found["link"] = node
+        elif content == "List" and "active_material_index" in node["key"]:
+            found["list"] = node
+        elif content == "Button" and "material_slot_assign" in node["key"]:
+            found["assign"] = node
+        for child in node.get("children", []):
+            walk(child)
+    walk(top)
+    return found
+
+
+def tick_material():
+    global step
+    try:
+        pump()
+        step += 1
+        ob = bpy.data.objects["Cube"]
+        if step == 1:
+            enter("object")
+            while ob.material_slots:
+                bpy.ops.object.material_slot_remove()
+            report["materials_before"] = len(bpy.data.materials)
+            subs["MATERIAL"] = subscribe("properties", tab="MATERIAL", properties=True)
+        elif step == 4:
+            nodes = _material_nodes()
+            report["no_slots"] = {"rows": len(nodes.get("list", {}).get("children", [])),
+                                  "reference": nodes.get("reference", {}).get("key")}
+            # C5: New on the material's reference, as its ＋ New does.
+            invoke(subs["MATERIAL"], nodes["reference"]["key"], 31, op=Op.Op.Add)
+        elif step == 7:
+            nodes = _material_nodes()
+            reference = nodes.get("reference", {})
+            report["after_new"] = {
+                "ack": acks.get(31), "slots": len(ob.material_slots),
+                "slot_material": ob.material_slots[0].material.name if ob.material_slots and
+                ob.material_slots[0].material else None,
+                "materials_made": len(bpy.data.materials) - report["materials_before"],
+                "reference_actions": {k: reference.get(k) for k in
+                                      ("name", "users", "can_new", "can_unlink", "can_single_user", "can_fake_user",
+                                       "choices")},
+                "link": nodes.get("link") and {k: nodes["link"].get(k) for k in ("key", "role", "value", "options")}}
+            set_text(subs["MATERIAL"], nodes["link"]["key"], "OBJECT", 32)
+        elif step == 10:
+            nodes = _material_nodes()
+            report["link_set"] = {"ack": acks.get(32), "slot_link": ob.material_slots[0].link,
+                                  "sent": nodes.get("link", {}).get("value")}
+            set_text(subs["MATERIAL"], nodes["link"]["key"], "DATA", 33)
+        elif step == 12:
+            report["link_back"] = {"ack": acks.get(33), "slot_link": ob.material_slots[0].link}
+            # A second slot with a material of its own, active; face 0 alone selected.
+            bpy.ops.object.material_slot_add()
+            ob.material_slots[1].material = bpy.data.materials.new("Second")
+            ob.active_material_index = 1
+            mesh = ob.data
+            for polygon in mesh.polygons:
+                polygon.select = polygon.index == 0
+                polygon.material_index = 0
+            first = set(mesh.polygons[0].vertices)
+            for vertex in mesh.vertices:
+                vertex.select = vertex.index in first
+            for edge in mesh.edges:
+                edge.select = all(v in first for v in edge.vertices)
+            bpy.ops.object.mode_set(mode='EDIT')
+        elif step == 16:
+            nodes = _material_nodes()
+            report["edit_mode_buttons"] = nodes.get("assign", {}).get("key")
+            invoke(subs["MATERIAL"], nodes["assign"]["key"], 34)
+        elif step == 19:
+            bpy.ops.object.mode_set(mode='OBJECT')
+            report["assign"] = {"ack": acks.get(34),
+                                "material_index": [p.material_index for p in ob.data.polygons]}
+            problems = []
+            if report["no_slots"]["rows"] != 0:
+                problems.append("rows before New")
+            if report["after_new"]["slots"] != 1 or report["after_new"]["materials_made"] != 1 or \
+                    not report["after_new"]["slot_material"]:
+                problems.append("New did not make one slot holding one material")
+            if not report["after_new"]["link"] or report["after_new"]["link"]["role"] != 8:
+                problems.append("the link is not sent with its role")
+            if report["link_set"]["slot_link"] != "OBJECT" or report["link_set"]["sent"] != "OBJECT":
+                problems.append("Link set to Object does not read back")
+            if report["link_back"]["slot_link"] != "DATA":
+                problems.append("Link set back to Data does not read back")
+            actions = report["after_new"]["reference_actions"]
+            if not (actions["can_new"] and actions["can_unlink"]):
+                problems.append("the reference lists no New or Unlink")
+            if report["assign"]["material_index"][0] != 1 or any(report["assign"]["material_index"][1:]):
+                problems.append("Assign did not give the selected face the active slot")
+            report["problems"] = problems
+            finish("done" if not problems else "error")
+            return None
+        if step > 40:
+            finish("timeout")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
+bpy.app.timers.register({"material": tick_material, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

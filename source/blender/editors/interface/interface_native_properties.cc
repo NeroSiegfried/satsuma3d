@@ -1626,6 +1626,12 @@ class Writer {
                               occurrence(edit_key),
                               array && index >= 0,
                               but.type == ButtonType::NumSlider});
+    /* A material slot's link follows the slot's material in its row, as Blender draws it. */
+    const protocol::Role role = look.role == protocol::Role::None &&
+                                        RNA_struct_is_a(ptr->type, RNA_MaterialSlot) &&
+                                        STREQ(RNA_property_identifier(prop), "link") ?
+                                    protocol::Role::Link :
+                                    look.role;
     const SelectedOthers own = look.others ? SelectedOthers() : selected_others(C, but);
     const bool mixed = others_differ(but, index, look.others ? *look.others : own);
     const auto [animation, animatable] = property_animation(C, but, index);
@@ -1640,7 +1646,7 @@ class Writer {
       fields.animatable = animatable;
       fields.property = RNA_property_identifier(prop);
       fields.short_label = look.short_label;
-      fields.role = look.role;
+      fields.role = role;
     };
 
     NodeId node;

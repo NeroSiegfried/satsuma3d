@@ -424,6 +424,9 @@ enum Role : ubyte {
   Duplicate,
   /// Drawn in the header of the panel it is a child of, such as a modifier's Remove.
   Header,
+  /// Where a data-block it follows is linked, such as a material slot's Object or Data: drawn at
+  /// the end of that data-block's row, as Blender draws it, by an interface that knows it.
+  Link,
 }
 
 /// How a property is animated, as Blender colors its control.

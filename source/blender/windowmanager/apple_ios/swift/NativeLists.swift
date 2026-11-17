@@ -14,13 +14,21 @@ import UIKit
 /** \name Data-block picker
  * \{ */
 
-/** The data-block in use as a card: preview, name and users. Tapping browses; the menu holds
- * New, Duplicate, Rename, Fake User, Make Single User and Unlink. */
+/**
+ * The data-block in use. In Properties, Blender's `template_ID` as one joined row (ROUND5 7D): the
+ * picture and ▾ browse the data-blocks, the name is a text field that renames, the users count
+ * (a tap makes it single-user), the fake user's shield, New (Blender's duplicate icon once one is
+ * chosen) and ✕ to unlink; with nothing chosen, the browser and ＋ New. Where it is linked from,
+ * such as a material slot's Object or Data, is an icon dropdown at the row's end (\a link). On a
+ * toolbar (\a compact), a small preview and the name, with the rest in a menu.
+ */
 struct ReferenceRow: View {
   let model: PanelsModel
   let node: NativeNode
   /** On one line, for a toolbar: a small preview and the name. */
   var compact = false
+  /** Where it is linked from, drawn at the row's end, see `Role.link`. */
+  var link: NativeNode? = nil
   @State private var browsing = false
   @State private var rename: RenameRequest?
 
@@ -41,8 +49,122 @@ struct ReferenceRow: View {
       /* Fonts by family name, from the system's font picker. */
       NativeFontSlotRow(model: model, node: node)
     }
-    else {
+    else if compact {
       picker
+    }
+    else {
+      templateID
+    }
+  }
+
+  /** The parts of Blender's `template_ID` this data-block has, in its order. */
+  private enum Part: Hashable { case browse, name, users, fakeUser, new, unlink }
+
+  private var parts: [Part] {
+    guard let reference else { return [.browse] }
+    var parts: [Part] = [.browse]
+    if has {
+      parts.append(.name)
+      if reference.users > 1 && reference.canSingleUser { parts.append(.users) }
+      if reference.canFakeUser { parts.append(.fakeUser) }
+      if reference.canNew { parts.append(.new) }
+      if reference.canUnlink { parts.append(.unlink) }
+    }
+    else if reference.canNew {
+      parts.append(.new)
+    }
+    return parts
+  }
+
+  private var templateID: some View {
+    let parts = self.parts
+    return HStack(spacing: 4) {
+      HStack(spacing: 1) {
+        ForEach(Array(parts.enumerated()), id: \.element) { index, part in
+          self.part(part, join: widgetJoin(index, parts.count))
+        }
+      }
+      if let link {
+        ReferenceLinkDropdown(model: model, node: link)
+      }
+    }
+    .frame(minHeight: 32)
+  }
+
+  private static func icon(_ blender: String, _ symbol: String) -> UIImage? {
+    BlenderIcon.image(blender) ?? UIImage(systemName: symbol)
+  }
+
+  @ViewBuilder
+  private func part(_ part: Part, join: WidgetJoin) -> some View {
+    let reference = self.reference
+    switch part {
+      case .browse:
+        Button {
+          browsing = true
+        } label: {
+          BlenderWidgetFace(icon: PreviewCache.image(reference?.preview)?.withRenderingMode(.alwaysOriginal) ?? BlenderIcon.image(node.icon), arrow: true,
+                            join: join)
+        }
+        .buttonStyle(.plain)
+        .disabled(!node.enabled || (reference?.optionsCount ?? 0) == 0)
+        .accessibilityLabel("Browse \(type)")
+        .accessibilityValue(has ? name : "None")
+        .help("Browse \(type)")
+        .popover(isPresented: $browsing) {
+          ReferenceBrowser(model: model, node: node) { browsing = false }
+            .frame(minWidth: 380, minHeight: min(560, 150 + 60 * CGFloat(reference?.optionsCount ?? 0)))
+        }
+      case .name:
+        ReferenceNameField(model: model, node: node, name: name, join: join,
+                           editable: node.enabled && reference?.linked != true)
+          .layoutPriority(1)
+      case .users:
+        let users = Int(reference?.users ?? 0)
+        Button {
+          model.send(node, .invoke, .text("single_user"))
+        } label: {
+          BlenderWidgetFace(icon: nil, text: "\(users)", join: join)
+        }
+        .buttonStyle(.plain)
+        .disabled(!node.enabled)
+        .accessibilityLabel("Make Single User")
+        .accessibilityValue("\(users) users")
+        .help("\(users) users: make single user")
+      case .fakeUser:
+        let on = reference?.fakeUser == true
+        BlenderToggleButton(name: "Fake User", icon: Self.icon(on ? "FAKE_USER_ON" : "FAKE_USER_OFF",
+                                                               on ? "shield.fill" : "shield"),
+                            isOn: on, join: join) {
+          model.send(node, .invoke, .text("fake_user"))
+        }
+        .disabled(!node.enabled)
+      case .new:
+        Button {
+          model.send(node, .add)
+          Haptics.selection()
+        } label: {
+          if has {
+            BlenderWidgetFace(icon: Self.icon("DUPLICATE", "plus.square.on.square"), join: join)
+          }
+          else {
+            BlenderWidgetFace(icon: Self.icon("ADD", "plus"), text: "New", join: join, fills: true)
+          }
+        }
+        .buttonStyle(.plain)
+        .disabled(!node.enabled)
+        .accessibilityLabel(has ? "New \(type) (a copy)" : "New \(type)")
+        .help(has ? "New \(type), a copy of this one" : "New \(type)")
+      case .unlink:
+        Button {
+          model.send(node, .remove)
+        } label: {
+          BlenderWidgetFace(icon: Self.icon("X", "xmark"), join: join)
+        }
+        .buttonStyle(.plain)
+        .disabled(!node.enabled)
+        .accessibilityLabel("Unlink \(type)")
+        .help("Unlink \(type)")
     }
   }
 
@@ -168,6 +290,84 @@ struct ReferenceRow: View {
   }
 }
 
+/** A data-block's name in Blender's text widget: typing a new one renames it. */
+struct ReferenceNameField: View {
+  let model: PanelsModel
+  let node: NativeNode
+  let name: String
+  let join: WidgetJoin
+  let editable: Bool
+  @State private var text = ""
+  @FocusState private var focused: Bool
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
+
+  var body: some View {
+    let glass = style == ShellStyle.glass.rawValue
+    let shape = WidgetShape(join: join, glass: glass)
+    TextField("Name", text: $text)
+      .font(.subheadline)
+      .lineLimit(1)
+      .autocorrectionDisabled()
+      .textInputAutocapitalization(.never)
+      .focused($focused)
+      .selectsAllOnFocus(focused)
+      .liftsAboveKeyboard(focused)
+      .submitLabel(.done)
+      .padding(.horizontal, 8)
+      .frame(maxWidth: .infinity, minHeight: 32)
+      .background(glass ? Color.primary.opacity(focused ? 0.18 : 0.08) : BlenderWidgetColors.textInner, in: shape)
+      .overlay { if !glass { shape.strokeBorder(BlenderWidgetColors.outline, lineWidth: 1) } }
+      .disabled(!editable)
+      .onAppear { text = name }
+      .onChange(of: name) { _, newValue in if !focused { text = newValue } }
+      .onSubmit { commit() }
+      .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
+      .accessibilityLabel("Name")
+  }
+
+  private func commit() {
+    let trimmed = text.trimmingCharacters(in: .whitespaces)
+    guard !trimmed.isEmpty, trimmed != name else {
+      text = name
+      return
+    }
+    model.send(node, .rename, .text(trimmed))
+  }
+}
+
+/** Where a data-block is linked from, such as a material slot's Object or Data, as Blender draws
+ * it at the end of the data-block's row: the icon and ▾, its menu titled Link with Blender's
+ * names and descriptions. */
+struct ReferenceLinkDropdown: View {
+  let model: PanelsModel
+  let node: NativeNode
+
+  var body: some View {
+    let options = node.choice?.allOptions.filter { $0.value != nil } ?? []
+    let value = model.text(node)
+    let current = options.first { $0.value == value }
+    let title = node.label.isEmpty ? "Link" : node.label
+    Menu {
+      Section(title) {
+        ForEach(Array(options.enumerated()), id: \.offset) { _, option in
+          Toggle(isOn: Binding(get: { option.value == value }, set: { _ in model.set(node, .text(option.value ?? "")) })) {
+            Text(option.label ?? "")
+            if let description = option.description, !description.isEmpty { Text(description) }
+          }
+        }
+      }
+    } label: {
+      BlenderWidgetFace(icon: BlenderIcon.image(current?.icon ?? node.icon), arrow: true)
+    }
+    .menuIndicator(.hidden)
+    .buttonStyle(.plain)
+    .disabled(!node.enabled)
+    .help(title)
+    .accessibilityLabel(title)
+    .accessibilityValue(current?.label ?? "")
+  }
+}
+
 /** Choose a data-block, like Blender's ID search popup: searchable, with previews. */
 struct ReferenceBrowser: View {
   let model: PanelsModel
@@ -247,6 +447,12 @@ struct ReferenceBrowser: View {
 /** Lists longer than this show the rows around the active one and a page with all of them. */
 private let inlineRows = 40
 
+/**
+ * A list as Blender's `template_list` draws it (ROUND5 7D): its rows in a box, the active one in
+ * Blender's selection blue, and at its side a column of Blender's buttons: ＋, −, ▾ for the list's
+ * menu and, where it can be reordered, ▲ ▼ to move the active row. Long lists show the rows
+ * around the active one and Show All.
+ */
 struct NativeList: View {
   let model: PanelsModel
   let node: NativeNode
@@ -254,34 +460,32 @@ struct NativeList: View {
 
   var body: some View {
     let rows = model.children(of: node).filter { $0.kind == .row }
-    VStack(alignment: .leading, spacing: 4) {
-      /* Add, remove and the rest above the rows, where they stay as the list grows: adding one
-       * after another, the finger stays put. */
-      HStack {
-        if rows.count > inlineRows {
-          Button {
-            showingAll = true
-          } label: {
-            Label("Show All \(rows.count)", systemImage: "list.bullet")
+    PanelColumn(spacing: 4) {
+      HStack(alignment: .top, spacing: 4) {
+        NativeListBox(minHeight: NativeListSideColumn.height(model, node, rows: rows)) {
+          if rows.isEmpty {
+            Text("None")
               .font(.subheadline)
-              .frame(minHeight: 32)
+              .foregroundStyle(.tertiary)
+              .frame(maxWidth: .infinity, minHeight: NativeListRows.rowHeight, alignment: .leading)
+              .padding(.leading, 8)
           }
-          .buttonStyle(.borderless)
-          .sheet(isPresented: $showingAll) { NativeListPage(model: model, node: node) }
+          else {
+            NativeListRows(model: model, node: node, rows: shown(rows))
+          }
         }
-        Spacer(minLength: 0)
-        NativeListToolbar(model: model, node: node)
+        NativeListSideColumn(model: model, node: node, rows: rows)
       }
-      .padding(.top, 2)
-      if rows.isEmpty {
-        Text("None")
-          .font(.subheadline)
-          .foregroundStyle(.tertiary)
-          .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-          .padding(.leading, 10)
-      }
-      else {
-        NativeListRows(model: model, node: node, rows: shown(rows))
+      if rows.count > inlineRows {
+        Button {
+          showingAll = true
+        } label: {
+          Label("Show All \(rows.count)", systemImage: "list.bullet")
+            .font(.subheadline)
+            .frame(minHeight: 32)
+        }
+        .buttonStyle(.borderless)
+        .sheet(isPresented: $showingAll) { NativeListPage(model: model, node: node) }
       }
     }
   }
@@ -295,65 +499,147 @@ struct NativeList: View {
   }
 }
 
-/** Add, remove and the list's other actions, together in one compact capsule. */
-struct NativeListToolbar: View {
+/** Blender's list box: darker than the panel, inside the widget outline. */
+struct NativeListBox<Content: View>: View {
+  var minHeight: CGFloat = 0
+  @ViewBuilder let content: Content
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
+
+  static var fill: Color { Color(red: 0x2d / 255, green: 0x2d / 255, blue: 0x2d / 255) }
+
+  var body: some View {
+    let glass = style == ShellStyle.glass.rawValue
+    let shape = RoundedRectangle(cornerRadius: glass ? 10 : ShellStyle.radius, style: .continuous)
+    content
+      .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
+      .background(glass ? Color.primary.opacity(0.06) : Self.fill, in: shape)
+      .clipShape(shape)
+      .overlay { if !glass { shape.strokeBorder(BlenderWidgetColors.outline, lineWidth: 1) } }
+  }
+}
+
+/** A list's buttons in a column at its side, as Blender's: ＋ and − joined, ▾ for the list's menu
+ * (its extra buttons and Blender's specials menu), and ▲ ▼ joined where it can be reordered. */
+struct NativeListSideColumn: View {
   let model: PanelsModel
   let node: NativeNode
+  let rows: [NativeNode]
+
+  static let width: CGFloat = 32
+
+  private static func reorders(_ node: NativeNode, _ rows: [NativeNode]) -> Bool {
+    node.list?.canReorder == true && node.enabled && rows.count > 1
+  }
+
+  private static func extras(_ model: PanelsModel, _ node: NativeNode) -> [NativeNode] {
+    model.children(of: node).filter { $0.kind == .button && $0.role != .duplicate }
+  }
+
+  /** How tall the column is, which the list's box is at least. */
+  static func height(_ model: PanelsModel, _ node: NativeNode, rows: [NativeNode]) -> CGFloat {
+    let list = node.list
+    var groups: [Int] = []
+    let addRemove = (list?.canAdd == true ? 1 : 0) + (list?.canRemove == true ? 1 : 0)
+    if addRemove > 0 { groups.append(addRemove) }
+    if !extras(model, node).isEmpty || !(list?.menu ?? "").isEmpty { groups.append(1) }
+    if reorders(node, rows) { groups.append(2) }
+    guard !groups.isEmpty else { return 0 }
+    return groups.reduce(0) { $0 + CGFloat($1) * 32 + CGFloat($1 - 1) } + CGFloat(groups.count - 1) * 8
+  }
 
   var body: some View {
     let list = node.list
-    let extras = model.children(of: node).filter { $0.kind == .button && $0.role != .duplicate }
+    let extras = Self.extras(model, node)
     let menu = list?.menu ?? ""
-    let hasMenu = !extras.isEmpty || !menu.isEmpty
-    if list?.canAdd == true || list?.canRemove == true || hasMenu {
-      HStack(spacing: 0) {
-        if list?.canAdd == true { toolButton("plus", "Add", .add) }
-        if list?.canRemove == true { toolButton("minus", "Remove", .remove) }
-        if hasMenu {
-          Menu {
-            ForEach(extras) { button in
-              let destructive = button.content(Blender_NativeUI_Button.self)?.style == .destructive
-              Button(role: destructive ? .destructive : nil) {
-                model.send(button, .invoke)
-              } label: {
-                Label {
-                  Text(button.label)
-                } icon: {
-                  if destructive { Image(systemName: "trash") }
-                  else if let image = BlenderIcon.image(button.icon) { Image(uiImage: image) }
-                }
-              }
-            }
-            if !menu.isEmpty {
-              Section { BlenderMenuItems(route: BlenderMenus.route(menu, tab: model.currentTab)) }
-            }
-          } label: {
-            Image(systemName: "ellipsis")
-              .frame(width: 40, height: 32)
-          }
-          .prefetchingBlenderMenu(BlenderMenus.route(menu, tab: model.currentTab))
-          .tint(.primary)
-          .disabled(!node.enabled)
-          .accessibilityLabel("More")
+    let canAdd = list?.canAdd == true, canRemove = list?.canRemove == true
+    VStack(spacing: 8) {
+      if canAdd || canRemove {
+        VStack(spacing: 1) {
+          if canAdd { button("ADD", "plus", "Add", .add, join: widgetJoin(0, canRemove ? 2 : 1)) }
+          if canRemove { button("REMOVE", "minus", "Remove", .remove, join: widgetJoin(canAdd ? 1 : 0, canAdd ? 2 : 1)) }
         }
       }
-      .font(.subheadline)
-      .foregroundStyle(.primary)
-      .background(PanelStyle.field, in: Capsule())
+      if !extras.isEmpty || !menu.isEmpty {
+        Menu {
+          ForEach(extras) { button in
+            let destructive = button.content(Blender_NativeUI_Button.self)?.style == .destructive
+            Button(role: destructive ? .destructive : nil) {
+              model.send(button, .invoke)
+            } label: {
+              Label {
+                Text(button.label)
+              } icon: {
+                if destructive { Image(systemName: "trash") }
+                else if let image = BlenderIcon.image(button.icon) { Image(uiImage: image) }
+              }
+            }
+          }
+          if !menu.isEmpty {
+            Section { BlenderMenuItems(route: BlenderMenus.route(menu, tab: model.currentTab)) }
+          }
+        } label: {
+          BlenderWidgetFace(icon: BlenderIcon.image("DOWNARROW_HLT") ?? UIImage(systemName: "chevron.down"))
+            .padding(.vertical, -6)
+        }
+        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
+        .prefetchingBlenderMenu(BlenderMenus.route(menu, tab: model.currentTab))
+        .disabled(!node.enabled)
+        .accessibilityLabel("More")
+        .help("More")
+      }
+      if Self.reorders(node, rows) {
+        VStack(spacing: 1) {
+          moveButton("TRIA_UP", "chevron.up", "Move Up", by: -1, join: .first)
+          moveButton("TRIA_DOWN", "chevron.down", "Move Down", by: 1, join: .last)
+        }
+      }
     }
+    .frame(width: Self.width)
   }
 
-  private func toolButton(_ symbol: String, _ title: String, _ op: NativeOp) -> some View {
+  private func face(_ blender: String, _ symbol: String, join: WidgetJoin) -> some View {
+    BlenderWidgetFace(icon: BlenderIcon.image(blender) ?? UIImage(systemName: symbol), join: join, vertical: true)
+      /* Stacked 32 point widgets: the face's own 44 point hit area would overlap its neighbour's. */
+      .padding(.vertical, -6)
+  }
+
+  private func button(_ blender: String, _ symbol: String, _ title: String, _ op: NativeOp, join: WidgetJoin)
+    -> some View
+  {
     Button {
       model.send(node, op)
       Haptics.selection()
     } label: {
-      Image(systemName: symbol)
-        .frame(width: 40, height: 32)
-        .contentShape(Rectangle())
+      face(blender, symbol, join: join)
     }
     .buttonStyle(.plain)
     .disabled(!node.enabled)
+    .accessibilityLabel(title)
+    .help(title)
+  }
+
+  /** Move the active row one place, as Blender's ▲ ▼ do: before the row now after its new place. */
+  private func moveButton(_ blender: String, _ symbol: String, _ title: String, by offset: Int, join: WidgetJoin)
+    -> some View
+  {
+    let order = rows.map(\.key)
+    let from = rows.firstIndex { $0.row?.selected == true }
+    let to = from.map { $0 + offset }
+    let possible = from != nil && to.map { order.indices.contains($0) } == true
+    return Button {
+      guard let from, let to, order.indices.contains(to) else { return }
+      var moved = order
+      let key = moved.remove(at: from)
+      moved.insert(key, at: to)
+      guard let row = model.view.node(key) else { return }
+      model.send(row, .move, to + 1 < moved.count ? .text(moved[to + 1]) : nil)
+      Haptics.impact()
+    } label: {
+      face(blender, symbol, join: join)
+    }
+    .buttonStyle(.plain)
+    .disabled(!node.enabled || !possible)
     .accessibilityLabel(title)
     .help(title)
   }
@@ -368,11 +654,12 @@ struct NativeListRows: View {
   @State private var renaming: String?
   @State private var renameText = ""
   @FocusState private var renameFocused: Bool
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
 
-  /** Each row's height: the list is as tall as its rows, inside the scrolling form. */
-  static let rowHeight: CGFloat = 44
-  /** The Properties card's horizontal padding, see `PanelSection`. */
-  static let cardInset: CGFloat = 12
+  private var glass: Bool { style == ShellStyle.glass.rawValue }
+
+  /** Each row's height, Blender's: the list is as tall as its rows, inside the scrolling form. */
+  static let rowHeight: CGFloat = 32
 
   private var editable: Bool { node.enabled }
   private var reorder: Bool { node.list?.canReorder == true && editable && rows.count > 1 }
@@ -402,7 +689,7 @@ struct NativeListRows: View {
       ForEach(Array(zip(Self.identities(shown), shown).enumerated()), id: \.element.0) { position, entry in
         let row = entry.1
         rowView(row, position: position)
-          .listRowInsets(EdgeInsets(top: 1, leading: Self.cardInset, bottom: 1, trailing: Self.cardInset))
+          .listRowInsets(EdgeInsets(top: 0, leading: 2, bottom: 0, trailing: 2))
           .listRowSeparator(.hidden)
           .listRowBackground(Color.clear)
           .swipeActions(edge: .trailing, allowsFullSwipe: true) { trailingActions(row) }
@@ -415,9 +702,6 @@ struct NativeListRows: View {
     .scrollContentBackground(.hidden)
     .environment(\.defaultMinListRowHeight, Self.rowHeight)
     .frame(height: CGFloat(shown.count) * Self.rowHeight)
-    /* The list reaches the card's edges, its rows inset as before: a swiped row slides under the
-     * card's edge rather than being cut off at a line inside it. */
-    .padding(.horizontal, -Self.cardInset)
     /* Items added or deleted slide in and out: the list animates the change. */
     .animation(UIAccessibility.isReduceMotionEnabled ? nil : .smooth(duration: 0.3), value: Self.identities(shown))
     /* Blender's list has changed: show it as it is. */
@@ -505,15 +789,15 @@ struct NativeListRows: View {
     /* An item with no name, such as a material slot with no material yet, as Blender leaves blank. */
     let empty = row.label.isEmpty
     let label = empty ? "Empty" : row.label
-    HStack(spacing: 10) {
+    HStack(spacing: 8) {
       Group {
         if let preview = PreviewCache.image(row.row?.preview) {
           Image(uiImage: preview).resizable().scaledToFill()
-            .frame(width: 28, height: 28)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .frame(width: 22, height: 22)
+            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         }
         else if let icon = BlenderIcon.image(row.icon) {
-          Image(uiImage: icon).resizable().scaledToFit().frame(width: 22, height: 22)
+          Image(uiImage: icon).resizable().scaledToFit().frame(width: 18, height: 18)
             .foregroundStyle(.primary)
         }
       }
@@ -528,9 +812,10 @@ struct NativeListRows: View {
       }
       else {
         Text(label)
+          .font(.subheadline)
           .lineLimit(1)
           .truncationMode(.middle)
-          .foregroundStyle(empty ? .secondary : .primary)
+          .foregroundStyle(isActive && !glass ? Color.white : empty ? Color.secondary : Color.primary)
           .frame(maxWidth: .infinity, alignment: .leading)
           .layoutPriority(1)
           .contentShape(Rectangle())
@@ -542,14 +827,15 @@ struct NativeListRows: View {
       }
     }
     /* Nested items (bone collections, layer groups) are indented under their parent. */
-    .padding(.leading, 10 + CGFloat(row.row?.depth ?? 0) * 16)
-    .padding(.trailing, 10)
+    .padding(.leading, 6 + CGFloat(row.row?.depth ?? 0) * 16)
+    .padding(.trailing, 6)
     .frame(maxWidth: .infinity, minHeight: Self.rowHeight - 2, maxHeight: Self.rowHeight - 2)
     .background {
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(isActive ? PanelStyle.activeRow : .clear)
+      /* Blender's active row: its selection blue (the system's in glass). */
+      RoundedRectangle(cornerRadius: glass ? 6 : 3, style: .continuous)
+        .fill(isActive ? (glass ? PanelStyle.activeRow : ShellStyle.selection) : .clear)
     }
-    .contextMenuPreviewShape(RoundedRectangle(cornerRadius: 8))
+    .contextMenuPreviewShape(RoundedRectangle(cornerRadius: 6))
     .contextMenu { rowMenu(row, position: position) }
     .accessibilityElement(children: .contain)
     .accessibilityLabel(label)
@@ -730,9 +1016,11 @@ struct NativeListPage: View {
     let rows = all.filter { query.isEmpty || $0.label.localizedStandardContains(query) }
     NavigationStack {
       ScrollView {
-        VStack(alignment: .leading, spacing: 8) {
-          NativeListToolbar(model: model, node: node)
-          NativeListRows(model: model, node: node, rows: rows)
+        HStack(alignment: .top, spacing: 4) {
+          NativeListBox(minHeight: NativeListSideColumn.height(model, node, rows: all)) {
+            NativeListRows(model: model, node: node, rows: rows)
+          }
+          NativeListSideColumn(model: model, node: node, rows: all)
         }
         .padding(16)
       }

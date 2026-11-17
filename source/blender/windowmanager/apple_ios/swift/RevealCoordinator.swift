@@ -177,3 +177,45 @@ final class RevealCoordinator {
     return false
   }
 }
+
+/* -------------------------------------------------------------------- */
+/** \name What the viewport's shading hides
+ *
+ * Where the 3D view's shading does not show what a Properties tab edits, the tab says so in one
+ * line with a button that switches the shading (ROUND5 7D.4, decision 30): Solid view draws a
+ * material's Viewport Display colour, never its Base Color, and no world at all. Desktop Blender
+ * says nothing here; this is an addition. A third case is one more entry in #table.
+ * \{ */
+
+enum ShadingHint {
+  struct Entry: Equatable {
+    /** The shadings, as `ShellModel.shading` names them, that hide what the tab edits. */
+    let hiddenIn: Set<String>
+    let text: String
+    /** The button's title, and the shading it switches to, as Blender's shading type names it. */
+    let button: String
+    let shading: String
+  }
+
+  /** By Properties tab. */
+  static let table: [String: Entry] = [
+    "MATERIAL": Entry(hiddenIn: ["solid", "wireframe"], text: "Solid view shows Viewport Display colours, not this material.",
+                      button: "Material Preview", shading: "MATERIAL"),
+    "WORLD": Entry(hiddenIn: ["solid", "wireframe"], text: "Solid view does not show the world.", button: "Rendered",
+                   shading: "RENDERED"),
+  ]
+
+  /** What to say on \a tab while the viewport shows \a shading, if anything. */
+  static func entry(tab: String, shading: String) -> Entry? {
+    guard let entry = table[tab], entry.hiddenIn.contains(shading) else { return nil }
+    return entry
+  }
+
+  /** Switch the 3D view's shading, as Blender's shading buttons and its Z pie do. */
+  @MainActor
+  static func apply(_ entry: Entry) {
+    Operators.run("VIEW3D_OT_toggle_shading", ["type": .text(entry.shading)])
+  }
+}
+
+/** \} */
