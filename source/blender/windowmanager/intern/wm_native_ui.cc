@@ -1013,6 +1013,8 @@ static bool bridge_hover_highlight = true;
 /* The navigation gizmo's corner of the viewport, from the iPad's Settings, and mirrored for the
  * left hand. */
 static std::atomic<bool> bridge_navigation_top = false;
+/* Blender's own navigation gizmo unless Settings choose the minimal touch one. */
+static std::atomic<bool> bridge_navigation_minimal = false;
 static std::atomic<bool> bridge_navigation_left = false;
 
 void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
@@ -1077,6 +1079,18 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     ED_undo_push(C, "Rename");
     WM_main_add_notifier(NC_ID | NA_RENAME, nullptr);
     bridge_context_pop(C, context_store);
+    return;
+  }
+  if (command.setting == "addon_install") {
+    /* A file the person picked in the native interface, installed in-process, see
+     * `bl_ui.native_addons.install`: iPadOS runs no helper process for the extensions platform. */
+    const char *imports[] = {"bpy", "bl_ui", nullptr};
+    const std::string expression = "bl_ui.native_addons.install(bpy.context, \"" +
+                                   bridge_json_escape(command.value) + "\")";
+    BPY_run_string_eval(C, imports, expression.c_str());
+    /* The add-ons list and the menus and panels an add-on brings. */
+    wm::native_ui::view_type_dirty("preferences_list");
+    WM_main_add_notifier(NC_WINDOW, nullptr);
     return;
   }
   if (command.setting == "native_action") {
@@ -2296,6 +2310,22 @@ void bridge_actions_build(bContext *C, const char *tool, views::ViewBuilder &bui
                                                    nullptr,
                                                    name,
                                                    (axes & (1 << axis)) != 0);
+      });
+    }
+    /* A move running from a menu or a key waits for a click, Enter or Escape, as on the desktop:
+     * a touch has neither key, so the bar offers them, or nothing could end it. */
+    for (const auto &[key, label, icon] : {std::tuple{"modal:confirm", "Confirm", "CHECKMARK"},
+                                           std::tuple{"modal:cancel", "Cancel", "CANCEL"}})
+    {
+      builder.add(row, key, [&](ViewBuffer &buffer, NodeFields &fields) {
+        fields.label = IFACE_(label);
+        fields.icon = icon;
+        return views::protocol::CreateButtonDirect(buffer,
+                                                   views::protocol::ButtonStyle::Normal,
+                                                   nullptr,
+                                                   nullptr,
+                                                   STREQ(key, "modal:confirm") ? "RET" : "ESC",
+                                                   false);
       });
     }
     return;
@@ -3604,6 +3634,14 @@ void bridge_settings_view_build(bContext * /*C*/,
                               (bridge_navigation_left ? "left" : "right");
     return views::protocol::CreateChoiceDirect(buffer, value.c_str(), &options);
   });
+  builder.add(top, "navigation_style", [&](ViewBuffer &buffer, NodeFields &fields) {
+    fields.label = IFACE_("Navigation Gizmo Style");
+    static const std::pair<const char *, const char *> styles[] = {{"blender", "Blender"},
+                                                                   {"minimal", "Minimal"}};
+    OptionOffsets options = bridge_options(buffer, OptionLabels(styles, std::size(styles)));
+    return views::protocol::CreateChoiceDirect(
+        buffer, bridge_navigation_minimal ? "minimal" : "blender", &options);
+  });
   /* What a drag with the Tweak tool does. */
   builder.add(top, "tweak_drag", [&](ViewBuffer &buffer, NodeFields &fields) {
     fields.label = IFACE_("Tweak");
@@ -3646,6 +3684,14 @@ views::CommandResult bridge_settings_view_command(bContext *C,
   }
   else if (target == "keymap") {
     bridge_setting_execute(C, BridgeSettingCommand{"keymap", text});
+  }
+  else if (target == "addon_install") {
+    bridge_setting_execute(C, BridgeSettingCommand{"addon_install", text});
+  }
+  else if (target == "navigation_style") {
+    bridge_navigation_minimal = text == "minimal";
+    WM_main_add_notifier(NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+    views::view_type_dirty("toolbar");
   }
   else if (target == "navigation_corner") {
     bridge_navigation_top = text.starts_with("top");
@@ -4520,6 +4566,11 @@ float WM_native_ui_viewport_trailing_cover()
 bool WM_native_ui_navigation_top()
 {
   return bridge_navigation_top.load();
+}
+
+bool WM_native_ui_navigation_minimal()
+{
+  return bridge_navigation_minimal.load();
 }
 
 bool WM_native_ui_navigation_left()

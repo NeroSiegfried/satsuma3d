@@ -517,6 +517,99 @@ enum Haptics {
  * material, without tints.
  * \{ */
 
+/** How the shell draws its panels: as Blender's own, the default, so it looks as Blender does on the
+ * desktop, or as the iPad's Liquid Glass. Settings chooses. */
+enum ShellStyle: String {
+  case blender, glass
+
+  static let key = "BlenderInterfaceStyle"
+
+  static var current: ShellStyle {
+    ShellStyle(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .blender
+  }
+
+  /** Blender's default theme: the regions' and panels' backgrounds, their outline, the selection
+   * and the tooltips. */
+  static let region = Color(red: 0x30 / 255, green: 0x30 / 255, blue: 0x30 / 255)
+  static let panel = Color(red: 0x3d / 255, green: 0x3d / 255, blue: 0x3d / 255)
+  static let outline = Color(red: 0x24 / 255, green: 0x24 / 255, blue: 0x24 / 255)
+  static let selection = Color(red: 0x47 / 255, green: 0x72 / 255, blue: 0xb3 / 255)
+  static let tooltip = Color(red: 0x19 / 255, green: 0x19 / 255, blue: 0x19 / 255)
+  static let text = Color(red: 0xe6 / 255, green: 0xe6 / 255, blue: 0xe6 / 255)
+  /** Blender rounds its regions and widgets a little, not into capsules. */
+  static let radius: CGFloat = 6
+}
+
+/** A container's outline in the chosen style: the glass's capsule or large rounding, or Blender's
+ * small rounding. Read as it draws, so views observing the style redraw it. */
+struct ShellShape: Shape {
+  /** The glass style's corner radius; none for a capsule. */
+  var glassRadius: CGFloat?
+
+  func path(in rect: CGRect) -> Path {
+    if ShellStyle.current == .glass {
+      if let glassRadius { return RoundedRectangle(cornerRadius: glassRadius, style: .continuous).path(in: rect) }
+      return Capsule().path(in: rect)
+    }
+    return RoundedRectangle(cornerRadius: ShellStyle.radius, style: .continuous).path(in: rect)
+  }
+}
+
+/** Blender's tooltip: light text in a dark box. */
+struct BlenderTooltip: View {
+  let text: String
+
+  var body: some View {
+    Text(text)
+      .font(.system(size: 14))
+      .foregroundStyle(ShellStyle.text)
+      .padding(.horizontal, 10)
+      .padding(.vertical, 6)
+      .background(ShellStyle.tooltip, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+      .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(Color.black.opacity(0.6), lineWidth: 1))
+      .fixedSize()
+      .allowsHitTesting(false)
+  }
+}
+
+/** A panel's surface in the chosen style, see #ShellStyle. */
+private struct PanelSurface<S: Shape>: ViewModifier {
+  let glass: PanelGlass
+  let interactive: Bool
+  let shape: S
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
+
+  func body(content: Content) -> some View {
+#if os(visionOS)
+    switch glass {
+      case .tinted(let color): content.background(color, in: shape)
+      case .regular, .clear: content.background(.thinMaterial, in: shape)
+      case .none: content
+    }
+#else
+    if style == ShellStyle.glass.rawValue {
+      /* One effect whose value changes, so iOS morphs between tints. */
+      content.glassEffect(glass.liquid(interactive: interactive), in: shape)
+    }
+    else {
+      let rounded = RoundedRectangle(cornerRadius: ShellStyle.radius, style: .continuous)
+      switch glass {
+        case .none:
+          content
+        case .tinted(let color):
+          /* Blender's selection blue for the system blue the glass would be tinted with. */
+          content.background(color == .blue ? ShellStyle.selection : color, in: rounded)
+        case .regular, .clear:
+          content
+            .background(ShellStyle.region.opacity(0.94), in: rounded)
+            .overlay(rounded.strokeBorder(ShellStyle.outline, lineWidth: 1))
+            .environment(\.colorScheme, .dark)
+      }
+    }
+#endif
+  }
+}
+
 enum PanelGlass {
   case regular
   case clear
@@ -541,16 +634,7 @@ enum PanelGlass {
 extension View {
   @ViewBuilder
   func panelGlass<S: Shape>(_ glass: PanelGlass = .regular, interactive: Bool = false, in shape: S) -> some View {
-#if os(visionOS)
-    switch glass {
-      case .tinted(let color): self.background(color, in: shape)
-      case .regular, .clear: self.background(.thinMaterial, in: shape)
-      case .none: self
-    }
-#else
-    /* One effect whose value changes, so iOS morphs between tints. */
-    self.glassEffect(glass.liquid(interactive: interactive), in: shape)
-#endif
+    self.modifier(PanelSurface(glass: glass, interactive: interactive, shape: shape))
   }
 }
 
@@ -629,10 +713,17 @@ extension View {
   /** A soft scroll edge, where the platform has one. */
   @ViewBuilder
   func softHorizontalScrollEdge() -> some View {
+    shellScrollEdge(.horizontal)
+  }
+
+  /** The edges of the shell's scrolling bars, one way for all of them: plain, as Blender's regions
+   * clip, or faded under glass; never the system's indicators. */
+  func shellScrollEdge(_ axes: Axis.Set) -> some View {
 #if os(visionOS)
-    self
+    self.scrollIndicators(.hidden)
 #else
-    self.scrollEdgeEffectStyle(.soft, for: .horizontal)
+    self.scrollEdgeEffectStyle(ShellStyle.current == .glass ? .soft : .hard, for: axes == .horizontal ? .horizontal : .vertical)
+      .scrollIndicators(.hidden)
 #endif
   }
 }

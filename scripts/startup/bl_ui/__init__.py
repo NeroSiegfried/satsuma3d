@@ -12,6 +12,7 @@ if "bpy" in locals():
 
 _modules = [
     "native_actions",
+    "native_addons",
     "native_brush",
     "native_character",
     "native_intents",
@@ -131,6 +132,9 @@ def register():
             register_class(cls)
 
     space_filebrowser.register_props()
+    # The bundled extensions, turned on once for the native iPad interface.
+    from . import native_addons
+    native_addons.register()
 
     from bpy.props import (
         EnumProperty,

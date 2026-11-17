@@ -2335,6 +2335,14 @@ if(WITH_APPLE_CROSSPLATFORM)
     DESTINATION ${TARGETDIR_VER}/datafiles/templates)
 endif()
 
+# Extensions the iPad app bundles in its system repository, see `release/ios/extensions/README.md`.
+if(WITH_APPLE_CROSSPLATFORM)
+  install(DIRECTORY ${CMAKE_SOURCE_DIR}/release/ios/extensions/
+    DESTINATION ${TARGETDIR_VER}/extensions/system
+    PATTERN "README.md" EXCLUDE
+  )
+endif()
+
 
 # -----------------------------------------------------------------------------
 # Setup link libraries

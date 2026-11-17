@@ -81,6 +81,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
       BlenderSettings.set("hover_highlight", .bool(false))
     }
     SettingsModel.applyNavigationCorner()
+    SettingsModel.applyNavigationStyle()
     if UserDefaults.standard.bool(forKey: "BlenderDesktopInterface") {
       /* Start in the interface the person left; Blender follows from its inbox. */
       BlenderSettings.set("desktop", .bool(true))

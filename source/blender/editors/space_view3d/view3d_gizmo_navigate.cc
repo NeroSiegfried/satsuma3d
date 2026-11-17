@@ -353,7 +353,14 @@ static void WIDGETGROUP_navigate_draw_prepare(const bContext *C, wmGizmoGroup *g
   const bool native_interface = false;
 #endif
   const bool use_bottom_right_navigation = native_interface;
-  const bool show_navigate = !native_interface && (U.uiflag & USER_SHOW_GIZMO_NAVIGATE) != 0;
+#ifdef WITH_NATIVE_UI
+  /* Blender's own gizmo, as on the desktop, shows its zoom, move, camera and projection buttons
+   * too; the minimal touch one is alone. */
+  const bool native_minimal = native_interface && WM_native_ui_navigation_minimal();
+#else
+  const bool native_minimal = false;
+#endif
+  const bool show_navigate = !native_minimal && (U.uiflag & USER_SHOW_GIZMO_NAVIGATE) != 0;
   const bool show_rotate_gizmo = native_interface ||
                                  ((U.mini_axis_type == USER_MINI_AXIS_TYPE_GIZMO) &&
                                   (region->alignment != RGN_ALIGN_QSPLIT ||
@@ -388,11 +395,13 @@ static void WIDGETGROUP_navigate_draw_prepare(const bContext *C, wmGizmoGroup *g
       break;
   }
 
-  const float co[2] = {roundf(rect_visible->xmax - icon_offset_mini * 0.75f),
-                       roundf(use_bottom_right_navigation ?
-                                  rect_visible->ymin + icon_offset_from_axis :
-                                  rect_visible->ymax - icon_offset_from_axis)};
-  const float icon_mini_direction = use_bottom_right_navigation ? 1.0f : -1.0f;
+  /* The buttons stack away from the gizmo's corner, on its side of the view. */
+  const bool buttons_bottom = use_bottom_right_navigation && !native_top;
+  const float co[2] = {roundf(native_left ? rect_visible->xmin + icon_offset_mini * 0.75f :
+                                            rect_visible->xmax - icon_offset_mini * 0.75f),
+                       roundf(buttons_bottom ? rect_visible->ymin + icon_offset_from_axis :
+                                               rect_visible->ymax - icon_offset_from_axis)};
+  const float icon_mini_direction = buttons_bottom ? 1.0f : -1.0f;
 
   wmGizmo *gz;
 

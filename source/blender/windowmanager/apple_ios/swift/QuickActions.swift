@@ -61,13 +61,22 @@ struct QuickAction: Identifiable, Equatable {
   }
 
   var image: UIImage? {
+    if key == "RET" { return UIImage(systemName: "checkmark") }
+    if key == "ESC" { return UIImage(systemName: "xmark") }
     if !key.isEmpty { return nil }
     if !icon.isEmpty, let image = BlenderIcon.image(icon) { return image }
     return wm_apple_ios_action_icon(operatorName, "", "")
   }
 
+  /** Confirm or Cancel of a move that waits for Enter or Escape. */
+  var modalKey: Bool { ["RET", "ESC"].contains(key) }
+
   @MainActor
   func run(in model: ShellModel) {
+    if modalKey {
+      wm_apple_ios_window_send_key(model.window, key)
+      return
+    }
     model.send(id, .invoke)
   }
 
@@ -145,9 +154,11 @@ struct QuickActionButton: View {
 struct QuickActionBarItem: View {
   let action: QuickAction
   let model: ShellModel
+  /** Its name while held, with its middle in the bar, for the bar to show above it; nil after. */
+  var name: (String?, CGFloat) -> Void = { _, _ in }
   /** Held long enough to name it: the hold shows its name instead of running it. */
-  @State private var naming = false
   @State private var heldToName = false
+  @State private var midX: CGFloat = 0
 
   private var destructive: Bool {
     action.icon == "TRASH" || action.operatorName.hasSuffix(".delete")
@@ -183,21 +194,15 @@ struct QuickActionBarItem: View {
           guard image != nil else { return }
           Haptics.selection()
           heldToName = true
-          naming = true
+          name(action.title, midX)
         }
         .sequenced(before: DragGesture(minimumDistance: 0))
         .onEnded { _ in
-          naming = false
+          name(nil, 0)
           /* The button may or may not see the lift as a tap: either way, the next one is a tap. */
           DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { heldToName = false }
         })
-    .popover(isPresented: $naming, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
-      Text(action.title)
-        .font(.subheadline)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .presentationCompactAdaptation(.popover)
-    }
+    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(QuickActionsRow.barSpace)).midX } action: { midX = $0 }
     .help(action.title)
     .accessibilityLabel(action.axis ? "\(action.key) axis constraint" : action.title)
     .accessibilityValue(action.axis ? (action.selected ? "On" : "Off") : "")
@@ -259,8 +264,12 @@ struct QuickActionPressStyle<S: Shape>: ButtonStyle {
  * \{ */
 
 struct QuickActionsRow: View {
+  static let barSpace = "blender.quick-actions.bar"
   let model: ShellModel
   let redo: PanelsModel
+  /** The held action's name and its middle in the bar, shown above the bar as Blender's tooltip. */
+  @State private var heldName: (text: String, x: CGFloat)?
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
   @State private var actionsOpen = false
   /** The operation the user opened the strip for; another operation arrives folded. */
   @State private var redoOpenID: String?
@@ -401,7 +410,9 @@ struct QuickActionsRow: View {
             .fill(Color.primary.opacity(0.2))
             .frame(width: 1, height: 22)
         }
-        QuickActionBarItem(action: action, model: model)
+        QuickActionBarItem(action: action, model: model) { text, x in
+          heldName = text.map { ($0, x) }
+        }
       }
     }
   }
@@ -480,9 +491,20 @@ struct QuickActionsRow: View {
           if abs(width - actionItemsWidth) > 0.5 { actionItemsWidth = width }
         }
     }
-    .clipShape(Capsule())
+    .coordinateSpace(name: Self.barSpace)
+    .clipShape(ShellShape())
     /* Not interactive glass once open, which would take the touches of the actions on it. */
     .panelGlass(interactive: !actionsOpen, in: Capsule())
+    /* Outside the bar's clipping and its scrolling, above the held action. */
+    .overlay(alignment: .topLeading) {
+      if let heldName {
+        BlenderTooltip(text: heldName.text)
+          .alignmentGuide(.leading) { $0.width / 2 - heldName.x }
+          .alignmentGuide(.top) { $0.height + 8 }
+          .transition(.opacity)
+      }
+    }
+    .animation(.easeOut(duration: 0.12), value: heldName?.text)
     .offset(x: frame.minX)
     .animation(animation, value: actions)
   }

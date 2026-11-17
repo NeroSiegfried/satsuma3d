@@ -116,7 +116,7 @@ static void gizmo_axis_draw(const bContext *C, wmGizmo *gz)
   /* When the cursor is over any of the gizmos (show circle backdrop). */
   const bool is_active = ((gz->state & WM_GIZMO_STATE_HIGHLIGHT) != 0);
 #ifdef WITH_NATIVE_UI
-  constexpr bool minimal = true;
+  const bool minimal = WM_native_ui_navigation_minimal();
   NavigateRotateGizmo *axis_gizmo = reinterpret_cast<NavigateRotateGizmo *>(gz);
   const int hover_part = is_active && WM_native_ui_navigation_hover_active() ?
                              gz->highlight_part : -1;

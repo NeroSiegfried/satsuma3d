@@ -226,7 +226,11 @@ struct DocumentToolbar: ToolbarContent {
       /* Back to the documents is navigation, not a tool: its own glass, as the system's back
        * button. */
       ToolbarItem(placement: .topBarLeading) {
-        Button("Documents", systemImage: "chevron.backward") { wm_apple_ios_show_documents(nil) }
+        Button("Documents", systemImage: "chevron.backward") {
+          /* A move waiting for Enter or Escape would hold the document open: cancel it first. */
+          if let model = ShellModel.current, model.transforming { wm_apple_ios_window_send_key(model.window, "ESC") }
+          wm_apple_ios_show_documents(nil)
+        }
           .accessibilityIdentifier("blender.documents")
       }
 #if !os(visionOS)

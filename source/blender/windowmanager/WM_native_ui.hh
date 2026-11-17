@@ -95,6 +95,9 @@ int WM_native_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region);
 int WM_native_ui_top_bar_ymax(const wmWindow *win, const ARegion *region);
 /** The navigation gizmo's corner of the viewport. */
 bool WM_native_ui_navigation_top();
+/** The touch interface's minimal navigation gizmo (dots that grow under a hover, no letters, no
+ * buttons beside it) rather than Blender's own, as on the desktop. */
+bool WM_native_ui_navigation_minimal();
 bool WM_native_ui_navigation_left();
 /** Whether a pointer hovers over the navigation gizmo, which then grows its axes. */
 bool WM_native_ui_navigation_hover_active();

@@ -13,6 +13,7 @@
 
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /* -------------------------------------------------------------------- */
 /** \name Model
@@ -63,6 +64,13 @@ final class SettingsModel: ObservableObject {
   }
 
   static let navigationTopKey = "BlenderNavigationGizmoTop"
+  /** Blender's own navigation gizmo, as on the desktop, or the minimal touch one. */
+  static let navigationStyleKey = "BlenderNavigationGizmoStyle"
+
+  static func applyNavigationStyle() {
+    let style = UserDefaults.standard.string(forKey: navigationStyleKey) ?? "blender"
+    BlenderSettings.set("navigation_style", .text(style))
+  }
 
   /** The navigation gizmo's corner: at the top or bottom as Settings has it, on the right, or the
    * left for the left hand. */
@@ -304,6 +312,8 @@ private struct IPadSettingsPage: View {
   @AppStorage(FaceControl.shownKey) private var faceControlShown = false
 #endif
   @AppStorage(SettingsModel.navigationTopKey) private var navigationTop = false
+  @AppStorage(ShellStyle.key) private var interfaceStyle = ShellStyle.blender.rawValue
+  @AppStorage(SettingsModel.navigationStyleKey) private var navigationStyle = "blender"
   /** Read as it changes by the app's event handling, see `show_touches` in `GHOST_SystemIOS.mm`. */
   @AppStorage("BlenderShowTouches") private var showTouches = false
 
@@ -402,6 +412,30 @@ private struct IPadSettingsPage: View {
       }
 
       Section {
+        ChoiceRow(title: "Blender", detail: "Blender's own panels and colors, as on the desktop.",
+                  symbol: "square.split.2x2", selected: interfaceStyle == ShellStyle.blender.rawValue) {
+          interfaceStyle = ShellStyle.blender.rawValue
+        }
+        ChoiceRow(title: "Liquid Glass", detail: "The iPad's glass panels.",
+                  symbol: "drop", selected: interfaceStyle == ShellStyle.glass.rawValue) {
+          interfaceStyle = ShellStyle.glass.rawValue
+        }
+      } header: {
+        Text("Interface Style")
+      }
+
+      Section {
+        ChoiceRow(title: "Blender", detail: "The axes with their letters and the zoom, move, camera and "
+                  + "projection buttons, as on the desktop.",
+                  symbol: "move.3d", selected: navigationStyle == "blender") { navigationStyle = "blender" }
+        ChoiceRow(title: "Minimal", detail: "Small dots that grow under the finger, alone.",
+                  symbol: "circle.grid.cross", selected: navigationStyle == "minimal") { navigationStyle = "minimal" }
+      } header: {
+        Text("Navigation Gizmo Style")
+      }
+      .onChange(of: navigationStyle) { _, _ in SettingsModel.applyNavigationStyle() }
+
+      Section {
         ChoiceRow(title: "Bottom", detail: "Below the brushes, near the hand.",
                   symbol: model.leftHanded ? "arrow.down.left.square" : "arrow.down.right.square",
                   selected: !navigationTop) { navigationTop = false }
@@ -448,6 +482,27 @@ private struct AddonsPage: View {
   let lists: PreferencesLists
   @State private var search = ""
   @State private var enabledOnly = false
+  @State private var importing = false
+  @State private var importError: String?
+
+  /** Blender installs the picked file in-process, see `bl_ui.native_addons`: a copy in the app's
+   * temporary folder, as the picked file may only be readable while the picker grants it. */
+  private func install(_ url: URL) {
+    let access = url.startAccessingSecurityScopedResource()
+    defer { if access { url.stopAccessingSecurityScopedResource() } }
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("addon-install", isDirectory: true)
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    do {
+      try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+      let copy = folder.appendingPathComponent(url.lastPathComponent)
+      try FileManager.default.copyItem(at: url, to: copy)
+      let path = String(data: try JSONEncoder().encode(copy.path), encoding: .utf8) ?? "\"\""
+      BlenderSettings.set("addon_install", .text(path))
+    }
+    catch {
+      importError = error.localizedDescription
+    }
+  }
 
   private var categories: [(String, [PreferencesLists.Addon])] {
     let query = search.trimmingCharacters(in: .whitespaces)
@@ -464,6 +519,13 @@ private struct AddonsPage: View {
 
   var body: some View {
     Form {
+      Section {
+        Button("Install Add-on…", systemImage: "square.and.arrow.down") { importing = true }
+          .accessibilityIdentifier("blender.preferences.addon-install")
+      } footer: {
+        Text("An extension's .zip, or a legacy add-on's .py or .zip, from Files. Add-ons written in "
+             + "Python work; ones with compiled code or that run other programs cannot run on iPad.")
+      }
       Section {
         Toggle("Enabled Add-ons Only", isOn: $enabledOnly)
       }
@@ -488,6 +550,15 @@ private struct AddonsPage: View {
       }
     }
     .searchable(text: $search, placement: .toolbar, prompt: "Search Add-ons")
+    .fileImporter(isPresented: $importing, allowedContentTypes: [.zip, .pythonScript]) { result in
+      if case .success(let url) = result { install(url) }
+    }
+    .alert("Could Not Read the File", isPresented: Binding(get: { importError != nil },
+                                                           set: { if !$0 { importError = nil } })) {
+      Button("OK", role: .cancel) {}
+    } message: {
+      Text(importError ?? "")
+    }
     .overlay {
       if lists.addons.isEmpty { ProgressView() }
       else if categories.isEmpty { ContentUnavailableView.search(text: search) }

@@ -405,11 +405,21 @@ struct PanelsTabs: View {
                 if let image = BlenderIcon.image(tab.icon, themed: !selected) {
                   Image(uiImage: image).resizable().scaledToFit().frame(width: 22, height: 22)
                 }
+                else {
+                  /* The 3D Viewport sidebar's tabs, add-ons' among them, are named as Blender's
+                   * sidebar names them: they have no icons. */
+                  Text(tab.label ?? "")
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, 10)
+                }
               }
               .foregroundStyle(selected ? Color.white : .secondary)
-              .frame(width: 42, height: 42)
-              .background(selected ? Color.accentColor : .clear,
-                          in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+              .frame(minWidth: 42, minHeight: 42, maxHeight: 42)
+              .background(selected ? (ShellStyle.current == .glass ? Color.accentColor : ShellStyle.selection) : .clear,
+                          in: RoundedRectangle(cornerRadius: ShellStyle.current == .glass ? 8 : ShellStyle.radius,
+                                               style: .continuous))
               .contentShape(Rectangle())
             }
             .buttonStyle(.plain)

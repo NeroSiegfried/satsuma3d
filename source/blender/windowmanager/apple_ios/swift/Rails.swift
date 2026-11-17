@@ -242,6 +242,19 @@ final class RailLabel {
 /** \name A rail
  * \{ */
 
+/** The corner triangle Blender's toolbar draws on a tool with others in its group: right angle
+ * in the bottom trailing corner, the hypotenuse facing the icon. */
+struct ToolGroupCorner: Shape {
+  func path(in rect: CGRect) -> Path {
+    var path = Path()
+    path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+    path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+    path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+    path.closeSubpath()
+    return path
+  }
+}
+
 struct RailItemView: View {
   let item: RailItem
   let selected: Bool
@@ -294,14 +307,14 @@ struct RailItemView: View {
         Capsule().fill(.clear).panelGlass(in: Capsule())
       }
     }
-    .background(alignment: .bottomTrailing) {
+    .overlay(alignment: .bottomTrailing) {
       if item.grouped {
-        /* More tools stacked under this one: a second edge peeking out behind it, as a deck of
-         * cards shows, rather than desktop Blender's corner arrow. */
-        Capsule()
-          .strokeBorder(Color.secondary.opacity(selected ? 0.55 : 0.45), lineWidth: 1.5)
-          .frame(width: 22, height: 10)
-          .offset(x: -6, y: 4)
+        /* As Blender's toolbar marks a group: a small triangle filling the button's corner. */
+        ToolGroupCorner()
+          .fill(selected ? Color.white : Color.primary.opacity(0.6))
+          .frame(width: 7, height: 7)
+          .padding(.trailing, inRow ? 7 : 9)
+          .padding(.bottom, 7)
           .accessibilityHidden(true)
       }
     }
@@ -310,6 +323,8 @@ struct RailItemView: View {
 }
 
 struct Rail: View {
+  /** Observed so the rail's outline follows the interface style as it changes. */
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
   let items: [RailItem]
   let active: String
   let state: RailState
@@ -382,6 +397,7 @@ struct Rail: View {
           .animation(animation, value: active)
         }
         /* Not while a hold slides along it: the scroll view would take the finger. */
+        .shellScrollEdge(edge.horizontal ? .horizontal : .vertical)
         .scrollDisabled(!state.listVisible || state.pressSelecting || state.moving)
         .scrollBounceBehavior(.basedOnSize)
         .onChange(of: state.listVisible) { _, visible in
@@ -390,7 +406,7 @@ struct Rail: View {
       }
     }
     .frame(width: width, height: height)
-    .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+    .clipShape(ShellShape(glassRadius: 32))
     .panelGlass(in: RoundedRectangle(cornerRadius: 32, style: .continuous))
     /* Lifted off the window while dragged, to move or to dock it. */
     .scaleEffect(lifted ? 1.06 : 1)

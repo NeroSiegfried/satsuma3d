@@ -2453,6 +2453,28 @@ namespace {
 
 /** Preferences tabs are the Preferences' section identifiers with this prefix. */
 constexpr const char *PREFERENCES_TAB_PREFIX = "PREFERENCES_";
+/* The 3D Viewport sidebar's tabs other than Tool, add-ons' among them (LoopTools' Edit and the
+ * like), as Properties tabs named apart: `SIDEBAR:Edit`. */
+constexpr const char *SIDEBAR_TAB_PREFIX = "SIDEBAR:";
+
+/** The sidebar's categories beside Tool that have panels, in the order Blender registered them. */
+static Vector<std::string> sidebar_categories()
+{
+  Vector<std::string> categories;
+  ARegionType *region_type = BKE_regiontype_from_id(BKE_spacetype_from_id(SPACE_VIEW3D), RGN_TYPE_UI);
+  if (region_type == nullptr) {
+    return categories;
+  }
+  for (PanelType &pt : region_type->paneltypes) {
+    if (pt.parent_id[0] || !pt.category[0] || STREQ(pt.category, "Tool") || !pt.draw ||
+        categories.contains(pt.category))
+    {
+      continue;
+    }
+    categories.append(pt.category);
+  }
+  return categories;
+}
 
 /**
  * List the Preferences' sections as tabs and return the requested one's tab id. \a panel_context
@@ -2706,7 +2728,12 @@ static std::string panels_walk(bContext *C,
     bool free_tabs;
     RNA_property_enum_items(C, &space_ptr, tab_prop, &items, &tab_count, &free_tabs);
     int selected = BCONTEXT_OBJECT;
-    if (!RNA_enum_value_from_identifier(items, requested_tab.c_str(), &selected)) {
+    /* A sidebar tab shows as Blender's Tool tab does, the Properties' place for the 3D Viewport's
+     * sidebar panels. */
+    const bool sidebar_requested = StringRef(requested_tab).startswith(SIDEBAR_TAB_PREFIX);
+    if (!RNA_enum_value_from_identifier(
+            items, sidebar_requested ? "TOOL" : requested_tab.c_str(), &selected))
+    {
       selected = context.space->mainb;
     }
     context.space->mainbuser = context.space->mainb = selected;
@@ -2723,6 +2750,14 @@ static std::string panels_walk(bContext *C,
     }
     if (free_tabs) {
       MEM_delete(items);
+    }
+    for (const std::string &category : sidebar_categories()) {
+      tabs.append({SIDEBAR_TAB_PREFIX + category, category, ""});
+    }
+    if (sidebar_requested &&
+        std::any_of(tabs.begin(), tabs.end(), [&](const Tab &tab) { return tab.id == requested_tab; }))
+    {
+      tab_id = requested_tab;
     }
   }
   /* Native lists scroll themselves, so draw all their items. */
@@ -2819,14 +2854,28 @@ static std::string panels_walk(bContext *C,
   /* Properties' Tool tab: the 3D Viewport's Tool panels for the mode, with their sub-panels, as
    * Blender draws them there. */
   const bool tool_tab = !viewport && !preferences && tab_id == "TOOL";
+  const bool sidebar_tab = !viewport && !preferences && StringRef(tab_id).startswith(SIDEBAR_TAB_PREFIX);
+  const std::string sidebar_category = sidebar_tab ? tab_id.substr(strlen(SIDEBAR_TAB_PREFIX)) : "";
+  std::set<std::string> sidebar_panels;
   const Vector<std::string> tool_contexts = tool_tab ? tool_tab_contexts(C) : Vector<std::string>();
   std::set<std::string> tool_panels;
-  ARegionType *candidate_region_type = tool_tab ?
+  ARegionType *candidate_region_type = (tool_tab || sidebar_tab) ?
                                            BKE_regiontype_from_id(BKE_spacetype_from_id(SPACE_VIEW3D),
                                                                   RGN_TYPE_UI) :
                                            panel_region_type;
   WorkSpace *workspace = CTX_wm_workspace(C);
   for (PanelType &pt : candidate_region_type->paneltypes) {
+    if (sidebar_tab) {
+      /* The category's panels and their sub-panels. */
+      if (pt.parent_id[0] ? !sidebar_panels.count(pt.parent_id) : sidebar_category != pt.category) {
+        continue;
+      }
+      sidebar_panels.insert(pt.idname);
+      if (!(pt.flag & PANEL_TYPE_INSTANCED)) {
+        candidates.push_back({&pt, nullptr, pt.idname, pt.parent_id});
+      }
+      continue;
+    }
     if (tool_tab) {
       if (pt.parent_id[0] ? !tool_panels.count(pt.parent_id) :
                             !STREQ(pt.category, "Tool") ||
@@ -2880,7 +2929,8 @@ static std::string panels_walk(bContext *C,
   for (size_t candidate_index = 0; candidate_index < candidates.size(); candidate_index++) {
     const Candidate candidate = candidates[candidate_index];
     PanelType &pt = *candidate.type;
-    if (!pt.draw || (!viewport && !tool_tab && !candidate.instance && panel_context != pt.context) ||
+    if (!pt.draw ||
+        (!viewport && !tool_tab && !sidebar_tab && !candidate.instance && panel_context != pt.context) ||
         (preferences && panel_context.empty()) ||
         /* Header-less Properties panels hold data-block pickers and slots (e.g. a material's
          * context panel); viewport ones are decorative. */
