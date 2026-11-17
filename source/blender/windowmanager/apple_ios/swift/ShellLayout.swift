@@ -169,8 +169,9 @@ extension View {
 
 /** Where #RailLayout put the rails, as computed: what the controls along the bottom keep clear of. */
 struct RailFrames: Equatable {
-  /** The width a tool or brush column takes in the bottom leading corner. */
+  /** The widest column on the leading and the trailing edge, 0 for none. */
   var leadingCorner: CGFloat = 64
+  var trailingCorner: CGFloat = 0
   /** A row of rails along the bottom, with its gap: what the controls along the bottom rise above. */
   var bottomRow: CGFloat = 0
 
@@ -178,6 +179,7 @@ struct RailFrames: Equatable {
 
   init(_ layout: RailLayout) {
     leadingCorner = layout.leadingCorner
+    trailingCorner = layout.trailingCorner
     bottomRow = layout.bottomRow
   }
 }
@@ -208,11 +210,12 @@ enum ShellLayout {
     let reach = gizmo.map { max(44, $0.width / 2 + 10) } ?? 0
     let reachLeft = min(footprint?.minX ?? width, gizmo.map { $0.midX - reach } ?? width)
     let reachRight = max(footprint?.maxX ?? 0, gizmo.map { $0.midX + reach } ?? 0)
-    let laneLeading = max(sideInsets.left + ShellMetrics.railLeading + rails.leadingCorner + 12,
+    let laneLeading = max(sideInsets.left + (rails.leadingCorner > 0 ? ShellMetrics.railLeading + rails.leadingCorner : 0) + 12,
                           gizmoBottom && gizmoLeft ? reachRight + 12 : 0)
     let hotspot = min(!gizmoBottom || gizmoLeft ? width :
                         footprint != nil ? reachLeft : width - ShellMetrics.gizmoReserve,
-                      width - sideInsets.right)
+                      width - sideInsets.right -
+                        (rails.trailingCorner > 0 ? ShellMetrics.railLeading + rails.trailingCorner : 0))
     let rowBottom = max(safeBottom + ShellMetrics.rowBottom + tray + rails.bottomRow, keyboardLift + 8)
     return Band(laneLeading: laneLeading, laneWidth: max(0, hotspot - 12 - laneLeading), rowBottom: rowBottom)
   }

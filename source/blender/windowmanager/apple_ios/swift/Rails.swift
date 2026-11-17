@@ -1139,7 +1139,7 @@ struct ToolRails: View {
         let messagesTop: CGFloat = model.dragHint == nil ? 12 : 68
         ShellMessagesView(messages: model.messages) { model.perform($0) }
           .layoutZone("messages")
-          .frame(maxWidth: max(0, safe.width - 2 * layout.leadingCorner - 32))
+          .frame(maxWidth: max(0, safe.width - 2 * max(layout.leadingCorner, layout.trailingCorner) - 32))
           /* Hung from its top, so a second message adds below rather than moving the first. */
           .frame(width: safe.width, height: max(0, safe.height - messagesTop), alignment: .top)
           .position(x: safe.midX, y: safe.minY + messagesTop + max(0, safe.height - messagesTop) / 2)
@@ -3014,8 +3014,11 @@ struct RailLayout: Equatable {
   var brushLeading: Bool { brushEdge == .leading }
   /** See #Rail.brushStops. */
   var brushStops: (middle: CGFloat, other: CGFloat)
-  /** What sits in the bottom left corner, for the quick actions beside it. */
+  /** The columns on the leading and trailing edges, for the row along the bottom and what rises
+   * above it (the Item card, the operation strip) to keep beside: the widest of the rails and the
+   * sidebar there, whatever their height, since a card can rise as high as any of them. */
   var leadingCorner: CGFloat = 0
+  var trailingCorner: CGFloat = 0
   /** A row along the bottom, which the quick actions rise above. */
   var bottomRow: CGFloat = 0
 
@@ -3026,7 +3029,8 @@ struct RailLayout: Equatable {
       a.toolCenter == b.toolCenter && a.brushCenter == b.brushCenter &&
       a.sidebarCenter == b.sidebarCenter && a.sidebarLeading == b.sidebarLeading && a.sidebarRow == b.sidebarRow &&
       a.sidebarTucked == b.sidebarTucked && a.toolEdge == b.toolEdge && a.brushEdge == b.brushEdge &&
-      a.brushStops == b.brushStops && a.leadingCorner == b.leadingCorner && a.bottomRow == b.bottomRow
+      a.brushStops == b.brushStops && a.leadingCorner == b.leadingCorner && a.trailingCorner == b.trailingCorner &&
+      a.bottomRow == b.bottomRow
   }
 
   @MainActor
@@ -3233,8 +3237,19 @@ struct RailLayout: Equatable {
     if brushEdge.horizontal {
       brushCenter = brushRowCenter
     }
-    if toolEdge == .leading { leadingCorner = toolWidth }
-    else if brushLeading && brushes?.restsAtTop != true { leadingCorner = brushWidth }
+    /* Every column on each side edge; the row along the bottom and the cards above it keep beside
+     * them (the self-test found the Item card rising into the sidebar's buttons, and the actions
+     * reaching a tool rail on the trailing edge). */
+    for leading in [true, false] {
+      var widths: [CGFloat] = []
+      if !toolEdge.horizontal && (toolEdge == .leading) == leading { widths.append(toolWidth) }
+      if brushes != nil && !brushEdge.horizontal && brushLeading == leading { widths.append(brushWidth) }
+      if !sidebar.isEmpty && sidebarRow == nil && !sidebarTucked && sidebarLeading == leading {
+        widths.append(PaintSidebar.width)
+      }
+      let corner = widths.max() ?? 0
+      if leading { leadingCorner = corner } else { trailingCorner = corner }
+    }
   }
 }
 
