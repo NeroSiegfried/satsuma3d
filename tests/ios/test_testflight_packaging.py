@@ -264,6 +264,34 @@ class NumpyReplacementsTest(unittest.TestCase):
         self.assertIn('replaces no bundled module', problems)
 
 
+class BuildScriptTest(unittest.TestCase):
+    """ROUND5 8F.4: `build_testflight.sh` makes a tester build and never sends it anywhere."""
+    SCRIPT = Path(__file__).resolve().parents[2] / 'release/ios/build_testflight.sh'
+
+    def test_never_uploads(self):
+        text = self.SCRIPT.read_text()
+        for word in ('altool', 'iTMSTransporter', 'Transporter', 'notarytool', '<string>upload</string>',
+                     'destination=upload', 'curl', 'git push'):
+            self.assertNotIn(word, text)
+        self.assertIn('<key>destination</key><string>export</string>', text)
+        self.assertIn('--without-plugins', text)
+
+    def run_with(self, settings):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'testflight.env'
+            path.write_text(settings)
+            return subprocess.run(['bash', str(self.SCRIPT), str(path)], capture_output=True, text=True,
+                                  timeout=60)
+
+    def test_refuses_the_development_identity_and_a_missing_source(self):
+        result = self.run_with('BUNDLE_ID=app.example.dev\n')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("ends in .dev", result.stderr)
+        result = self.run_with('SOURCE_URL=\n')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('must name its source', result.stderr)
+
+
 class IdentityTest(unittest.TestCase):
     """ROUND5 8A/8B: the iPad app's template names the configured identity and icon, not Blender's."""
     ROOT = Path(__file__).resolve().parents[2]

@@ -44,38 +44,60 @@ Xcode 27.0 installation for the distribution build; the Xcode 27.1 simulator use
 by some development tests is not a runtime requirement. The optional 27.1 toolbar
 compression preference is guarded at both compile time and runtime.
 
-Configure a separate device build with the matching libraries and host tools
-described above, and these additional CMake settings:
+### Building a tester build
+
+`build_testflight.sh` is the way to make one. It goes from nothing to a prepared, checked app
+in a build directory of its own (`build_ios_testflight` beside the checkout), never the
+development one, and never uploads:
 
 ```sh
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer cmake \
-  -S . -B ../build_native_ipados_testflight -G Xcode \
-  -DWITH_APPLE_CROSSPLATFORM=ON -DAPPLE_TARGET_DEVICE=ios \
-  -DIOS_MIN_DEPLOYMENT_TARGET=27.0 -DIOS_BUNDLE_VERSION=1 \
-  -DLIBDIR=/path/to/ios/libraries \
-  -DCROSSCOMPILE_TOOLDIR=/path/to/matching/host/tools \
-  -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=YOUR_TEAM_ID \
-  -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_STYLE=Automatic \
-  -DCMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER=org.example.blender \
-  -DWITH_INSTALL_COPYRIGHT=ON
+cp release/ios/testflight.env.example ../testflight.env   # once; fill in the team when there is one
+release/ios/build_testflight.sh                           # or: build_testflight.sh /path/to/settings.env
 ```
 
-Increment `IOS_BUNDLE_VERSION` for each upload. It controls `CFBundleVersion`
-independently of the Blender version. Confirm the generated app's
-`MinimumOSVersion` is 27.0 and validate on 27.0 before inviting testers.
+The settings file lives outside the repository because it holds the team id and signing
+identity; the example lists its keys (bundle id `app.satsuma3d`, version, build number, source
+address, team, identity, profile). The script, logging each step to `<build dir>/logs/`:
 
-Package the device app using `prepare_testflight.py`. It copies the input app,
-turns native libraries into individual frameworks, rewrites load paths and adds
-Python `.fwork` markers. It rejects simulator binaries, libraries requiring a
-newer OS, unconverted Python bundles and test probes. OpenImageDenoise must be
-built with `oidn_ios_frameworks.diff` so its Metal module resolves as a framework.
-Existing NumPy Mach-O bundles must first be relinked as dynamic libraries with
-`relink_python_extensions.py`, using the matching Meson build directory.
+1. configures the Xcode project with those settings (`IOS_BUNDLE_VERSION` is the build number:
+   raise it for each upload; a bundle id ending in `.dev` or an empty source address is refused);
+2. builds the `install` target unsigned (the one expected failure is `ValidateEmbeddedBinary`);
+3. stages the complete app with `cmake --install` (`bin/Blender.app`, not `bin/Release`);
+4. rebuilds NumPy's modules as dynamic libraries with `build_numpy_ios.sh` and proves them with
+   `check_numpy_replacements.py` (see below);
+5. runs `prepare_testflight.py --without-plugins`: every library becomes a framework, each Python
+   module gets its `.fwork` marker, each framework whose binary uses a required reason API gets
+   a privacy manifest, the thumbnail extension is left out (it needs an App ID of its own), and
+   the layout is checked (`check_prepared`);
+6. checks the prepared app: its identity in `Info.plist` (id, name, version, build, source
+   address and commit, iPad only, minimum OS), `required_reason_apis.py`, and
+   `tests/ios/test_testflight_packaging.py`;
+7. only with a team, a signing identity, an installed profile for `<team>.<bundle id>` that grants
+   `entitlements.plist`, and a clean checkout: archives with `archive_testflight.py` and exports
+   an `.ipa` with `xcodebuild -exportArchive` (`method` `app-store-connect`, `destination`
+   `export`, `manageAppVersionAndBuildNumber` false). Without them it stops after the checks and
+   says what is missing.
+
+Uploading is a separate step on the owner's word; the script has no upload code path, and a test
+holds that. A full build takes hours the first time and wants about twice the development build
+directory's size free.
+
+**NumPy.** The prebuilt libraries ship NumPy's modules as `MH_BUNDLE`, which cannot become
+frameworks. `build_numpy_ios.sh <work dir> <output dir>` rebuilds the bundled version (checked
+against `versions.cmake`'s hash) with its vendored Meson and the recipe's cross files, then
+relinks every module as `MH_DYLIB`. Meson asks the Mac's Python for the extension suffix, so it
+runs with `_PYTHON_SYSCONFIGDATA_NAME=_sysconfigdata__darwin_arm64-iphoneos` and a `PYTHONPATH`
+holding only that file from the iOS Python; without that the modules are named for the Mac and
+the app never finds them. OpenImageDenoise must be built with `oidn_ios_frameworks.diff` so its
+Metal module resolves as a framework.
+
+The pieces can also be run by hand:
 
 ```sh
-python3 release/ios/relink_python_extensions.py /path/to/numpy/build /path/to/replacements/numpy
-python3 release/ios/prepare_testflight.py /path/to/Blender.app /path/to/prepared/Blender.app \
-  --replacement-directory /path/to/replacements
+release/ios/build_numpy_ios.sh /path/to/numpy-work /path/to/replacements
+python3 release/ios/prepare_testflight.py /path/to/bin/Blender.app /path/to/prepared/Blender.app \
+  --replacement-directory /path/to/replacements --without-plugins
+python3 release/ios/required_reason_apis.py /path/to/prepared/Blender.app
 python3 release/ios/archive_testflight.py /path/to/prepared/Blender.app /path/to/Blender.xcarchive \
   --profile /path/to/profile.mobileprovision --identity SIGNING_IDENTITY \
   --dsym /path/to/Blender.app.dSYM
@@ -87,19 +109,40 @@ background. The profile must grant each of them, so use the development profile
 Xcode makes for the app's own identifier: a wildcard profile cannot carry
 capabilities. After enabling a capability on the App ID, existing profiles become
 invalid; Xcode makes new ones when building for a device and when exporting.
+Distribution signing requires the account's appropriate certificate or Xcode
+cloud signing access.
 
-Export it using
-`xcodebuild -exportArchive -allowProvisioningUpdates`, an export options plist
-with `method=app-store-connect`, `signingStyle=automatic` and the developer team.
-Use `destination=export` for a local distribution package or `destination=upload`
-for App Store Connect. Set `manageAppVersionAndBuildNumber=false` to preserve the
-configured build number. Distribution signing requires the account's appropriate
-certificate or Xcode cloud signing access.
+### Checking the framework layout on a device
 
-Run `test_testflight_packaging.py` for packaging checks. Before uploading, install
-a separately signed QA copy on a 27.0 device and run `testflight_device_test.py`
-with factory startup. This checks packaged NumPy imports, OpenImageDenoise module
-loading, saving and rendering without touching a user's scene.
+The same prepared layout can be signed for development and run on an iPad before any upload.
+`sign_development.py` signs either layout (loose libraries or frameworks):
+
+```sh
+python3 release/ios/sign_development.py /path/to/prepared/Blender.app /path/to/prepared_signed/Blender.app \
+  --profile /path/to/development.mobileprovision --identity SIGNING_IDENTITY --without-plugins
+```
+
+The bundle id must be the profile's: prepare from a build configured with it (the development
+build, for a free team). Installing replaces the app of that id on the device. Then copy
+`tests/ios/testflight_device_test.py` into the app's `tmp` folder and launch it with factory
+startup, with `PLATYPUS_SCRATCH_DOCUMENT=1` so the launcher opens a scratch copy instead of the
+last document (`--` ends `devicectl`'s own options; what follows goes to the app):
+
+```sh
+xcrun devicectl device install app --device UDID /path/to/prepared_signed/Blender.app
+xcrun devicectl device copy to --device UDID --domain-type appDataContainer --domain-identifier BUNDLE_ID \
+  --source tests/ios/testflight_device_test.py --destination tmp/testflight_device_test.py
+xcrun devicectl device process launch --device UDID --terminate-existing \
+  --environment-variables '{"PLATYPUS_SCRATCH_DOCUMENT":"1"}' BUNDLE_ID -- --factory-startup --python-expr \
+  "exec(compile(open(__import__('os').path.expanduser('~/tmp/testflight_device_test.py')).read(), 'testflight_device_test.py', 'exec'))"
+xcrun devicectl device copy from --device UDID --domain-type appDataContainer --domain-identifier BUNDLE_ID \
+  --source tmp/testflight-check/testflight-device-test.json --destination testflight-device-test.json
+```
+
+The report's `success` is true when NumPy imports from all its frameworks, OpenImageDenoise
+initialises, a scene saves and renders, and the default cube exports to glTF. Everything the
+test writes stays in the app's `tmp/testflight-check/`; it saves a copy, so the recent-files
+list is untouched. Validate on an iPadOS 27.0 device before inviting testers.
 
 See [Apple's bundle layout requirements](https://developer.apple.com/documentation/bundleresources/placing-content-in-a-bundle)
 and [Python's iOS packaging instructions](https://docs.python.org/3.13/using/ios.html).
