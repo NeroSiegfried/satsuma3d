@@ -11,6 +11,9 @@
  *   as `send mode set EDIT`, `send action:mesh.subdivide invoke`, `send repeat invoke`;
  * - `tool <id>`: make a tool active, such as `tool builtin.scale`;
  * - `style blender|glass`: the interface style;
+ * - `size <width> <height>`: ask Stage Manager for a window this size, in points (the scene's
+ *   size restrictions, set to it and put back when the script ends);
+ * - `rail <leading|trailing|top|bottom>`: the edge the tool rail rests on;
  * - `wait <seconds>`;
  * - `shot <name>`: every window of the scene, drawn into `tmp/shots/<name>.png`.
  *
@@ -25,13 +28,23 @@ enum ShellSnapshots {
   private static var started = false
 
   static func start() {
+    if !started { ShellLayout.selfTest() }
     guard !started, let script = ProcessInfo.processInfo.environment["PLATYPUS_SNAPSHOT_SCRIPT"] else { return }
     started = true
     let steps = script.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     /* The person's own style, put back when the script ends: a script must not change settings. */
     let style = UserDefaults.standard.string(forKey: ShellStyle.key)
+    let rail = UserDefaults.standard.string(forKey: "BlenderToolRailEdge")
+    let restrictions = scene?.sizeRestrictions.map { ($0.minimumSize, $0.maximumSize) }
     Task { @MainActor in
-      defer { UserDefaults.standard.set(style, forKey: ShellStyle.key) }
+      defer {
+        UserDefaults.standard.set(style, forKey: ShellStyle.key)
+        UserDefaults.standard.set(rail, forKey: "BlenderToolRailEdge")
+        if let restrictions, let limits = scene?.sizeRestrictions {
+          limits.minimumSize = restrictions.0
+          limits.maximumSize = restrictions.1
+        }
+      }
       /* The window and Blender's first views first. */
       for _ in 0..<200 where ShellModel.current == nil {
         try? await Task.sleep(for: .milliseconds(100))
@@ -65,6 +78,20 @@ enum ShellSnapshots {
         UserDefaults.standard.set(words.first == "glass" ? ShellStyle.glass.rawValue : ShellStyle.blender.rawValue,
                                   forKey: ShellStyle.key)
         try? await Task.sleep(for: .milliseconds(400))
+      case "size":
+        guard words.count >= 2, let width = Double(words[0]), let height = Double(words[1]),
+              let limits = scene?.sizeRestrictions else { break }
+        let size = CGSize(width: width, height: height)
+        limits.minimumSize = size
+        limits.maximumSize = size
+        try? await Task.sleep(for: .seconds(2))
+        let bounds = scene?.coordinateSpace.bounds.size ?? .zero
+        WM_native_ui_log("snapshot", "size \(Int(width))x\(Int(height)) asked, \(Int(bounds.width))x\(Int(bounds.height)) given")
+      case "rail":
+        if let edge = words.first, RailEdge(rawValue: edge) != nil {
+          UserDefaults.standard.set(edge, forKey: "BlenderToolRailEdge")
+        }
+        try? await Task.sleep(for: .milliseconds(600))
       case "wait":
         try? await Task.sleep(for: .seconds(Double(words.first ?? "") ?? 0.5))
       case "shot":
@@ -72,6 +99,10 @@ enum ShellSnapshots {
       default:
         WM_native_ui_log("snapshot", "unknown step: \(step)")
     }
+  }
+
+  private static var scene: UIWindowScene? {
+    UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
   }
 
   private static func shot(_ name: String) {

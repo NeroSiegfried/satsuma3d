@@ -726,11 +726,23 @@ final class LayoutChecker {
   private var frames: [String: CGRect] = [:]
   private var logged: [String: Date] = [:]
   private var scheduled = false
+  /** The window's size, width class, header rung and style, written before each line so a line
+   * can be reproduced. */
+  var conditions = ""
+  /** The window is being resized: frames pass through each other for a moment, which is not an
+   * overlap anyone sees. Checked once more when it ends. */
+  var resizing = false {
+    didSet { if !resizing && oldValue { schedule() } }
+  }
 
   func set(_ zone: String, _ frame: CGRect?) {
     let next = frame.flatMap { $0.width >= 1 && $0.height >= 1 ? $0 : nil }
     guard frames[zone] != next else { return }
     frames[zone] = next
+    schedule()
+  }
+
+  private func schedule() {
     guard !scheduled else { return }
     scheduled = true
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -740,6 +752,7 @@ final class LayoutChecker {
 
   private func check() {
     scheduled = false
+    guard !resizing else { return }
     let zones = frames.keys.sorted()
     let now = Date()
     for (i, a) in zones.enumerated() {
@@ -750,7 +763,7 @@ final class LayoutChecker {
         let key = "\(a) ∩ \(b)"
         if let last = logged[key], now.timeIntervalSince(last) < 60 { continue }
         logged[key] = now
-        WM_native_ui_log("layout", "\(key) \(Int(overlap.width))x\(Int(overlap.height)) at \(Int(overlap.minX)),\(Int(overlap.minY))")
+        WM_native_ui_log("layout", "\(conditions) \(key) \(Int(overlap.width))x\(Int(overlap.height)) at \(Int(overlap.minX)),\(Int(overlap.minY))")
       }
     }
   }

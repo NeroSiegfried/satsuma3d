@@ -430,6 +430,8 @@ else()
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/SettingsSheet.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/ShellModel.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/ShellMessages.swift
+      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/ShellLayout.swift
+      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/BlenderWidgets.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/CommandSearch.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/ToolSettingsRow.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/ItemCard.swift

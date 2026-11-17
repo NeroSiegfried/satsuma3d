@@ -103,6 +103,7 @@ struct ToolSettingsItems: View {
 struct ToolSettingItem: View {
   let model: PanelsModel
   let node: NativeNode
+  @Environment(\.widgetsNamed) private var named
 
   private var title: String { node.shortLabel }
   /** Blender's own icon for it, not the checkbox it draws a toggle with. */
@@ -164,9 +165,18 @@ struct ToolSettingItem: View {
             }
           }
           else {
-            Label { Text(name) } icon: { IconView(name: current?.icon ?? node.icon) }
+            /* As Blender's `prop()` in its header: the setting's name, then a dropdown with the
+             * value ("Orientation  Default ▾"), so a value such as Default is never alone. */
+            HStack(spacing: 6) {
+              if title != name && named {
+                Text(title).font(.subheadline).foregroundStyle(.secondary).fixedSize()
+              }
+              BlenderWidgetFace(icon: BlenderIcon.image(current?.icon ?? node.icon), text: name, arrow: true)
+            }
           }
         }
+        .menuIndicator(.hidden)
+        .help(title)
         .disabled(!node.enabled)
       case .number:
         /* A number to slide sideways or tap to type, beside a name only where Blender's bar draws

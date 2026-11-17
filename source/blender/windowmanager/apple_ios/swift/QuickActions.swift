@@ -361,17 +361,6 @@ struct QuickActionsRow: View {
     return own + CommandSearch.shared.pinnedActions.filter { !ids.contains(String($0.id.dropFirst("pin:".count))) }
   }
 
-  /** How far the row rises to stay clear of a tool rail lying along the bottom under it, measured
-   * from the rail's own frame, so the two never overlap whatever placed them. */
-  private func railLift(in window: CGRect) -> CGFloat {
-    let rail = model.toolsFrame
-    guard rail.width > rail.height, rail.midY > window.midY else { return 0 }
-    let base = max(model.safeAreaInsets.bottom + ShellMetrics.rowBottom + model.bottomTray + model.bottomRailHeight,
-                   KeyboardLift.shared.stripLift + 8)
-    let rowBottom = window.maxY - base
-    return max(0, rowBottom - rail.minY + 8)
-  }
-
   /** An operation waits for keys: the bar is its modal bar. */
   private var modalRunning: Bool { actions.contains { $0.modalKey } }
 
@@ -401,24 +390,17 @@ struct QuickActionsRow: View {
   var body: some View {
     GeometryReader { geometry in
       let width = geometry.size.width
-      /* The lane between the tool rail and the navigation gizmo, across the whole viewport, as
-       * Blender places the gizmo, but beside the window's sides. */
-      /* Clear of the navigation gizmo's hotspot where it is along the bottom, which Blender places
-       * in fractions of the viewport: on the right, or the left for the left hand. */
-      /* The gizmo with its buttons, and the touch hotspot around the gizmo, which reaches further. */
-      let gizmo = model.navigationGizmo
-      let footprint = model.navigationFrame(in: geometry.size)
-      let gizmoBottom = footprint.map { $0.midY > geometry.size.height / 2 } ?? true
-      let gizmoLeft = footprint.map { $0.midX < width / 2 } ?? false
-      let gizmoReach = gizmo.count == 3 ? max(44, gizmo[2] * width + 10) : 0
-      let reachLeft = min(footprint?.minX ?? width, gizmo.count == 3 ? gizmo[0] * width - gizmoReach : width)
-      let reachRight = max(footprint?.maxX ?? 0, gizmo.count == 3 ? gizmo[0] * width + gizmoReach : 0)
-      let laneLeading = max(model.sideInsets.left + ShellMetrics.railLeading + model.toolRailWidth + 12,
-                            gizmoBottom && gizmoLeft ? reachRight + 12 : 0)
-      let hotspot = min(!gizmoBottom || gizmoLeft ? width :
-                          footprint != nil ? reachLeft : width - ShellMetrics.gizmoReserve,
-                        width - model.sideInsets.right)
-      let laneWidth = max(0, hotspot - 12 - laneLeading)
+      /* The lane between the tool rail and the navigation gizmo, above a row of rails, from where
+       * their layouts put them, see #ShellLayout.band. */
+      let origin = geometry.frame(in: .global).origin
+      let band = ShellLayout.band(
+        size: geometry.size, sideInsets: model.sideInsets, safeBottom: model.safeAreaInsets.bottom,
+        tray: model.bottomTray, rails: model.rails,
+        gizmo: model.navigationGizmoRect?.offsetBy(dx: -origin.x, dy: -origin.y),
+        footprint: model.navigationFrame?.offsetBy(dx: -origin.x, dy: -origin.y),
+        keyboardLift: KeyboardLift.shared.stripLift)
+      let laneLeading = band.laneLeading
+      let laneWidth = band.laneWidth
       let wide = width >= ShellMetrics.wideRow
       let pillWidth = redoTitle.map(redoPillWidth) ?? 0
       /* With the actions open, the last operation's name and settings sit above them, so neither
@@ -453,38 +435,6 @@ struct QuickActionsRow: View {
                           CGRect(x: rowX + rowWidth - pillWidth, y: 0, width: pillWidth,
                                  height: ShellMetrics.buttonHeight))
             }
-            /* The selection's transform, above the row and above the last operation's strip
-             * when that is above it too. */
-            if itemWanted && !ItemCard.rows(item, tool: model.activeTool).isEmpty {
-              let stripAbove: CGFloat = redoTitle == nil ? 0 :
-                (redoAbove ? ShellMetrics.buttonHeight + 8 : (redoOpen && !wide ? 60 + 8 : 0))
-              ItemCard(model: item, tool: model.activeTool, folded: $itemFolded,
-                       maxHeight: geometry.size.height * 0.4)
-                .frame(maxWidth: min(laneWidth, 520), alignment: .leading)
-                .fixedSize(horizontal: true, vertical: false)
-                .alignmentGuide(VerticalAlignment.center) { d in
-                  d.height + ShellMetrics.rowHeight / 2 + 8 + stripAbove
-                }
-                .offset(x: laneLeading)
-                .transition(.opacity)
-            }
-            /* While an operation waits: its name and what it says, and the number pad, above
-             * the bar. */
-            if modalRunning {
-              VStack(alignment: .leading, spacing: 8) {
-                if NumberPadState.shared.shown {
-                  NumberPad(model: model)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-                }
-                if !model.modalHint.isEmpty {
-                  ShellNameLabel(text: model.modalHint)
-                }
-              }
-              .alignmentGuide(VerticalAlignment.center) { d in
-                d.height + ShellMetrics.barHeight / 2 + 8
-              }
-              .offset(x: rowX)
-            }
             /* The held action's name, as the tool rail names its tools: above everything else in
              * the row, clear of the finger and of the last operation above the bar. */
             if let heldName {
@@ -499,12 +449,47 @@ struct QuickActionsRow: View {
             }
           }
           .frame(width: width, height: ShellMetrics.rowHeight, alignment: .leading)
+          /* Above the row, as overlays: an overlay never changes the size of what it is over, so
+           * the row stays where its padding puts it however tall these are. Placed inside the row's
+           * stack, they made it taller and pushed the row down by half their height. */
+          .overlay(alignment: .topLeading) {
+            /* The selection's transform, above the row and above the last operation's strip
+             * when that is above it too. */
+            if itemWanted && !ItemCard.rows(item, tool: model.activeTool).isEmpty {
+              let stripAbove: CGFloat = redoTitle == nil ? 0 :
+                (redoAbove ? ShellMetrics.buttonHeight + 8 : (redoOpen && !wide ? 60 + 8 : 0))
+              ItemCard(model: item, tool: model.activeTool, folded: $itemFolded,
+                       maxHeight: geometry.size.height * 0.4)
+                .frame(maxWidth: min(laneWidth, 520), alignment: .leading)
+                .fixedSize(horizontal: true, vertical: false)
+                .alignmentGuide(.top) { d in d.height + 8 + stripAbove }
+                .offset(x: laneLeading)
+                .transition(.opacity)
+            }
+          }
+          .overlay(alignment: .topLeading) {
+            /* While an operation waits: its name and what it says, and the number pad, above
+             * the bar. */
+            if modalRunning {
+              VStack(alignment: .leading, spacing: 8) {
+                if NumberPadState.shared.shown {
+                  NumberPad(model: model)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+                if !model.modalHint.isEmpty {
+                  ShellNameLabel(text: model.modalHint)
+                }
+              }
+              .alignmentGuide(.top) { d in
+                d.height + 8 + (ShellMetrics.barHeight - ShellMetrics.rowHeight) / 2
+              }
+              .offset(x: rowX)
+            }
+          }
         }
       }
       /* Above the keyboard while one of the strip's fields is typed into; the viewport stays. */
-      .padding(.bottom, max(model.safeAreaInsets.bottom + ShellMetrics.rowBottom + model.bottomTray +
-                              model.bottomRailHeight, KeyboardLift.shared.stripLift + 8) +
-               railLift(in: geometry.frame(in: .global)))
+      .padding(.bottom, band.rowBottom)
       .ignoresSafeArea(edges: .bottom)
     }
     .ignoresSafeArea(edges: .horizontal)

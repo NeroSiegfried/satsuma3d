@@ -81,10 +81,10 @@ struct ViewGizmoGeometry {
            width: hotspotRadius * 2, height: hotspotRadius * 2)
   }
 
-  init(gizmo: [Double], window: CGSize, safe: CGRect, pie: [ViewCommand]) {
-    radius = gizmo.count == 3 ? gizmo[2] * window.width : 40
-    center = gizmo.count == 3 ? CGPoint(x: gizmo[0] * window.width, y: gizmo[1] * window.height) :
-      CGPoint(x: window.width - 50, y: window.height - 50)
+  /** \a gizmo: Blender's gizmo, the square around its circle, in the view's coordinates. */
+  init(gizmo: CGRect?, window: CGSize, safe: CGRect, pie: [ViewCommand]) {
+    radius = gizmo.map { $0.width / 2 } ?? 40
+    center = gizmo.map { CGPoint(x: $0.midX, y: $0.midY) } ?? CGPoint(x: window.width - 50, y: window.height - 50)
     hotspotRadius = max(44, radius + 10)
     buttons = []
     guard !safe.isEmpty else { return }
@@ -349,7 +349,9 @@ struct ViewGizmoLayer: View {
       let kept = model.viewportOption("keep_camera_view")
       let camera = model.viewportOption("camera_view")
       let pie = ViewCommand.pie(locked: locked, kept: kept, camera: camera)
-      let geometry = ViewGizmoGeometry(gizmo: model.navigationGizmo, window: proxy.size, safe: safe, pie: pie)
+      let origin = proxy.frame(in: .global).origin
+      let geometry = ViewGizmoGeometry(gizmo: model.navigationGizmoRect?.offsetBy(dx: -origin.x, dy: -origin.y),
+                                       window: proxy.size, safe: safe, pie: pie)
       ZStack(alignment: .topLeading) {
         feedback(geometry)
         ViewGizmoHotspotView(model: model, state: state)
@@ -375,6 +377,7 @@ struct ViewGizmoLayer: View {
         state.pie = pie
       }
       .onChange(of: model.navigationGizmo) { state.geometry = geometry }
+      .onChange(of: model.pointScale) { state.geometry = geometry }
       .onChange(of: model.safeAreaInsets) { state.geometry = geometry }
       .onChange(of: model.sideInsets) { state.geometry = geometry }
     }

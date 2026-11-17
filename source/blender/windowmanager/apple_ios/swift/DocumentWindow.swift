@@ -176,6 +176,9 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
 
   override public func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
+    let scale = max(1, view.window?.traitCollection.displayScale ?? traitCollection.displayScale)
+    if model.pointScale != scale { model.pointScale = scale }
+    noteWindow()
     if model.toolRowChanged == nil {
       model.toolRowChanged = { [weak self] in self?.updateTopBarBottom() }
     }
@@ -192,20 +195,85 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
   private func updateTopBarBottom() {
     var pending: [UIView] = [view]
     var bottom: CGFloat = 0
+    var header: UINavigationBar?
     while let current = pending.popLast() {
       if let bar = current as? UINavigationBar {
-        if !bar.isHidden, bar.alpha > 0.01 { bottom = max(bottom, bar.convert(bar.bounds, to: view).maxY) }
+        if !bar.isHidden, bar.alpha > 0.01 {
+          bottom = max(bottom, bar.convert(bar.bounds, to: view).maxY)
+          header = bar
+        }
         continue
       }
       pending.append(contentsOf: current.subviews)
     }
     if model.navigationBarBottom != bottom { model.navigationBarBottom = bottom }
-    /* The tool settings row hangs under the header, with a gap. */
-    if bottom > 0 && model.toolRowHeight > 0 { bottom += model.toolRowHeight + 6 }
-    if model.topBarBottom != bottom {
-      model.topBarBottom = bottom
-      /* Blender keeps the navigation gizmo below it. */
-      WM_native_ui_top_bar_set(view.bounds.height > 0 ? Float(bottom / view.bounds.height) : 0)
+    /* The tool settings row hangs under the header: flush in Blender's style, 6 points below in
+     * glass, see #ToolSettingsRow.gap. */
+    if bottom > 0 && model.toolRowHeight > 0 { bottom += model.toolRowHeight + ToolSettingsRow.gap }
+    if model.topBarBottom != bottom { model.topBarBottom = bottom }
+    /* Blender keeps the navigation gizmo below it: in window pixels, sent on every layout (an
+     * atomic store, which redraws only on a change), so a resize can never leave it stale. */
+    WM_native_ui_top_bar_set(Float(bottom * model.pointScale))
+    if let header, header.bounds.width != headerCheckedWidth {
+      headerCheckedWidth = header.bounds.width
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak header] in
+        if let header { Self.checkHeaderClipping(header) }
+      }
+    }
+  }
+
+  private var headerCheckedWidth: CGFloat = 0
+
+  /** Any of the header's controls cut by its edges, logged as `layout: … header clipped`: the
+   * header ladder's width estimates (#HeaderLadder) must keep this from happening. */
+  private static func checkHeaderClipping(_ bar: UINavigationBar) {
+    var pending: [UIView] = bar.subviews
+    var clipped: [String] = []
+    while let current = pending.popLast() {
+      guard !current.isHidden, current.alpha > 0.01 else { continue }
+      if current is UIControl {
+        let frame = current.convert(current.bounds, to: bar)
+        if frame.width > 1, frame.minX < -1 || frame.maxX > bar.bounds.width + 1 {
+          clipped.append(current.accessibilityIdentifier ?? current.accessibilityLabel ?? "\(type(of: current))")
+        }
+        continue
+      }
+      pending.append(contentsOf: current.subviews)
+    }
+    if !clipped.isEmpty {
+      WM_native_ui_log("layout", "\(LayoutChecker.shared.conditions) header clipped at \(Int(bar.bounds.width)): " +
+                                 clipped.joined(separator: ", "))
+    }
+  }
+
+  /* -------------------------------------------------------------------- */
+  /* The window's size, for the layout's evidence */
+
+  private var windowLine = ""
+
+  /** The window's size, width class and style, on every change, as a `window` line once it
+   * settles, and as the conditions of the layout checker's lines. */
+  private func noteWindow() {
+    let size = view.bounds.size
+    let style = ShellStyle.current == .glass ? "glass" : "blender"
+    let line = "\(Int(size.width))x\(Int(size.height)) \(model.widthClass.name) rung \(model.headerRung) \(style)"
+    guard line != windowLine else { return }
+    windowLine = line
+    LayoutChecker.shared.conditions = line
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+      guard let self, self.windowLine == line else { return }
+      WM_native_ui_log("window", line)
+    }
+  }
+
+  override public func viewWillTransition(to size: CGSize, with coordinator: any UIViewControllerTransitionCoordinator) {
+    super.viewWillTransition(to: size, with: coordinator)
+    LayoutChecker.shared.resizing = true
+    WM_native_ui_log("window", "resize begin \(Int(size.width))x\(Int(size.height))")
+    coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+      LayoutChecker.shared.resizing = false
+      WM_native_ui_log("window", "resize end \(Int(size.width))x\(Int(size.height))")
+      self?.noteWindow()
     }
   }
 
@@ -532,11 +600,10 @@ public struct DocumentWindow: View {
         .toolbar(controlsShown ? .visible : .hidden, for: .navigationBar)
         .toolbarTitleDisplayMode(.inline)
         .headerSurface(interfaceStyle)
-        /* As an editor's: the tool's settings are the bar's middle items, which the system lays
-         * out in the room there is, the rest in its overflow menu. */
-        .toolbarRole(.editor)
+        /* No editor role: the system would move a whole side into its own overflow at once. The
+         * header folds one rung at a time instead, see #HeaderLadder. */
     }
-    .onChange(of: sizeClass, initial: true) { _, size in model.compact = size == .compact }
+    .headerLadder(model)
   }
 
   private var columnLayout: some View {
@@ -571,7 +638,7 @@ public struct DocumentWindow: View {
       bottomLayers(leading: hierarchy ? Self.hierarchyWidth : 0, trailing: inspector ? Self.inspectorWidth : 0)
     }
     .animation(.easeOut(duration: 0.42), value: docked)
-    .onGeometryChange(for: Bool.self) { $0.size.width < 1000 } action: { shell.panels.narrow = $0 }
+    .onChange(of: model.widthClass, initial: true) { _, width in shell.panels.narrow = width < .wide }
   }
 
   static let hierarchyWidth: CGFloat = 320
@@ -597,7 +664,7 @@ public struct DocumentWindow: View {
         .toolbar(controlsShown ? .visible : .hidden, for: .navigationBar)
         .toolbarTitleDisplayMode(.inline)
         .headerSurface(interfaceStyle)
-        .onChange(of: sizeClass, initial: true) { _, size in model.compact = size == .compact }
+        .headerLadder(model)
 #if os(visionOS)
         .visionOrnaments(model: model, shown: controlsShown && model.windowVisible)
 #endif
@@ -724,15 +791,19 @@ public struct DocumentWindow: View {
               .animation(.easeOut(duration: 0.18), value: RollDial.shared.showing)
 #endif
             ViewGizmoLayer(model: model)
-            /* Blender's Tool Settings bar, under the header, in a regular window. */
+            /* Blender's Tool Settings bar, under the header, unless the window is compact: flush
+             * and full width in Blender's style, as its tool header; a capsule hugging its items,
+             * a little below, in glass. */
             if !model.compact && !model.desktop {
+              let glass = interfaceStyle == ShellStyle.glass.rawValue
               GeometryReader { proxy in
                 ToolSettingsRow(model: model, shell: shell)
                   .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { model.toolRowHeight = $0 }
                   .onDisappear { model.toolRowHeight = 0 }
-                  .padding(.leading, model.sideInsets.left + 14)
-                  .padding(.trailing, model.sideInsets.right + 14)
-                  .offset(y: model.navigationBarBottom - proxy.frame(in: .global).minY + 6)
+                  .padding(.leading, glass ? model.sideInsets.left + 14 : 0)
+                  .padding(.trailing, glass ? model.sideInsets.right + 14 : 0)
+                  .frame(width: proxy.size.width, alignment: .leading)
+                  .offset(y: model.navigationBarBottom - proxy.frame(in: .global).minY + ToolSettingsRow.gap)
               }
               .ignoresSafeArea()
             }
@@ -1042,7 +1113,9 @@ struct BottomTrayLayer: View {
     }
     /* Blender keeps its own overlays, such as the navigation gizmo, above the tray. */
     let top = height - model.safeAreaInsets.bottom - 6 - (tray > 0 ? tray - 8 : 0)
-    WM_native_ui_bottom_tray_set(tray > 0 ? Float((height - top) / height) : 0)
+    /* In window pixels from the bottom: a fraction of the height is wrong once the window is
+     * resized. */
+    WM_native_ui_bottom_tray_set(tray > 0 ? Float((height - top) * model.pointScale) : 0)
   }
 }
 

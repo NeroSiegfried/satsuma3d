@@ -908,6 +908,17 @@ const char *bridge_snap_id(const ToolSettings *settings)
   return "mixed";
 }
 
+/** The element snapping goes to, whether or not snapping is on: "mixed" for several. */
+const char *bridge_snap_element_id(const ToolSettings *settings)
+{
+  for (const char *id : {"increment", "grid", "vertex", "edge", "face", "volume"}) {
+    if (settings->snap_mode == bridge_snap_mode_for_id(id)) {
+      return id;
+    }
+  }
+  return "mixed";
+}
+
 const char *bridge_proportional_id(const ToolSettings *settings, const eContextObjectMode mode)
 {
   const bool enabled = mode == CTX_MODE_OBJECT ?
@@ -1320,6 +1331,43 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
           bridge_rna_boolean_set(
               C, mirror->axes, name.c_str(), !RNA_boolean_get(&mirror->axes, name.c_str())));
     }
+    return;
+  }
+
+  /* Blender's header pairs: snapping and proportional editing each a toggle beside a dropdown of
+   * what it uses, and Auto Merge. Values are "on" and "off" for the toggles. */
+  if (command.setting == "snap_on") {
+    bridge_rna_undo_push(
+        C, bridge_rna_boolean_set(C, tool_settings_ptr, "use_snap", command.value == "on"));
+    return;
+  }
+  if (command.setting == "snap_element") {
+    bridge_rna_undo_push(
+        C,
+        bridge_rna_enum_set(C, tool_settings_ptr, "snap_elements", bridge_snap_mode_for_id(command.value)));
+    return;
+  }
+  if (command.setting == "proportional_on") {
+    bridge_rna_undo_push(C,
+                         bridge_rna_boolean_set(C,
+                                                tool_settings_ptr,
+                                                CTX_data_mode_enum(C) == CTX_MODE_OBJECT ?
+                                                    "use_proportional_edit_objects" :
+                                                    "use_proportional_edit",
+                                                command.value == "on"));
+    return;
+  }
+  if (command.setting == "proportional_falloff") {
+    PropertyRNA *prop = RNA_struct_find_property(&tool_settings_ptr, "proportional_edit_falloff");
+    int value = 0;
+    if (prop && RNA_property_enum_value(C, &tool_settings_ptr, prop, command.value.c_str(), &value)) {
+      bridge_rna_undo_push(C, bridge_rna_enum_set(C, tool_settings_ptr, "proportional_edit_falloff", value));
+    }
+    return;
+  }
+  if (command.setting == "automerge") {
+    bridge_rna_undo_push(
+        C, bridge_rna_boolean_set(C, tool_settings_ptr, "use_mesh_automerge", command.value == "on"));
     return;
   }
 
@@ -2466,6 +2514,51 @@ void bridge_transform_build(const Scene *scene,
          "Proportional Editing",
          bridge_proportional_id(settings, mode),
          OptionLabels(proportionals, std::size(proportionals)));
+  /* Blender's header draws snapping and proportional editing as a toggle joined to a dropdown:
+   * the toggles and the dropdowns' values on their own, so the shell can draw the same. */
+  const auto toggle = [&](const char *key, const char *label, const bool on) {
+    builder.add(top, key, [&](ViewBuffer &buffer, NodeFields &fields) {
+      fields.label = IFACE_(label);
+      return views::protocol::CreateToggle(buffer, on);
+    });
+  };
+  static const std::pair<const char *, const char *> snap_elements[] = {{"increment", "Increment"},
+                                                                        {"grid", "Absolute Grid"},
+                                                                        {"vertex", "Vertex"},
+                                                                        {"edge", "Edge"},
+                                                                        {"face", "Face"},
+                                                                        {"volume", "Volume"},
+                                                                        {"mixed", "Mix"}};
+  toggle("snap_on", "Snap", (settings->snap_flag & SCE_SNAP) != 0);
+  choice("snap_element",
+         "Snap To",
+         bridge_snap_element_id(settings),
+         OptionLabels(snap_elements, std::size(snap_elements)));
+  /* As Blender's header: Object Mode, the edit modes but armatures', particles and Grease
+   * Pencil sculpting. */
+  if (mode == CTX_MODE_OBJECT || mode == CTX_MODE_PARTICLE || mode == CTX_MODE_SCULPT_GREASE_PENCIL ||
+      (mode <= CTX_MODE_EDIT_POINTCLOUD && mode != CTX_MODE_EDIT_ARMATURE))
+  {
+    toggle("proportional_on",
+           "Proportional Editing",
+           mode == CTX_MODE_OBJECT ? settings->proportional_objects :
+                                     (settings->proportional_edit & PROP_EDIT_USE) != 0);
+    static const std::pair<const char *, const char *> falloffs[] = {{"SMOOTH", "Smooth"},
+                                                                     {"SPHERE", "Sphere"},
+                                                                     {"ROOT", "Root"},
+                                                                     {"INVERSE_SQUARE", "Inverse Square"},
+                                                                     {"SHARP", "Sharp"},
+                                                                     {"LINEAR", "Linear"},
+                                                                     {"CONSTANT", "Constant"},
+                                                                     {"RANDOM", "Random"}};
+    const char *falloff = "SMOOTH";
+    RNA_enum_identifier(rna_enum_proportional_falloff_items, settings->prop_mode, &falloff);
+    choice("proportional_falloff", "Proportional Falloff", falloff, OptionLabels(falloffs, std::size(falloffs)));
+  }
+  if (mode == CTX_MODE_EDIT_MESH) {
+    toggle("automerge", "Auto Merge Vertices", (settings->automerge & AUTO_MERGE) != 0);
+  }
+
   std::optional<BridgeMirror> mirror = bridge_mirror(ob, mode);
   if (!mirror) {
     return;
@@ -3091,14 +3184,11 @@ void bridge_toolbar_view_build(bContext *C,
     const float inset = radius + 10.0f * U.scale_factor;
     if (width > 0 && height > 0) {
       /* As `view3d_gizmo_navigate.cc` places it, over the part of the window a panel leaves
-       * showing, in whichever corner Settings has it: its center and radius as fractions of the
-       * window's width and height from the top left. */
-      const float cover = std::min(bridge_viewport_cover.load(), height * 0.9f);
+       * showing, in whichever corner Settings has it: its center and radius in window pixels from
+       * the top left, which the shell divides by its scale. */
       const float x = bridge_navigation_left ? visible.xmin + inset : visible.xmax - inset;
       const float y = bridge_navigation_top ? visible.ymax - inset : visible.ymin + inset;
-      const double gizmo[3] = {(region->winrct.xmin + x) / width,
-                               1.0 - (region->winrct.ymin + y - cover) / (height - cover),
-                               radius / width};
+      const double gizmo[3] = {region->winrct.xmin + x, height - (region->winrct.ymin + y), radius};
       data("navigation_gizmo", Span<double>(gizmo, 3));
 
       /* All the gizmo takes, its zoom, move, camera and projection buttons too where they show,
@@ -3127,11 +3217,11 @@ void bridge_toolbar_view_build(bContext *C,
         y0 = std::min({y0, first - mini * 0.5f, last - mini * 0.5f});
         y1 = std::max({y1, first + mini * 0.5f, last + mini * 0.5f});
       }
-      /* Its left, top, right and bottom as fractions of the window from the top left. */
-      const double footprint[4] = {(region->winrct.xmin + x0) / width,
-                                   1.0 - (region->winrct.ymin + y1 - cover) / (height - cover),
-                                   (region->winrct.xmin + x1) / width,
-                                   1.0 - (region->winrct.ymin + y0 - cover) / (height - cover)};
+      /* Its left, top, right and bottom in window pixels from the top left. */
+      const double footprint[4] = {region->winrct.xmin + x0,
+                                   height - (region->winrct.ymin + y1),
+                                   region->winrct.xmin + x1,
+                                   height - (region->winrct.ymin + y0)};
       data("navigation_footprint", Span<double>(footprint, 4));
     }
   }
@@ -3197,7 +3287,17 @@ views::CommandResult bridge_toolbar_view_command(bContext *C,
   if (set && target == "active_name") {
     return setting("rename_active", "\"" + bridge_json_escape(text) + "\"");
   }
-  if (set && ELEM(target, "orientation", "pivot", "snap", "proportional")) {
+  if (set && ELEM(target,
+                  "orientation",
+                  "pivot",
+                  "snap",
+                  "proportional",
+                  "snap_on",
+                  "snap_element",
+                  "proportional_on",
+                  "proportional_falloff",
+                  "automerge"))
+  {
     return setting(std::string(target).c_str(), text);
   }
   if (set && target == "mirror") {
@@ -3311,6 +3411,7 @@ bool bridge_toolbar_view_live(const views::protocol::Command &command)
 {
   const StringRef target = command.target()->string_view();
   return ELEM(target, "orientation", "pivot", "snap", "proportional", "mirror", "mirror_topology") ||
+         ELEM(target, "snap_on", "snap_element", "proportional_on", "proportional_falloff", "automerge") ||
          target == "direction" || target.startswith("brush:") || target.startswith("axis:");
 }
 
@@ -5231,12 +5332,14 @@ void WM_native_ui_navigation_redraw_request()
   bridge_navigation_redraw_pending.store(true);
 }
 
-/* How much of the window's height, from the top, the native top bar covers. */
+/* How far from the window's top the native top bar and the tool settings row reach, in window
+ * pixels. Pixels, not a fraction of the height: the window's height changes as it is resized, and
+ * the shell and Blender may hold different heights for a few frames while it does. */
 static std::atomic<float> bridge_top_bar = 0.0f;
 
-extern "C" void WM_native_ui_top_bar_set(const float fraction)
+extern "C" void WM_native_ui_top_bar_set(const float pixels)
 {
-  if (bridge_top_bar.exchange(fraction) != fraction) {
+  if (bridge_top_bar.exchange(pixels) != pixels) {
     bridge_navigation_redraw_pending.store(true);
   }
 }
@@ -5244,12 +5347,13 @@ extern "C" void WM_native_ui_top_bar_set(const float fraction)
 int WM_native_ui_top_bar_ymax(const wmWindow *win, const ARegion *region)
 {
   /* The navigation gizmo sits below the top bar, in region pixels. */
-  return int((1.0f - bridge_top_bar.load()) * WM_window_native_pixel_y(win)) - region->winrct.ymin;
+  return WM_window_native_pixel_y(win) - int(bridge_top_bar.load()) - region->winrct.ymin;
 }
 
-extern "C" void WM_native_ui_bottom_tray_set(const float fraction)
+/* How far from the window's bottom the native controls along the bottom reach, in window pixels. */
+extern "C" void WM_native_ui_bottom_tray_set(const float pixels)
 {
-  if (bridge_bottom_tray.exchange(fraction) != fraction) {
+  if (bridge_bottom_tray.exchange(pixels) != pixels) {
     bridge_navigation_redraw_pending.store(true);
   }
 }
@@ -5299,7 +5403,7 @@ bool WM_native_ui_navigation_left()
 int WM_native_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region)
 {
   /* The navigation gizmo sits above the tray, in region pixels. */
-  return int(bridge_bottom_tray.load() * WM_window_native_pixel_y(win)) - region->winrct.ymin;
+  return int(bridge_bottom_tray.load()) - region->winrct.ymin;
 }
 
 static void bridge_dispatch(bContext *C, BridgeMessage &message)

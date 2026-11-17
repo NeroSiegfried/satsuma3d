@@ -253,24 +253,29 @@ final class ShellModel {
   var curvesCover: CGFloat = 0
   /** The native Image Editor shows beside the viewport, a viewport of its own. */
   var imageShown = false
-  /** Blender's navigation gizmo: its center and radius, in fractions of the window's width and
-   * height (center) and width (radius). */
+  /** Blender's navigation gizmo: its center and radius, in window pixels from the top left. */
   var navigationGizmo: [Double] { floats("navigation_gizmo") }
-  /** All the navigation gizmo takes with its buttons, as fractions of the window from the top left:
-   * left, top, right and bottom. */
+  /** All the navigation gizmo takes with its buttons, in window pixels from the top left: left,
+   * top, right and bottom. */
   var navigationFootprint: [Double] { floats("navigation_footprint") }
+  /** Window points per pixel Blender draws: the window's display scale. */
+  var pointScale: CGFloat = 2
 
-  /** The navigation gizmo and its buttons in a window of \a size, or nil before Blender says. */
-  func navigationFrame(in size: CGSize) -> CGRect? {
+  /** Blender's navigation gizmo, as the square around its circle, in window points; nil before
+   * Blender says. */
+  var navigationGizmoRect: CGRect? {
+    let g = navigationGizmo
+    guard g.count == 3, pointScale > 0 else { return nil }
+    let r = CGFloat(g[2]) / pointScale
+    return CGRect(x: CGFloat(g[0]) / pointScale - r, y: CGFloat(g[1]) / pointScale - r, width: r * 2, height: r * 2)
+  }
+
+  /** The navigation gizmo and its buttons, in window points; nil before Blender says. */
+  var navigationFrame: CGRect? {
     let f = navigationFootprint
-    guard f.count == 4 else {
-      let g = navigationGizmo
-      guard g.count == 3 else { return nil }
-      let r = g[2] * size.width
-      return CGRect(x: g[0] * size.width - r, y: g[1] * size.height - r, width: r * 2, height: r * 2)
-    }
-    return CGRect(x: f[0] * size.width, y: f[1] * size.height,
-                  width: (f[2] - f[0]) * size.width, height: (f[3] - f[1]) * size.height)
+    guard f.count == 4, pointScale > 0 else { return navigationGizmoRect }
+    return CGRect(x: CGFloat(f[0]) / pointScale, y: CGFloat(f[1]) / pointScale,
+                  width: CGFloat(f[2] - f[0]) / pointScale, height: CGFloat(f[3] - f[1]) / pointScale)
   }
   /** The color the viewport is cleared to, as red, green and blue in display space. */
   var viewportBackground: [Double] { floats("viewport_background") }
@@ -289,8 +294,12 @@ final class ShellModel {
    * by name: `mirror_axes` the axes there are and `mirror` those on, as letters. */
   var transformSettings: [String: String] {
     var settings: [String: String] = [:]
-    for name in ["orientation", "pivot", "snap", "proportional"] {
+    for name in ["orientation", "pivot", "snap", "proportional", "snap_element", "proportional_falloff"] {
       if let value = node(name)?.choice?.value { settings[name] = value }
+    }
+    /* Blender's header toggles: snapping, proportional editing and Auto Merge, "on" or "off". */
+    for name in ["snap_on", "proportional_on", "automerge"] {
+      if let toggle = node(name)?.toggle { settings[name] = toggle.value ? "on" : "off" }
     }
     if let mirror = node("mirror")?.choice {
       settings["mirror_axes"] = mirror.allOptions.compactMap(\.value).joined()
@@ -341,15 +350,16 @@ final class ShellModel {
   var assetsShown = false
   /** Full screen: everything but the button that brings it back is hidden. */
   var interfaceHidden = false
-  /** The tool rail's width, which the controls beside it keep clear of. */
-  var toolRailWidth: CGFloat = 64
-  /** A tool or brush row along the bottom, which the quick actions rise above. */
-  var bottomRailHeight: CGFloat = 0
-  /** The tool rail's frame in the window, which the action bar keeps clear of. */
-  var toolsFrame: CGRect = .zero
-  /** A narrow window, such as a phone's: the toolbar keeps its most used items and puts the rest
-   * in one menu. */
-  var compact = false
+  /** Where the rails are, as their layout placed them (not as measured): the controls along the
+   * bottom are placed from it, see #ShellLayout. */
+  var rails = RailFrames()
+  /** The window's width class, see #WidthClass: the one notion of narrow. */
+  var widthClass: WidthClass = .wide
+  /** How far the header has folded into More, see #HeaderLadder: 6 shows everything. */
+  var headerRung = HeaderLadder.widest
+  /** A phone's or a narrow window's layout: the header at its last rung, the tool settings row
+   * in More. */
+  var compact: Bool { widthClass == .compact }
   /** The viewport shading and tool settings popovers are open. */
   var shadingOpen = false
   var toolSettingsOpen = false

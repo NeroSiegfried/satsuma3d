@@ -1023,8 +1023,11 @@ struct ToolRails: View {
       let toolItems = RailItem.tools(model.tools, mode: model.mode)
       let brushItems = RailItem.brushes(model.brushes)
       /* The navigation gizmo with its buttons, in whichever corner it is. */
+      let origin = proxy.frame(in: .global).origin
       let gizmoFrame = !gizmoShown ? CGRect(x: safe.minX, y: safe.maxY + 1000, width: 0, height: 0) :
-        model.navigationFrame(in: proxy.size) ?? CGRect(x: safe.maxX - 100, y: safe.maxY - 100, width: 80, height: 80)
+        model.navigationFrame?.offsetBy(dx: -origin.x, dy: -origin.y) ??
+        ShellLayout.predictedGizmo(size: proxy.size, top: safe.minY, leading: false, bottom: false,
+                                   sideInsets: .zero).footprint
       let arrange = { (dial: Bool) -> (SidebarContent, RailLayout) in
         let content = SidebarContent(brush: model.brush,
                                      buttons: model.direction?.hidden != true || model.transforming,
@@ -1078,7 +1081,6 @@ struct ToolRails: View {
           ShellModel.current?.setTool(item.id)
         }
         .layoutZone("tools")
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { model.toolsFrame = $0 }
         .position(carriedCenter(.tools, size: CGSize(width: layout.toolWidth, height: layout.toolHeight)) ??
                   layout.toolCenter)
         .onChange(of: layout.toolsCompact) { _, compact in
@@ -1205,8 +1207,8 @@ struct ToolRails: View {
       .animation(UIAccessibility.isReduceMotionEnabled || sidebarDragStart != nil ? nil :
                    .spring(response: 0.32, dampingFraction: 0.84),
                  value: layout)
-      .onChange(of: layout.leadingCorner, initial: true) { _, width in model.toolRailWidth = width }
-      .onChange(of: layout.bottomRow, initial: true) { _, height in model.bottomRailHeight = height }
+      /* Where the layout put the rails, for the row along the bottom: computed, not measured. */
+      .onChange(of: RailFrames(layout), initial: true) { _, frames in model.rails = frames }
       .onAppear {
         PencilRoll.start()
 #if !os(visionOS)

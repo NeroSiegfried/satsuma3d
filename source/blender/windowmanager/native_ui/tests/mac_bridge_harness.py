@@ -23,7 +23,7 @@ SCENARIO = argv[2] if len(argv) > 2 else "actions"
 import flatbuffers  # noqa: E402
 from Blender.NativeUI import (  # noqa: E402
     BoolValue, Button, ButtonStyle, Choice, Command, Commands, Content, Group, Node, Op, Param, Subscribe, TextValue,
-    Updates, Value,
+    Toggle, Updates, Value,
 )
 
 lib = ctypes.CDLL(None)
@@ -99,6 +99,31 @@ def invoke(subscription, target, command_id):
     lib.WM_native_ui_send(data, len(data))
 
 
+def set_text(subscription, target, text, command_id):
+    builder = flatbuffers.Builder(256)
+    t = builder.CreateString(target)
+    v = builder.CreateString(text)
+    TextValue.Start(builder)
+    TextValue.AddValue(builder, v)
+    tv = TextValue.End(builder)
+    Command.Start(builder)
+    Command.AddId(builder, command_id)
+    Command.AddSubscription(builder, subscription)
+    Command.AddTarget(builder, t)
+    Command.AddOp(builder, Op.Op.Set)
+    Command.AddValueType(builder, Value.Value.TextValue)
+    Command.AddValue(builder, tv)
+    c = Command.End(builder)
+    Commands.StartCommandsVector(builder, 1)
+    builder.PrependUOffsetTRelative(c)
+    vec = builder.EndVector()
+    Commands.Start(builder)
+    Commands.AddCommands(builder, vec)
+    builder.Finish(Commands.End(builder))
+    data = bytes(builder.Output())
+    lib.WM_native_ui_send(data, len(data))
+
+
 CONTENT_NAMES = {value: name for name, value in vars(Content.Content).items() if not name.startswith("_")}
 STYLE_NAMES = {value: name for name, value in vars(ButtonStyle.ButtonStyle).items() if not name.startswith("_")}
 views = {}  # subscription -> {"top": key, "nodes": {key: dict}, "children": {key: [keys]}}
@@ -138,6 +163,11 @@ def decode_node(raw):
         choice.Init(table.Bytes, table.Pos)
         entry.update(value=s(choice.Value()),
                      options=[s(choice.Options(i).Value()) for i in range(choice.OptionsLength())])
+    elif node.ContentType() == Content.Content.Toggle:
+        table = node.Content()
+        toggle = Toggle.Toggle()
+        toggle.Init(table.Bytes, table.Pos)
+        entry.update(value=bool(toggle.Value()))
     return s(node.Key()), entry
 
 
@@ -393,7 +423,7 @@ def tick_menus():
 
 
 # The mirror or symmetry axes in every mode whose header has them, as Blender names them there.
-MIRROR_MODES = ("EDIT", "SCULPT", "WEIGHT_PAINT", "VERTEX_PAINT", "TEXTURE_PAINT", "ARMATURE_EDIT", "POSE")
+MIRROR_MODES = ("OBJECT", "EDIT", "SCULPT", "WEIGHT_PAINT", "VERTEX_PAINT", "TEXTURE_PAINT", "ARMATURE_EDIT", "POSE")
 
 
 def tick_mirror():
@@ -410,6 +440,8 @@ def tick_mirror():
             mode = MIRROR_MODES[index]
             if bpy.context.mode != 'OBJECT':
                 bpy.ops.object.mode_set(mode='OBJECT')
+            if mode == "OBJECT":
+                return 0.25
             name = report["armature"] if mode in {"ARMATURE_EDIT", "POSE"} else "Cube"
             ob = bpy.data.objects[name]
             bpy.ops.object.select_all(action='DESELECT')
@@ -419,8 +451,27 @@ def tick_mirror():
         elif step >= 2 and (step - 2) % 4 == 3 and index < len(MIRROR_MODES):
             top = tree(subs["toolbar"]) or {}
             node = next((n for n in top.get("children", []) if n["key"] == "mirror"), None)
+            # Blender's header widgets: snapping and proportional editing as a toggle and a
+            # dropdown each, Auto Merge in Edit Mesh (ROUND5 Stage 5E).
+            header = {n["key"]: n.get("value", n.get("options")) for n in top.get("children", [])
+                      if n["key"] in {"snap_on", "snap_element", "proportional_on", "proportional_falloff",
+                                      "automerge", "orientation", "pivot"}}
             report["steps"].append({"name": MIRROR_MODES[index], "context": bpy.context.mode,
-                                    "mirror": node and {"label": node["label"], "options": node.get("options")}})
+                                    "mirror": node and {"label": node["label"], "options": node.get("options")},
+                                    "header": header})
+            if MIRROR_MODES[index] == "EDIT":
+                # The header's new commands, as the shell sends them; checked a step later.
+                for n, (target, text) in enumerate((("snap_on", "on"), ("snap_element", "vertex"),
+                                                    ("proportional_on", "on"), ("proportional_falloff", "SHARP"),
+                                                    ("automerge", "on"))):
+                    set_text(subs["toolbar"], target, text, 900 + n)
+            if index > 0 and MIRROR_MODES[index - 1] == "EDIT":
+                ts = bpy.context.scene.tool_settings
+                report["header_set"] = {"use_snap": ts.use_snap, "snap_elements": sorted(ts.snap_elements),
+                                        "use_proportional_edit": ts.use_proportional_edit,
+                                        "proportional_edit_falloff": ts.proportional_edit_falloff,
+                                        "use_mesh_automerge": ts.use_mesh_automerge,
+                                        "acks": {k: v for k, v in acks.items() if k >= 900}}
             if index == len(MIRROR_MODES) - 1:
                 finish("done")
                 return None

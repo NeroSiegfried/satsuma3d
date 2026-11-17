@@ -146,6 +146,8 @@ private struct SettingOption {
   let title: String
   let symbol: String
   let value: String
+  /** Blender's icon for it, as its header draws it. */
+  var blender = ""
 }
 
 private struct TransformSetting {
@@ -156,40 +158,66 @@ private struct TransformSetting {
 
   static let all = [
     TransformSetting(key: "orientation", title: "Transform Orientation", symbol: "rotate.3d", options: [
-      SettingOption(title: "Global", symbol: "globe", value: "global"),
-      SettingOption(title: "Local", symbol: "cube", value: "local"),
-      SettingOption(title: "Normal", symbol: "arrow.up.forward", value: "normal"),
-      SettingOption(title: "Gimbal", symbol: "gyroscope", value: "gimbal"),
-      SettingOption(title: "View", symbol: "eye", value: "view"),
-      SettingOption(title: "Cursor", symbol: "scope", value: "cursor"),
-      SettingOption(title: "Parent", symbol: "arrow.triangle.branch", value: "parent"),
+      SettingOption(title: "Global", symbol: "globe", value: "global", blender: "ORIENTATION_GLOBAL"),
+      SettingOption(title: "Local", symbol: "cube", value: "local", blender: "ORIENTATION_LOCAL"),
+      SettingOption(title: "Normal", symbol: "arrow.up.forward", value: "normal", blender: "ORIENTATION_NORMAL"),
+      SettingOption(title: "Gimbal", symbol: "gyroscope", value: "gimbal", blender: "ORIENTATION_GIMBAL"),
+      SettingOption(title: "View", symbol: "eye", value: "view", blender: "ORIENTATION_VIEW"),
+      SettingOption(title: "Cursor", symbol: "scope", value: "cursor", blender: "ORIENTATION_CURSOR"),
+      SettingOption(title: "Parent", symbol: "arrow.triangle.branch", value: "parent", blender: "ORIENTATION_PARENT"),
     ]),
     TransformSetting(key: "pivot", title: "Pivot Point", symbol: "viewfinder", options: [
-      SettingOption(title: "Median Point", symbol: "circle.grid.cross", value: "median"),
-      SettingOption(title: "Bounding Box Center", symbol: "square.dashed", value: "bounds"),
-      SettingOption(title: "3D Cursor", symbol: "scope", value: "cursor"),
-      SettingOption(title: "Individual Origins", symbol: "circle.grid.2x2", value: "individual"),
-      SettingOption(title: "Active Element", symbol: "record.circle", value: "active"),
+      SettingOption(title: "Median Point", symbol: "circle.grid.cross", value: "median", blender: "PIVOT_MEDIAN"),
+      SettingOption(title: "Bounding Box Center", symbol: "square.dashed", value: "bounds", blender: "PIVOT_BOUNDBOX"),
+      SettingOption(title: "3D Cursor", symbol: "scope", value: "cursor", blender: "PIVOT_CURSOR"),
+      SettingOption(title: "Individual Origins", symbol: "circle.grid.2x2", value: "individual", blender: "PIVOT_INDIVIDUAL"),
+      SettingOption(title: "Active Element", symbol: "record.circle", value: "active", blender: "PIVOT_ACTIVE"),
     ]),
     TransformSetting(key: "snap", title: "Snapping", symbol: "magnet", options: [
-      SettingOption(title: "Off", symbol: "magnet", value: "off"),
-      SettingOption(title: "Increment", symbol: "grid", value: "increment"),
-      SettingOption(title: "Grid", symbol: "square.grid.3x3", value: "grid"),
-      SettingOption(title: "Vertex", symbol: "point.topleft.down.curvedto.point.bottomright.up", value: "vertex"),
-      SettingOption(title: "Edge", symbol: "line.diagonal", value: "edge"),
-      SettingOption(title: "Face", symbol: "square", value: "face"),
-      SettingOption(title: "Volume", symbol: "cube.transparent", value: "volume"),
+      SettingOption(title: "Off", symbol: "magnet", value: "off", blender: "SNAP_OFF"),
+      SettingOption(title: "Increment", symbol: "grid", value: "increment", blender: "SNAP_INCREMENT"),
+      SettingOption(title: "Grid", symbol: "square.grid.3x3", value: "grid", blender: "SNAP_GRID"),
+      SettingOption(title: "Vertex", symbol: "point.topleft.down.curvedto.point.bottomright.up", value: "vertex", blender: "SNAP_VERTEX"),
+      SettingOption(title: "Edge", symbol: "line.diagonal", value: "edge", blender: "SNAP_EDGE"),
+      SettingOption(title: "Face", symbol: "square", value: "face", blender: "SNAP_FACE"),
+      SettingOption(title: "Volume", symbol: "cube.transparent", value: "volume", blender: "SNAP_VOLUME"),
     ]),
     TransformSetting(key: "proportional", title: "Proportional Editing", symbol: "circle.circle", options: [
-      SettingOption(title: "Off", symbol: "circle", value: "off"),
-      SettingOption(title: "On", symbol: "largecircle.fill.circle", value: "on"),
-      SettingOption(title: "Connected Only", symbol: "link.circle", value: "connected"),
-      SettingOption(title: "Projected", symbol: "square.3.layers.3d", value: "projected"),
+      SettingOption(title: "Off", symbol: "circle", value: "off", blender: "PROP_OFF"),
+      SettingOption(title: "On", symbol: "largecircle.fill.circle", value: "on", blender: "PROP_ON"),
+      SettingOption(title: "Connected Only", symbol: "link.circle", value: "connected", blender: "PROP_CON"),
+      SettingOption(title: "Projected", symbol: "square.3.layers.3d", value: "projected", blender: "PROP_PROJECTED"),
     ]),
   ]
 
+  /** Snapping's targets, as its dropdown lists them beside the magnet. */
+  static let snapElements = [
+    SettingOption(title: "Increment", symbol: "grid", value: "increment", blender: "SNAP_INCREMENT"),
+    SettingOption(title: "Absolute Grid", symbol: "square.grid.3x3", value: "grid", blender: "SNAP_GRID"),
+    SettingOption(title: "Vertex", symbol: "smallcircle.filled.circle", value: "vertex", blender: "SNAP_VERTEX"),
+    SettingOption(title: "Edge", symbol: "line.diagonal", value: "edge", blender: "SNAP_EDGE"),
+    SettingOption(title: "Face", symbol: "square", value: "face", blender: "SNAP_FACE"),
+    SettingOption(title: "Volume", symbol: "cube.transparent", value: "volume", blender: "SNAP_VOLUME"),
+  ]
+
+  /** Proportional editing's falloffs, as its dropdown lists them beside the circle. */
+  static let falloffs = [
+    SettingOption(title: "Smooth", symbol: "waveform.path", value: "SMOOTH", blender: "SMOOTHCURVE"),
+    SettingOption(title: "Sphere", symbol: "circle", value: "SPHERE", blender: "SPHERECURVE"),
+    SettingOption(title: "Root", symbol: "function", value: "ROOT", blender: "ROOTCURVE"),
+    SettingOption(title: "Inverse Square", symbol: "function", value: "INVERSE_SQUARE", blender: "INVERSESQUARECURVE"),
+    SettingOption(title: "Sharp", symbol: "function", value: "SHARP", blender: "SHARPCURVE"),
+    SettingOption(title: "Linear", symbol: "line.diagonal", value: "LINEAR", blender: "LINCURVE"),
+    SettingOption(title: "Constant", symbol: "minus", value: "CONSTANT", blender: "NOCURVE"),
+    SettingOption(title: "Random", symbol: "dice", value: "RANDOM", blender: "RNDCURVE"),
+  ]
+
+  static func blenderImage(_ option: SettingOption) -> UIImage? {
+    BlenderIcon.image(option.blender) ?? UIImage(systemName: option.symbol)
+  }
+
   func image(_ option: SettingOption) -> UIImage? {
-    wm_apple_ios_icon("setting.\(key).\(option.value)", option.symbol)
+    BlenderIcon.image(option.blender) ?? wm_apple_ios_icon("setting.\(key).\(option.value)", option.symbol)
   }
 }
 
@@ -232,6 +260,9 @@ struct DocumentToolbar: ToolbarContent {
 #endif
   }
 
+  /** What the header shows at its rung, see #HeaderLadder; the rest is in More. */
+  private var shown: HeaderLadder.Shown { HeaderLadder.shows(model.headerRung) }
+
   @ToolbarContentBuilder
   private var items: some ToolbarContent {
     if model.documentsAvailable {
@@ -249,7 +280,7 @@ struct DocumentToolbar: ToolbarContent {
       ToolbarSpacer(.fixed, placement: .topBarLeading)
 #endif
     }
-    if !model.compact {
+    if shown.fileEdit {
       ToolbarItem(placement: .topBarLeading) {
         HStack(spacing: 0) {
           fileButton
@@ -259,6 +290,8 @@ struct DocumentToolbar: ToolbarContent {
 #if !os(visionOS)
       ToolbarSpacer(.fixed, placement: .topBarLeading)
 #endif
+    }
+    if shown.sidebar {
       ToolbarItem(placement: .topBarLeading) { sidebarMenu }
 #if !os(visionOS)
       ToolbarSpacer(.fixed, placement: .topBarLeading)
@@ -270,10 +303,14 @@ struct DocumentToolbar: ToolbarContent {
         .help("Assets")
         .accessibilityIdentifier("blender.assets")
     }
-    if !model.compact {
+    if shown.menusExpanded {
       /* Blender's header menus for the mode, as on the desktop: View, Select, Add, Object, or
-       * Mesh, Vertex, Edge, Face and UV; one Menus button where they do not fit. */
+       * Mesh, Vertex, Edge, Face and UV. */
       ToolbarItem(placement: .topBarLeading) { EditorMenus() }
+    }
+    else if shown.menusButton {
+      /* Folded into one button before they go into More. */
+      ToolbarItem(placement: .topBarLeading) { EditorMenusButton() }
     }
     /* Search, as F3: any command by its name. */
     ToolbarItem(placement: .topBarLeading) {
@@ -285,7 +322,7 @@ struct DocumentToolbar: ToolbarContent {
             .sheetDetents()
         }
     }
-    if model.mode == "mesh_edit" && !model.compact {
+    if model.mode == "mesh_edit" && shown.selectMode {
 #if os(visionOS)
       ToolbarItem(placement: .topBarLeading) { meshSelection }
 #else
@@ -294,62 +331,46 @@ struct DocumentToolbar: ToolbarContent {
         .sharedBackgroundVisibility(.hidden)
 #endif
     }
-    if model.compact {
-      /* Undo stays in reach on a phone, beside the items above. */
+    if shown.shading {
+      ToolbarItem(placement: .topBarTrailing) { shadingButton }
 #if !os(visionOS)
-      ToolbarSpacer(.fixed, placement: .topBarLeading)
+      ToolbarSpacer(.fixed, placement: .topBarTrailing)
 #endif
-      ToolbarItemGroup(placement: .topBarLeading) {
-        undoButton
-        redoButton
-        repeatButton
-      }
     }
-    if model.compact {
-      /* Everything else in one menu, as nothing else fits beside the most used items. */
+    if shown.properties {
+      /* Properties slides in from the window's trailing edge. */
       ToolbarItem(placement: .topBarTrailing) {
-        Menu("More", systemImage: "ellipsis") { compactMenu }
-          .background(ShareSource(commands: commands))
-          .prefetchingBlenderMenu(EditorMenus.route)
-          .prefetchingBlenderMenu(Self.importRoute)
-          .prefetchingBlenderMenu(Self.exportRoute)
-          .shadingPopover(model: model, shell: shell)
-          .popover(isPresented: $model.toolSettingsOpen) {
-            shell.panels.toolSettingsContent { model.toolSettingsOpen = false }
-          }
-          .accessibilityIdentifier("blender.actions")
+        panelToggle("Properties", image: BlenderIcon.image("PROPERTIES"), isOn: model.inspectorShown,
+                    identifier: "blender.inspector") { shell.panels.toggleInspector() }
       }
-    }
-    else {
-      regularTrailing
-    }
-  }
-
-  @ToolbarContentBuilder
-  private var regularTrailing: some ToolbarContent {
-    ToolbarItem(placement: .topBarTrailing) { shadingButton }
 #if !os(visionOS)
-    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+      ToolbarSpacer(.fixed, placement: .topBarTrailing)
 #endif
-    /* Properties slides in from the window's trailing edge. */
-    ToolbarItem(placement: .topBarTrailing) {
-      panelToggle("Properties", image: BlenderIcon.image("PROPERTIES"), isOn: model.inspectorShown,
-                  identifier: "blender.inspector") { shell.panels.toggleInspector() }
     }
-#if !os(visionOS)
-    ToolbarSpacer(.fixed, placement: .topBarTrailing)
-#endif
-    /* Undo, Redo, Share and More together. */
+    /* Undo, Redo, Repeat, Share and More together; Undo, Redo and More at every width. */
     ToolbarItemGroup(placement: .topBarTrailing) {
       undoButton
       redoButton
-      repeatButton
-      Menu("Share", systemImage: "square.and.arrow.up") { shareMenu }
-        .background(ShareSource(commands: commands))
-        .accessibilityIdentifier("blender.share")
-      Menu("More", systemImage: "ellipsis") { moreMenu }
-        .accessibilityIdentifier("blender.actions")
+      if shown.repeatLast { repeatButton }
+      if shown.share {
+        Menu("Share", systemImage: "square.and.arrow.up") { shareMenu }
+          .background(ShareSource(commands: commands))
+          .accessibilityIdentifier("blender.share")
+      }
+      moreButton
     }
+  }
+
+  /** More: what the header has no room for at its rung, then the smaller things. */
+  private var moreButton: some View {
+    Menu("More", systemImage: "ellipsis") { overflowMenu }
+      /* The share sheet points at More while Share is in it. */
+      .background { if !shown.share { ShareSource(commands: commands) } }
+      .prefetchingBlenderMenu(EditorMenus.route)
+      .prefetchingBlenderMenu(Self.importRoute)
+      .prefetchingBlenderMenu(Self.exportRoute)
+      .modifier(MorePopovers(model: model, shell: shell, shading: !shown.shading, toolSettings: model.compact))
+      .accessibilityIdentifier("blender.actions")
   }
 
   /** A panel in the sidebar menu, with Blender's icon for its editor. */
@@ -518,58 +539,76 @@ struct DocumentToolbar: ToolbarContent {
     Label { Text(title) } icon: { iconImage(BlenderIcon.image(icon)) }
   }
 
-  /** A narrow window's one menu: the panels, the view, One Finger, the selection mode and tool
-   * settings, then Share and More. */
+  /** More's first part: every item the header's rung has moved out, in the header's order, so
+   * nothing is in two places and nothing is missing; at the last rung also the view, One Finger
+   * and the tool settings, as a phone has no room for them elsewhere. */
   @ViewBuilder
-  private var compactMenu: some View {
-    /* Blender's header menus, as one submenu each. */
-    Section {
-      ForEach((BlenderMenus.shared.items[EditorMenus.route] ?? []).filter { $0.submenu && !$0.disabled }) { item in
-        Menu(item.title) { BlenderMenuItems(route: item.route) }
-      }
-    }
-    Section {
-      sidebarToggle("Outliner", icon: BlenderIcon.image("OUTLINER"), isOn: model.hierarchyShown) {
-        shell.panels.toggleHierarchy()
-      }
-      sidebarToggle("Timeline", icon: UIImage(named: "blender.time")?.withRenderingMode(.alwaysTemplate),
-                    isOn: model.timelineShown) { shell.timeline.setVisible($0) }
-      sidebarToggle("Properties", icon: BlenderIcon.image("PROPERTIES"), isOn: model.inspectorShown) {
-        shell.panels.toggleInspector()
-      }
-    }
-    nodeEditorToggles
-    Section {
-      Button("Viewport Shading", systemImage: "circle.lefthalf.filled") {
-        shell.panels.showShadingTab("SHADING")
-        model.shadingOpen = true
-      }
-      Button {
-        shell.panels.showShadingTab("OVERLAYS")
-        model.shadingOpen = true
-      } label: {
-        Label { Text("Overlays") } icon: { iconImage(BlenderIcon.image("OVERLAY")) }
-      }
-      Menu {
-        ForEach(ViewCommand.pie(locked: model.viewportOption("lock_camera"),
-                                kept: model.viewportOption("keep_camera_view"),
-                                camera: model.viewportOption("camera_view")), id: \.title) { command in
-          Button { command.run() } label: { Label { Text(command.title) } icon: { iconImage(command.image) } }
+  private var overflowMenu: some View {
+    if !shown.menusExpanded && !shown.menusButton {
+      /* Blender's header menus, as one submenu each. */
+      Section {
+        ForEach((BlenderMenus.shared.items[EditorMenus.route] ?? []).filter { $0.submenu && !$0.disabled }) { item in
+          Menu(item.title) { BlenderMenuItems(route: item.route) }
         }
-      } label: {
-        Label("View", systemImage: "eye")
       }
-      Menu {
-        sidebarToggle("Use Tool", icon: wm_apple_ios_icon("control.finger_tool", "cursorarrow"),
-                      isOn: model.fingerUsesTool) { commands.setFingerUsesTool(true) }
-        sidebarToggle("Orbit View", icon: wm_apple_ios_icon("operator.VIEW3D_OT_rotate", "rotate.3d"),
-                      isOn: !model.fingerUsesTool) { commands.setFingerUsesTool(false) }
-      } label: {
-        Label("One Finger", systemImage: "hand.point.up")
+    }
+    if !shown.sidebar || !shown.properties {
+      Section {
+        if !shown.sidebar {
+          sidebarToggle("Outliner", icon: BlenderIcon.image("OUTLINER"), isOn: model.hierarchyShown) {
+            shell.panels.toggleHierarchy()
+          }
+          sidebarToggle("Timeline", icon: UIImage(named: "blender.time")?.withRenderingMode(.alwaysTemplate),
+                        isOn: model.timelineShown) { shell.timeline.setVisible($0) }
+          sidebarToggle("Asset Browser", icon: BlenderIcon.image("ASSET_MANAGER"), isOn: model.assetsShown) {
+            shell.assets.toggle()
+          }
+        }
+        if !shown.properties {
+          sidebarToggle("Properties", icon: BlenderIcon.image("PROPERTIES"), isOn: model.inspectorShown) {
+            shell.panels.toggleInspector()
+          }
+        }
+      }
+      if !shown.sidebar { nodeEditorToggles }
+    }
+    if !shown.shading || model.headerRung == 0 {
+      Section {
+        if !shown.shading {
+          Button("Viewport Shading", systemImage: "circle.lefthalf.filled") {
+            shell.panels.showShadingTab("SHADING")
+            model.shadingOpen = true
+          }
+          Button {
+            shell.panels.showShadingTab("OVERLAYS")
+            model.shadingOpen = true
+          } label: {
+            Label { Text("Overlays") } icon: { iconImage(BlenderIcon.image("OVERLAY")) }
+          }
+        }
+        if model.headerRung == 0 {
+          Menu {
+            ForEach(ViewCommand.pie(locked: model.viewportOption("lock_camera"),
+                                    kept: model.viewportOption("keep_camera_view"),
+                                    camera: model.viewportOption("camera_view")), id: \.title) { command in
+              Button { command.run() } label: { Label { Text(command.title) } icon: { iconImage(command.image) } }
+            }
+          } label: {
+            Label("View", systemImage: "eye")
+          }
+          Menu {
+            sidebarToggle("Use Tool", icon: wm_apple_ios_icon("control.finger_tool", "cursorarrow"),
+                          isOn: model.fingerUsesTool) { commands.setFingerUsesTool(true) }
+            sidebarToggle("Orbit View", icon: wm_apple_ios_icon("operator.VIEW3D_OT_rotate", "rotate.3d"),
+                          isOn: !model.fingerUsesTool) { commands.setFingerUsesTool(false) }
+          } label: {
+            Label("One Finger", systemImage: "hand.point.up")
+          }
+        }
       }
     }
     Section {
-      if model.mode == "mesh_edit" {
+      if model.mode == "mesh_edit" && !shown.selectMode {
         Menu {
           ForEach([("VERT", "Vertex Select", "circle.fill"), ("EDGE", "Edge Select", "line.diagonal"),
                    ("FACE", "Face Select", "square.fill")], id: \.0) { value, title, symbol in
@@ -580,38 +619,45 @@ struct DocumentToolbar: ToolbarContent {
           Label { Text("Select Mode") } icon: { iconImage(wm_apple_ios_icon("mesh.VERT", "circle.fill")) }
         }
       }
-      if transformTools.contains(model.activeTool) {
-        ForEach(TransformSetting.all, id: \.key) { setting in
-          Menu {
-            ForEach(setting.options, id: \.value) { option in
-              sidebarToggle(option.title, icon: setting.image(option),
-                            isOn: model.transformSettings[setting.key] == option.value) {
-                model.send(setting.key, .set_, .text(option.value))
+      /* The tool settings row is hidden in a compact window: its settings are here. */
+      if model.compact {
+        if transformTools.contains(model.activeTool) {
+          ForEach(TransformSetting.all, id: \.key) { setting in
+            Menu {
+              ForEach(setting.options, id: \.value) { option in
+                sidebarToggle(option.title, icon: setting.image(option),
+                              isOn: model.transformSettings[setting.key] == option.value) {
+                  model.send(setting.key, .set_, .text(option.value))
+                }
+              }
+            } label: {
+              Label { Text(setting.title) } icon: {
+                iconImage(wm_apple_ios_icon("control.\(setting.title)", setting.symbol))
               }
             }
-          } label: {
-            Label { Text(setting.title) } icon: {
-              iconImage(wm_apple_ios_icon("control.\(setting.title)", setting.symbol))
+          }
+        }
+        else if shell.panels.tools.hasToolSettings {
+          Button("Tool Settings", systemImage: "slider.horizontal.3") { model.toolSettingsOpen = true }
+        }
+        /* Mirror, X-Axis Mirror or Symmetry, in every mode whose header has it, whatever the tool. */
+        if MirrorToggles.available(model) {
+          Menu { MirrorToggles(model: model) } label: {
+            Label { Text(model.transformSettings["mirror_label"] ?? "Mirror") } icon: {
+              iconImage(BlenderIcon.image("MOD_MIRROR"))
             }
           }
+          .accessibilityIdentifier("blender.setting.Mirror")
         }
-      }
-      else if shell.panels.tools.hasToolSettings {
-        Button("Tool Settings", systemImage: "slider.horizontal.3") { model.toolSettingsOpen = true }
-      }
-      /* Mirror, X-Axis Mirror or Symmetry, in every mode whose header has it, whatever the tool. */
-      if MirrorToggles.available(model) {
-        Menu { MirrorToggles(model: model) } label: {
-          Label { Text(model.transformSettings["mirror_label"] ?? "Mirror") } icon: {
-            iconImage(BlenderIcon.image("MOD_MIRROR"))
-          }
-        }
-        .accessibilityIdentifier("blender.setting.Mirror")
       }
     }
-    Menu { fileMenu } label: { Label("File", systemImage: "doc") }
-    Menu { editMenu } label: { Label("Edit", systemImage: "pencil") }
-    Menu { shareMenu } label: { Label("Share", systemImage: "square.and.arrow.up") }
+    if !shown.fileEdit {
+      Menu { fileMenu } label: { Label("File", systemImage: "doc") }
+      Menu { editMenu } label: { Label("Edit", systemImage: "pencil") }
+    }
+    if !shown.share {
+      Menu { shareMenu } label: { Label("Share", systemImage: "square.and.arrow.up") }
+    }
     moreMenu
   }
 
@@ -768,44 +814,89 @@ private struct ShareSource: UIViewRepresentable {
 
 /** \} */
 
-/** The transform settings of Blender's header, in Object, Edit and Pose Mode whatever the tool:
- * orientation, pivot, snapping, proportional editing and mirror, see #ToolSettingsRow. */
+/** The transform settings of Blender's header, in Object, Edit and Pose Mode whatever the tool, as
+ * `draw_xform_template` draws them: orientation as its icon and name, pivot as its icon, snapping
+ * and proportional editing each a toggle joined to a dropdown of what it uses. See #ToolSettingsRow. */
 struct ToolSettingsTransformItems: View {
   @Bindable var model: ShellModel
+
+  private func picker(_ key: String, _ title: String, _ options: [SettingOption]) -> some View {
+    let value = model.transformSettings[key]
+    return Picker(title, selection: Binding(get: { value ?? "" }, set: { model.send(key, .set_, .text($0)) })) {
+      ForEach(options, id: \.value) { option in
+        Label { Text(option.title) } icon: { iconImage(TransformSetting.blenderImage(option)) }
+          .tag(option.value)
+      }
+    }
+  }
+
+  private func option(_ options: [SettingOption], _ key: String) -> SettingOption? {
+    options.first { $0.value == model.transformSettings[key] }
+  }
 
   var body: some View {
     if model.activeTool == "builtin.select" {
       TweakDragMenu()
     }
-    Group {
-      ForEach(TransformSetting.all, id: \.key) { setting in
-        let value = model.transformSettings[setting.key]
-        let selected = setting.options.first { $0.value == value }
-        Menu {
-          Picker(setting.title, selection: Binding(
-            get: { value ?? "" },
-            set: { model.send(setting.key, .set_, .text($0)) })) {
-            ForEach(setting.options, id: \.value) { option in
-              Label { Text(option.title) } icon: { iconImage(setting.image(option)) }
-                .tag(option.value)
+    let all = TransformSetting.all
+    let orientations = all[0].options, pivots = all[1].options
+    let orientation = option(orientations, "orientation")
+    BlenderDropdown(name: "Transform Orientation", icon: orientation.flatMap(TransformSetting.blenderImage),
+                    text: orientation?.title ?? "Orientation") {
+      picker("orientation", "Transform Orientation", orientations)
+    }
+    .accessibilityIdentifier("blender.setting.Transform Orientation")
+    let pivot = option(pivots, "pivot")
+    BlenderDropdown(name: "Pivot Point: " + (pivot?.title ?? ""), icon: pivot.flatMap(TransformSetting.blenderImage)) {
+      picker("pivot", "Pivot Point", pivots)
+    }
+    .accessibilityIdentifier("blender.setting.Pivot Point")
+    if let snapOn = model.transformSettings["snap_on"] {
+      let on = snapOn == "on"
+      let element = option(TransformSetting.snapElements, "snap_element")
+      HStack(spacing: 1) {
+        BlenderToggleButton(name: "Snap", icon: BlenderIcon.image(on ? "SNAP_ON" : "SNAP_OFF"), isOn: on,
+                            join: .first) {
+          model.send("snap_on", .set_, .text(on ? "off" : "on"))
+        }
+        BlenderDropdown(name: "Snap To: " + (element?.title ?? "Mix"),
+                        icon: element.flatMap(TransformSetting.blenderImage),
+                        text: element == nil ? "Mix" : nil, join: .last) {
+          picker("snap_element", "Snap To", TransformSetting.snapElements)
+        }
+      }
+      .accessibilityElement(children: .contain)
+      .accessibilityIdentifier("blender.setting.Snapping")
+    }
+    if let proportionalOn = model.transformSettings["proportional_on"] {
+      let on = proportionalOn == "on"
+      let kind = model.transformSettings["proportional"] ?? "off"
+      let falloff = option(TransformSetting.falloffs, "proportional_falloff")
+      HStack(spacing: 1) {
+        BlenderToggleButton(name: "Proportional Editing",
+                            icon: BlenderIcon.image(!on ? "PROP_OFF" : kind == "connected" ? "PROP_CON" :
+                                                      kind == "projected" ? "PROP_PROJECTED" : "PROP_ON"),
+                            isOn: on, join: .first) {
+          model.send("proportional_on", .set_, .text(on ? "off" : "on"))
+        }
+        BlenderDropdown(name: "Proportional Editing Falloff: " + (falloff?.title ?? ""),
+                        icon: falloff.flatMap(TransformSetting.blenderImage), join: .last, dimmed: !on) {
+          picker("proportional_falloff", "Falloff", TransformSetting.falloffs)
+          Section {
+            Picker("Proportional Editing", selection: Binding(get: { kind == "off" ? "on" : kind }, set: {
+              model.send("proportional", .set_, .text($0))
+            })) {
+              Text("Connected Only").tag("connected")
+              Text("Projected from View").tag("projected")
+              Text("All").tag("on")
             }
           }
-        } label: {
-          Label {
-            /* The value chosen, as Blender's header shows it; the setting's name where none is. */
-            Text(selected?.title ?? setting.title)
-          } icon: {
-            iconImage(selected.flatMap { setting.image($0) } ??
-                      (setting.key == "snap" && value == "mixed" ? wm_apple_ios_icon("control.Snapping", "magnet") :
-                       wm_apple_ios_icon("control.\(setting.title)", setting.symbol)))
-          }
         }
-        .accessibilityValue(selected?.title ?? "")
-        .accessibilityIdentifier("blender.setting.\(setting.title)")
       }
+      .accessibilityElement(children: .contain)
+      .accessibilityIdentifier("blender.setting.Proportional Editing")
     }
   }
-
 }
 
 /** The mode's mirror axes, as Blender's header has them in a popover; none outside modes that
@@ -855,42 +946,103 @@ struct EditorMenus: View {
   }
 }
 
-/** The mode's mirror axes inline, as Blender's header has them: the butterfly, its name, and a
- * toggle button for each axis; Topology Mirror where the mode has it. */
+/** The editor's menus in one button, before they go into More, see #HeaderLadder. */
+struct EditorMenusButton: View {
+  private let menus = BlenderMenus.shared
+
+  var body: some View {
+    let items = (menus.items[EditorMenus.route] ?? []).filter { $0.submenu && !$0.disabled }
+    Menu {
+      ForEach(items) { item in
+        Menu(item.title) { BlenderMenuItems(route: item.route) }
+      }
+    } label: {
+      Text("Menus")
+    }
+    .prefetchingBlenderMenu(EditorMenus.route)
+    .accessibilityIdentifier("blender.menus")
+  }
+}
+
+/** The popovers More opens for what the header has no room for: viewport shading, and the tool
+ * settings while their row is hidden. */
+private struct MorePopovers: ViewModifier {
+  @Bindable var model: ShellModel
+  let shell: ShellPanels
+  let shading: Bool
+  let toolSettings: Bool
+
+  @ViewBuilder
+  func body(content: Content) -> some View {
+    if shading {
+      settings(content.shadingPopover(model: model, shell: shell))
+    }
+    else {
+      settings(content)
+    }
+  }
+
+  @ViewBuilder
+  private func settings(_ content: some View) -> some View {
+    if toolSettings {
+      content.popover(isPresented: $model.toolSettingsOpen) {
+        shell.panels.toolSettingsContent { model.toolSettingsOpen = false }
+      }
+    }
+    else {
+      content
+    }
+  }
+}
+
+/** The mode's mirror axes inline, as Blender's header has them: the butterfly, then a toggle for
+ * each axis joined into one piece; Topology Mirror and Auto Merge where the mode has them. The
+ * butterfly's name (Mirror, X-Axis Mirror or Symmetry) is said when held, and shown in glass where
+ * there is room. */
 struct MirrorInline: View {
   @Bindable var model: ShellModel
+  @Environment(\.widgetsNamed) private var named
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
 
   var body: some View {
     let axes = Array(model.transformSettings["mirror_axes"] ?? "")
     let on = model.transformSettings["mirror"] ?? ""
     let label = model.transformSettings["mirror_label"] ?? "Mirror"
     HStack(spacing: 4) {
-      iconImage(BlenderIcon.image("MOD_MIRROR"))
-      Text(label)
-        .font(.subheadline)
-      ForEach(axes, id: \.self) { axis in
-        let selected = on.contains(axis)
-        Button {
-          let next = axes.filter { $0 == axis ? !selected : on.contains($0) }
-          model.send("mirror", .set_, .text(next.map(String.init).joined(separator: ",")))
-        } label: {
-          Text(axis.uppercased())
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(selected ? Color.white : Color.primary)
-            .frame(minWidth: 30, minHeight: 30)
-            .background(selected ? ShellStyle.selection : ShellStyle.widget,
-                        in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-            .contentShape(Rectangle())
+      if !axes.isEmpty {
+        HStack(spacing: 4) {
+          iconImage(BlenderIcon.image("MOD_MIRROR"))
+          if named && style == ShellStyle.glass.rawValue {
+            Text(label).font(.subheadline)
+          }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(label) \(axis.uppercased())")
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        .help(label)
+        HStack(spacing: 1) {
+          ForEach(Array(axes.enumerated()), id: \.offset) { index, axis in
+            let selected = on.contains(axis)
+            BlenderToggleButton(name: "\(label) \(axis.uppercased())", icon: nil, text: axis.uppercased(),
+                                isOn: selected,
+                                join: axes.count == 1 ? .alone : index == 0 ? .first :
+                                  index == axes.count - 1 ? .last : .middle,
+                                minWidth: 30) {
+              let next = axes.filter { $0 == axis ? !selected : on.contains($0) }
+              model.send("mirror", .set_, .text(next.map(String.init).joined(separator: ",")))
+            }
+          }
+        }
+        if let topology = model.transformSettings["mirror_topology"] {
+          Toggle("Topology", isOn: Binding(get: { topology == "on" },
+                                           set: { model.send("mirror_topology", .set_, .bool($0)) }))
+            .toggleStyle(BlenderCheckboxStyle())
+            .font(.subheadline)
+        }
       }
-      if let topology = model.transformSettings["mirror_topology"] {
-        Toggle("Topology", isOn: Binding(get: { topology == "on" },
-                                         set: { model.send("mirror_topology", .set_, .bool($0)) }))
-          .toggleStyle(BlenderCheckboxStyle())
-          .font(.subheadline)
+      if let automerge = model.transformSettings["automerge"] {
+        let merging = automerge == "on"
+        BlenderToggleButton(name: "Auto Merge Vertices", icon: BlenderIcon.image(merging ? "AUTOMERGE_ON" : "AUTOMERGE_OFF"),
+                            isOn: merging) {
+          model.send("automerge", .set_, .text(merging ? "off" : "on"))
+        }
       }
     }
     .accessibilityElement(children: .contain)
