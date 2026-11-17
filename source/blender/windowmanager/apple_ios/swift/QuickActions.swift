@@ -313,6 +313,28 @@ struct QuickActionBarItem: View {
   }
 }
 
+/** A circle at the end of a bar: the actions bar's and the operation strip's ✕, the strip's
+ * Repeat. */
+struct BarCircleButton: View {
+  let systemImage: String
+  let label: String
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Image(systemName: systemImage)
+        .font(.system(size: 15, weight: .semibold))
+        .foregroundStyle(.primary)
+        .frame(width: ShellMetrics.barCircle, height: ShellMetrics.barCircle)
+        .background(Circle().fill(Color.primary.opacity(0.1)))
+        .contentShape(Circle())
+    }
+    .buttonStyle(QuickActionPressStyle(shape: Circle()))
+    .accessibilityLabel(label)
+    .help(label)
+  }
+}
+
 /** Highlights a control on the bar while it is pressed. */
 struct QuickActionPressStyle<S: Shape>: ButtonStyle {
   let shape: S
@@ -360,7 +382,7 @@ struct QuickActionsRow: View {
   /** Blender's count of requests to open the strip (F9, the Edit menu), to open it for a new one. */
   @State private var redoShowRequests: UInt32?
   @State private var redoError: String?
-  /** The strip hugs its settings, measured as they lay out. */
+  /** The strip hugs its circles, title and settings, measured as they lay out. */
   @State private var redoContentWidth: CGFloat = 0
   /** The actions' own width in the bar, measured ahead of opening it. */
   @State private var actionItemsWidth: CGFloat = 0
@@ -424,7 +446,7 @@ struct QuickActionsRow: View {
     if let title = redoTitle {
       input.operation = redoOpen ? .open : .folded
       input.operationPillWidth = redoPillWidth(title)
-      input.operationWidth = ceil(redoContentWidth) + 48
+      input.operationWidth = ceil(redoContentWidth)
     }
     if itemShown { input.item = stack.itemFolded ? .folded : .open }
     input.pad = modalRunning && NumberPadState.shared.shown
@@ -601,19 +623,9 @@ struct QuickActionsRow: View {
     ZStack(alignment: .leading) {
       if stack.actionsOpen {
         HStack(spacing: 0) {
-          Button(action: toggleActions) {
-            Image(systemName: "xmark")
-              .font(.system(size: 15, weight: .semibold))
-              .foregroundStyle(.primary)
-              .frame(width: ShellMetrics.barCircle, height: ShellMetrics.barCircle)
-              .background(Circle().fill(Color.primary.opacity(0.1)))
-              .contentShape(Circle())
-          }
-          .buttonStyle(QuickActionPressStyle(shape: Circle()))
-          .accessibilityLabel("Hide Quick Actions")
-          .accessibilityValue("Expanded")
-          .accessibilityIdentifier("blender.quick-actions.toggle")
-          .help("Hide Quick Actions")
+          BarCircleButton(systemImage: "xmark", label: "Hide Quick Actions", action: toggleActions)
+            .accessibilityValue("Expanded")
+            .accessibilityIdentifier("blender.quick-actions.toggle")
           ScrollView(.horizontal, showsIndicators: false) {
             actionItems
           }
@@ -690,9 +702,7 @@ struct QuickActionsRow: View {
    * and closing folds it back, while their contents cross over inside it.
    */
   private func redoMorph(title: String, frame: CGRect) -> some View {
-    let shape = RoundedRectangle(cornerRadius: redoOpen ? 20 : ShellMetrics.buttonHeight / 2,
-                                 style: .continuous)
-    return ZStack(alignment: .leading) {
+    ZStack(alignment: .leading) {
       if redoOpen {
         RedoContent(model: redo, close: closeRedo, widthChanged: redoWidthChanged)
           .environment(\.inOperationStrip, true)
@@ -727,9 +737,10 @@ struct QuickActionsRow: View {
       }
     }
     .frame(width: frame.width, height: frame.height, alignment: .leading)
-    .clipShape(shape)
+    /* The actions bar's shape, open or folded: a capsule in glass, Blender's rounding in its style. */
+    .clipShape(ShellShape())
     /* Not interactive glass once open, which would take the touches of the controls on it. */
-    .panelGlass(interactive: !redoOpen, in: shape)
+    .panelGlass(interactive: !redoOpen, in: Capsule())
     .layoutZone("operation")
     .offset(x: frame.minX, y: frame.minY)
     .transition(.scale(scale: 0.8, anchor: .leading).combined(with: .opacity))

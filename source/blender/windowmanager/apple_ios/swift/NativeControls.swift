@@ -72,7 +72,13 @@ struct NativeNumberField: View {
   /** Sliders scrub with their track instead. */
   var scrubs = true
   var significant = 9
+  /** Drawn as Blender's number field (`wcol_num`), joined thus in a vector: as every bar draws
+   * numbers, see #BlenderSettingItem. */
+  var widget: WidgetJoin? = nil
+  /** Its name inside the field, leading, as a vector's X, Y and Z. */
+  var inlineLabel: String? = nil
 
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
   @State private var editing = false
   @State private var text = ""
   @State private var scrubValue: Double?
@@ -120,19 +126,28 @@ struct NativeNumberField: View {
           }
       }
       else {
-        Text(shown)
-          .font(numberFont)
-          /* New values just show, even when rows around them animate. */
-          .contentTransition(.identity)
-          .lineLimit(1)
-          .minimumScaleFactor(0.7)
-          .foregroundStyle(editable ? .primary : .tertiary)
-          .frame(maxWidth: .infinity, alignment: .trailing)
+        HStack(spacing: 4) {
+          if widget != nil, let inlineLabel, !inlineLabel.isEmpty {
+            Text(inlineLabel)
+              .font(.subheadline)
+              .foregroundStyle(Color.primary.opacity(0.6))
+              .fixedSize()
+          }
+          Text(shown)
+            .font(numberFont)
+            /* New values just show, even when rows around them animate. */
+            .contentTransition(.identity)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .foregroundStyle(editable ? .primary : .tertiary)
+            /* Blender centres a number without a name inside its field. */
+            .frame(maxWidth: .infinity, alignment: widget != nil && (inlineLabel ?? "").isEmpty ? .center : .trailing)
+        }
       }
     }
     .padding(.horizontal, 8)
-    .frame(minHeight: height ?? (compact ? 30 : 40))
-    .background(background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .frame(minHeight: widget != nil ? 32 : height ?? (compact ? 30 : 40))
+    .background { fieldBackground }
     .overlay {
       /* Arrows at the ends say the number drags sideways: shown under the pointer, and in the
        * tint while dragging, like Blender's own number fields. */
@@ -170,6 +185,41 @@ struct NativeNumberField: View {
       let step = stepperStep / number.shownFactor
       model.set(node, .float(number.clamp(value + (direction == .increment ? step : -step))))
     }
+  }
+
+  private var glass: Bool { style == ShellStyle.glass.rawValue }
+
+  /** The field's face: the system's rounded field, or Blender's widget with a slider's fill. */
+  @ViewBuilder
+  private var fieldBackground: some View {
+    if let widget {
+      let shape = WidgetShape(join: widget, glass: glass)
+      ZStack(alignment: .leading) {
+        shape.fill(widgetFill)
+        if let number, number.slider, !mixed {
+          /* A slider fills its leading part to the value, as Blender's does. */
+          GeometryReader { proxy in
+            Rectangle()
+              .fill(BlenderWidgetColors.sliderFill.opacity(glass ? 0.7 : 1))
+              .frame(width: proxy.size.width * number.fraction(of: value))
+          }
+          .clipShape(shape)
+        }
+        if !glass {
+          shape.strokeBorder(BlenderWidgetColors.outline, lineWidth: 1)
+        }
+      }
+    }
+    else {
+      RoundedRectangle(cornerRadius: 8, style: .continuous).fill(background)
+    }
+  }
+
+  private var widgetFill: Color {
+    let active = scrubValue != nil || editing
+    if let color = nativeAnimationColor(node.node.animation), !active { return color.opacity(0.35) }
+    if glass { return Color.primary.opacity(active ? 0.18 : 0.08) }
+    return active ? BlenderWidgetColors.numInnerActive : BlenderWidgetColors.numInner
   }
 
   private var background: Color {
@@ -1407,15 +1457,13 @@ struct NativeVectorRow: View {
 struct NativeToggleGroup: View {
   let model: PanelsModel
   let group: NativeNode
-  var compact = false
 
   var body: some View {
-    let layout = compact ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 10))
-    layout {
+    HStack(spacing: 10) {
       Text(group.label)
-        .font(compact ? .caption2 : .body)
-        .foregroundStyle(compact ? .secondary : .primary)
-        .frame(maxWidth: compact ? nil : .infinity, alignment: .leading)
+        .font(.body)
+        .foregroundStyle(.primary)
+        .frame(maxWidth: .infinity, alignment: .leading)
       HStack(spacing: 2) {
         ForEach(model.children(of: group)) { item in
           let mixed = model.isMixed(item)
@@ -1428,15 +1476,15 @@ struct NativeToggleGroup: View {
             /* An axis letter in a square, as Mirror's; a word as wide as it is. */
             let letter = title.count <= 1
             Text(title)
-              .font(letter ? .system(size: compact ? 13 : 15, weight: .semibold, design: .monospaced) :
-                .system(size: compact ? 12 : 14, weight: .semibold))
+              .font(letter ? .system(size: 15, weight: .semibold, design: .monospaced) :
+                .system(size: 14, weight: .semibold))
               .lineLimit(1)
               .fixedSize()
               .foregroundStyle(on ? Color.white : .primary)
               .padding(.horizontal, letter ? 0 : 8)
-              .frame(minWidth: compact ? 28 : 36, minHeight: compact ? 22 : 30, maxHeight: compact ? 22 : 30)
+              .frame(minWidth: 36, minHeight: 30, maxHeight: 30)
               .background(on ? Color.accentColor : mixed ? Color.accentColor.opacity(0.25) : .clear,
-                          in: RoundedRectangle(cornerRadius: compact ? 7 : 8, style: .continuous))
+                          in: RoundedRectangle(cornerRadius: 8, style: .continuous))
           }
           .buttonStyle(.plain)
           .disabled(!item.enabled)
@@ -1447,9 +1495,9 @@ struct NativeToggleGroup: View {
         }
       }
       .padding(2)
-      .background(PanelStyle.field, in: RoundedRectangle(cornerRadius: compact ? 9 : 10, style: .continuous))
+      .background(PanelStyle.field, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
-    .frame(minHeight: compact ? 40 : 44)
+    .frame(minHeight: 44)
   }
 }
 

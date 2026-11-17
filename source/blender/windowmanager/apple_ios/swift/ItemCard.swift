@@ -104,34 +104,36 @@ struct ItemCard: View {
     }
     else {
       VStack(alignment: .leading, spacing: 6) {
-        HStack {
-          Text("Item")
-            .font(.subheadline.weight(.semibold))
-          Spacer(minLength: 8)
-          Button {
-            withAnimation(.easeOut(duration: 0.18)) { folded = true }
-          } label: {
+        /* Blender's panel header: the chevron first, then the name, the whole header folds it. */
+        Button {
+          withAnimation(.easeOut(duration: 0.18)) { folded = true }
+        } label: {
+          HStack(spacing: 6) {
             Image(systemName: "chevron.down")
-              .font(.system(size: 14, weight: .semibold))
-              .frame(width: 44, height: 32)
-              .contentShape(Rectangle())
+              .font(.system(size: 12, weight: .semibold))
+            Text("Item")
+              .font(.subheadline.weight(.semibold))
+            Spacer(minLength: 8)
           }
-          .buttonStyle(.plain)
-          .accessibilityLabel("Fold Item")
+          .frame(height: 44)
+          .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Fold Item")
         ScrollView(.vertical) {
           VStack(alignment: .leading, spacing: 6) {
             ForEach(rows) { row in rowView(row) }
           }
           .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowsHeight = $0 }
         }
-        .frame(height: max(0, min(rowsHeight, maxHeight - 48)))
+        /* Below the header (44), its gap (6) and the margins (8). */
+        .frame(height: max(0, min(rowsHeight, maxHeight - 58)))
         .shellScrollEdge(.vertical)
         .scrollBounceBehavior(.basedOnSize)
       }
       .padding(.leading, 14)
       .padding(.trailing, 6)
-      .padding(.vertical, 8)
+      .padding(.vertical, 4)
       .environment(\.inOperationStrip, true)
       .panelGlass(in: ShellShape(glassRadius: 20))
       .layoutZone("item")
@@ -164,12 +166,9 @@ struct ItemCard: View {
       .fixedSize()
   }
 
+  /** The row's components as Blender's joined fields, each named inside. */
   private func fields(_ row: ItemRow) -> some View {
-    ForEach(row.components) { component in
-      NativeNumberField(model: model, node: component, compact: true, significant: 6)
-        .frame(minWidth: 88, maxWidth: 120)
-        .accessibilityLabel("\(row.label) \(component.label)")
-    }
+    BlenderVectorField(model: model, group: row.group)
   }
 
   @ViewBuilder

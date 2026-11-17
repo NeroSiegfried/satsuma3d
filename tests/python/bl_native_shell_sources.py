@@ -112,4 +112,27 @@ for offender in offenders:
     print('%s: %s' % (offender, GUIDE_IN_CONDITION))
 check(not offenders, "No alignment guide inside a condition in an overlay or background")
 
+
+def calls(text, name):
+    """Each call `name(…)` in \a text: (line, its argument list)."""
+    for match in re.finditer(r'\b%s\(' % re.escape(name), text):
+        start = match.end() - 1
+        yield text.count('\n', 0, match.start()) + 1, text[start:balanced(text, start, '(', ')')]
+
+
+# 6C.6: one way to draw a setting in a bar. The tool settings row (whose items are in
+# NativeToolSettings.swift), the last operation's strip and the Item card draw numbers only as
+# Blender's widget, and never with the system's light field.
+code = {path.name: code_only(path.read_text(encoding='utf-8')) for path in sources()}
+check(not any(re.search(r'\bStripColumn\b', text) for text in code.values()),
+      "StripColumn is gone: the strip draws its settings with BlenderSettingItem")
+BARS = ('RedoStrip.swift', 'ItemCard.swift', 'ToolSettingsRow.swift', 'NativeToolSettings.swift')
+plain = ['%s:%d' % (name, line) for name in BARS for line, args in calls(code[name], 'NativeNumberField')
+         if 'widget:' not in args]
+for offender in plain:
+    print('%s: a number in a bar is drawn as Blender\'s field, NativeNumberField(…, widget:) (ROUND5 6C)' % offender)
+check(not plain, "Numbers in the bars are drawn only through Blender's widget")
+light = [name for name in BARS if 'PanelStyle.field' in code[name]]
+check(not light, "No system field (PanelStyle.field) in the bars: %s" % light)
+
 print('PASS: native shell sources ' + json.dumps(checks))

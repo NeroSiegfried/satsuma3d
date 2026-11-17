@@ -20,13 +20,11 @@ extension PanelsModel {
   /** Which operation: another one starts its controls again. */
   var operationKey: String? { operation == nil ? nil : view.top?.key }
 
-  /** Its settings, as the strip shows them: a vector's components one by one, named with it. */
-  var operationColumns: [(node: NativeNode, caption: String)] {
+  /** Its settings, as the strip shows them: a vector or a row of toggles whole, see
+   * #BlenderSettingItem. */
+  var operationColumns: [NativeNode] {
     guard let top = view.top else { return [] }
-    return children(of: top).flatMap { node -> [(node: NativeNode, caption: String)] in
-      guard node.group?.layout == .row else { return [(node, node.label)] }
-      return children(of: node).filter { $0.role == .none_ }.map { ($0, "\(node.label) \($0.label)") }
-    }
+    return children(of: top)
   }
 
   /** Dismiss the last operation's settings, or confirm or cancel a dialog. */
@@ -36,10 +34,10 @@ extension PanelsModel {
   }
 }
 
-/** Short titles for the folded pill, where Blender's are long. */
+/** Short titles for the folded pill, only where Blender's are too long for it: otherwise the pill
+ * reads Blender's name, which the strip it opens into is titled with (decision 27). */
 let operationShortNames = [
-  "TRANSFORM_OT_translate": "Move", "TRANSFORM_OT_rotate": "Rotate",
-  "TRANSFORM_OT_resize": "Scale", "MESH_OT_extrude_region_move": "Extrude",
+  "TRANSFORM_OT_rotate": "Rotate", "MESH_OT_extrude_region_move": "Extrude",
   "MESH_OT_extrude_context_move": "Extrude", "MESH_OT_extrude_faces_move": "Extrude",
   "MESH_OT_duplicate_move": "Duplicate", "OBJECT_OT_duplicate_move": "Duplicate",
   "OBJECT_OT_duplicate_move_linked": "Duplicate Linked",
@@ -93,60 +91,58 @@ struct OperatorDialog: View {
 struct RedoContent: View {
   let model: PanelsModel
   let close: () -> Void
-  /** The width of the title and controls, which the strip hugs. */
+  /** The strip's whole width, which it hugs: its circles, title and settings. */
   var widthChanged: (CGFloat) -> Void = { _ in }
+  @State private var titleWidth: CGFloat = 0
+  @State private var settingsWidth: CGFloat = 0
+  @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
+  @Environment(\.colorScheme) private var colorScheme
+
+  /** The circles at either end with their margins, and the two separators. */
+  private static let chrome: CGFloat = 2 * (4 + ShellMetrics.barCircle) + 2 * 9
+
+  private func report() { widthChanged(Self.chrome + titleWidth + settingsWidth) }
 
   var body: some View {
+    /* As the actions bar below it: ✕, the operation's name, its settings with Blender's widgets
+     * (as the tool settings row draws them), and Repeat at the end. */
     HStack(spacing: 0) {
-      Button(action: close) {
-        Image(systemName: "xmark")
-          .font(.system(size: 19, weight: .semibold))
-          .foregroundStyle(.primary)
-          .frame(width: 44, height: 48)
-          .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-      .padding(.leading, 4)
-      .accessibilityLabel("Collapse Last Operation")
-      .accessibilityIdentifier("blender.redo.done")
-      .accessibilityHint(model.operation?.error ?? "")
+      BarCircleButton(systemImage: "xmark", label: "Collapse Last Operation", action: close)
+        .padding(.leading, 4)
+        .accessibilityIdentifier("blender.redo.done")
+        .accessibilityHint(model.operation?.error ?? "")
+      Text(model.title)
+        .font(.subheadline.weight(.semibold))
+        .lineLimit(1)
+        .fixedSize()
+        .padding(.horizontal, 10)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { titleWidth = $0; report() }
+        .accessibilityIdentifier("blender.redo.title")
+      BlenderWidgetSeparator()
       ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 14) {
-          Text(model.title)
-            .font(.subheadline)
-            .lineLimit(2)
-            .frame(width: 112, alignment: .leading)
-            .accessibilityIdentifier("blender.redo.title")
-          /* Do it again, as Shift+R: beside its settings, where "again" and "adjust" meet. */
-          Button {
-            ShellModel.current?.send("repeat", .invoke)
-          } label: {
-            Image(systemName: "repeat")
-              .font(.system(size: 15, weight: .semibold))
-              .frame(width: 36, height: 36)
-              .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          .disabled(!(ShellModel.current?.canRepeat ?? false))
-          .help("Repeat")
-          .accessibilityLabel(ShellModel.current?.repeatTitle ?? "Repeat Last")
-          .accessibilityIdentifier("blender.redo.repeat")
-          ForEach(model.operationColumns, id: \.node.key) { column in
-            if column.node.kind == .group {
-              NativeToggleGroup(model: model, group: column.node, compact: true)
-            }
-            else {
-              StripColumn(model: model, node: column.node, caption: column.caption)
-            }
-          }
+        HStack(spacing: 12) {
+          ForEach(model.operationColumns) { BlenderSettingItem(model: model, node: $0) }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 8)
         .frame(maxHeight: .infinity)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { widthChanged($0) }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { settingsWidth = $0; report() }
       }
       .softHorizontalScrollEdge()
+      BlenderWidgetSeparator()
+      /* Do it again, as Shift+R. */
+      BarCircleButton(systemImage: "repeat", label: ShellModel.current?.repeatTitle ?? "Repeat Last") {
+        ShellModel.current?.send("repeat", .invoke)
+      }
+      .disabled(!(ShellModel.current?.canRepeat ?? false))
+      .padding(.trailing, 4)
+      .accessibilityIdentifier("blender.redo.repeat")
     }
-    .tint(Color(uiColor: .systemBlue))
+    .labelStyle(.titleAndIcon)
+    /* Blender's text colour, not the system's blue, as the tool settings row. */
+    .tint(Color.primary)
+    .foregroundStyle(Color.primary)
+    /* Blender's regions are dark whatever the system's appearance. */
+    .environment(\.colorScheme, style == ShellStyle.glass.rawValue ? colorScheme : .dark)
     /* Another operation's controls start again, dropping what was being typed. */
     .id(model.operationKey)
   }

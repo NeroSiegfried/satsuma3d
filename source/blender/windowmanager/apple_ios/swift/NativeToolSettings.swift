@@ -143,48 +143,15 @@ struct ToolSettingItem: View {
         .prefetchingBlenderMenu(route)
         .disabled(!node.enabled)
       case .choice:
-        let options = node.choice?.allOptions.filter { $0.value != nil } ?? []
-        let value = model.text(node)
-        Menu {
-          Picker(title, selection: Binding(get: { value }, set: { model.set(node, .text($0)) })) {
-            ForEach(Array(options.enumerated()), id: \.offset) { _, option in
-              Label { Text(option.label ?? "") } icon: { optionIcon(option) }
-                .tag(option.value ?? "")
-            }
-          }
-        } label: {
-          /* The choice made, as the bar has room to name it, with its preview where it has one,
-           * as a material's: it alone would not say which. */
-          let current = options.first { $0.value == value }
-          let name = current?.label ?? title
-          if let current, !(current.preview ?? "").isEmpty {
-            HStack(spacing: 6) {
-              optionIcon(current)
-              /* A data-block's name, the person's own: shortened in the middle if it must be. */
-              Text(name).lineLimit(1).truncationMode(.middle)
-            }
-          }
-          else {
-            /* As Blender's `prop()` in its header: the setting's name, then a dropdown with the
-             * value ("Orientation  Default ▾"), so a value such as Default is never alone. */
-            HStack(spacing: 6) {
-              if title != name && named {
-                Text(title).font(.subheadline).foregroundStyle(.secondary).fixedSize()
-              }
-              BlenderWidgetFace(icon: BlenderIcon.image(current?.icon ?? node.icon), text: name, arrow: true)
-            }
-          }
-        }
-        .menuIndicator(.hidden)
-        .help(title)
-        .disabled(!node.enabled)
+        /* As Blender's `prop()` in its header, see #BlenderChoiceWidget. */
+        BlenderChoiceWidget(model: model, node: node)
       case .number:
         /* A number to slide sideways or tap to type, beside a name only where Blender's bar draws
          * one: Dyntopo's Detail is the number alone, the switch beside it names it. */
         HStack(spacing: 6) {
           if let label = node.node.shortLabel, !label.isEmpty { Text(label) }
-          NativeNumberField(model: model, node: node, compact: true, significant: 3)
-            .frame(width: 72)
+          NativeNumberField(model: model, node: node, significant: 3, widget: .alone)
+            .frame(width: 84)
         }
         .fixedSize()
         .disabled(!node.enabled)
@@ -196,21 +163,6 @@ struct ToolSettingItem: View {
           ControlRow(model: model, node: node)
         }
         .disabled(!node.enabled)
-    }
-  }
-
-  /** An option's picture: its preview, as a material's swatch, or else its icon. */
-  @ViewBuilder
-  private func optionIcon(_ option: Blender_NativeUI_Option) -> some View {
-    if let path = option.preview, let image = UIImage(contentsOfFile: path) {
-      Image(uiImage: image)
-        .resizable()
-        .scaledToFill()
-        .frame(width: 22, height: 22)
-        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-    }
-    else {
-      IconView(name: option.icon)
     }
   }
 
@@ -232,94 +184,4 @@ func menuName(_ node: NativeNode) -> String {
   guard let button = node.content(Blender_NativeUI_MenuButton.self) else { return "" }
   return (0..<button.paramsCount).compactMap { button.params(at: $0) }
     .first { $0.key == "menu" }?.value(type: Blender_NativeUI_TextValue.self)?.value ?? ""
-}
-
-/** A setting as a column of the strip: its caption over its control. */
-struct StripColumn: View {
-  let model: PanelsModel
-  let node: NativeNode
-  var caption: String?
-
-  private var width: CGFloat {
-    switch node.kind {
-      case .color: return 52
-      case .toggle: return 72
-      case .button: return 96
-      case .choice:
-        let options = node.choice?.allOptions.filter { $0.value != nil } ?? []
-        /* A preview and its name. */
-        if options.contains(where: { !($0.preview ?? "").isEmpty }) { return 150 }
-        let fits = options.allSatisfy { BlenderIcon.image($0.icon) != nil } ||
-          options.allSatisfy { ($0.label ?? "").count <= 5 }
-        if node.choice?.style == .expanded && (2...6).contains(options.count) && fits {
-          return CGFloat(options.count) * 42 + 8  /* A segmented control. */
-        }
-        return 108
-      default: return 104
-    }
-  }
-
-  var body: some View {
-    if node.kind == .menubutton {
-      /* One of Blender's menus, such as Sculpt Mode's Mask and Face Sets: a compact capsule that
-       * names itself, as the strip's pop-outs do. */
-      let route = BlenderMenus.route(menuName(node), tab: model.currentTab)
-      Menu {
-        BlenderMenuItems(route: route)
-      } label: {
-        StripCapsuleLabel(title: node.label, icon: node.icon)
-      }
-      .prefetchingBlenderMenu(route)
-      .buttonStyle(.plain)
-      .disabled(!node.enabled)
-      .frame(height: 40)
-    }
-    else {
-      VStack(spacing: 0) {
-        Text(caption ?? node.shortLabel)
-          .font(.caption2)
-          .foregroundStyle(.secondary)
-          /* Blender's label in full: the column widens rather than cut or shrink it. */
-          .lineLimit(1)
-          .fixedSize()
-        control
-          .frame(height: 26)
-      }
-      .frame(minWidth: width, minHeight: 40, maxHeight: 40)
-      .controlActions(model, node)
-    }
-  }
-
-  @ViewBuilder
-  private var control: some View {
-    switch node.kind {
-      /* Blender's checkbox under its caption, not the button the toolbar would make of a toggle. */
-      case .toggle:
-        Toggle(isOn: Binding(get: { model.bool(node) }, set: { model.set(node, .bool($0)) })) { EmptyView() }
-          .toggleStyle(BlenderCheckboxStyle())
-          .disabled(!node.enabled)
-          .accessibilityLabel(node.label)
-          .frame(height: 24)
-      case .button:
-        NativeButton(model: model, node: node, compact: true)
-      case .choice:
-        NativeChoice(model: model, node: node, compact: true)
-          .frame(width: width - 8)
-      case .color:
-        NativeColorSwatch(model: model, node: node)
-          .scaleEffect(0.8)
-      case .number:
-        if node.number?.slider == true {
-          NativeSlider(model: model, node: node)
-            .controlSize(.mini)
-            .frame(width: width - 8)
-        }
-        else {
-          NativeNumberField(model: model, node: node, compact: true)
-            .frame(width: width - 8)
-        }
-      default:
-        EmptyView()
-    }
-  }
 }
