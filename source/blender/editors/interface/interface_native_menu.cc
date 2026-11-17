@@ -242,6 +242,25 @@ bool hidden_from_menu_bar(bContext *C, Button &but)
       return true;
     }
   }
+  /* Help's links to Blender's own support, community and contribution pages would send this app's
+   * testers to Blender's channels; the manual, the tutorials and the API reference stay (ROUND5
+   * 8I.6, decision 46). By address, which does not change with the interface's language. */
+  if (but.optype && STREQ(but.optype->idname, "WM_OT_url_open") && but.opptr) {
+    static const Set<std::string> blender_channels = {
+        "https://www.blender.org/support",
+        "https://www.blender.org/community",
+        "https://www.blender.org/get-involved",
+    };
+    if (RNA_struct_find_property(but.opptr, "url")) {
+      std::string url = RNA_string_get(but.opptr, "url");
+      while (!url.empty() && url.back() == '/') {
+        url.pop_back();
+      }
+      if (blender_channels.contains(url)) {
+        return true;
+      }
+    }
+  }
   if (MenuType *child = button_menutype_get(&but); child && menus.contains(child->idname)) {
     return true;
   }

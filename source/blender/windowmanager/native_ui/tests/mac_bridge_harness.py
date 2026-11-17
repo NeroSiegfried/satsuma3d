@@ -531,8 +531,10 @@ def branding_allowed():
 
 
 branding = {"menus": 0, "seen": set(), "unlisted": []}
-# Links about Blender rather than this app, which the iPad's menus leave out (ROUND5 decision 35).
-NOT_ON_IPAD = {"Release Notes", "Report a Bug", "Splash Screen", "About Blender", "Donate to Blender"}
+# Links about Blender rather than this app, which the iPad's menus leave out (ROUND5 decision 35),
+# and Help's links to Blender's support, community and contribution pages (8I.6, decision 46).
+NOT_ON_IPAD = {"Release Notes", "Report a Bug", "Splash Screen", "About Blender", "Donate to Blender",
+               "Support", "User Communities", "Get Involved"}
 walk_state = {}  # subscription -> (route, menu idname, depth); `None` once read
 
 
