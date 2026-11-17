@@ -716,7 +716,8 @@ extension View {
  * The controls over the viewport are placed by different views; each new one has collided with
  * another. Each zone reports its frame here, and any two that overlap are written to the session's
  * log as `layout: <a> ∩ <b>`, at most once a minute each, so overlaps nobody has reported yet are
- * found. It changes nothing on screen, and checks half a second after the frames settle.
+ * found; a development build also shows each as a message, once per launch. It moves nothing on
+ * screen, and checks half a second after the frames settle.
  * \{ */
 
 @MainActor
@@ -738,6 +739,18 @@ final class LayoutChecker {
    * overlap anyone sees. Checked once more when it ends. */
   var resizing = false {
     didSet { if !resizing && oldValue { schedule() } }
+  }
+
+  /** A development build (its identifier ends in `.dev`) also shows each problem as a message,
+   * once per launch, so it is seen and not only logged (ROUND5 Stage 6B, decision 22). */
+  private static let development = Bundle.main.bundleIdentifier?.hasSuffix(".dev") ?? false
+  private var shown = Set<String>()
+
+  /** Log a layout problem: \a key names it (`item ∩ tools`, `item outside`), \a line is the log's. */
+  func report(_ key: String, _ line: String) {
+    WM_native_ui_log("layout", line)
+    guard Self.development, shown.insert(key).inserted else { return }
+    ShellModel.current?.messages.say("Layout problem: \(key) (logged)", level: "warning")
   }
 
   func set(_ zone: String, _ frame: CGRect?) {
@@ -768,7 +781,7 @@ final class LayoutChecker {
         let key = "\(a) ∩ \(b)"
         if let last = logged[key], now.timeIntervalSince(last) < 60 { continue }
         logged[key] = now
-        WM_native_ui_log("layout", "\(conditions) \(key) \(Int(overlap.width))x\(Int(overlap.height)) at \(Int(overlap.minX)),\(Int(overlap.minY))")
+        report(key, "\(conditions) \(key) \(Int(overlap.width))x\(Int(overlap.height)) at \(Int(overlap.minX)),\(Int(overlap.minY))")
       }
     }
     guard !bounds.isNull, !bounds.isEmpty else { return }
@@ -778,7 +791,7 @@ final class LayoutChecker {
       let key = "\(zone) outside"
       if let last = logged[key], now.timeIntervalSince(last) < 60 { continue }
       logged[key] = now
-      WM_native_ui_log("layout", "\(conditions) \(zone) outside window \(Int(bounds.width))x\(Int(bounds.height)) at \(Int(frame.minX)),\(Int(frame.minY))")
+      report(key, "\(conditions) \(zone) outside window \(Int(bounds.width))x\(Int(bounds.height)) at \(Int(frame.minX)),\(Int(frame.minY))")
     }
   }
 }

@@ -518,7 +518,7 @@ enum ShellLayout {
         }
       }
     }
-    WM_native_ui_log("selftest", "\(layouts) layouts, \(overlaps) overlaps, \(outside) outside, \(short) short")
+    WM_native_ui_log("selftest", "\(layouts) layouts, \(overlaps) overlaps; \(outside) beyond the window, \(short) slots too short")
   }
 
   /** \} */

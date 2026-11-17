@@ -243,8 +243,8 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
       pending.append(contentsOf: current.subviews)
     }
     if !clipped.isEmpty {
-      WM_native_ui_log("layout", "\(LayoutChecker.shared.conditions) header clipped at \(Int(bar.bounds.width)): " +
-                                 clipped.joined(separator: ", "))
+      LayoutChecker.shared.report("header clipped", "\(LayoutChecker.shared.conditions) header clipped at " +
+                                    "\(Int(bar.bounds.width)): " + clipped.joined(separator: ", "))
     }
   }
 
