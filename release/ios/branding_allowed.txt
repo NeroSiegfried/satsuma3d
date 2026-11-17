@@ -1,0 +1,82 @@
+# The "Blender" strings the iPad app may hold (ROUND5 8A.7, decision 34). The app never calls
+# itself Blender: Blender is named only as a fact (the file type, the keymap, the interface style,
+# the manual, the credit in About), or in names no one sees (stored-setting keys, notification
+# names, type names).
+#
+# One line per string: `<where> | <reason> | <the exact string>`. <where> is a source file of
+# `source/blender/windowmanager/apple_ios/` (by name), an iOS `Info.plist` (by path from the
+# repository root), `scripts/startup/bl_ui/native_*.py` (by name), or `menu <idname>` for a label
+# the bridge sends for an item of that menu (checked by the Mac harness's `menus` scenario).
+# Reasons: file type, keymap name, style name, credit, internal key.
+#
+# `tests/python/bl_native_shell_sources.py` fails on a string holding "Blender" that is not here,
+# and on a line here whose string is no longer in its file. Swift interpolations, `\(…)`, are
+# left out of the string they sit in.
+
+AppIdentity.swift | internal key: Info.plist key holding the Blender version | PlatypusBlenderVersion
+BlenderIntents.swift | internal key: stored bookmark key | BlenderOpenDocument
+CommandSearch.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderPinnedCommands
+CommandSearch.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderRecentCommands
+DocumentWindow.swift | keymap name: the identifier of Blender's keymap preset | Blender
+DocumentWindow.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderDesktopInterface
+DocumentWindow.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderImageSplit
+DocumentWindow.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderImageSplitAcross
+DocumentWindow.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderKeymapDefaultedBlender
+DocumentWindow.swift | internal key: notification name | BlenderSnapshotsPublished
+DocumentWindow.swift | internal key: notification name | BlenderTemplatePresentation
+FCurveEditor.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderCurvesChannels
+FCurveEditor.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderCurvesChannelsWidth
+FCurveEditor.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderCurvesOnlySelected
+FaceControl.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderShowFaceControl
+ImageEditor.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderImageChannels
+ImageEditor.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderImageUVs
+ImageEditor.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderPencilPressureSensitivity
+ItemCard.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderItemCardShown
+NodeEditor.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderNodeBackdrop
+NodeEditor.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderNodeEditorFraction
+NodeEditor.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderNodeTimings
+Rails.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderBrushRailEdge
+Rails.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderLeftHandedInterface
+Rails.swift | internal key: notification name | BlenderPencilRoll
+Rails.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderSidebarDials
+Rails.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderSidebarEdge
+Rails.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderSidebarPosition
+Rails.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderToolRailEdge
+RevealCoordinator.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderRedoOpensItself
+RevealCoordinator.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderShowSettingsAutomatically
+SettingsSheet.swift | keymap name and style name: Blender's keymap preset, the Blender interface style and the Blender navigation gizmo style | Blender
+SettingsSheet.swift | style name: describes the Blender interface style | Blender's own panels and colors, as on the desktop.
+SettingsSheet.swift | keymap name: describes the Blender keymap | Blender's own shortcuts, as on a desktop computer.
+SettingsSheet.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderFingerDragsObjects
+SettingsSheet.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderFingerUsesTool
+SettingsSheet.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderHoverHighlight
+SettingsSheet.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderNavigationGizmoStyle
+SettingsSheet.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderNavigationGizmoTop
+SettingsSheet.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderPencilPressureSensitivity
+SettingsSheet.swift | internal key: stored setting key and notification name | BlenderPencilSqueeze
+SettingsSheet.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderRedoOpensItself
+SettingsSheet.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderShowQuickActions
+SettingsSheet.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderShowTouches
+SettingsSheet.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderSidebarDials
+Snapshots.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderToolRailEdge
+SqueezePalette.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderPaletteRecentColors
+SqueezePalette.swift | internal key: notification name | BlenderPencilRoll
+SqueezePalette.swift | internal key: stored setting key and notification name | BlenderPencilSqueeze
+Storyboard.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderStoryKeys
+Timeline.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderCurvesHeight
+Timeline.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderStoryboardHeight
+TopBar.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderTweakDrag
+UIKitInterop.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderInterfaceStyle
+wm_apple_ios_blend_document.mm | internal key: folder name in Application Support, holding the person's templates | BlenderTemplates
+wm_apple_ios_blend_document.mm | internal key: key in the template manifest (Blender version a template needs) | minimumBlender
+wm_apple_ios_launcher.mm | internal key: Blender's own folder in Application Support, where the engine keeps its files | Blender
+wm_apple_ios_launcher.mm | internal key: stored bookmark key | BlenderOpenDocument
+wm_apple_ios_launcher.mm | internal key: notification name | BlenderSceneInactive
+wm_apple_ios_launcher.mm | internal key: notification name | BlenderTemplatePresentation
+wm_apple_ios_launcher.mm | file type: the document type is "Blender File" | Create Blender File
+release/ios/Blender.app/Info.plist | internal key: Info.plist key holding the Blender version | PlatypusBlenderVersion
+release/ios/Blender.app/Info.plist | file type: the document type's name | Blender File
+release/ios/Blender.app/Info.plist | internal key: CFBundleExecutable and the scene configuration's name, which no one sees | Blender
+release/ios/Blender.app/Info.plist | credit: CFBundleGetInfoString, "Platypus 3D 0.1.0, based on Blender 5.1.2" | ${IOS_PRODUCT_NAME} ${IOS_MARKETING_VERSION}, based on Blender ${IOS_BLENDER_VERSION}
+native_settings.py | keymap name: the identifier of Blender's keymap preset | Blender
+menu menubar | internal key: TOPBAR_MT_blender's title; the menu bar puts its items in the system's application menu and titles it with the app's name (wm_apple_ios_build_menu_bar) | Blender

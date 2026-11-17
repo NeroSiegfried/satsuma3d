@@ -205,7 +205,9 @@ UIMenu *blenderIOSNativeSubmenu(NSDictionary *item, NSString *identifier)
           NSArray *elements = blenderIOSNativeMenuElements(result);
           if (elements.count == 0) {
             UIAction *empty = [UIAction actionWithTitle:result ? @"No Available Commands" :
-                                                                 @"Blender Is Busy"
+                                                                 [wm_apple_ios_app_name()
+                                                                     stringByAppendingString:
+                                                                         @" Is Busy"]
                                                   image:nil
                                              identifier:nil
                                                 handler:^(__kindof UIAction *) {

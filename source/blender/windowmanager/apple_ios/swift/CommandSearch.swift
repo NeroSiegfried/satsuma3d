@@ -208,7 +208,7 @@ struct CommandSearchSheet: View {
         if search.walking {
           HStack {
             ProgressView()
-            Text("Reading Blender's menus…").foregroundStyle(.secondary)
+            Text("Reading the menus…").foregroundStyle(.secondary)
           }
         }
       }

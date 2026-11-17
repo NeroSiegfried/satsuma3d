@@ -39,7 +39,9 @@ def main():
         shutil.copytree(os.path.join(args.flatbuffers_python, "flatbuffers"), os.path.join(directory, "flatbuffers"))
         report = os.path.join(directory, "report.json")
         subprocess.run([args.blender, "--factory-startup", "--python", os.path.join(HERE, "mac_bridge_harness.py"),
-                        "--", directory, report, args.scenario], check=True, timeout=300)
+                        "--", directory, report, args.scenario,
+                        os.path.join(HERE, "..", "..", "..", "..", "..", "release", "ios", "branding_allowed.txt")],
+                       check=True, timeout=300)
         with open(report) as f:
             result = json.load(f)
     print(json.dumps(result, indent=1))

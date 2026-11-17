@@ -121,7 +121,7 @@ def _install_legacy(path):
     known = {module.__name__ for module in addon_utils.modules(refresh=False)}
     result = bpy.ops.preferences.addon_install(filepath=path, overwrite=True)
     if 'FINISHED' not in result:
-        raise ValueError("Blender could not install it")
+        raise ValueError("The add-on could not be installed")
     new = [module.__name__ for module in addon_utils.modules(refresh=True) if module.__name__ not in known]
     if not new:
         # Reinstalled over itself: its name is the file's.

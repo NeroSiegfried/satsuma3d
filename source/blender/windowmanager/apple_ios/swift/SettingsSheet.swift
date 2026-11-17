@@ -407,7 +407,7 @@ private struct IPadSettingsPage: View {
                   symbol: "pencil.and.scribble",
                   selected: squeeze != "menu") { squeeze = "palette" }
         ChoiceRow(title: "Context Menu",
-                  detail: "Blender's context menu around the Pencil.",
+                  detail: "The viewport's context menu around the Pencil.",
                   symbol: "circle.circle",
                   selected: squeeze == "menu") { squeeze = "menu" }
       } header: {
@@ -469,7 +469,7 @@ private struct IPadSettingsPage: View {
       } footer: {
         Text("Quick Actions are buttons for common actions on the selection, above the bottom of "
           + "the viewport. Operation settings, such as Subdivide's number of cuts, open after it runs, "
-          + "as Blender's Adjust Last Operation panel. With All, what a command makes also shows where it lives: "
+          + "as the Adjust Last Operation panel on the desktop. With All, what a command makes also shows where it lives: "
           + "a new modifier in Properties, a node tree in its editor, a message for a keyframe. Hover Highlighting outlines what Apple Pencil or the pointer is over. "
           + "Show Touches draws a circle under each finger, for recordings and demonstrations.")
       }
@@ -722,7 +722,7 @@ struct SettingsView: View {
                 .tag(tab.id)
             }
           } header: {
-            if index == 0 { Text("Blender Preferences") }
+            if index == 0 { Text("Preferences") }
           }
         }
       }

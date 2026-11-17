@@ -5,6 +5,10 @@
 
 #import <UIKit/UIKit.h>
 
+/** The name the app calls itself, from its `Info.plist` (`IOS_PRODUCT_NAME`); the same as
+ * `AppIdentity.name` in Swift (ROUND5 8A). */
+NSString *wm_apple_ios_app_name();
+
 /** The open document, or nil in the launcher. */
 UIDocument *wm_apple_ios_launcher_document();
 /** Whether a document is open that the system's back action can return from. */

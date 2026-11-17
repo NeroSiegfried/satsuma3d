@@ -351,6 +351,45 @@ if(WITH_PYTHON_MODULE)
 else()
 
   if(WITH_APPLE_CROSSPLATFORM)
+    # The app's identity (ROUND5 8A): its name, version and source, written into `Info.plist`
+    # and read from there by the shell (`AppIdentity`), never typed into its code.
+    set(IOS_BUNDLE_VERSION "${BLENDER_VERSION}.${BLENDER_VERSION_PATCH}" CACHE STRING
+      "iOS build number; increment for each TestFlight upload")
+    set(IOS_PRODUCT_NAME "Platypus 3D" CACHE STRING
+      "The app's name on the Home Screen, in About and wherever it names itself")
+    set(IOS_MARKETING_VERSION "0.1.0" CACHE STRING
+      "The app's version (CFBundleShortVersionString), apart from Blender's")
+    set(IOS_SOURCE_URL "" CACHE STRING
+      "Where the app's complete source is published; required unless the bundle identifier ends in .dev")
+    set(IOS_BLENDER_VERSION "${BLENDER_VERSION}.${BLENDER_VERSION_PATCH}")
+    if(APPLE_TARGET_VISIONOS)
+      # The visionOS app keeps Blender's own identity and version.
+      set(IOS_APP_SHORT_VERSION "${IOS_BLENDER_VERSION}")
+      set(IOS_APP_DISPLAY_NAME "Blender")
+    else()
+      set(IOS_APP_SHORT_VERSION "${IOS_MARKETING_VERSION}")
+      set(IOS_APP_DISPLAY_NAME "${IOS_PRODUCT_NAME}")
+      # The GPL asks for the source of every build given to someone else.
+      if(NOT CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER MATCHES "\\.dev$" AND IOS_SOURCE_URL STREQUAL "")
+        message(FATAL_ERROR
+          "IOS_SOURCE_URL is empty and the bundle identifier "
+          "\"${CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER}\" does not end in \".dev\": "
+          "a build for other people must name its source. Set -DIOS_SOURCE_URL=<address>, or use an "
+          "identifier ending in .dev for a development build."
+        )
+      endif()
+    endif()
+    # The commit the app is built from; the build writes the current one, see `PlatypusSourceCommit`.
+    execute_process(
+      COMMAND git -C "${CMAKE_SOURCE_DIR}" rev-parse HEAD
+      OUTPUT_VARIABLE IOS_SOURCE_COMMIT
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET
+    )
+    if(NOT IOS_SOURCE_COMMIT)
+      set(IOS_SOURCE_COMMIT "unknown")
+    endif()
+
     # Add Storyboard - required for main window interface.
     set(storyboards ${OSX_APP_SOURCEDIR}/Main.storyboard)
     if(APPLE_TARGET_VISIONOS)
@@ -400,6 +439,7 @@ else()
       ${FLATBUFFERS_SWIFT_DIR}/VeriferOptions.swift
       ${FLATBUFFERS_SWIFT_DIR}/Verifiable.swift
       ${FLATBUFFERS_SWIFT_DIR}/Verifier.swift
+      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/AppIdentity.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/Assets.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/BlenderMenus.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/FileDrop.swift
@@ -452,8 +492,12 @@ else()
     )
     set(IOS_LAUNCHER_RESOURCES
       ${CMAKE_SOURCE_DIR}/release/ios/launcher/Suzanne.usdz
-      ${CMAKE_SOURCE_DIR}/release/ios/launcher/blender_logo_mono.svg
     )
+    if(APPLE_TARGET_VISIONOS)
+      # The iPad app carries none of Blender's logo artwork (ROUND5 decision 34): its launcher's
+      # title is the app's name in text. The visionOS app keeps Blender's identity.
+      list(APPEND IOS_LAUNCHER_RESOURCES ${CMAKE_SOURCE_DIR}/release/ios/launcher/blender_logo_mono.svg)
+    endif()
 
     # Shaders for SwiftUI's effects, built into a library the app loads by name. `xcrun` takes
     # the SDK being built for from Xcode's environment.
@@ -513,7 +557,8 @@ else()
       BUNDLE_EXTENSION appex
       XCODE_PRODUCT_TYPE com.apple.product-type.app-extension
       MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/release/ios/blender-thumbnailer.appex/Info.plist
-      MACOSX_BUNDLE_SHORT_VERSION_STRING "${BLENDER_VERSION}.${BLENDER_VERSION_PATCH}"
+      # An extension's version is its app's.
+      MACOSX_BUNDLE_SHORT_VERSION_STRING "${IOS_APP_SHORT_VERSION}"
       XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER
         "${CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER}.thumbnailer"
       XCODE_ATTRIBUTE_SKIP_INSTALL "YES"
@@ -1908,8 +1953,6 @@ elseif(APPLE)
 
   if(WITH_APPLE_CROSSPLATFORM)
     MESSAGE(STATUS "-- CONFIGURING IOS PLIST -- ")
-    set(IOS_BUNDLE_VERSION "${BLENDER_VERSION}.${BLENDER_VERSION_PATCH}" CACHE STRING
-      "iOS build number; increment for each TestFlight upload")
     if(APPLE_TARGET_VISIONOS)
       # A visionOS app: its own windows and icon, without the iPad's orientations and background
       # processing.
@@ -1919,9 +1962,22 @@ elseif(APPLE)
     endif()
     set_target_properties(blender PROPERTIES
       MACOSX_BUNDLE_INFO_PLIST ${IOS_INFO_PLIST}
-      MACOSX_BUNDLE_SHORT_VERSION_STRING "${BLENDER_VERSION}.${BLENDER_VERSION_PATCH}"
+      MACOSX_BUNDLE_SHORT_VERSION_STRING "${IOS_APP_SHORT_VERSION}"
       MACOSX_BUNDLE_LONG_VERSION_STRING "${BLENDER_VERSION}.${BLENDER_VERSION_PATCH} ${BLENDER_DATE}"
     )
+    if(NOT APPLE_TARGET_VISIONOS)
+      # `Info.plist` is written when CMake configures, which a build does not repeat for a new
+      # commit: name the commit the app is actually built from.
+      add_custom_command(
+        TARGET blender
+        POST_BUILD
+        COMMAND
+          /bin/sh -c
+          "commit=$(git -C \"${CMAKE_SOURCE_DIR}\" rev-parse HEAD 2>/dev/null) && /usr/libexec/PlistBuddy -c \"Set :PlatypusSourceCommit $commit\" \"$<TARGET_BUNDLE_DIR:blender>/Info.plist\""
+        COMMENT "Writing the source commit into Info.plist"
+        VERBATIM
+      )
+    endif()
 
     set(IOS_ICON_MANIFEST ${CMAKE_SOURCE_DIR}/release/ios/blender_icons.json)
     set(IOS_ICON_EXPORTER ${CMAKE_SOURCE_DIR}/release/ios/export_icons.py)

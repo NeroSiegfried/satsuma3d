@@ -383,7 +383,7 @@ struct LauncherScene: View {
     }
     layer.addSublayer(shape)
     isAccessibilityElement = true
-    accessibilityLabel = "Blender"
+    accessibilityLabel = AppIdentity.name
     accessibilityTraits = .header
     registerForTraitChanges([UITraitUserInterfaceStyle.self]) {
       (view: WMIOSLauncherLogoView, _: UITraitCollection) in
@@ -732,11 +732,11 @@ private struct LauncherWelcome: View {
                        contentMode: .fit)
           .frame(height: 64)
           .accessibilityElement()
-          .accessibilityLabel("Blender")
+          .accessibilityLabel(AppIdentity.name)
           .accessibilityAddTraits(.isHeader)
       }
       else {
-        Text("Blender")
+        Text(AppIdentity.name)
           .font(.extraLargeTitle)
           .accessibilityAddTraits(.isHeader)
       }

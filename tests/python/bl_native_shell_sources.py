@@ -238,4 +238,118 @@ check(code['RevealCoordinator.swift'].count('enum ShadingHint') == 1 and
               if path.name != 'RevealCoordinator.swift'),
       "What the shading hides is one table beside RevealCoordinator (ROUND5 7D, decision 30)")
 
+
+# 8A.7: the app never calls itself Blender (decision 34). Every string literal holding "Blender" in
+# the shell's Swift and Objective-C, its iOS `Info.plist` files and its own Python must be on
+# `release/ios/branding_allowed.txt`, with its reason, and every line there must still be found.
+# Labels the bridge sends from Blender's Python are checked by the Mac harness's `menus` scenario.
+ROOT = SWIFT.parents[4]
+SHELL = SWIFT.parent
+
+
+def literals(text):
+    r"""The string literals of Swift or Objective-C \a text, with Swift's interpolations `\(…)`
+    left out, as (line, text)."""
+    i, n = 0, len(text)
+    while i < n:
+        if text.startswith('//', i):
+            end = text.find('\n', i)
+            i = n if end < 0 else end
+        elif text.startswith('/*', i):
+            end = text.find('*/', i + 2)
+            i = n if end < 0 else end + 2
+        elif text.startswith('"""', i):
+            end = text.find('"""', i + 3)
+            end = n if end < 0 else end
+            yield text.count('\n', 0, i) + 1, text[i + 3:end]
+            i = end + 3
+        elif text[i] == '"':
+            j, out, depth = i + 1, [], 0
+            while j < n:
+                c = text[j]
+                if depth:
+                    if c == '(':
+                        depth += 1
+                    elif c == ')':
+                        depth -= 1
+                    elif c == '"':
+                        # A string inside an interpolation: skip it whole.
+                        k = j + 1
+                        while k < n and text[k] != '"':
+                            k += 2 if text[k] == '\\' else 1
+                        j = k
+                    j += 1
+                    continue
+                if text.startswith('\\(', j):
+                    depth, j = 1, j + 2
+                    out.append('\\(…)')
+                    continue
+                if c == '\\':
+                    out.append(text[j:j + 2])
+                    j += 2
+                    continue
+                if c in '"\n':
+                    break
+                out.append(c)
+                j += 1
+            yield text.count('\n', 0, i) + 1, ''.join(out)
+            i = j + 1
+        elif text[i] == "'" and 0 < text.find("'", i + 1) - i <= 4:
+            i = text.find("'", i + 1) + 1
+        else:
+            i += 1
+
+
+def python_strings(text):
+    """The string constants of Python \a text that are not docstrings, as (line, text)."""
+    import ast
+    tree = ast.parse(text)
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.body and \
+                isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant):
+            docstrings.add(id(node.body[0].value))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
+            yield node.lineno, node.value
+
+
+branding_sources = {}  # where -> [(line, text)]
+for path in sorted(SHELL.glob('swift/*.swift')) + sorted(SHELL.glob('*.mm')) + sorted(SHELL.glob('*.h')) + \
+        sorted(SHELL.glob('*.hh')):
+    branding_sources[path.name] = list(literals(path.read_text(encoding='utf-8')))
+for path in sorted((ROOT / 'scripts/startup/bl_ui').glob('native_*.py')):
+    branding_sources[path.name] = list(python_strings(path.read_text(encoding='utf-8')))
+for relative in ('release/ios/Blender.app/Info.plist', 'release/ios/blender-thumbnailer.appex/Info.plist'):
+    text = (ROOT / relative).read_text(encoding='utf-8')
+    branding_sources[relative] = [(text.count('\n', 0, m.start()) + 1, m.group(1))
+                                  for m in re.finditer(r'<(?:string|key)>([^<]*)</(?:string|key)>', text)]
+check(len(branding_sources) > 50, "The branding sweep reads the shell's sources")
+
+allowed, bad_lines = {}, []
+REASONS = ('file type', 'keymap name', 'style name', 'credit', 'internal key')
+for number, line in enumerate((ROOT / 'release/ios/branding_allowed.txt').read_text(encoding='utf-8').splitlines(), 1):
+    if not line.strip() or line.startswith('#'):
+        continue
+    parts = line.split(' | ', 2)
+    if len(parts) != 3 or not parts[1].startswith(REASONS) or 'Blender' not in parts[2]:
+        bad_lines.append(number)
+        continue
+    allowed[(parts[0], parts[2])] = parts[1]
+for number in bad_lines:
+    print('branding_allowed.txt:%d: not `<where> | <reason> | <text>` with a reason from %s' % (number, REASONS))
+check(not bad_lines, "Every line of branding_allowed.txt names where, a reason and a string holding \"Blender\"")
+
+unlisted = ['%s:%d: %r' % (where, line, text) for where, found in branding_sources.items()
+            for line, text in found if 'Blender' in text and (where, text) not in allowed]
+for offender in unlisted:
+    print('%s holds "Blender" and is not on release/ios/branding_allowed.txt: the app never calls itself '
+          'Blender; use AppIdentity.name, or list it there with its reason (ROUND5 8A.7)' % offender)
+check(not unlisted, "Every \"Blender\" string in the shell is on the allow-list")
+found = {(where, text) for where, items in branding_sources.items() for _line, text in items}
+stale = sorted('%s | %s' % key for key in allowed if not key[0].startswith('menu ') and key not in found)
+for line in stale:
+    print('branding_allowed.txt: no longer found, remove it: %s' % line)
+check(not stale, "Every line of branding_allowed.txt is still found in its file")
+
 print('PASS: native shell sources ' + json.dumps(checks))

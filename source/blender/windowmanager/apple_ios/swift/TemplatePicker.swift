@@ -41,7 +41,7 @@ final class TemplateStore: ObservableObject {
     var result: [(title: String, items: [JSON])] = []
     let bundled = shown.filter { !$0.bool("personal") }
     let personal = shown.filter { $0.bool("personal") }
-    if !bundled.isEmpty { result.append(("Blender", bundled)) }
+    if !bundled.isEmpty { result.append(("Templates", bundled)) }
     if !personal.isEmpty { result.append(("My Templates", personal)) }
     return result
   }

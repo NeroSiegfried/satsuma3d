@@ -812,7 +812,7 @@ def _run(context, request):
     idname = request.get("command") or ""
     operator = _operator(idname)
     if operator is None or not _command_allowed(idname, operator):
-        return {"sentence": "Blender doesn't have that command."}
+        return {"sentence": "There is no such command."}
     rna = operator.get_rna_type()
     title = rna.name
     if not _poll(operator):
@@ -1290,12 +1290,12 @@ def perform(context, request):
         request = json.loads(request)
         handler = _HANDLERS[request.get("intent")]
     except (ValueError, KeyError, TypeError, AttributeError):
-        return json.dumps({"sentence": "Blender didn't understand that."})
+        return json.dumps({"sentence": "That wasn't understood."})
     try:
         with context.temp_override(**_view3d_override(context)):
             answer = handler(bpy.context, request)
     except Exception as ex:
         import traceback
         traceback.print_exc()
-        answer = {"sentence": "Blender couldn't do that: {:s}".format(str(ex))}
+        answer = {"sentence": "That couldn't be done: {:s}".format(str(ex))}
     return json.dumps(answer, ensure_ascii=False)

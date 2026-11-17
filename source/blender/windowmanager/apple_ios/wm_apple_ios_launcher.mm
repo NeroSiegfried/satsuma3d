@@ -155,95 +155,17 @@ static UIColor *launcherDynamicColor(UIColor *light, UIColor *dark)
 
 @end
 
-/** The title the launcher draws, left blank for Blender's logo to take its place. */
-static NSString *const launcher_blank_title = @" ";
-
-static UILabel *launcherTitleLabel(UIView *view)
+NSString *wm_apple_ios_app_name()
 {
-  if ([view isKindOfClass:UILabel.class] &&
-      [((UILabel *)view).text isEqualToString:launcher_blank_title] &&
-      ((UILabel *)view).font.pointSize > 24)
-  {
-    return (UILabel *)view;
-  }
-  for (UIView *child in view.subviews) {
-    if (UILabel *label = launcherTitleLabel(child)) {
-      return label;
+  NSDictionary *info = NSBundle.mainBundle.infoDictionary;
+  for (NSString *key in @[ @"CFBundleDisplayName", @"CFBundleName" ]) {
+    NSString *name = info[key];
+    if ([name isKindOfClass:NSString.class] && name.length) {
+      return name;
     }
   }
-  return nil;
+  return NSProcessInfo.processInfo.processName;
 }
-
-/** Blender's logo where the launcher would draw its title. */
-@interface WMIOSLauncherLogoStage : UIView
-@end
-
-@implementation WMIOSLauncherLogoStage
-{
-  UIView<WMIOSLauncherLogoView> *_logo;
-}
-
-- (instancetype)initWithLogo:(UIView<WMIOSLauncherLogoView> *)logo
-{
-  if ((self = [super initWithFrame:CGRectZero])) {
-    _logo = [logo retain];
-    [self addSubview:logo];
-  }
-  return self;
-}
-
-- (void)dealloc
-{
-  [_logo release];
-  [super dealloc];
-}
-
-- (void)layoutSubviews
-{
-  [super layoutSubviews];
-  const CGSize size = self.bounds.size;
-  /* The logo's letters sit on the title's baseline, a little smaller than its letters; the mark
-   * rises above them and hangs a little left of the text below. */
-  const CGFloat letters = 0.44, baseline = 0.87, hang = 0.035;
-  UILabel *title = self.window ? launcherTitleLabel(self.window) : nil;
-  CGFloat height, x, baseline_y;
-  if (title) {
-    const CGRect frame = [self convertRect:title.bounds fromView:title];
-    height = title.font.capHeight / letters;
-    x = CGRectGetMinX(frame) - height * self->_logo.aspectRatio * hang;
-    baseline_y = CGRectGetMinY(frame) + title.font.ascender;
-  }
-  else {
-    /* Where the launcher puts its title for this size. */
-    height = size.height * 0.08;
-    x = size.width * 0.125;
-    baseline_y = size.height * 0.222;
-  }
-  _logo.frame = CGRectMake(x, baseline_y - height * baseline, height * _logo.aspectRatio, height);
-}
-
-- (void)didMoveToWindow
-{
-  [super didMoveToWindow];
-  if (self.window == nil) {
-    return;
-  }
-  /* The launcher may lay out its title after its accessories: follow it for a moment. */
-  for (int i = 1; i <= 10; i++) {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(i * 0.1 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(),
-                   ^{
-                     [self setNeedsLayout];
-                   });
-  }
-}
-
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event
-{
-  return nil;
-}
-
-@end
 
 static void launcherStyle(UIDocumentViewControllerLaunchOptions *launch)
 {
@@ -258,23 +180,13 @@ static void launcherStyle(UIDocumentViewControllerLaunchOptions *launch)
 #endif
   NSBundle *bundle = NSBundle.mainBundle;
   NSURL *model_url = [bundle URLForResource:@"Suzanne" withExtension:@"usdz"];
-  NSURL *logo_url = [bundle URLForResource:@"blender_logo_mono" withExtension:@"svg"];
   Class model_class = NSClassFromString(@"WMIOSLauncherModelView");
-  Class logo_class = NSClassFromString(@"WMIOSLauncherLogoView");
   if (model_url && model_class) {
     UIView<WMIOSLauncherModelView> *model = [[[model_class alloc] initWithModelURL:model_url]
         autorelease];
     model.browserView = launch.browserViewController.view;
     launch.backgroundAccessoryView = [[[WMIOSLauncherModelStage alloc] initWithModel:model]
         autorelease];
-  }
-  if (logo_url && logo_class) {
-    UIView<WMIOSLauncherLogoView> *logo = [[[logo_class alloc] initWithArtworkURL:logo_url]
-        autorelease];
-    launch.foregroundAccessoryView = [[[WMIOSLauncherLogoStage alloc] initWithLogo:logo]
-        autorelease];
-    /* The logo is the title; VoiceOver reads it as "Blender". */
-    launch.title = launcher_blank_title;
   }
 }
 
@@ -456,7 +368,7 @@ static NSURL *launcher_pending_url = nil;
   self.view.backgroundColor = UIColor.clearColor;
 #endif
   UIDocumentViewControllerLaunchOptions *launch = self.launchOptions;
-  launch.title = @"Blender";
+  launch.title = wm_apple_ios_app_name();
   if (@available(iOS 27.0, visionOS 27.0, *)) {
     launch.subtitle = @"Create a new scene or open one";
   }

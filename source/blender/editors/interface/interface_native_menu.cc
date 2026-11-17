@@ -185,7 +185,7 @@ bool is_action(Button &but)
  * outside the document, and the regions the native interface replaces, which do nothing there or
  * open Blender's desktop interface over it.
  */
-bool hidden_from_menu_bar(Button &but)
+bool hidden_from_menu_bar(bContext *C, Button &but)
 {
   static const Set<StringRef> operators = {
       "WM_OT_splash",
@@ -228,6 +228,19 @@ bool hidden_from_menu_bar(Button &but)
   };
   if (but.optype && operators.contains(but.optype->idname)) {
     return true;
+  }
+  /* Blender's release notes and its bug tracker are about Blender, not this app: its testers
+   * report through TestFlight and About's session log (ROUND5 decision 35). */
+  if (but.optype && STREQ(but.optype->idname, "WM_OT_url_open_preset") && but.opptr) {
+    PropertyRNA *prop = RNA_struct_find_property(but.opptr, "type");
+    const char *identifier = nullptr;
+    /* Its choices come from Python, which needs the context to list them. */
+    if (prop && RNA_property_enum_identifier(
+                    C, but.opptr, prop, RNA_property_enum_get(but.opptr, prop), &identifier) &&
+        ELEM(StringRef(identifier), "RELEASE_NOTES", "BUG"))
+    {
+      return true;
+    }
   }
   if (MenuType *child = button_menutype_get(&but); child && menus.contains(child->idname)) {
     return true;
@@ -306,7 +319,7 @@ void project(bContext *C,
     if (!writer) {
       continue;
     }
-    if (ELEM(root, "TOPBAR_MT_editor_menus", "VIEW3D_MT_editor_menus") && hidden_from_menu_bar(but)) {
+    if (ELEM(root, "TOPBAR_MT_editor_menus", "VIEW3D_MT_editor_menus") && hidden_from_menu_bar(C, but)) {
       continue;
     }
     if (ELEM(but.type, ButtonType::Sepr, ButtonType::SeprLine)) {

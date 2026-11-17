@@ -311,11 +311,19 @@ extern "C" void wm_apple_ios_build_menu_bar(id<UIMenuBuilder> builder, NSArray *
       continue;
     }
     NSString *menuName = item[@"menu"];
+    NSDictionary *shown = item;
+    if ([menuName isEqualToString:@"TOPBAR_MT_blender"]) {
+      /* Blender's application menu is this app's: it carries the app's name wherever the system
+       * shows it as a menu of its own (ROUND5 8A). */
+      NSMutableDictionary *renamed = [[item mutableCopy] autorelease];
+      renamed[@"title"] = wm_apple_ios_app_name();
+      shown = renamed;
+    }
     NSString *systemIdentifier = systemIdentifiers[menuName];
     NSString *identifier = systemIdentifier ?:
                                               [@"org.blender.menu."
                                    stringByAppendingString:menuName ?: item[@"title"]];
-    UIMenu *menu = blenderIOSNativeSubmenu(item, identifier);
+    UIMenu *menu = blenderIOSNativeSubmenu(shown, identifier);
     if (systemIdentifier && [builder menuForIdentifier:systemIdentifier]) {
       if ([systemIdentifier isEqualToString:UIMenuApplication] ||
           [systemIdentifier isEqualToString:UIMenuWindow])

@@ -19,10 +19,13 @@ argv = sys.argv[sys.argv.index("--") + 1:]
 sys.path.insert(0, argv[0])
 REPORT = argv[1]
 SCENARIO = argv[2] if len(argv) > 2 else "actions"
+# The "Blender" strings the app may show (ROUND5 8A.7), read by the `menus` scenario.
+ALLOWED = argv[3] if len(argv) > 3 else None
 
 import flatbuffers  # noqa: E402
 from Blender.NativeUI import (  # noqa: E402
-    BoolValue, Button, ButtonStyle, Choice, Command, Commands, Content, Data, Group, Node, Number, Op, Param, Reference,
+    BoolValue, Button, ButtonStyle, Choice, Command, Commands, Content, Data, Group, MenuButton, Node, Number, Op, Param,
+    Reference,
     Subscribe, TextValue, Toggle, Updates, Value,
 )
 
@@ -157,6 +160,18 @@ def decode_node(raw):
                 params[s(param.Key())] = s(tv.Value())
         if params:
             entry["params"] = params
+    elif node.ContentType() == Content.Content.MenuButton:
+        table = node.Content()
+        menu = MenuButton.MenuButton()
+        menu.Init(table.Bytes, table.Pos)
+        params = {}
+        for i in range(menu.ParamsLength()):
+            param = menu.Params(i)
+            if param.ValueType() == Value.Value.TextValue:
+                tv = TextValue.TextValue()
+                tv.Init(param.Value().Bytes, param.Value().Pos)
+                params[s(param.Key())] = s(tv.Value())
+        entry.update(view=s(menu.View()), params=params)
     elif node.ContentType() == Content.Content.Choice:
         table = node.Content()
         choice = Choice.Choice()
@@ -502,6 +517,69 @@ def tick_precision():
 MENU_ROUTES = ("VIEW3D_MT_editor_menus", "TOPBAR_MT_edit", "VIEW3D_MT_view", "VIEW3D_MT_object_apply")
 
 
+def branding_allowed():
+    """`release/ios/branding_allowed.txt` as {(where, text)}: the "Blender" strings the app may show."""
+    allowed = set()
+    with open(ALLOWED, encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line.strip() or line.startswith("#"):
+                continue
+            where, _reason, text = line.split(" | ", 2)
+            allowed.add((where, text))
+    return allowed
+
+
+branding = {"menus": 0, "seen": set(), "unlisted": []}
+# Links about Blender rather than this app, which the iPad's menus leave out (ROUND5 decision 35).
+NOT_ON_IPAD = {"Release Notes", "Report a Bug", "Splash Screen", "About Blender", "Donate to Blender"}
+walk_state = {}  # subscription -> (route, menu idname, depth); `None` once read
+
+
+def walk_branding(mode):
+    """Read the menus the shell reads (the menu bar, the context menu, Import and Export), to depth 4,
+    a few at a time. Labels holding "Blender" that are not on the allow-list for their menu go into
+    `branding["unlisted"]`. True once every menu has been read."""
+    if not walk_state:
+        allowed = branding.setdefault("allowed", branding_allowed())
+        for route, menu in (("menubar", "menubar"), ("context", "context"),
+                            ("TOPBAR_MT_file_import", "TOPBAR_MT_file_import"),
+                            ("TOPBAR_MT_file_export", "TOPBAR_MT_file_export")):
+            walk_state[subscribe("menu", route=route)] = (route, menu, 1)
+        walk_state["seen_routes"] = set()
+        return False
+    allowed = branding["allowed"]
+    pending = 0
+    for sub, entry in list(walk_state.items()):
+        if sub == "seen_routes" or entry is None:
+            continue
+        route, menu, depth = entry
+        top = tree(sub)
+        if top is None:
+            pending += 1
+            continue
+        walk_state[sub] = None
+        lib.WM_native_ui_unsubscribe(sub)
+        branding["menus"] += 1
+        for node in top.get("children", []):
+            label = node.get("label") or ""
+            params = node.get("params") or {}
+            if label in NOT_ON_IPAD:
+                branding["unlisted"].append("menu %s | %s (decision 35: not shown on iPad)" % (menu, label))
+            if label == "Manual":
+                branding["help_read"] = True
+            if "Blender" in label:
+                branding["seen"].add("menu %s | %s" % (menu, label))
+                if ("menu " + menu, label) not in allowed:
+                    branding["unlisted"].append("menu %s | %s" % (menu, label))
+            child = params.get("route")
+            if child and depth < 4 and node.get("enabled") and child not in walk_state["seen_routes"]:
+                walk_state["seen_routes"].add(child)
+                walk_state[subscribe("menu", route=child)] = (child, params.get("menu") or menu, depth + 1)
+                pending += 1
+    return pending == 0
+
+
 def tick_menus():
     global step
     try:
@@ -522,9 +600,26 @@ def tick_menus():
             report["steps"].append({"name": "edit", "menus": {
                 name: [(n.get("label"), n.get("content")) for n in (tree(sub) or {}).get("children", [])]
                 for name, sub in subs.items() if name.startswith("edit")}})
-            finish("done")
-            return None
-        if step > 40:
+            for sub in subs.values():
+                lib.WM_native_ui_unsubscribe(sub)
+            subs.clear()
+            enter("object")
+        elif step > 10:
+            # ROUND5 8A.7: every label the shell can reach through the menus, in Object then Edit Mode.
+            if walk_branding("object" if step < 200 else "edit_mesh"):
+                if step < 200:
+                    step = 199
+                    enter("edit_mesh")
+                    walk_state.clear()
+                    return 0.25
+                problems = sorted(set(branding["unlisted"]))
+                if not branding.get("help_read"):
+                    problems.append("the Help menu was not read (no Manual)")
+                report["branding"] = {"menus_read": branding["menus"], "labels_with_blender": sorted(branding["seen"]),
+                                      "unlisted": problems}
+                finish("done" if not problems else "error")
+                return None
+        if step > 400:
             finish("timeout")
             return None
     except Exception:

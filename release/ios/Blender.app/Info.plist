@@ -63,7 +63,7 @@
 	<key>CFBundleExecutable</key>
 	<string>Blender</string>
 	<key>CFBundleGetInfoString</key>
-	<string>${MACOSX_BUNDLE_LONG_VERSION_STRING}, Blender Foundation</string>
+	<string>${IOS_PRODUCT_NAME} ${IOS_MARKETING_VERSION}, based on Blender ${IOS_BLENDER_VERSION}</string>
 	<key>CFBundleIcons</key>
 	<dict>
 		<key>CFBundlePrimaryIcon</key>
@@ -94,7 +94,9 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Blender</string>
+	<string>${IOS_PRODUCT_NAME}</string>
+	<key>CFBundleDisplayName</key>
+	<string>${IOS_PRODUCT_NAME}</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -103,6 +105,12 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>${IOS_BUNDLE_VERSION}</string>
+	<key>PlatypusBlenderVersion</key>
+	<string>${IOS_BLENDER_VERSION}</string>
+	<key>PlatypusSourceURL</key>
+	<string>${IOS_SOURCE_URL}</string>
+	<key>PlatypusSourceCommit</key>
+	<string>${IOS_SOURCE_COMMIT}</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>UIViewControllerBasedStatusBarAppearance</key>

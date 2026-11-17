@@ -21,8 +21,8 @@ import UIKit
  * \{ */
 
 enum IntentEngine {
-  static let noDocument = "Open a document in Blender first."
-  static let noAnswer = "Blender didn't answer. Try again in a moment."
+  static let noDocument = "Open a document in \(AppIdentity.name) first."
+  static let noAnswer = "\(AppIdentity.name) didn't answer. Try again in a moment."
 
   /** Ask Blender and wait for its answer without holding up the interface; nil when it has none
    * in time, as while a long render or file holds the engine up. */
@@ -97,7 +97,7 @@ private final class Once {
  * or Add Cube. */
 struct CommandEntity: AppEntity {
   static let typeDisplayRepresentation = TypeDisplayRepresentation(
-    name: "Blender Action", synonyms: ["Command", "Operation", "Tool"])
+    name: "Action", synonyms: ["Command", "Operation", "Tool"])
   static let defaultQuery = CommandQuery()
 
   var id: String
@@ -145,17 +145,17 @@ struct CommandQuery: EntityStringQuery {
 
 /** Run any of Blender's commands on the open document, with options in plain words. */
 struct RunCommandIntent: AppIntent {
-  static let title: LocalizedStringResource = "Do in Blender"
+  static let title: LocalizedStringResource = "Run Action"
   static let description = IntentDescription(
-    "Runs any Blender action, such as Subdivide or Shade Smooth, with optional settings in plain words, such as \"levels 2\" or \"size 3 m\".",
+    "Runs any action, such as Subdivide or Shade Smooth, with optional settings in plain words, such as \"levels 2\" or \"size 3 m\".",
     categoryName: "Editing",
     searchKeywords: ["command", "operator", "action", "model", "edit"])
   /** Changes to the document happen where they can be seen, and undone. */
   static var supportedModes: IntentModes { .foreground(.immediate) }
 
   @Parameter(title: "Action",
-             description: "The Blender action to run, such as Subdivide, Shade Smooth or Add Cube.",
-             requestValueDialog: "What should Blender do?")
+             description: "The action to run, such as Subdivide, Shade Smooth or Add Cube.",
+             requestValueDialog: "Which action should run?")
   var command: CommandEntity
 
   @Parameter(title: "Options",
@@ -163,7 +163,7 @@ struct RunCommandIntent: AppIntent {
   var options: String?
 
   static var parameterSummary: some ParameterSummary {
-    Summary("Do \(\.$command) in Blender") {
+    Summary("Do \(\.$command)") {
       \.$options
     }
   }
@@ -205,7 +205,7 @@ struct RunCommandIntent: AppIntent {
  * settings, the tool settings or the brush, such as "Cube › Base Color". */
 struct SettingEntity: AppEntity {
   static let typeDisplayRepresentation = TypeDisplayRepresentation(
-    name: "Blender Setting", synonyms: ["Property", "Value", "Option"])
+    name: "Setting", synonyms: ["Property", "Value", "Option"])
   static let defaultQuery = SettingQuery()
 
   var id: String
@@ -250,9 +250,9 @@ struct SettingQuery: EntityStringQuery {
 
 /** Tell the value of any setting in the open document. */
 struct GetSettingIntent: AppIntent {
-  static let title: LocalizedStringResource = "Get Blender Setting"
+  static let title: LocalizedStringResource = "Get Setting"
   static let description = IntentDescription(
-    "Tells the value of any setting in the open Blender document, such as an object's location, its material's base color or the scene's end frame.",
+    "Tells the value of any setting in the open document, such as an object's location, its material's base color or the scene's end frame.",
     categoryName: "Settings",
     searchKeywords: ["property", "value", "read", "check"])
   static var supportedModes: IntentModes { [.background, .foreground(.dynamic)] }
@@ -261,7 +261,7 @@ struct GetSettingIntent: AppIntent {
   var setting: SettingEntity
 
   static var parameterSummary: some ParameterSummary {
-    Summary("Get \(\.$setting) in Blender")
+    Summary("Get \(\.$setting)")
   }
 
   @MainActor
@@ -277,9 +277,9 @@ struct GetSettingIntent: AppIntent {
 
 /** Change any setting in the open document to a value in plain words. */
 struct SetSettingIntent: AppIntent {
-  static let title: LocalizedStringResource = "Change Blender Setting"
+  static let title: LocalizedStringResource = "Change Setting"
   static let description = IntentDescription(
-    "Changes any setting in the open Blender document, such as a material's color, an object's size or the end frame, to a value in plain words: \"red\", \"2 m\", \"45 degrees\", \"on\".",
+    "Changes any setting in the open document, such as a material's color, an object's size or the end frame, to a value in plain words: \"red\", \"2 m\", \"45 degrees\", \"on\".",
     categoryName: "Settings",
     searchKeywords: ["property", "value", "set", "make", "color"])
   static var supportedModes: IntentModes { .foreground(.immediate) }
@@ -293,7 +293,7 @@ struct SetSettingIntent: AppIntent {
   var value: String
 
   static var parameterSummary: some ParameterSummary {
-    Summary("Set \(\.$setting) to \(\.$value) in Blender")
+    Summary("Set \(\.$setting) to \(\.$value)")
   }
 
   @MainActor
@@ -315,9 +315,9 @@ struct SetSettingIntent: AppIntent {
 
 /** The open document's scene as facts Siri can reason over and answer questions from. */
 struct DescribeSceneIntent: AppIntent {
-  static let title: LocalizedStringResource = "Describe Blender Scene"
+  static let title: LocalizedStringResource = "Describe Scene"
   static let description = IntentDescription(
-    "Tells what is in the open Blender document's scene: how many objects of each type and their names, what is selected, the active object and its size, the mode and the frame.",
+    "Tells what is in the open document's scene: how many objects of each type and their names, what is selected, the active object and its size, the mode and the frame.",
     categoryName: "Scene",
     searchKeywords: ["objects", "count", "selection", "what", "summary"])
   static var supportedModes: IntentModes { [.background, .foreground(.dynamic)] }
@@ -351,7 +351,7 @@ struct BlenderShortcuts: AppShortcutsProvider {
         "Do something in \(.applicationName)",
         "Run a command in \(.applicationName)",
       ],
-      shortTitle: "Do in Blender",
+      shortTitle: "Run Action",
       systemImageName: "wand.and.stars")
     AppShortcut(
       intent: DescribeSceneIntent(),

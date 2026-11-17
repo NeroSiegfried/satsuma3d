@@ -746,7 +746,7 @@ final class LayoutChecker {
 
   /** A development build (its identifier ends in `.dev`) also shows each problem as a message,
    * once per launch, so it is seen and not only logged (ROUND5 Stage 6B, decision 22). */
-  private static let development = Bundle.main.bundleIdentifier?.hasSuffix(".dev") ?? false
+  private static let development = AppIdentity.isDevelopment
   private var shown = Set<String>()
 
   /** Log a layout problem: \a key names it (`item ∩ tools`, `item outside`), \a line is the log's. */
