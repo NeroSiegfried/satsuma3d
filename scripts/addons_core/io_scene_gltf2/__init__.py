@@ -1399,7 +1399,9 @@ class ExportGLTF2_Base(ConvertGLTF2_Base):
 
         # If gltfpack is not setup in plugin preferences -> don't show any gltfpack relevant options in export dialog
         gltfpack_path = context.preferences.addons['io_scene_gltf2'].preferences.gltfpack_path_ui.strip()
-        if gltfpack_path != '':
+        # gltfpack is another program, which iPadOS cannot run (ROUND5 8E).
+        from _bpy_internal.platform.sandbox import IPAD
+        if gltfpack_path != '' and not IPAD:
             export_panel_gltfpack(layout, operator)
 
         export_panel_user_extension(context, layout)
@@ -2184,7 +2186,11 @@ class GLTF_AddonPreferences(bpy.types.AddonPreferences):
         row.prop(self, "KHR_materials_variants_ui", text="Material Variants")
         row.prop(self, "animation_ui", text="Animation UI")
         row = layout.row()
-        row.prop(self, "gltfpack_path_ui", text="Path to gltfpack")
+        from _bpy_internal.platform.sandbox import IPAD, NO_PROGRAMS
+        if IPAD:
+            row.label(text="gltfpack: " + NO_PROGRAMS)
+        else:
+            row.prop(self, "gltfpack_path_ui", text="Path to gltfpack")
         row = layout.row()
         row.prop(self, "allow_embedded_format", text="Allow glTF Embedded format")
         if self.allow_embedded_format:

@@ -925,5 +925,38 @@ def tick_material():
     return 0.3
 
 
-bpy.app.timers.register({"material": tick_material, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror}.get(SCENARIO, tick_actions),
+def tick_extensions():
+    """ROUND5 8E.1: started offline as the iPad starts, online access stays off and cannot be turned
+    on, and the bundled extension (LoopTools) still turns on and registers its operators."""
+    global step
+    try:
+        step += 1
+        if step == 1:
+            system = bpy.context.preferences.system
+            report["online_access"] = bpy.app.online_access
+            report["override"] = bpy.app.online_access_override
+            report["online_toggle_readonly"] = not system.bl_rna.properties["use_online_access"].is_readonly and \
+                system.is_property_readonly("use_online_access")
+            module = "bl_ext.system.looptools"
+            report["enable"] = list(bpy.ops.preferences.addon_enable(module=module))
+            report["enabled"] = module in bpy.context.preferences.addons
+            report["operator"] = hasattr(bpy.types, "MESH_OT_looptools_bridge") or "looptools_bridge" in dir(bpy.ops.mesh)
+            problems = [name for name, good in (
+                ("online access is on", not report["online_access"]),
+                ("not overridden", report["override"]),
+                ("the online toggle can be changed", report["online_toggle_readonly"]),
+                ("LoopTools did not turn on", report["enabled"]),
+                ("LoopTools registered no operator", report["operator"])) if not good]
+            report["problems"] = problems
+            finish("done" if not problems else "error")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
+bpy.app.timers.register({"material": tick_material, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror,
+                         "extensions": tick_extensions}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

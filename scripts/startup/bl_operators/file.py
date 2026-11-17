@@ -23,6 +23,12 @@ class WM_OT_previews_batch_generate(Operator):
     bl_label = "Batch-Generate Previews"
     bl_options = {'REGISTER'}
 
+    @classmethod
+    def poll(cls, _context):
+        # It runs another program, which iPadOS does not allow (ROUND5 8E).
+        from _bpy_internal.platform.sandbox import poll_programs
+        return poll_programs(cls)
+
     # -----------
     # File props.
     files: CollectionProperty(
@@ -139,6 +145,12 @@ class WM_OT_previews_batch_clear(Operator):
     bl_idname = "wm.previews_batch_clear"
     bl_label = "Batch-Clear Previews"
     bl_options = {'REGISTER'}
+
+    @classmethod
+    def poll(cls, _context):
+        # It runs another program, which iPadOS does not allow (ROUND5 8E).
+        from _bpy_internal.platform.sandbox import poll_programs
+        return poll_programs(cls)
 
     # -----------
     # File props.

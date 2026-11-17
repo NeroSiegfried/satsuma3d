@@ -1163,6 +1163,12 @@ class WM_OT_path_open(Operator):
     bl_label = ""
     bl_options = {'INTERNAL'}
 
+    @classmethod
+    def poll(cls, _context):
+        # It runs another program, which iPadOS does not allow (ROUND5 8E).
+        from _bpy_internal.platform.sandbox import poll_programs
+        return poll_programs(cls)
+
     filepath: StringProperty(
         subtype='FILE_PATH',
         options={'SKIP_SAVE'},

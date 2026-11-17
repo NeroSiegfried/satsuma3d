@@ -608,6 +608,14 @@ int main(int argc,
   BLI_args_parse(ba, ARG_PASS_SETTINGS_FORCE, nullptr, nullptr);
 #endif
 
+#ifdef WITH_APPLE_CROSSPLATFORM
+  /* The app never goes online (App Store Guideline 2.5.2, ROUND5 8E): as `--offline-mode` does,
+   * after any arguments, so the preference is overridden and cannot be turned back on, and the
+   * stored preference is left as it is. */
+  G.f &= ~(G_FLAG_INTERNET_ALLOW | G_FLAG_INTERNET_OVERRIDE_PREF_ANY);
+  G.f |= G_FLAG_INTERNET_OVERRIDE_PREF_OFFLINE;
+#endif
+
   WM_init(C, argc, argv);
 
 #ifndef WITH_PYTHON

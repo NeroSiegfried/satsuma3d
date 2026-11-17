@@ -379,4 +379,76 @@ check('SwiftAbout.present(from:' in code['DocumentWindow.swift'] and 'aboutPage'
 check('Development build: source not published' in about_text,
       "A development build without a source address says so in About")
 
+
+# 8E.3: iPadOS runs no other program. Every use of `subprocess` or `os.system` (and their kin) in
+# Blender's Python is either in an operator whose poll fails on iPad through the one helper
+# (`_bpy_internal.platform.sandbox.poll_programs`, "Not available on iPad: it needs another
+# program"), or on this short reviewed list, keyed by file and the class or function holding it.
+SCRIPTS = ROOT / 'scripts'
+LAUNCHES = re.compile(r'\b(subprocess\.(run|Popen|call|check_call|check_output|getoutput|getstatusoutput)|'
+                      r'os\.(system|popen|exec[lv]p?e?|spawn[lv]p?e?|posix_spawnp?|startfile))\s*\(')
+REVIEWED = {
+    ('addons_core/bl_pkg/bl_extension_utils.py', 'command_output_from_json_0'):
+        "the extensions platform's worker: syncing needs online access, which is off on iPad, and add-ons "
+        "install in-process through bl_ui.native_addons; a failure to start raises and is reported",
+    ('addons_core/io_scene_gltf2/blender/exp/export.py', '__postprocess_with_gltfpack'):
+        "gltfpack: its panel and preference are hidden on iPad (sandbox.IPAD); a failure is logged",
+    ('addons_core/ui_translate/update_repo.py', 'UI_OT_i18n_updatetranslation_work_repo'):
+        "translators' tool, not enabled",
+    ('modules/_bl_i18n_utils/utils.py', 'I18nMessages'): "translators' tool, not run by the app",
+    ('modules/_bl_text_utils/external_editor.py', 'open_external_editor'):
+        "only with a program in Preferences > File Paths > Text Editor; its error is returned as a report",
+    ('modules/_bpy_internal/platform/freedesktop.py', 'handle_mime_association_xml'): "Linux desktop registration only",
+    ('modules/_bpy_internal/platform/freedesktop.py', 'handle_mime_association_default'):
+        "Linux desktop registration only",
+    ('modules/_bpy_internal/platform/freedesktop.py', 'main_run_as_root'): "Linux desktop registration only",
+    ('modules/_bpy_internal/system_info/text_generate_runtime.py', 'write'):
+        "Python's version for Save System Info, in a try: an error is written into the report",
+    ('modules/_bpy_internal/system_info/url_prefill_startup.py', 'url_from_blender'):
+        "the crash reporter's startup script, run outside the app; in a try",
+    ('modules/_console_shell.py', 'shell_run'): "the Python console's Shell language, which reports errors",
+    ('modules/_graphviz_export.py', 'graph_armature'): "developers' debugging",
+}
+seen_reviewed, unguarded = set(), []
+for path in sorted(SCRIPTS.rglob('*.py')):
+    relative = str(path.relative_to(SCRIPTS))
+    if '/tests/' in relative or relative.startswith('templates_py/'):
+        continue
+    lines = path.read_text(encoding='utf-8', errors='replace').split('\n')
+    for number, line in enumerate(lines, 1):
+        stripped = line.split('#', 1)[0]
+        if not LAUNCHES.search(stripped):
+            continue
+        # The class or function holding it, at the top level.
+        holder = next((m.group(2) for previous in reversed(lines[:number])
+                       for m in [re.match(r'(class|def)\s+(\w+)', previous)] if m), '')
+        if (relative, holder) in REVIEWED:
+            seen_reviewed.add((relative, holder))
+            continue
+        start = next(i for i in range(number - 1, -1, -1) if lines[i].startswith(('class ', 'def ')) or i == 0)
+        end = next((i for i in range(number, len(lines)) if lines[i].startswith(('class ', 'def '))), len(lines))
+        if lines[start].startswith('class ') and 'poll_programs(cls)' in '\n'.join(lines[start:end]):
+            continue
+        unguarded.append('scripts/%s:%d (%s)' % (relative, number, holder))
+for offender in unguarded:
+    print('%s starts another program and neither fails its poll on iPad through '
+          '_bpy_internal.platform.sandbox.poll_programs nor is on the reviewed list (ROUND5 8E.3)' % offender)
+check(not unguarded, "Every subprocess or os.system use is guarded on iPad or reviewed")
+check(seen_reviewed == set(REVIEWED), "Every reviewed subprocess use still exists: %s" % sorted(set(REVIEWED) - seen_reviewed))
+for idname, name in (('wm.py', 'WM_OT_path_open'), ('image.py', 'EditExternally'),
+                     ('file.py', 'WM_OT_previews_batch_generate'), ('file.py', 'WM_OT_previews_batch_clear'),
+                     ('screen_play_rendered_anim.py', 'PlayRenderedAnim'), ('assets.py', 'ASSET_OT_open_containing_blend_file')):
+    text = (SCRIPTS / 'startup/bl_operators' / idname).read_text(encoding='utf-8')
+    body = text[text.index('class %s(' % name):]
+    body = body[:body.find('\nclass ', 1)] if '\nclass ' in body[1:] else body
+    check('poll_programs(cls)' in body, "%s fails its poll on iPad (ROUND5 8E.3)" % name)
+
+# 8E.1: online access is off on iPad as `--offline-mode` makes it, and the shell says so in words.
+creator = (ROOT / 'source/creator/creator.cc').read_text(encoding='utf-8')
+block = creator[creator.index('#ifdef WITH_APPLE_CROSSPLATFORM\n  /* The app never goes online'):]
+check('G.f |= G_FLAG_INTERNET_OVERRIDE_PREF_OFFLINE;' in block[:600] and 'U.flag' not in block[:600],
+      "iOS starts the engine offline through G.f, as --offline-mode does, without touching U.flag (ROUND5 8E.1)")
+check('NO_ONLINE' in (SCRIPTS / 'startup/bl_ui/space_userpref.py').read_text(encoding='utf-8'),
+      "Preferences' Network panel says on iPad why online access is off")
+
 print('PASS: native shell sources ' + json.dumps(checks))

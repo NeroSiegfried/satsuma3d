@@ -12,6 +12,7 @@ __all__ = (
     "pkg_wheel_filter",
 )
 
+from _bpy_internal.platform.sandbox import offline_hint  # ROUND5 8E: what the iPad says instead.
 import os
 
 from functools import partial
@@ -1451,7 +1452,7 @@ def _extensions_maybe_online_action_poll_impl(cls, repo, action):
                 case _:
                     assert False, "Unreachable"
             if bpy.app.online_access_override:
-                message += " " + rpt_("Launch Blender without --offline-mode")
+                message += " " + offline_hint(rpt_("Launch Blender without --offline-mode"))
             else:
                 message += " " + rpt_("Enable online access in System preferences")
             cls.poll_message_set(message)
@@ -2965,8 +2966,8 @@ class EXTENSIONS_OT_package_install(Operator, _ExtCmdMixIn):
     def poll(cls, _context):
         if not bpy.app.online_access:
             if bpy.app.online_access_override:
-                cls.poll_message_set(
-                    "Online access required to install or update. Launch Blender without --offline-mode")
+                cls.poll_message_set(offline_hint(
+                    "Online access required to install or update. Launch Blender without --offline-mode"))
             else:
                 cls.poll_message_set(
                     "Online access required to install or update. Enable online access in System preferences")
@@ -3977,7 +3978,8 @@ class EXTENSIONS_OT_userpref_show_online(Operator):
     def poll(cls, _context):
         if bpy.app.online_access_override:
             if not bpy.app.online_access:
-                cls.poll_message_set("Blender was launched in offline mode, which cannot be changed at runtime")
+                cls.poll_message_set(offline_hint(
+                    "Blender was launched in offline mode, which cannot be changed at runtime"))
                 return False
         return True
 
@@ -3997,7 +3999,8 @@ class EXTENSIONS_OT_userpref_allow_online(Operator):
     def poll(cls, _context):
         if bpy.app.online_access_override:
             if not bpy.app.online_access:
-                cls.poll_message_set("Blender was launched in offline mode, which cannot be changed at runtime")
+                cls.poll_message_set(offline_hint(
+                    "Blender was launched in offline mode, which cannot be changed at runtime"))
                 return False
         return True
 
@@ -4043,7 +4046,7 @@ class EXTENSIONS_OT_userpref_allow_online_popup(Operator):
             lines = (
                 rpt_("Online access required to install or update."),
                 "",
-                rpt_("Launch Blender without --offline-mode"),
+                offline_hint(rpt_("Launch Blender without --offline-mode")),
             )
         else:
             lines = (

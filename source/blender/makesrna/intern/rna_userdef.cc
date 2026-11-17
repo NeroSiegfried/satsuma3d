@@ -564,7 +564,11 @@ static int rna_userdef_use_online_access_editable(const PointerRNA * /*ptr*/, co
   if ((G.f & G_FLAG_INTERNET_ALLOW) == 0) {
     /* Return 0 when blender was invoked with `--offline-mode` "forced". */
     if (G.f & G_FLAG_INTERNET_OVERRIDE_PREF_OFFLINE) {
+#ifdef WITH_APPLE_CROSSPLATFORM
+      *r_info = N_("Not available on iPad: the app does not go online");
+#else
       *r_info = N_("Launched with \"--offline-mode\", cannot be changed");
+#endif
       return 0;
     }
   }

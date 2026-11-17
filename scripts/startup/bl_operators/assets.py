@@ -84,6 +84,10 @@ class ASSET_OT_open_containing_blend_file(Operator):
 
     @classmethod
     def poll(cls, context):
+        # It runs another Blender, which iPadOS does not allow (ROUND5 8E).
+        from _bpy_internal.platform.sandbox import poll_programs
+        if not poll_programs(cls):
+            return False
         asset = getattr(context, "asset", None)
 
         if not asset:

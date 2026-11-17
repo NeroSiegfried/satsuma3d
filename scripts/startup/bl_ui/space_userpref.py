@@ -807,7 +807,13 @@ class USERPREF_PT_system_network(SystemPanel, CenterAlignMixIn, Panel):
 
         # Show when the preference has been overridden and doesn't match the current preference.
         runtime_online_access = bpy.app.online_access
-        if system.use_online_access != runtime_online_access:
+        from _bpy_internal.platform.sandbox import IPAD, NO_ONLINE
+        if IPAD and not runtime_online_access:
+            # The app never goes online there (ROUND5 8E); the toggle is disabled: say why.
+            row = layout.split(factor=0.4)
+            row.label(text="")
+            row.label(text=NO_ONLINE)
+        elif system.use_online_access != runtime_online_access:
             row = layout.split(factor=0.4)
             row.label(text="")
             if runtime_online_access:
