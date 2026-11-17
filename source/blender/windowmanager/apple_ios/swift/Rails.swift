@@ -1177,6 +1177,7 @@ struct ToolRails: View {
         updateSqueezePalette(toolItems: toolItems, brushItems: brushItems)
       }
       .onChange(of: model.notices, initial: true) { _, notices in model.messages.take(notices) }
+      .onChange(of: model.reveal, initial: true) { _, reveal in RevealCoordinator.shared.take(reveal, model: model) }
       .onChange(of: gizmoFrame, initial: true) { _, gizmo in
         let origin = proxy.frame(in: .global).origin
         LayoutChecker.shared.set("gizmo", gizmo.offsetBy(dx: origin.x, dy: origin.y))

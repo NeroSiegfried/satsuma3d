@@ -266,6 +266,11 @@ add_blender_test(
 )
 
 add_blender_test(
+  script_native_reveal
+  --python ${CMAKE_CURRENT_LIST_DIR}/bl_native_reveal.py
+)
+
+add_blender_test(
   script_native_clipboard
   --python ${CMAKE_CURRENT_LIST_DIR}/bl_native_clipboard.py
 )

@@ -117,6 +117,20 @@ struct RedoContent: View {
             .lineLimit(2)
             .frame(width: 112, alignment: .leading)
             .accessibilityIdentifier("blender.redo.title")
+          /* Do it again, as Shift+R: beside its settings, where "again" and "adjust" meet. */
+          Button {
+            ShellModel.current?.send("repeat", .invoke)
+          } label: {
+            Image(systemName: "repeat")
+              .font(.system(size: 15, weight: .semibold))
+              .frame(width: 36, height: 36)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .disabled(!(ShellModel.current?.canRepeat ?? false))
+          .help("Repeat")
+          .accessibilityLabel(ShellModel.current?.repeatTitle ?? "Repeat Last")
+          .accessibilityIdentifier("blender.redo.repeat")
           ForEach(model.operationColumns, id: \.node.key) { column in
             if column.node.kind == .group {
               NativeToggleGroup(model: model, group: column.node, compact: true)

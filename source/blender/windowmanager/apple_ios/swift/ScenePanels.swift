@@ -29,6 +29,9 @@ final class SwiftScenePanels {
   let tools = PanelsModel(mode: .toolStrip, tab: "TOOL")
   /** The last operation's settings, which the actions row shows, and a dialog's. */
   let redo = PanelsModel(mode: .redo)
+  /** The 3D View's sidebar Item tab, for the selection's transform above the actions, see
+   * #ItemCard. */
+  let item = PanelsModel(mode: .properties, tab: "SIDEBAR:Item")
   let dialog = PanelsModel(mode: .dialog)
   /** Blender's Preferences, which Settings shows. */
   let preferences = PanelsModel(mode: .preferences, tab: "PREFERENCES_INTERFACE")
@@ -55,6 +58,7 @@ final class SwiftScenePanels {
 
   init() {
     properties.setShown(false)
+    item.setShown(false)
     shading.setShown(false)
     preferences.setShown(false)
     Self.current = self

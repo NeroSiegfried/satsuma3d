@@ -206,7 +206,14 @@ final class ShellModel {
   /** The messages showing at the top of the viewport. */
   @ObservationIgnored let messages = ShellMessages()
   /** Run what a message's button names: `mode:<MODE>` or `action:<id>`. */
+  /** While an operation waits: its name, or what Blender writes in the header for it. */
+  var modalHint: String { text("modal_hint") ?? "" }
+
+  /** What Blender decided shows after the last command, see #RevealCoordinator. */
+  var reveal: String { text("reveal") ?? "" }
+
   func perform(_ target: String) {
+    if RevealCoordinator.shared.perform(target) { return }
     if target.hasPrefix("mode:") {
       send("mode", .set_, .text(String(target.dropFirst(5))))
     }
@@ -313,8 +320,16 @@ final class ShellModel {
   /** The window's sides, such as a phone's toolbar column: the viewport runs under them, and the
    * controls over it keep beside them. */
   var sideInsets = UIEdgeInsets.zero
-  /** The bottom of the top bar, in the window: controls along the top edge rest below it. */
+  /** The bottom of the top bar, with the tool settings row under it, in the window: controls along
+   * the top edge rest below it. */
   var topBarBottom: CGFloat = 0
+  /** The header's own bottom, which the tool settings row hangs from. */
+  var navigationBarBottom: CGFloat = 0
+  /** The tool settings row's height, 0 while it is hidden; the window then measures again. */
+  var toolRowHeight: CGFloat = 0 {
+    didSet { if toolRowHeight != oldValue { toolRowChanged?() } }
+  }
+  @ObservationIgnored var toolRowChanged: (() -> Void)?
   /** The asset pane and timeline along the bottom: their height, which the controls resting on
    * the bottom edge rise above. */
   var bottomTray: CGFloat = 0
@@ -335,6 +350,8 @@ final class ShellModel {
   /** The viewport shading and tool settings popovers are open. */
   var shadingOpen = false
   var toolSettingsOpen = false
+  /** Search shows, see #CommandSearchSheet. */
+  var searchOpen = false
   /** One finger uses the active tool rather than orbiting the view. */
   var fingerUsesTool = false
 

@@ -84,19 +84,22 @@ struct QuickAction: Identifiable, Equatable {
 
   @MainActor
   func run(in model: ShellModel) {
+    if id == "modal:pad" {
+      /* The number pad, for typing a value into the waiting operation. */
+      withAnimation(.easeOut(duration: 0.18)) { NumberPadState.shared.shown.toggle() }
+      return
+    }
+    if id.hasPrefix("pin:") {
+      /* Pinned from Search: run as Search runs it. */
+      CommandSearch.shared.run(id: String(id.dropFirst("pin:".count)))
+      return
+    }
     if modalKey {
       wm_apple_ios_window_send_key(model.window, key)
       return
     }
+    /* What opens afterwards is Blender's to say, see #RevealCoordinator. */
     model.send(id, .invoke)
-    /* Adding a modifier: its settings are in Properties, which opens on them. */
-    if operatorName == "OBJECT_OT_native_modifier_toggle" && !selected,
-       UserDefaults.standard.object(forKey: SettingsModel.redoOpensKey) as? Bool ?? true,
-       let panels = SwiftScenePanels.current
-    {
-      panels.setInspectorShown(true)
-      panels.properties.selectTab("MODIFIER")
-    }
   }
 
   var axisColor: Color {
@@ -238,6 +241,13 @@ struct QuickActionBarItem: View {
     .simultaneousGesture(
       LongPressGesture(minimumDuration: 0.4, maximumDistance: 12)
         .onEnded { _ in
+          if action.axis {
+            /* Held, an axis locks its plane, as Shift and the axis key do. */
+            Haptics.selection()
+            heldToName = true
+            model.send("modalkey:shift+" + action.key, .invoke)
+            return
+          }
           guard image != nil else { return }
           Haptics.selection()
           heldToName = true
@@ -314,10 +324,16 @@ struct QuickActionsRow: View {
   static let barSpace = "blender.quick-actions.bar"
   let model: ShellModel
   let redo: PanelsModel
+  /** The 3D View's sidebar Item tab, see #ItemCard. */
+  let item: PanelsModel
+  @State private var itemFolded = false
+  @AppStorage(ItemCardTools.shownKey) private var itemCardEnabled = true
   /** The held action's name and its middle in the bar, shown above the bar as Blender's tooltip. */
   @State private var heldName: (text: String, x: CGFloat)?
   @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
   @State private var actionsOpen = false
+  /** Opened because an operation started waiting, rather than by the person. */
+  @State private var openedForModal = false
   /** The operation the user opened the strip for; another operation arrives folded. */
   @State private var redoOpenID: String?
   /** Blender's count of requests to open the strip (F9, the Edit menu), to open it for a new one. */
@@ -328,27 +344,25 @@ struct QuickActionsRow: View {
   /** The actions' own width in the bar, measured ahead of opening it. */
   @State private var actionItemsWidth: CGFloat = 0
   @AppStorage(SettingsModel.showQuickActionsKey) private var showQuickActions = true
-  @AppStorage(SettingsModel.redoOpensKey) private var redoOpens = true
 
-  /** Whether an operation's settings open by themselves: not for moving in the viewport, selecting,
-   * strokes or the view, which happen all the time and are adjusted by doing them again. */
-  static func opensItself(_ idname: String?) -> Bool {
-    guard let idname, !idname.isEmpty else { return false }
-    let lower = idname.lowercased()
-    for prefix in ["VIEW3D_OT_", "VIEW2D_OT_", "ED_OT_", "SCREEN_OT_", "WM_OT_", "UI_OT_"]
-      where idname.hasPrefix(prefix) { return false }
-    /* The transforms dragged in the viewport; Mirror and the others chosen from a menu open. */
-    if idname.hasPrefix("TRANSFORM_OT_") && !["TRANSFORM_OT_mirror", "TRANSFORM_OT_tosphere",
-                                               "TRANSFORM_OT_shear", "TRANSFORM_OT_bend"].contains(idname) {
-      return false
-    }
-    return !lower.contains("select") && !lower.contains("stroke") && !lower.contains("_hide") &&
-      !lower.contains("_reveal")
+  /** The Item card shows with a transform tool, in Object and Edit Mode. */
+  private var itemWanted: Bool {
+    itemCardEnabled && ItemCardTools.properties(for: model.activeTool) != nil &&
+      ["objectmode", "mesh_edit"].contains(model.mode)
   }
 
   private var actions: [QuickAction] {
-    showQuickActions ? QuickAction.list(model.actions) : []
+    guard showQuickActions else { return [] }
+    let own = QuickAction.list(model.actions)
+    /* Pinned commands follow, but not while a move takes keys: then the bar is its keys. */
+    guard !own.contains(where: { !$0.key.isEmpty }) else { return own }
+    let ids = Set(own.map(\.id))
+    /* A pinned action the registry already shows is not shown twice. */
+    return own + CommandSearch.shared.pinnedActions.filter { !ids.contains(String($0.id.dropFirst("pin:".count))) }
   }
+
+  /** An operation waits for keys: the bar is its modal bar. */
+  private var modalRunning: Bool { actions.contains { $0.modalKey } }
 
   /** Blender's full context menu follows the actions, but not while a transform takes keys. */
   private var contextMenuAvailable: Bool {
@@ -428,6 +442,38 @@ struct QuickActionsRow: View {
                           CGRect(x: rowX + rowWidth - pillWidth, y: 0, width: pillWidth,
                                  height: ShellMetrics.buttonHeight))
             }
+            /* The selection's transform, above the row and above the last operation's strip
+             * when that is above it too. */
+            if itemWanted && !ItemCard.rows(item, tool: model.activeTool).isEmpty {
+              let stripAbove: CGFloat = redoTitle == nil ? 0 :
+                (redoAbove ? ShellMetrics.buttonHeight + 8 : (redoOpen && !wide ? 60 + 8 : 0))
+              ItemCard(model: item, tool: model.activeTool, folded: $itemFolded,
+                       maxHeight: geometry.size.height * 0.4)
+                .frame(maxWidth: min(laneWidth, 520), alignment: .leading)
+                .fixedSize(horizontal: true, vertical: false)
+                .alignmentGuide(VerticalAlignment.center) { d in
+                  d.height + ShellMetrics.rowHeight / 2 + 8 + stripAbove
+                }
+                .offset(x: laneLeading)
+                .transition(.opacity)
+            }
+            /* While an operation waits: its name and what it says, and the number pad, above
+             * the bar. */
+            if modalRunning {
+              VStack(alignment: .leading, spacing: 8) {
+                if NumberPadState.shared.shown {
+                  NumberPad(model: model)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+                if !model.modalHint.isEmpty {
+                  ShellNameLabel(text: model.modalHint)
+                }
+              }
+              .alignmentGuide(VerticalAlignment.center) { d in
+                d.height + ShellMetrics.barHeight / 2 + 8
+              }
+              .offset(x: rowX)
+            }
             /* The held action's name, as the tool rail names its tools: above everything else in
              * the row, clear of the finger and of the last operation above the bar. */
             if let heldName {
@@ -451,9 +497,9 @@ struct QuickActionsRow: View {
     }
     .ignoresSafeArea(edges: .horizontal)
     .onChange(of: redo.operationKey) { _, key in
-      /* Another operation arrives folded, unless its settings open by themselves. */
+      /* Another operation arrives folded, unless Blender said its settings show. */
       withAnimation(animation) {
-        if redoOpens, let key, Self.opensItself(redo.operation?.idname) {
+        if let key, RevealCoordinator.shared.opensOperation(redo.operation?.idname) {
           redoOpenID = key
         }
         else if redoOpenID != key {
@@ -461,7 +507,30 @@ struct QuickActionsRow: View {
         }
       }
     }
+    .onChange(of: RevealCoordinator.shared.operationRequests) { _, _ in
+      /* The decision may come after the settings: open them for it then. */
+      guard let key = redo.operationKey, !redo.operationColumns.isEmpty,
+            RevealCoordinator.shared.opensOperation(redo.operation?.idname) else { return }
+      withAnimation(animation) { redoOpenID = key }
+    }
     .animation(.easeOut(duration: 0.12), value: heldName?.text)
+    .onChange(of: itemWanted, initial: true) { _, wanted in item.setShown(wanted) }
+    .onChange(of: modalRunning) { _, running in
+      /* The waiting operation's bar opens by itself, and folds when it ends if it opened so. */
+      withAnimation(animation) {
+        if running && !actionsOpen {
+          actionsOpen = true
+          openedForModal = true
+        }
+        else if !running {
+          if openedForModal { actionsOpen = false }
+          openedForModal = false
+          NumberPadState.shared.shown = false
+        }
+      }
+    }
+    /* Folded for one tool, open again for the next. */
+    .onChange(of: model.activeTool) { _, _ in itemFolded = false }
     .onChange(of: redo.operation?.shown, initial: true) { _, requests in
       /* Asked to open (F9, the Edit menu): open for this operation. */
       if let requests, let seen = redoShowRequests, requests > seen, !redo.operationColumns.isEmpty {
@@ -679,6 +748,64 @@ struct QuickActionsRow: View {
     .panelGlass(interactive: !redoOpen, in: shape)
     .offset(x: frame.minX, y: frame.minY)
     .transition(.scale(scale: 0.8, anchor: .leading).combined(with: .opacity))
+  }
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Number pad
+ * Typing a value into a waiting operation, as "G X 2 Enter" does with a keyboard: each key is
+ * sent to it as that key, and the hint above shows what it has read.
+ * \{ */
+
+@MainActor
+@Observable
+final class NumberPadState {
+  static let shared = NumberPadState()
+  var shown = false
+}
+
+struct NumberPad: View {
+  let model: ShellModel
+
+  private let rows: [[(String, String)]] = [
+    [("7", "SEVEN"), ("8", "EIGHT"), ("9", "NINE"), ("⌫", "BACK_SPACE")],
+    [("4", "FOUR"), ("5", "FIVE"), ("6", "SIX"), ("−", "MINUS")],
+    [("1", "ONE"), ("2", "TWO"), ("3", "THREE"), ("Tab", "TAB")],
+    [("0", "ZERO"), (".", "PERIOD"), ("=", "EQUAL"), ("Done", "RET")],
+  ]
+
+  var body: some View {
+    Grid(horizontalSpacing: 6, verticalSpacing: 6) {
+      ForEach(rows.indices, id: \.self) { row in
+        GridRow {
+          ForEach(rows[row], id: \.1) { title, key in
+            Button {
+              Haptics.selection()
+              if key == "RET" {
+                wm_apple_ios_window_send_key(model.window, "RET")
+                NumberPadState.shared.shown = false
+              }
+              else {
+                model.send("modalkey:" + key, .invoke)
+              }
+            } label: {
+              Text(title)
+                .font(.system(size: 20, weight: .medium))
+                .frame(width: 56, height: 44)
+                .background(Color.primary.opacity(0.08), in: ShellShape(glassRadius: 12))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(QuickActionPressStyle(shape: ShellShape(glassRadius: 12)))
+            .accessibilityLabel(key == "BACK_SPACE" ? "Delete" : key == "MINUS" ? "Minus" : title)
+          }
+        }
+      }
+    }
+    .padding(8)
+    .panelGlass(in: ShellShape(glassRadius: 20))
+    .accessibilityIdentifier("blender.number-pad")
   }
 }
 

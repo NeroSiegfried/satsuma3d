@@ -12,6 +12,8 @@ import UIKit
 
 @MainActor
 final class ShellPanels {
+  /** The window's, for code that acts on its panels from outside it, see #RevealCoordinator. */
+  static weak var current: ShellPanels?
   let model: ShellModel
   let panels = SwiftScenePanels()
   let timeline = SwiftTimeline()
@@ -20,6 +22,7 @@ final class ShellPanels {
 
   init(model: ShellModel) {
     self.model = model
+    Self.current = self
     panels.panelsDidChange = { [weak self] in
       guard let self else { return }
       withAnimation(SwiftTimeline.animation) {

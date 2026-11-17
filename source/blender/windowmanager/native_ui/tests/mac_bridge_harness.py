@@ -113,6 +113,11 @@ def decode_node(raw):
     node = Node.Node.GetRootAs(raw, 0)
     entry = {"label": s(node.Label()), "icon": s(node.Icon()), "enabled": node.Enabled(),
              "content": CONTENT_NAMES.get(node.ContentType(), node.ContentType())}
+    try:
+        entry["role"] = node.Role()
+        entry["property"] = s(node.Property())
+    except AttributeError:
+        pass
     if node.ContentType() == Content.Content.Button:
         table = node.Content()
         button = Button.Button()
@@ -329,6 +334,7 @@ def tick_tabs():
             entry = {"name": mode, "context": bpy.context.mode, "missing": missing,
                      "nodes": {tab: count(top) for tab, top in trees.items() if top},
                      "item": labels(trees.get("SIDEBAR:Item") or {}),
+                     "item_tree": trees.get("SIDEBAR:Item"),
                      "view": labels(trees.get("SIDEBAR:View") or {})}
             report["steps"].append(entry)
             if missing:
@@ -349,4 +355,41 @@ def tick_tabs():
     return 0.25
 
 
-bpy.app.timers.register(tick_tabs if SCENARIO == "tabs" else tick_actions, first_interval=1.0)
+# Blender's header menus as the native menus ask for them, in Object and Edit Mode: the editor's
+# menus (View, Select, Add, Object | Mesh, Vertex, Edge, Face, UV) and the top bar's Edit menu.
+MENU_ROUTES = ("VIEW3D_MT_editor_menus", "TOPBAR_MT_edit", "VIEW3D_MT_view", "VIEW3D_MT_object_apply")
+
+
+def tick_menus():
+    global step
+    try:
+        pump()
+        step += 1
+        if step == 1:
+            enter("object")
+            for route in MENU_ROUTES:
+                subs["object " + route] = subscribe("menu", route=route)
+        elif step == 5:
+            report["steps"].append({"name": "object", "menus": {
+                name: [(n.get("label"), n.get("content")) for n in (tree(sub) or {}).get("children", [])]
+                for name, sub in subs.items()}})
+            enter("edit_mesh")
+            for route in MENU_ROUTES[:1]:
+                subs["edit " + route] = subscribe("menu", route=route)
+        elif step == 10:
+            report["steps"].append({"name": "edit", "menus": {
+                name: [(n.get("label"), n.get("content")) for n in (tree(sub) or {}).get("children", [])]
+                for name, sub in subs.items() if name.startswith("edit")}})
+            finish("done")
+            return None
+        if step > 40:
+            finish("timeout")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.25
+
+
+bpy.app.timers.register({"tabs": tick_tabs, "menus": tick_menus}.get(SCENARIO, tick_actions), first_interval=1.0)

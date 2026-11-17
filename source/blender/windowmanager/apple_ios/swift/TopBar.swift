@@ -250,7 +250,12 @@ struct DocumentToolbar: ToolbarContent {
 #endif
     }
     if !model.compact {
-      ToolbarItem(placement: .topBarLeading) { fileButton }
+      ToolbarItem(placement: .topBarLeading) {
+        HStack(spacing: 0) {
+          fileButton
+          editButton
+        }
+      }
 #if !os(visionOS)
       ToolbarSpacer(.fixed, placement: .topBarLeading)
 #endif
@@ -261,8 +266,24 @@ struct DocumentToolbar: ToolbarContent {
     }
     ToolbarItemGroup(placement: .topBarLeading) {
       modeMenu
-      Button("Add", systemImage: "plus") { shell.assets.toggle() }
+      Button("Assets", systemImage: "plus") { shell.assets.toggle() }
+        .help("Assets")
         .accessibilityIdentifier("blender.assets")
+    }
+    if !model.compact {
+      /* Blender's header menus for the mode, as on the desktop: View, Select, Add, Object, or
+       * Mesh, Vertex, Edge, Face and UV; one Menus button where they do not fit. */
+      ToolbarItem(placement: .topBarLeading) { EditorMenus() }
+    }
+    /* Search, as F3: any command by its name. */
+    ToolbarItem(placement: .topBarLeading) {
+      Button("Search", systemImage: "magnifyingglass") { model.searchOpen = true }
+        .help("Search")
+        .accessibilityIdentifier("blender.search")
+        .sheet(isPresented: $model.searchOpen) {
+          CommandSearchSheet(model: model) { model.searchOpen = false }
+            .sheetDetents()
+        }
     }
     if model.mode == "mesh_edit" && !model.compact {
 #if os(visionOS)
@@ -289,6 +310,7 @@ struct DocumentToolbar: ToolbarContent {
       ToolbarItem(placement: .topBarTrailing) {
         Menu("More", systemImage: "ellipsis") { compactMenu }
           .background(ShareSource(commands: commands))
+          .prefetchingBlenderMenu(EditorMenus.route)
           .prefetchingBlenderMenu(Self.importRoute)
           .prefetchingBlenderMenu(Self.exportRoute)
           .shadingPopover(model: model, shell: shell)
@@ -305,7 +327,6 @@ struct DocumentToolbar: ToolbarContent {
 
   @ToolbarContentBuilder
   private var regularTrailing: some ToolbarContent {
-    ToolbarItemGroup(placement: .secondaryAction) { centerItems }
     ToolbarItem(placement: .topBarTrailing) { shadingButton }
 #if !os(visionOS)
     ToolbarSpacer(.fixed, placement: .topBarTrailing)
@@ -447,6 +468,38 @@ struct DocumentToolbar: ToolbarContent {
       .accessibilityIdentifier("blender.file")
   }
 
+  /** Edit, as Blender's top bar has it, less its search entries (Search is in the header). */
+  @ViewBuilder
+  private var editMenu: some View {
+    Section {
+      Button("Undo", systemImage: "arrow.uturn.backward") { Operators.run("ED_OT_undo") }
+        .disabled(!model.canUndo)
+      Button("Redo", systemImage: "arrow.uturn.forward") { Operators.run("ED_OT_redo") }
+        .disabled(!model.canRedo)
+      Button("Undo History…", systemImage: "clock.arrow.circlepath") { Operators.run("ED_OT_undo_history") }
+    }
+    Section {
+      Button(model.repeatTitle, systemImage: "repeat") { model.send("repeat", .invoke) }
+        .disabled(!model.canRepeat)
+      Button("Repeat History…", systemImage: "list.bullet") { Operators.run("SCREEN_OT_repeat_history") }
+      Button("Adjust Last Operation…", systemImage: "slider.horizontal.3") { Operators.run("SCREEN_OT_redo_last") }
+    }
+    Section {
+      Button("Rename Active Item…", systemImage: "pencil") {
+        Operators.run("WM_OT_call_panel", ["name": .text("TOPBAR_PT_name"), "keep_open": .bool(false)])
+      }
+      Button("Batch Rename…", systemImage: "pencil.line") { Operators.run("WM_OT_batch_rename") }
+    }
+    Section {
+      Button("Preferences…", systemImage: "gearshape") { commands.settings?.present() }
+    }
+  }
+
+  private var editButton: some View {
+    Menu { editMenu } label: { Text("Edit") }
+      .accessibilityIdentifier("blender.edit")
+  }
+
   /** Share: what leaves the document as it is, and its renders. */
   @ViewBuilder
   private var shareMenu: some View {
@@ -469,6 +522,12 @@ struct DocumentToolbar: ToolbarContent {
    * settings, then Share and More. */
   @ViewBuilder
   private var compactMenu: some View {
+    /* Blender's header menus, as one submenu each. */
+    Section {
+      ForEach((BlenderMenus.shared.items[EditorMenus.route] ?? []).filter { $0.submenu && !$0.disabled }) { item in
+        Menu(item.title) { BlenderMenuItems(route: item.route) }
+      }
+    }
     Section {
       sidebarToggle("Outliner", icon: BlenderIcon.image("OUTLINER"), isOn: model.hierarchyShown) {
         shell.panels.toggleHierarchy()
@@ -536,8 +595,8 @@ struct DocumentToolbar: ToolbarContent {
             }
           }
         }
-        if hasMirror {
-          Menu { mirrorToggles } label: {
+        if MirrorToggles.available(model) {
+          Menu { MirrorToggles(model: model) } label: {
             Label { Text("Mirror") } icon: { iconImage(BlenderIcon.image("MOD_MIRROR")) }
           }
         }
@@ -547,6 +606,7 @@ struct DocumentToolbar: ToolbarContent {
       }
     }
     Menu { fileMenu } label: { Label("File", systemImage: "doc") }
+    Menu { editMenu } label: { Label("Edit", systemImage: "pencil") }
     Menu { shareMenu } label: { Label("Share", systemImage: "square.and.arrow.up") }
     moreMenu
   }
@@ -644,72 +704,6 @@ struct DocumentToolbar: ToolbarContent {
   /* -------------------------------------------------------------------- */
   /* Tool settings */
 
-  /** The tool's settings as the bar's middle items, see #ToolSettingsItems: the transform tools'
-   * orientation, pivot, snapping and proportional editing, or the active tool's own. */
-  @ViewBuilder
-  private var centerItems: some View {
-    if transformTools.contains(model.activeTool) {
-      if model.activeTool == "builtin.select" {
-        TweakDragMenu()
-      }
-      ForEach(TransformSetting.all, id: \.key) { setting in
-        let value = model.transformSettings[setting.key]
-        let selected = setting.options.first { $0.value == value }
-        Menu {
-          Picker(setting.title, selection: Binding(
-            get: { value ?? "" },
-            set: { model.send(setting.key, .set_, .text($0)) })) {
-            ForEach(setting.options, id: \.value) { option in
-              Label { Text(option.title) } icon: { iconImage(setting.image(option)) }
-                .tag(option.value)
-            }
-          }
-        } label: {
-          Label {
-            Text(setting.title)
-          } icon: {
-            iconImage(selected.flatMap { setting.image($0) } ??
-                      (setting.key == "snap" && value == "mixed" ? wm_apple_ios_icon("control.Snapping", "magnet") :
-                       wm_apple_ios_icon("control.\(setting.title)", setting.symbol)))
-          }
-        }
-        .accessibilityValue(selected?.title ?? "")
-        .accessibilityIdentifier("blender.setting.\(setting.title)")
-      }
-      if hasMirror {
-        Menu { mirrorToggles } label: {
-          Label { Text("Mirror") } icon: { iconImage(BlenderIcon.image("MOD_MIRROR")) }
-        }
-        .accessibilityIdentifier("blender.setting.Mirror")
-      }
-    }
-    else if shell.panels.tools.hasToolSettings {
-      ToolSettingsItems(model: shell.panels.tools)
-    }
-  }
-
-  /** The mode's mirror axes, as Blender's header has them in a popover; none outside modes that
-   * mirror. */
-  private var hasMirror: Bool { !(model.transformSettings["mirror_axes"] ?? "").isEmpty }
-
-  @ViewBuilder
-  private var mirrorToggles: some View {
-    let on = model.transformSettings["mirror"] ?? ""
-    ForEach(Array(model.transformSettings["mirror_axes"] ?? ""), id: \.self) { axis in
-      Toggle(axis.uppercased(), isOn: Binding(get: { on.contains(axis) }, set: { mirrored in
-        /* The axes on, with this one turned on or off. */
-        let axes = (model.transformSettings["mirror_axes"] ?? "").filter { $0 == axis ? mirrored : on.contains($0) }
-        model.send("mirror", .set_, .text(axes.map(String.init).joined(separator: ",")))
-      }))
-    }
-    if let topology = model.transformSettings["mirror_topology"] {
-      Section {
-        Toggle("Topology Mirror", isOn: Binding(get: { topology == "on" },
-                                               set: { model.send("mirror_topology", .set_, .bool($0)) }))
-      }
-    }
-  }
-
   /* -------------------------------------------------------------------- */
   /* Panels and shading */
 
@@ -769,3 +763,106 @@ private struct ShareSource: UIViewRepresentable {
 }
 
 /** \} */
+
+/** The transform settings of Blender's header, in Object, Edit and Pose Mode whatever the tool:
+ * orientation, pivot, snapping, proportional editing and mirror, see #ToolSettingsRow. */
+struct ToolSettingsTransformItems: View {
+  @Bindable var model: ShellModel
+
+  var body: some View {
+    if model.activeTool == "builtin.select" {
+      TweakDragMenu()
+    }
+    Group {
+      ForEach(TransformSetting.all, id: \.key) { setting in
+        let value = model.transformSettings[setting.key]
+        let selected = setting.options.first { $0.value == value }
+        Menu {
+          Picker(setting.title, selection: Binding(
+            get: { value ?? "" },
+            set: { model.send(setting.key, .set_, .text($0)) })) {
+            ForEach(setting.options, id: \.value) { option in
+              Label { Text(option.title) } icon: { iconImage(setting.image(option)) }
+                .tag(option.value)
+            }
+          }
+        } label: {
+          Label {
+            Text(setting.title)
+          } icon: {
+            iconImage(selected.flatMap { setting.image($0) } ??
+                      (setting.key == "snap" && value == "mixed" ? wm_apple_ios_icon("control.Snapping", "magnet") :
+                       wm_apple_ios_icon("control.\(setting.title)", setting.symbol)))
+          }
+        }
+        .accessibilityValue(selected?.title ?? "")
+        .accessibilityIdentifier("blender.setting.\(setting.title)")
+      }
+      if hasMirror {
+        Menu { mirrorToggles } label: {
+          Label { Text("Mirror") } icon: { iconImage(BlenderIcon.image("MOD_MIRROR")) }
+        }
+        .accessibilityIdentifier("blender.setting.Mirror")
+      }
+    }
+  }
+
+  private var hasMirror: Bool { MirrorToggles.available(model) }
+
+  private var mirrorToggles: some View { MirrorToggles(model: model) }
+}
+
+/** The mode's mirror axes, as Blender's header has them in a popover; none outside modes that
+ * mirror. */
+struct MirrorToggles: View {
+  @Bindable var model: ShellModel
+
+  static func available(_ model: ShellModel) -> Bool { !(model.transformSettings["mirror_axes"] ?? "").isEmpty }
+
+  var body: some View {
+    let on = model.transformSettings["mirror"] ?? ""
+    ForEach(Array(model.transformSettings["mirror_axes"] ?? ""), id: \.self) { axis in
+      Toggle(axis.uppercased(), isOn: Binding(get: { on.contains(axis) }, set: { mirrored in
+        /* The axes on, with this one turned on or off. */
+        let axes = (model.transformSettings["mirror_axes"] ?? "").filter { $0 == axis ? mirrored : on.contains($0) }
+        model.send("mirror", .set_, .text(axes.map(String.init).joined(separator: ",")))
+      }))
+    }
+    if let topology = model.transformSettings["mirror_topology"] {
+      Section {
+        Toggle("Topology Mirror", isOn: Binding(get: { topology == "on" },
+                                               set: { model.send("mirror_topology", .set_, .bool($0)) }))
+      }
+    }
+  }
+
+}
+
+/** Blender's header menus for the 3D View in its mode, from `VIEW3D_MT_editor_menus`: each a text
+ * menu, as on the desktop, or all of them in one Menus button where they do not fit. */
+struct EditorMenus: View {
+  /** A menu by its name is its own route, see `BlenderMenus.route`. */
+  static let route = "VIEW3D_MT_editor_menus"
+  private let menus = BlenderMenus.shared
+
+  var body: some View {
+    let items = (menus.items[Self.route] ?? []).filter { $0.submenu && !$0.disabled }
+    ViewThatFits(in: .horizontal) {
+      HStack(spacing: 0) {
+        ForEach(items) { item in
+          Menu { BlenderMenuItems(route: item.route) } label: { Text(item.title) }
+            .accessibilityIdentifier("blender.menu.\(item.title)")
+        }
+      }
+      Menu {
+        ForEach(items) { item in
+          Menu(item.title) { BlenderMenuItems(route: item.route) }
+        }
+      } label: {
+        Text("Menus")
+      }
+      .accessibilityIdentifier("blender.menus")
+    }
+    .prefetchingBlenderMenu(Self.route)
+  }
+}

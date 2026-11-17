@@ -240,6 +240,9 @@ int2 bridge_asset_drag_xy(0);
 BridgePencilHoverRequest bridge_hover_request;
 
 std::string bridge_json_escape(const std::string &value);
+/** What shows after the last command, see `bridge_reveal_after`. */
+static int bridge_reveal_number = 0;
+static std::string bridge_reveal_json;
 std::string bridge_json_number(double value);
 
 wmOperator *bridge_constraint_operator(wmWindow *win)
@@ -258,6 +261,42 @@ wmOperator *bridge_constraint_operator(wmWindow *win)
     if (blender::ed::transform::modal_constraint_get(handler->op, axes)) {
       return handler->op;
     }
+  }
+  return nullptr;
+}
+
+/**
+ * The operation a touch waits on: the first operator heading the window's modal handlers, unless
+ * it moves the view, strokes, selects with a gesture or is the interface's own, which a finger
+ * already drives and ends.
+ */
+wmOperator *bridge_waiting_operator(wmWindow *win)
+{
+  if (win == nullptr) {
+    return nullptr;
+  }
+  for (wmEventHandler &handler_base : win->runtime->modalhandlers) {
+    if (handler_base.type != WM_HANDLER_TYPE_OP) {
+      continue;
+    }
+    wmOperator *op = reinterpret_cast<wmEventHandler_Op &>(handler_base).op;
+    if (op == nullptr || op->type == nullptr) {
+      return nullptr;
+    }
+    const StringRef idname = op->type->idname;
+    for (const char *prefix : {"VIEW3D_OT_", "VIEW2D_OT_", "SCREEN_OT_", "UI_OT_", "WM_OT_", "GIZMOGROUP_OT_",
+                               "IMAGE_OT_view", "NODE_OT_view"})
+    {
+      if (idname.startswith(prefix)) {
+        return nullptr;
+      }
+    }
+    if (idname.find("stroke") != StringRef::not_found || idname.find("select") != StringRef::not_found ||
+        idname.find("gesture") != StringRef::not_found)
+    {
+      return nullptr;
+    }
+    return op;
   }
   return nullptr;
 }
@@ -1146,6 +1185,42 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
   }
 #endif
 
+  if (command.setting == "modal_key") {
+    /* A key the waiting operation listens for, pressed and let go, as on a keyboard:
+     * `shift+ctrl+B`, by Blender's event type names. */
+    wmWindow *win = CTX_wm_window(C);
+    if (win == nullptr || win->runtime->eventstate == nullptr) {
+      return;
+    }
+    std::string name = command.value;
+    wmEvent event = *win->runtime->eventstate;
+    event.modifier = wmEventModifierFlag(0);
+    for (const auto &[prefix, flag] : {std::pair{"shift+", KM_SHIFT},
+                                       std::pair{"ctrl+", KM_CTRL},
+                                       std::pair{"alt+", KM_ALT},
+                                       std::pair{"oskey+", KM_OSKEY}})
+    {
+      if (StringRef(name).startswith(prefix)) {
+        event.modifier = wmEventModifierFlag(event.modifier | flag);
+        name = name.substr(strlen(prefix));
+      }
+    }
+    int type = 0;
+    if (!RNA_enum_value_from_id(rna_enum_event_type_items, name.c_str(), &type)) {
+      return;
+    }
+    event.type = wmEventType(type);
+    event.val = KM_PRESS;
+    event.flag = eWM_EventFlag(0);
+    event.prev_type = EVENT_NONE;
+    WM_event_add(win, &event);
+    if (!ISMOUSE_WHEEL(event.type)) {
+      event.val = KM_RELEASE;
+      WM_event_add(win, &event);
+    }
+    WM_event_add_mousemove(win);
+    return;
+  }
   if (command.setting == "constraint_axis") {
     const int axis = command.value == "X" ? 0 :
                      command.value == "Y" ? 1 :
@@ -2436,13 +2511,143 @@ void bridge_action_add(views::ViewBuilder &builder,
 
 /** Quick actions for the mode, tool and selection, as `bl_ui.native_actions` chooses them; or
  * the axes a move, turn or scale running is constrained to. */
+/** The waiting operation's name and what Blender says of it, which the bar shows above it. */
+static std::string bridge_modal_hint;
+
+/**
+ * The modal bar, in place of the actions while an operation waits: its axes for a transform,
+ * Confirm and Cancel, a number pad, and every key of its modal key map as a button, named as
+ * the key map names it, so nothing it listens for needs a keyboard.
+ */
+static void bridge_modal_bar_build(
+    bContext *C, wmOperator *op, const bool axes_shown, views::ViewBuilder &builder, const NodeId row)
+{
+  if (axes_shown) {
+    int axes;
+    blender::ed::transform::modal_constraint_get(op, axes);
+    for (int axis = 0; axis < 3; axis++) {
+      const char *name = axis == 0 ? "X" : axis == 1 ? "Y" : "Z";
+      builder.add(row, std::string("axis:") + name, [&](ViewBuffer &buffer, NodeFields &fields) {
+        fields.label = name;
+        return views::protocol::CreateButtonDirect(buffer,
+                                                   views::protocol::ButtonStyle::Normal,
+                                                   nullptr,
+                                                   nullptr,
+                                                   name,
+                                                   (axes & (1 << axis)) != 0);
+      });
+    }
+  }
+  /* A touch has neither Enter nor Escape: the bar offers them, or nothing could end it. */
+  for (const auto &[key, label, icon] : {std::tuple{"modal:confirm", "Confirm", "CHECKMARK"},
+                                         std::tuple{"modal:cancel", "Cancel", "CANCEL"}})
+  {
+    builder.add(row, key, [&](ViewBuffer &buffer, NodeFields &fields) {
+      fields.label = IFACE_(label);
+      fields.icon = icon;
+      return views::protocol::CreateButtonDirect(buffer,
+                                                 views::protocol::ButtonStyle::Normal,
+                                                 nullptr,
+                                                 nullptr,
+                                                 STREQ(key, "modal:confirm") ? "RET" : "ESC",
+                                                 false);
+    });
+  }
+  /* Typing a value, as "G X 2 Enter": the shell's number pad sends the digits. */
+  builder.add(row, "modal:pad", [&](ViewBuffer &buffer, NodeFields &fields) {
+    fields.label = "123";
+    return views::protocol::CreateButtonDirect(
+        buffer, views::protocol::ButtonStyle::Normal, nullptr, nullptr, nullptr, false);
+  });
+
+  /* Its own keys, from its modal key map as the person has it. */
+  std::string hint = WM_operatortype_name(op->type, op->ptr);
+  wmKeyMap *keymap = op->type->modalkeymap ?
+                         WM_keymap_active(CTX_wm_manager(C), op->type->modalkeymap) :
+                         nullptr;
+  const EnumPropertyItem *items = keymap ? static_cast<const EnumPropertyItem *>(keymap->modal_items) :
+                                           nullptr;
+  if (keymap && items) {
+    Set<int> shown;
+    for (wmKeyMapItem &kmi : keymap->items) {
+      if ((kmi.flag & KMI_INACTIVE) || kmi.propvalue == 0 || shown.contains(kmi.propvalue)) {
+        continue;
+      }
+      const int type = kmi.type;
+      if (ISMOUSE_MOTION(type) || ISMOUSE_BUTTON(type) || ISNDOF(type) || ISTIMER(type) ||
+          ELEM(type, EVT_RETKEY, EVT_PADENTER, EVT_ESCKEY))
+      {
+        continue;
+      }
+      if (keymap->poll_modal_item && !keymap->poll_modal_item(op, kmi.propvalue)) {
+        continue;
+      }
+      const char *name = nullptr;
+      for (const EnumPropertyItem *item = items; item->identifier; item++) {
+        if (item->value == kmi.propvalue && item->name) {
+          name = item->name;
+          break;
+        }
+      }
+      const char *event_id = nullptr;
+      if (name == nullptr || !RNA_enum_identifier(rna_enum_event_type_items, type, &event_id) ||
+          STREQ(name, "Confirm") || STREQ(name, "Cancel"))
+      {
+        continue;
+      }
+      shown.add(kmi.propvalue);
+      std::string key;
+      if (kmi.shift == KM_MOD_HELD) {
+        key += "shift+";
+      }
+      if (kmi.ctrl == KM_MOD_HELD) {
+        key += "ctrl+";
+      }
+      if (kmi.alt == KM_MOD_HELD) {
+        key += "alt+";
+      }
+      if (kmi.oskey == KM_MOD_HELD) {
+        key += "oskey+";
+      }
+      key += event_id;
+      const std::string label = CTX_IFACE_(BLT_I18NCONTEXT_ID_WINDOWMANAGER, name);
+      builder.add(row, "modalkey:" + key, [&](ViewBuffer &buffer, NodeFields &fields) {
+        fields.label = label;
+        return views::protocol::CreateButtonDirect(
+            buffer, views::protocol::ButtonStyle::Normal, nullptr, nullptr, nullptr, false);
+      });
+    }
+  }
+  /* What Blender writes in the header while it runs, such as transform's values. */
+  if (ScrArea *area = CTX_wm_area(C)) {
+    for (ARegion &region : area->regionbase) {
+      if (ELEM(region.regiontype, RGN_TYPE_HEADER, RGN_TYPE_TOOL_HEADER) && region.runtime->headerstr &&
+          region.runtime->headerstr[0])
+      {
+        hint = region.runtime->headerstr;
+        break;
+      }
+    }
+  }
+  bridge_modal_hint = hint;
+}
+
 void bridge_actions_build(bContext *C, const char *tool, views::ViewBuilder &builder, const NodeId top)
 {
+  bridge_modal_hint.clear();
   using namespace io::serialize;
   const NodeId row = builder.add(top, "actions", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
     return views::protocol::CreateGroup(buffer, views::protocol::Layout::Row);
   });
-  if (wmOperator *op = bridge_constraint_operator(CTX_wm_window(C))) {
+  wmWindow *win = CTX_wm_window(C);
+  wmOperator *constraint_op = bridge_constraint_operator(win);
+  wmOperator *waiting_op = constraint_op ? constraint_op : bridge_waiting_operator(win);
+  if (waiting_op) {
+    bridge_modal_bar_build(C, waiting_op, constraint_op != nullptr, builder, row);
+    return;
+  }
+  if (false) {
+    wmOperator *op = constraint_op;
     int axes;
     blender::ed::transform::modal_constraint_get(op, axes);
     for (int axis = 0; axis < 3; axis++) {
@@ -2711,6 +2916,7 @@ void bridge_toolbar_view_build(bContext *C,
   {
     const std::string notices = bridge_notices_json();
     data("notices", std::string_view(notices));
+    data("reveal", std::string_view(bridge_reveal_json));
   }
 
   if (has_view3d) {
@@ -2837,6 +3043,9 @@ void bridge_toolbar_view_build(bContext *C,
   if (has_view3d) {
     bridge_actions_build(C, active_tool_id, builder, top);
     bridge_text_object_build(C, builder, top);
+    if (!bridge_modal_hint.empty()) {
+      data("modal_hint", std::string_view(bridge_modal_hint));
+    }
   }
 
   if (has_view3d) {
@@ -3035,6 +3244,9 @@ views::CommandResult bridge_toolbar_view_command(bContext *C,
   }
   if (invoke && StringRef(target).startswith("axis:")) {
     return setting("constraint_axis", std::string(target.substr(5)));
+  }
+  if (invoke && StringRef(target).startswith("modalkey:")) {
+    return setting("modal_key", std::string(target.substr(9)));
   }
   if (std::optional<std::string> edit = bridge_text_object_command(command)) {
     /* Typed text: each line inserted, and a line break between. */
@@ -4566,6 +4778,52 @@ static std::string bridge_operator_unavailable(bContext *C, wmOperatorType *ot)
   return text;
 }
 
+/* -------------------------------------------------------------------- */
+/** \name What Shows After a Command
+ *
+ * After each command, `bl_ui.native_reveal` names what the interface opens: the operation's
+ * settings, a Properties tab, an editor, a message, or nothing, with why. The toolbar view carries
+ * the latest as `reveal`, numbered so each is acted on once.
+ * \{ */
+
+static void bridge_reveal_after(bContext *C, wmOperator *op, const std::string &call)
+{
+#ifdef WITH_PYTHON
+  if (G.background || CTX_wm_window(C) == nullptr) {
+    return;
+  }
+  const std::string expression = "bl_ui.native_reveal.after_operator(bpy.context, \"" +
+                                 bridge_json_escape(op->type->idname) + "\", \"" +
+                                 bridge_json_escape(call) + "\", \"" +
+                                 bridge_json_escape(WM_operatortype_name(op->type, op->ptr)) +
+                                 "\")";
+  const std::shared_ptr<io::serialize::Value> value = bridge_python_value(
+      C, "reveal", expression.c_str());
+  const io::serialize::DictionaryValue *answer = value ? value->as_dictionary_value() : nullptr;
+  if (answer == nullptr) {
+    return;
+  }
+  const std::string show(bridge_text(*answer, "show"));
+  std::string json = "{\"number\":" + std::to_string(++bridge_reveal_number) + ",\"operator\":\"" +
+                     bridge_json_escape(op->type->idname) + "\"";
+  for (const char *key : {"show", "focus", "text", "button", "why"}) {
+    json += std::string(",\"") + key + "\":\"" +
+            bridge_json_escape(std::string(bridge_text(*answer, key))) + "\"";
+  }
+  json += "}";
+  bridge_reveal_json = std::move(json);
+  wm::native_ui::view_type_dirty("toolbar");
+  const std::string why(bridge_text(*answer, "why"));
+  WM_native_ui_session_log(
+      "reveal",
+      (std::string(op->type->idname) + " -> " + show + (why.empty() ? "" : " (" + why + ")")).c_str());
+#else
+  UNUSED_VARS(C, op, call);
+#endif
+}
+
+/** \} */
+
 void WM_native_ui_operator_finished(bContext *C, wmOperator *op)
 {
   /* What changes the document or is kept for redo: not the view moving many times a second, nor
@@ -4573,7 +4831,9 @@ void WM_native_ui_operator_finished(bContext *C, wmOperator *op)
   if ((op->type->flag & (OPTYPE_REGISTER | OPTYPE_UNDO)) == 0) {
     return;
   }
-  std::string line = WM_operator_pystring(C, op, false, true);
+  const std::string call = WM_operator_pystring(C, op, false, true);
+  bridge_reveal_after(C, op, call);
+  std::string line = call;
   if (CTX_wm_window(C) && CTX_data_scene(C)) {
     line += std::string("  [") + CTX_data_mode_string(C);
     if (CTX_wm_area(C) && CTX_wm_workspace(C)) {

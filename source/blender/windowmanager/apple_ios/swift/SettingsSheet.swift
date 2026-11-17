@@ -316,7 +316,8 @@ private struct IPadSettingsPage: View {
 #endif
   @AppStorage(SettingsModel.navigationTopKey) private var navigationTop = false
   @AppStorage(ShellStyle.key) private var interfaceStyle = ShellStyle.blender.rawValue
-  @AppStorage(SettingsModel.redoOpensKey) private var redoOpens = true
+  @AppStorage(RevealCoordinator.levelKey) private var revealLevel = RevealCoordinator.level.rawValue
+  @AppStorage(ItemCardTools.shownKey) private var itemCardShown = true
   @AppStorage(SettingsModel.navigationStyleKey) private var navigationStyle = "blender"
   /** Read as it changes by the app's event handling, see `show_touches` in `GHOST_SystemIOS.mm`. */
   @AppStorage("BlenderShowTouches") private var showTouches = false
@@ -455,7 +456,12 @@ private struct IPadSettingsPage: View {
 
       Section {
         Toggle("Quick Actions", isOn: $model.showQuickActions)
-        Toggle("Open Operation Settings Automatically", isOn: $redoOpens)
+        Picker("Show Settings Automatically", selection: $revealLevel) {
+          ForEach(RevealCoordinator.Level.allCases, id: \.rawValue) { level in
+            Text(level.title).tag(level.rawValue)
+          }
+        }
+        Toggle("Show Transform Values with Transform Tools", isOn: $itemCardShown)
         Toggle("Hover Highlighting", isOn: $model.hoverHighlight)
         Toggle("Show Touches", isOn: $showTouches)
       } header: {
@@ -463,7 +469,8 @@ private struct IPadSettingsPage: View {
       } footer: {
         Text("Quick Actions are buttons for common actions on the selection, above the bottom of "
           + "the viewport. Operation settings, such as Subdivide's number of cuts, open after it runs, "
-          + "as Blender's Adjust Last Operation panel; adding a modifier opens its settings in Properties. Hover Highlighting outlines what Apple Pencil or the pointer is over. "
+          + "as Blender's Adjust Last Operation panel. With All, what a command makes also shows where it lives: "
+          + "a new modifier in Properties, a node tree in its editor, a message for a keyframe. Hover Highlighting outlines what Apple Pencil or the pointer is over. "
           + "Show Touches draws a circle under each finger, for recordings and demonstrations.")
       }
 

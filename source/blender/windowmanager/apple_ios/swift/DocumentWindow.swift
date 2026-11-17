@@ -176,6 +176,9 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
 
   override public func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
+    if model.toolRowChanged == nil {
+      model.toolRowChanged = { [weak self] in self?.updateTopBarBottom() }
+    }
     updateTopBarBottom()
     if !touchSettingsApplied, view.window != nil {
       /* The iPad's saved Pencil and touch choice; a phone has no Pencil, so its finger starts
@@ -196,6 +199,9 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
       }
       pending.append(contentsOf: current.subviews)
     }
+    if model.navigationBarBottom != bottom { model.navigationBarBottom = bottom }
+    /* The tool settings row hangs under the header, with a gap. */
+    if bottom > 0 && model.toolRowHeight > 0 { bottom += model.toolRowHeight + 6 }
     if model.topBarBottom != bottom {
       model.topBarBottom = bottom
       /* Blender keeps the navigation gizmo below it. */
@@ -712,12 +718,24 @@ public struct DocumentWindow: View {
           /* The 3D viewport's own, beside the Image Editor. */
           ZStack {
 #if !os(visionOS) /* Ornaments there. */
-            QuickActionsRow(model: model, redo: shell.panels.redo)
+            QuickActionsRow(model: model, redo: shell.panels.redo, item: shell.panels.item)
               /* The Pencil's dial takes over while it shows. */
               .opacity(RollDial.shared.showing ? 0 : 1)
               .animation(.easeOut(duration: 0.18), value: RollDial.shared.showing)
 #endif
             ViewGizmoLayer(model: model)
+            /* Blender's Tool Settings bar, under the header, in a regular window. */
+            if !model.compact && !model.desktop {
+              GeometryReader { proxy in
+                ToolSettingsRow(model: model, shell: shell)
+                  .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { model.toolRowHeight = $0 }
+                  .onDisappear { model.toolRowHeight = 0 }
+                  .padding(.leading, model.sideInsets.left + 14)
+                  .padding(.trailing, model.sideInsets.right + 14)
+                  .offset(y: model.navigationBarBottom - proxy.frame(in: .global).minY + 6)
+              }
+              .ignoresSafeArea()
+            }
             TextObjectKeyboard(model: model)
           }
           .padding(across ? .bottom : .trailing,

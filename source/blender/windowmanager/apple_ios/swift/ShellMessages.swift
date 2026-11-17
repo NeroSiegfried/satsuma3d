@@ -59,9 +59,9 @@ final class ShellMessages {
    * so the two never share an identity. */
   @ObservationIgnored private var ownNumber = 0
 
-  func say(_ text: String, level: String = "info") {
+  func say(_ text: String, level: String = "info", button: String? = nil, target: String? = nil) {
     ownNumber -= 1
-    show(ShellMessage(id: ownNumber, level: level, text: text, button: nil, target: nil))
+    show(ShellMessage(id: ownNumber, level: level, text: text, button: button, target: target))
   }
 
   private func show(_ message: ShellMessage) {
