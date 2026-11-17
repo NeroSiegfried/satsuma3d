@@ -161,4 +161,18 @@ pad = pad[pad.index('struct NumberPad'):]
 check(not re.search(r'\.frame\(width:\s*56\b', pad) and 'NumberPad(model: model, width:' in code['QuickActions.swift'],
       "The number pad's keys take their width from its slot, not a literal 56 (ROUND5 6E)")
 
+# 7A: a form is exactly as wide as what holds it. A `VStack` grows to its widest row, and a vertical
+# scroll view centres content wider than itself, so one over-wide row pushed every card of
+# Properties off its panel. The form and each panel's body are a PanelColumn, which lays every
+# row out at the width it has and logs a panel whose rows need more.
+panels = code['NativePanels.swift']
+form = panels[panels.index('struct PanelsForm'):panels.index('struct PanelColumn')]
+check('PanelColumn(' in form and not re.search(r'\bVStack\(alignment: \.leading, spacing: 17\)', form),
+      "PanelsForm lays its panels out in a PanelColumn, not a VStack that grows to its widest row (ROUND5 7A)")
+check('LayoutChecker.shared.overflow(' in panels and
+      ' needs ' in (SWIFT / 'NativePanels.swift').read_text(encoding='utf-8'),
+      "A panel whose rows need more width than it has is logged as `layout properties <tab> <panel> needs W of P`")
+check('case "tab":' in (SWIFT / 'Snapshots.swift').read_text(encoding='utf-8'),
+      "Snapshot scripts can open Properties on a tab (`tab <ID>`)")
+
 print('PASS: native shell sources ' + json.dumps(checks))

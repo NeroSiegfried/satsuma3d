@@ -753,6 +753,15 @@ final class LayoutChecker {
     ShellModel.current?.messages.say("Layout problem: \(key) (logged)", level: "warning")
   }
 
+  /** Log a layout problem found by a view itself, such as a panel whose rows need more width
+   * than it has (ROUND5 7A): at most once a minute per \a key. */
+  func overflow(_ key: String, _ line: String) {
+    let now = Date()
+    if let last = logged[key], now.timeIntervalSince(last) < 60 { return }
+    logged[key] = now
+    report(key, line)
+  }
+
   func set(_ zone: String, _ frame: CGRect?) {
     let next = frame.flatMap { $0.width >= 1 && $0.height >= 1 ? $0 : nil }
     guard frames[zone] != next else { return }

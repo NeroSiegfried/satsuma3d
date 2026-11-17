@@ -486,9 +486,10 @@ struct PanelsForm: View {
   }
 
   private var content: some View {
-    /* Not lazy: lazy stacks stay empty when they first appear in a hidden, unsized panel. */
+    /* Not lazy: lazy stacks stay empty when they first appear in a hidden, unsized panel. A
+     * column exactly as wide as the form, so no row can widen it past its panel (ROUND5 7A). */
     /* Spaced like an inset grouped table: a 44 point header right above its card. */
-    VStack(alignment: .leading, spacing: 17) {
+    PanelColumn(spacing: 17) {
       let style = model.textStyle
       ForEach(model.panels) { panel in
         if let style, panel.key == "panel:DATA_PT_font" {
@@ -522,6 +523,52 @@ struct PanelsForm: View {
     .padding(.horizontal, 16)
     .padding(.top, 3)
     .padding(.bottom, 16)
+  }
+}
+
+/**
+ * A column exactly as wide as it is offered (ROUND5 7A, class "content wider than what holds it"):
+ * each child is laid out at that width, one below the other, so no child can widen the column
+ * and push the form past its panel, as a `VStack` does for a child wider than it. A child that
+ * needs more width than it has is still laid out in what there is; with \a overflow, such as
+ * `properties MATERIAL panel:…`, that is logged as `layout <overflow> needs W of P`.
+ */
+struct PanelColumn: Layout {
+  var spacing: CGFloat = 0
+  /** What to log a row needing more width than the column has as; nothing when nil. */
+  var overflow: String? = nil
+
+  private func width(_ proposal: ProposedViewSize) -> CGFloat? {
+    proposal.width.flatMap { $0.isFinite ? $0 : nil }
+  }
+
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    let width = width(proposal)
+    var height: CGFloat = 0
+    var widest: CGFloat = 0
+    for (index, subview) in subviews.enumerated() {
+      let size = subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+      widest = max(widest, size.width)
+      height += size.height + (index > 0 ? spacing : 0)
+    }
+    if let width, width > 0, widest > width + 1, let overflow {
+      /* Not while laying out: the checker may show a message. */
+      let line = "\(overflow) needs \(Int(widest.rounded(.up))) of \(Int(width))"
+      DispatchQueue.main.async {
+        MainActor.assumeIsolated { LayoutChecker.shared.overflow(overflow, line) }
+      }
+    }
+    return CGSize(width: width ?? widest, height: height)
+  }
+
+  func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    var y = bounds.minY
+    for subview in subviews {
+      let height = subview.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil)).height
+      subview.place(at: CGPoint(x: bounds.minX, y: y), anchor: .topLeading,
+                    proposal: ProposedViewSize(width: bounds.width, height: height))
+      y += height + spacing
+    }
   }
 }
 
@@ -559,7 +606,9 @@ struct PanelSection: View {
               ControlRow(model: model, node: rows[0].node)
             }
             else {
-              VStack(alignment: .leading, spacing: 0) {
+              /* As wide as the card, whatever a row asks: one that needs more is laid out in what
+               * there is, and logged (ROUND5 7A). */
+              PanelColumn(spacing: 0, overflow: overflow) {
                 /* A modifier's or constraint's name and the rest of where it applies, open. */
                 let header = model.header(of: panel)
                 if let name = header.first(where: { $0.role == .name }) {
@@ -603,6 +652,10 @@ struct PanelSection: View {
       return true
     }
   }
+
+  /** A row of its body needing more width than the body has: logged, at most once a minute, as
+   * `layout properties <tab> <panel> needs W of P` (ROUND5 7A). */
+  private var overflow: String { "properties \(model.currentTab) \(panel.key)" }
 
   /** A dragged panel, as text naming it, which only the stack reads. */
   static let dragPrefix = "blender.panel\n"

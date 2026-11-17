@@ -16,6 +16,7 @@
  * - `rail <leading|trailing|top|bottom>`: the edge the tool rail rests on;
  * - `stack <actions|operation|item> <open|fold>`: open or fold a piece of the bottom row, see
  *   #BottomStackState (`operation open` opens the last operation's strip, if there is one);
+ * - `tab <ID>`: open Properties on a tab, such as `tab MATERIAL` or `tab SIDEBAR:Item`;
  * - `wait <seconds>`;
  * - `shot <name>`: every window of the scene, drawn into `tmp/shots/<name>.png`.
  *
@@ -115,6 +116,16 @@ enum ShellSnapshots {
           }
         }
         try? await Task.sleep(for: .milliseconds(600))
+      case "tab":
+        /* Properties, open on the tab, as a reveal opens it (ROUND5 7A.4). */
+        guard let tab = words.first, let panels = SwiftScenePanels.current else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        panels.setInspectorShown(true)
+        try? await Task.sleep(for: .milliseconds(600))
+        panels.properties.selectTab(tab)
+        try? await Task.sleep(for: .seconds(1))
       case "wait":
         try? await Task.sleep(for: .seconds(Double(words.first ?? "") ?? 0.5))
       case "shot":
