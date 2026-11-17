@@ -199,6 +199,11 @@ static NSArray<NSDictionary *> *launcherTemplates()
   return wm_apple_ios_document_templates();
 }
 
+/* About and Licences, in SwiftUI (`source/blender/windowmanager/apple_ios/swift/AboutSheet.swift`). */
+@interface NSObject (WMIOSSwiftAbout)
++ (void)presentFrom:(UIViewController *)presenter;
+@end
+
 /* The template chooser in SwiftUI
  * (`source/blender/windowmanager/apple_ios/swift/TemplatePicker.swift`). */
 @interface UIViewController (WMIOSSwiftTemplatePicker)
@@ -403,6 +408,22 @@ static NSURL *launcher_pending_url = nil;
   /* Picking several is what lets the browser select files, to move or share them, as Files does.
    * Opening takes the first: Blender works on one file at a time. */
   browser.allowsPickingMultipleItems = YES;
+  /* About and Licences (ROUND5 8C), `SwiftAbout` in `AboutSheet.swift`. */
+  Class about_class = NSClassFromString(@"WMIOSSwiftAbout");
+  if (about_class) {
+    /* Not retained: the browser, which holds the action, is the launcher's own. */
+    __block UIViewController *presenter = self;
+    UIAction *about = [UIAction
+        actionWithTitle:[@"About " stringByAppendingString:wm_apple_ios_app_name()]
+                  image:[UIImage systemImageNamed:@"info.circle"]
+             identifier:nil
+                handler:^(__kindof UIAction *) {
+                  [about_class presentFrom:presenter];
+                }];
+    UIBarButtonItem *item = [[[UIBarButtonItem alloc] initWithPrimaryAction:about] autorelease];
+    item.accessibilityLabel = about.title;
+    browser.additionalTrailingNavigationBarButtonItems = @[ item ];
+  }
   launch.browserViewController = browser;
   launcherStyle(launch);
 #if defined(APPLE_TARGET_VISIONOS)

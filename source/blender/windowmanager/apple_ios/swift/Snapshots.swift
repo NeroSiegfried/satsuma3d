@@ -22,6 +22,7 @@
  * - `panel <key end> open|close`: a Properties panel, such as `panel PT_surface open`;
  * - `popover shading|close`: the 3D View's shading popover;
  * - `prefs open|close`: Preferences;
+ * - `about open|close`: About and Licences, as the app menu and the launcher open it (ROUND5 8C);
  * - `wait <seconds>`;
  * - `shot <name>`: every window of the scene, drawn into `tmp/shots/<name>.png`.
  *
@@ -181,6 +182,15 @@ enum ShellSnapshots {
         }
         else {
           scene?.windows.first?.rootViewController?.presentedViewController?.dismiss(animated: false)
+        }
+        try? await Task.sleep(for: .seconds(1))
+      case "about":
+        /* About, as the app menu opens it: `about open|close`. */
+        if words.first == "open", let root = scene?.windows.first?.rootViewController {
+          SwiftAbout.present(from: root)
+        }
+        else {
+          SwiftAbout.dismiss()
         }
         try? await Task.sleep(for: .seconds(1))
       case "wait":

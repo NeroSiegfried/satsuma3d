@@ -305,6 +305,20 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
   override public func buildMenu(with builder: any UIMenuBuilder) {
     super.buildMenu(with: builder)
     wm_apple_ios_build_menu_bar(builder, menuBarItems as! [Any])
+    guard builder.system == .main else { return }
+    /* Blender's splash and About popups are left out of the menu bar (`hidden_from_menu_bar`); the
+     * app's own About takes their place (ROUND5 8A.6, decision 35). */
+    let about = UIAction(title: "About \(AppIdentity.name)", image: UIImage(systemName: "info.circle")) { [weak self] _ in
+      guard let self else { return }
+      SwiftAbout.present(from: self)
+    }
+    let group = UIMenu(title: "", options: .displayInline, children: [about])
+    if builder.menu(for: .about) != nil {
+      builder.replace(menu: .about, with: group)
+    }
+    else if builder.menu(for: .application) != nil {
+      builder.insertChild(group, atStartOfMenu: .application)
+    }
   }
 
   @objc public func newDocument(_ sender: Any?) {

@@ -686,6 +686,8 @@ struct SettingsView: View {
   @State private var page: String? = SettingsView.iPadPage
 
   static let iPadPage = "IPAD"
+  /** About the app, the last page (ROUND5 8C). */
+  static let aboutPage = "ABOUT"
 
   /** The sections as Blender groups them, between its separators. */
   private var groups: [[PanelTab]] {
@@ -700,7 +702,7 @@ struct SettingsView: View {
   private var selection: Binding<String?> {
     Binding(get: { page }, set: { tab in
       page = tab
-      if let tab, tab != Self.iPadPage { preferences.selectTab(tab) }
+      if let tab, tab != Self.iPadPage, tab != Self.aboutPage { preferences.selectTab(tab) }
       lists.show(true, tab: tab ?? "")
     })
   }
@@ -725,6 +727,10 @@ struct SettingsView: View {
             if index == 0 { Text("Preferences") }
           }
         }
+        Section {
+          Label { Text("About \(AppIdentity.name)") } icon: { SettingsIcon(symbol: "info.circle.fill", color: .gray) }
+            .tag(Self.aboutPage)
+        }
       }
       .navigationTitle("Settings")
       .toolbar {
@@ -737,6 +743,10 @@ struct SettingsView: View {
           if page == nil || page == Self.iPadPage {
             IPadSettingsPage(model: model)
               .navigationTitle("iPad")
+          }
+          else if page == Self.aboutPage {
+            AboutPage()
+              .navigationTitle("About")
           }
           else {
             Group {

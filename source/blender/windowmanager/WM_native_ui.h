@@ -121,6 +121,9 @@ void WM_native_ui_navigation_hover_set(bool active);
 /** A line of the session's log (see `WM_native_ui_session_log`), from the interface's own code:
  * \a kind such as "layout" or "reveal". Safe from any thread. */
 void WM_native_ui_log(const char *kind, const char *text);
+/** Write the session's log out now and give its file's path in \a path, for About's Share
+ * Session Log (ROUND5 8C). False when there is no log to share. */
+bool WM_native_ui_session_log_file(char *path, size_t path_size);
 
 /** How much of the window's height, from the top, the interface's top bar covers. */
 void WM_native_ui_top_bar_set(float fraction);

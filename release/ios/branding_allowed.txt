@@ -80,3 +80,7 @@ release/ios/Blender.app/Info.plist | internal key: CFBundleExecutable and the sc
 release/ios/Blender.app/Info.plist | credit: CFBundleGetInfoString, "Platypus 3D 0.1.0, based on Blender 5.1.2" | ${IOS_PRODUCT_NAME} ${IOS_MARKETING_VERSION}, based on Blender ${IOS_BLENDER_VERSION}
 native_settings.py | keymap name: the identifier of Blender's keymap preset | Blender
 menu menubar | internal key: TOPBAR_MT_blender's title; the menu bar puts its items in the system's application menu and titles it with the app's name (wm_apple_ios_build_menu_bar) | Blender
+AboutSheet.swift | credit: About's "Based on Blender 5.1.2" | Based on Blender \(…)
+AboutSheet.swift | credit: what VoiceOver reads for About's title block | based on Blender \(…)
+AboutSheet.swift | credit: About's "not affiliated with or endorsed by the Blender Foundation" | the Blender Foundation.
+AboutSheet.swift | credit: About's credit to the Blender project | The Blender project and its contributors

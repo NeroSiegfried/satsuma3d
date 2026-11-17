@@ -352,4 +352,31 @@ for line in stale:
     print('branding_allowed.txt: no longer found, remove it: %s' % line)
 check(not stale, "Every line of branding_allowed.txt is still found in its file")
 
+
+# 8C: About shows the licences the app carries, never a copy typed into the code; every row has
+# what VoiceOver reads; it is reached from the launcher, Settings and the app menu.
+about_text = (SWIFT / 'AboutSheet.swift').read_text(encoding='utf-8')
+LICENCE_PHRASES = ('GNU GENERAL PUBLIC LICENSE', 'WITHOUT ANY WARRANTY', 'Permission is hereby granted',
+                   'Free Software Foundation', 'Redistribution and use in source and binary forms')
+typed = [phrase for phrase in LICENCE_PHRASES for _line, text in literals(about_text) if phrase in text]
+check(not typed, "About types no licence text, it reads the app's own: %s" % typed)
+check('license/spdx/' in about_text and 'license/license.md' in about_text and 'copyright.txt' in about_text,
+      "About reads the GPL, the notices and the copyright notice from Assets/text")
+about = about_text
+row = about[about.index('private struct AboutRow'):about.index('private struct LicenceTextView')]
+check('.accessibilityLabel(' in row and '.accessibilityElement(children: .combine)' in row,
+      "About's rows each give VoiceOver one label")
+page = about[about.index('struct AboutPage'):about.index('final class SwiftAbout')]
+bare = [m.start() for m in re.finditer(r'^\s*Text\(', page, re.M)]
+check(page.count('.accessibilityLabel(') >= 1 and all(
+      'Section' in page[max(0, i - 200):i] or 'VStack' in page[max(0, i - 300):i] or 'footer' in page[max(0, i - 80):i]
+      or 'header' in page[max(0, i - 80):i] for i in bare),
+      "About's rows are AboutRows; other text is a header, a footer or the labelled title block")
+check('SwiftAbout.present(from:' in code['DocumentWindow.swift'] and 'aboutPage' in code['SettingsSheet.swift']
+      and 'WMIOSSwiftAbout' in (SHELL / 'wm_apple_ios_launcher.mm').read_text(encoding='utf-8')
+      and 'case "about":' in (SWIFT / 'Snapshots.swift').read_text(encoding='utf-8'),
+      "About opens from the app menu, the last page of Settings and the launcher; snapshots can open it")
+check('Development build: source not published' in about_text,
+      "A development build without a source address says so in About")
+
 print('PASS: native shell sources ' + json.dumps(checks))

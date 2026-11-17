@@ -4862,6 +4862,17 @@ void WM_native_ui_session_log_flush(const bool force)
   }
 }
 
+extern "C" bool WM_native_ui_session_log_file(char *path, const size_t path_size)
+{
+  {
+    SessionLog &log = session_log();
+    std::scoped_lock lock(log.mutex);
+    session_log_write(log);
+  }
+  BLI_path_join(path, path_size, BKE_tempdir_base(), "platypus-session.log");
+  return BLI_exists(path);
+}
+
 int WM_native_ui_session_log_writes()
 {
   return session_log().writes;

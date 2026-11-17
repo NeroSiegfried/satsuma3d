@@ -442,6 +442,7 @@ else()
       ${FLATBUFFERS_SWIFT_DIR}/VeriferOptions.swift
       ${FLATBUFFERS_SWIFT_DIR}/Verifiable.swift
       ${FLATBUFFERS_SWIFT_DIR}/Verifier.swift
+      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/AboutSheet.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/AppIdentity.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/Assets.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/BlenderMenus.swift
