@@ -331,6 +331,12 @@ struct DocumentToolbar: ToolbarContent {
         .sharedBackgroundVisibility(.hidden)
 #endif
     }
+    trailingItems
+  }
+
+  /** The trailing side: shading and Properties, what can fold, then Undo, Redo and More. */
+  @ToolbarContentBuilder
+  private var trailingItems: some ToolbarContent {
     if shown.shading {
       ToolbarItem(placement: .topBarTrailing) { shadingButton }
 #if !os(visionOS)
