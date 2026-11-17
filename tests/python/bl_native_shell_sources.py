@@ -135,4 +135,20 @@ check(not plain, "Numbers in the bars are drawn only through Blender's widget")
 light = [name for name in BARS if 'PanelStyle.field' in code[name]]
 check(not light, "No system field (PanelStyle.field) in the bars: %s" % light)
 
+# 6D.4: numbers show the decimals Blender shows (the node's precision), never a count of
+# significant digits, which turns 1234.567 into 1230.
+rounded = ['%s:%d' % (name, line) for name, text in code.items() for line, args in calls(text, 'format')
+           if 'significant' in args]
+for offender in rounded:
+    print('%s: a number is formatted with its precision, format(value), not significant digits (ROUND5 6D)' % offender)
+check(not rounded, "No number is formatted by significant digits")
+
+# 6D.1: the bridge sends the precision Blender draws each number with, not one literal for all.
+# (Its values are checked against a running Blender by the Mac bridge harness, scenario
+# `precision`: the bridge needs a window, which these background tests do not have.)
+bridge = code_only((SWIFT.parents[2] / 'editors/interface/interface_native_properties.cc').read_text(encoding='utf-8'))
+create = [args for line, args in calls(bridge, 'protocol::CreateNumber')]
+check(any('precision' in args for args in create) and 'ui_but_calc_float_precision' in bridge,
+      "The bridge sends Blender's precision for each number")
+
 print('PASS: native shell sources ' + json.dumps(checks))

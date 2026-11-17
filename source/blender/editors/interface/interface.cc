@@ -738,7 +738,7 @@ static bool ui_but_hide_fraction(Button *but, double value)
   return false;
 }
 
-static int ui_but_calc_float_precision(Button *but, double value)
+int ui_but_calc_float_precision(Button *but, double value)
 {
   if (ui_but_hide_fraction(but, value)) {
     return 0;

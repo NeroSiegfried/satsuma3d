@@ -2433,7 +2433,7 @@ struct NodeCanvasNumber: View {
             .frame(width: proxy.size.width * number.fraction(of: value))
         }
       }
-      Text(number?.format(value, significant: 5) ?? "")
+      Text(number?.format(value) ?? "")
         .font(.callout.monospacedDigit())
         .lineLimit(1)
         .minimumScaleFactor(0.7)
@@ -2468,13 +2468,13 @@ struct NodeCanvasNumber: View {
         })
     .accessibilityElement()
     .accessibilityLabel(node.label)
-    .accessibilityValue(number?.format(value, significant: 5) ?? "")
+    .accessibilityValue(number?.format(value) ?? "")
   }
 
   private func beginTyping() {
     guard let number, node.enabled, scrub == nil else { return }
     NodeTyping.shared.begin(model: model, node: node, frame: anchor.windowRect ?? .zero,
-                            text: number.format(model.number(node), significant: 6))
+                            text: number.editingText(model.number(node)))
   }
 }
 
@@ -2534,7 +2534,7 @@ final class NodeTyping {
     self.node = nil
     self.model = nil
     if let number = node.number {
-      guard text != number.format(model.number(node), significant: 6) else { return }
+      guard text != number.editingText(model.number(node)) else { return }
       guard let value = number.parse(text) else {
         UIAccessibility.post(notification: .announcement, argument: "Enter a valid number.")
         return

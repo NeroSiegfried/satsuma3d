@@ -1699,6 +1699,12 @@ class Writer {
         step = std::isfinite(step) && step > 0 ? step : 0.01;
       }
       const bool angle = ELEM(RNA_property_subtype(prop), PROP_ANGLE, PROP_EULER);
+      /* The decimals Blender draws this value with, as its own field shows it: none for an
+       * integer, 3 for a float drawn as some other kind of button. */
+      const int precision = type == PROP_INT ? 0 :
+                            ELEM(but.type, ButtonType::Num, ButtonType::NumSlider) ?
+                                                     ui_but_calc_float_precision(&but, value) :
+                                                     3;
       node = builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
         common(fields);
         return protocol::CreateNumber(
@@ -1711,7 +1717,7 @@ class Writer {
             slider ? but.softmin : min,
             slider ? but.softmax : max,
             step,
-            3,
+            uint8_t(std::clamp(precision, 0, UI_PRECISION_FLOAT_MAX)),
             slider,
             !slider                                         ? protocol::Scale::Linear :
             scale == PROP_SCALE_LOG && but.softmin > 0      ? protocol::Scale::Logarithmic :

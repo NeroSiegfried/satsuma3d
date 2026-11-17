@@ -22,8 +22,8 @@ SCENARIO = argv[2] if len(argv) > 2 else "actions"
 
 import flatbuffers  # noqa: E402
 from Blender.NativeUI import (  # noqa: E402
-    BoolValue, Button, ButtonStyle, Choice, Command, Commands, Content, Data, Group, Node, Op, Param, Subscribe, TextValue,
-    Toggle, Updates, Value,
+    BoolValue, Button, ButtonStyle, Choice, Command, Commands, Content, Data, Group, Node, Number, Op, Param, Subscribe,
+    TextValue, Toggle, Updates, Value,
 )
 
 lib = ctypes.CDLL(None)
@@ -171,12 +171,20 @@ def decode_node(raw):
             tv = TextValue.TextValue()
             tv.Init(data.Value().Bytes, data.Value().Pos)
             entry.update(value=s(tv.Value()))
+    elif node.ContentType() == Content.Content.Number:
+        table = node.Content()
+        number = Number.Number()
+        number.Init(table.Bytes, table.Pos)
+        entry.update(value=number.Value(), integer=bool(number.Integer()), precision=number.Precision())
     elif node.ContentType() == Content.Content.Toggle:
         table = node.Content()
         toggle = Toggle.Toggle()
         toggle.Init(table.Bytes, table.Pos)
         entry.update(value=bool(toggle.Value()))
     return s(node.Key()), entry
+
+
+decoded = [0]
 
 
 def pump():
@@ -201,6 +209,7 @@ def pump():
             for j in range(update.NodesLength()):
                 buffer = update.Nodes(j)
                 key, entry = decode_node(bytearray(buffer.NodeAsNumpy().tobytes()))
+                decoded[0] += 1
                 view["nodes"][key] = entry
             for j in range(update.ChildrenLength()):
                 children = update.Children(j)
@@ -391,6 +400,52 @@ def tick_tabs():
         finish("error")
         return None
     return 0.25
+
+
+def numbers(node, out=None):
+    """Every number under \a node: its property, label, value and precision."""
+    out = [] if out is None else out
+    if node.get("content") == "Number":
+        out.append({k: node.get(k) for k in ("key", "property", "label", "value", "integer", "precision")})
+    for child in node.get("children", []):
+        numbers(child, out)
+    return out
+
+
+def tick_precision():
+    """The decimals the bridge sends for numbers (ROUND5 6D): the Object tab's, and how many nodes
+    each change of a value sends, before and after the value crosses a power of ten. The bridge
+    needs a window, so this runs here rather than in the background tests."""
+    global step
+    try:
+        pump()
+        step += 1
+        cube = bpy.data.objects["Cube"]
+        if step == 1:
+            enter("object")
+            subs["OBJECT"] = subscribe("properties", tab="OBJECT", properties=True)
+        elif step == 4:
+            report["object"] = numbers(tree(subs["OBJECT"]) or {})
+        if 6 <= step <= 10:
+            # What the change made in the step before sent.
+            report.setdefault("changes", []).append({
+                "scale_x": cube.scale[0], "nodes_sent": decoded[0] - report["mark"],
+                "shown": next((n for n in numbers(tree(subs["OBJECT"]) or {})
+                               if n["property"] == "scale" and n["label"] == "X"), None)})
+        if 5 <= step <= 9:
+            # One change a step: the scale moves within 1-10, crosses 10, drops below 0.001, back.
+            report["mark"] = decoded[0]
+            cube.scale[0] = (1.25, 1.5, 12.5, 0.0004, 1.0)[step - 5]
+            for area in bpy.context.screen.areas:
+                area.tag_redraw()
+        if step == 11:
+            finish("done")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
 
 
 # Blender's header menus as the native menus ask for them, in Object and Edit Mode: the editor's
@@ -613,5 +668,5 @@ def tick_knife():
     return 0.3
 
 
-bpy.app.timers.register({"tabs": tick_tabs, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror}.get(SCENARIO, tick_actions),
+bpy.app.timers.register({"tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

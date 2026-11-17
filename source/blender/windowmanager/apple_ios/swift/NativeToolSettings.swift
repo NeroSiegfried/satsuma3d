@@ -150,7 +150,7 @@ struct ToolSettingItem: View {
          * one: Dyntopo's Detail is the number alone, the switch beside it names it. */
         HStack(spacing: 6) {
           if let label = node.node.shortLabel, !label.isEmpty { Text(label) }
-          NativeNumberField(model: model, node: node, significant: 3, widget: .alone)
+          NativeNumberField(model: model, node: node, widget: .alone)
             .frame(width: 84)
         }
         .fixedSize()

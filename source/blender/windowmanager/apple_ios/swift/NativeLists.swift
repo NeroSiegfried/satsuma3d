@@ -650,7 +650,7 @@ struct NativeRowControl: View {
         .accessibilityLabel(node.label.isEmpty ? node.node.property ?? "" : node.label)
         .accessibilityValue(shownOn(on) ? "On" : "Off")
       case .number:
-        NativeNumberField(model: model, node: node, compact: true, significant: 3)
+        NativeNumberField(model: model, node: node, compact: true)
           .frame(width: 56)
       case .choice:
         NativeChoice(model: model, node: node, compact: true)

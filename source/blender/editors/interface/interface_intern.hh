@@ -790,6 +790,11 @@ void block_add_dynamic_listener(Block *block,
                                 void (*listener_func)(const wmRegionListenerParams *params));
 
 double button_value_get(Button *but);
+/**
+ * The decimals Blender draws \a value of the number button \a but with (its precision, more for a
+ * small value, none for a whole number with a whole step).
+ */
+int ui_but_calc_float_precision(Button *but, double value);
 void button_value_set(Button *but, double value);
 /**
  * For picker, while editing HSV.

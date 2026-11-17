@@ -20,17 +20,34 @@ extension Blender_NativeUI_Number {
   /** From Blender's value to what shows: degrees for an angle. */
   var shownFactor: Double { isAngle ? 180.0 / .pi : 1 }
 
-  func format(_ value: Double, significant: Int) -> String {
+  /** As Blender draws it: exactly the decimals Blender shows for this property and value
+   * (`precision`, which the bridge sends from `ui_but_calc_float_precision`), so `1.143` and
+   * `1.000`, never a float's noise. */
+  func format(_ value: Double) -> String {
     let formatter = NumberFormatter()
     formatter.numberStyle = .decimal
     formatter.usesGroupingSeparator = false
-    formatter.usesSignificantDigits = true
-    formatter.maximumSignificantDigits = integer ? 10 : significant
+    formatter.roundingMode = .halfUp
+    let decimals = integer ? 0 : Int(precision)
+    formatter.minimumFractionDigits = decimals
+    formatter.maximumFractionDigits = decimals
     var shown = value * shownFactor
     if integer { shown = shown.rounded() }
     let text = formatter.string(from: NSNumber(value: shown)) ?? "\(shown)"
     guard let unit, !unit.isEmpty else { return text }
     return text + " " + unit
+  }
+
+  /** The value in full, as it is typed into or copied: up to six decimals, trailing zeros dropped,
+   * so opening a field and closing it never rounds what was there (decision 26). */
+  func editingText(_ value: Double) -> String {
+    let formatter = NumberFormatter()
+    formatter.numberStyle = .decimal
+    formatter.usesGroupingSeparator = false
+    formatter.maximumFractionDigits = integer ? 0 : 6
+    var shown = value * shownFactor
+    if integer { shown = shown.rounded() }
+    return formatter.string(from: NSNumber(value: shown)) ?? "\(shown)"
   }
 
   func parse(_ text: String) -> Double? {
@@ -71,7 +88,6 @@ struct NativeNumberField: View {
   var height: CGFloat?
   /** Sliders scrub with their track instead. */
   var scrubs = true
-  var significant = 9
   /** Drawn as Blender's number field (`wcol_num`), joined thus in a vector: as every bar draws
    * numbers, see #BlenderSettingItem. */
   var widget: WidgetJoin? = nil
@@ -99,8 +115,10 @@ struct NativeNumberField: View {
   /** The selected items' values differ: a dash, until a drag or a typed value sets them. */
   private var mixed: Bool { scrubValue == nil && model.isMixed(node) }
   private var shown: String {
-    mixed ? "—" : number?.format(value, significant: significant) ?? ""
+    mixed ? "—" : number?.format(value) ?? ""
   }
+  /** What typing starts from: the value in full. */
+  private var editingText: String { number?.editingText(value) ?? "" }
 
   var body: some View {
     ZStack(alignment: .trailing) {
@@ -247,7 +265,8 @@ struct NativeNumberField: View {
 
   private func beginEditing() {
     guard editable, scrubValue == nil else { return }
-    text = mixed ? "" : shown
+    /* The full value, not the rounded one shown: Done without typing changes nothing. */
+    text = mixed ? "" : editingText
     stepperValue = value * (number?.shownFactor ?? 1)
     editing = true
     focused = true
@@ -258,7 +277,7 @@ struct NativeNumberField: View {
     editing = false
     focused = false
     /* A typed value sets every selected item, even one that already has it. */
-    if model.isMixed(node) ? text.trimmingCharacters(in: .whitespaces).isEmpty : text == shown { return }
+    if model.isMixed(node) ? text.trimmingCharacters(in: .whitespaces).isEmpty : text == editingText { return }
     guard let parsed = number.parse(text) else {
       return
     }
@@ -404,7 +423,7 @@ struct ControlActions: View {
   /** Its value as text, as copied: what the field shows, without grouping. */
   private var copiedText: String? {
     if let number = node.number {
-      return number.format(model.number(node), significant: 7)
+      return number.editingText(model.number(node))
     }
     return node.kind == .textfield ? model.text(node) : nil
   }
@@ -525,7 +544,7 @@ struct ControlRow: View {
             labeled(width: 0.66) {
               HStack(spacing: 8) {
                 NativeSlider(model: model, node: node)
-                NativeNumberField(model: model, node: node, compact: true, scrubs: false, significant: 6)
+                NativeNumberField(model: model, node: node, compact: true, scrubs: false)
                   .frame(width: 64)
               }
             }
@@ -1399,7 +1418,7 @@ struct NativeVectorRow: View {
               NativeSwitch(model: model, node: item)
             }
             else {
-              NativeNumberField(model: model, node: item, compact: true, height: 40, significant: 6)
+              NativeNumberField(model: model, node: item, compact: true, height: 40)
             }
           }
           .frame(maxWidth: .infinity)
