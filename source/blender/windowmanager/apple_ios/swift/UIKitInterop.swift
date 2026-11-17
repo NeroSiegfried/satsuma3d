@@ -729,6 +729,11 @@ final class LayoutChecker {
   /** The window's size, width class, header rung and style, written before each line so a line
    * can be reproduced. */
   var conditions = ""
+  /** The window, in the coordinates zones report: a zone reaching more than a point outside it is
+   * logged as `outside window`. Empty until the window says its size. */
+  var bounds = CGRect.null {
+    didSet { if bounds != oldValue { schedule() } }
+  }
   /** The window is being resized: frames pass through each other for a moment, which is not an
    * overlap anyone sees. Checked once more when it ends. */
   var resizing = false {
@@ -765,6 +770,15 @@ final class LayoutChecker {
         logged[key] = now
         WM_native_ui_log("layout", "\(conditions) \(key) \(Int(overlap.width))x\(Int(overlap.height)) at \(Int(overlap.minX)),\(Int(overlap.minY))")
       }
+    }
+    guard !bounds.isNull, !bounds.isEmpty else { return }
+    let window = bounds.insetBy(dx: -1, dy: -1)
+    for zone in zones {
+      guard let frame = frames[zone], !window.contains(frame) else { continue }
+      let key = "\(zone) outside"
+      if let last = logged[key], now.timeIntervalSince(last) < 60 { continue }
+      logged[key] = now
+      WM_native_ui_log("layout", "\(conditions) \(zone) outside window \(Int(bounds.width))x\(Int(bounds.height)) at \(Int(frame.minX)),\(Int(frame.minY))")
     }
   }
 }

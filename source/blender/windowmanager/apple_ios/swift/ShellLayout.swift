@@ -11,6 +11,8 @@
  *   More one rung at a time, rather than the system's overflow taking a whole side at once;
  * - #RailFrames: where the rails' layout (#RailLayout) put them, in the window;
  * - #ShellLayout.band: the row along the bottom, from the rails and the navigation gizmo;
+ * - #ShellLayout.bottomStack: what stands in that row and above it (the actions, the last
+ *   operation, the Item card, the number pad), every frame from what is open;
  * - #ShellLayout.selfTest: every layout over a grid of windows, logging any two zones that
  *   overlap (`PLATYPUS_LAYOUT_SELFTEST=1`).
  */
@@ -184,6 +186,53 @@ struct RailFrames: Equatable {
   }
 }
 
+extension View {
+  /** Stand in \a rect of a top-leading stack, aligned inside it. */
+  func placed(in rect: CGRect, alignment: Alignment = .center) -> some View {
+    frame(width: rect.width, height: rect.height, alignment: alignment).offset(x: rect.minX, y: rect.minY)
+  }
+}
+
+/** What is open in the bottom row, for #ShellLayout.bottomStack. */
+struct BottomStackInput: Equatable {
+  enum Fold { case none, folded, open }
+  /** The row view's width. */
+  var width: CGFloat
+  /** The lane, from #ShellLayout.band. */
+  var laneLeading: CGFloat
+  var laneWidth: CGFloat
+  /** From the row's top up to 8 points under the top chrome. */
+  var headroom: CGFloat
+  /** 40 % of the view's height. */
+  var itemMaxHeight: CGFloat
+  var actions = Fold.none
+  /** The open bar hugging its items, before clamping. */
+  var actionsWidth: CGFloat = 0
+  var operation = Fold.none
+  var operationPillWidth: CGFloat = 0
+  /** The open strip hugging its settings, before clamping. */
+  var operationWidth: CGFloat = 0
+  var item = Fold.none
+  /** The number pad is shown. */
+  var pad = false
+}
+
+/** Where each piece of the bottom stack stands, in the row's coordinates: the origin at the
+ * top-leading corner of the row, y negative above it. */
+struct BottomStackFrames: Equatable {
+  /** The Actions pill, or the open bar. */
+  var actions: CGRect?
+  /** The last operation's pill, or its open strip. */
+  var operation: CGRect?
+  /** The Item pill; or, when #itemOpen, the slot the card stands in. */
+  var item: CGRect?
+  var itemOpen = false
+  /** The slot the number pad stands in. */
+  var pad: CGRect?
+  /** The held action's name, its centre. */
+  var nameY: CGFloat = 0
+}
+
 @MainActor
 enum ShellLayout {
   /** The lane the row along the bottom has, and how far its bottom edge is from the view's. */
@@ -220,6 +269,96 @@ enum ShellLayout {
     return Band(laneLeading: laneLeading, laneWidth: max(0, hotspot - 12 - laneLeading), rowBottom: rowBottom)
   }
 
+  /**
+   * Where everything in the bottom row stands (ROUND5 Stage 6A, decision 23). Every rule depends
+   * on what is open, never on a measured width, so nothing changes shelf when a bar's content
+   * changes:
+   *
+   * 1. The open strip stands on a shelf above the row when the actions are open too, or the lane
+   *    is narrower than #ShellMetrics.wideRow; otherwise it opens in the row.
+   * 2. The Item card opens when it is open, the number pad is not shown, and there is room above
+   *    for its header and a row; otherwise it is its pill.
+   * 3. Pills stand in the row from the lane's leading end, in order: Actions, the operation, Item.
+   * 4. The open actions bar is centred on the view, between the pills and the lane's end.
+   * 5. The open strip is centred on the view, inside the room it has: after the pills in the row,
+   *    the whole lane above it.
+   * 6. Shelves above the row, each a gap above the one below: the strip, the number pad, the Item
+   *    card. A slot is where a view stands, anchored at its bottom-leading corner.
+   * 7. With nothing in the row, the first shelf rests on the row's content line.
+   * 8. The held action's name stands above the bar, the strip and the pad.
+   */
+  nonisolated static func bottomStack(_ input: BottomStackInput) -> BottomStackFrames {
+    typealias M = ShellMetrics
+    let gap = M.stackGap
+    let laneEnd = input.laneLeading + input.laneWidth
+    var frames = BottomStackFrames()
+
+    /* Rules 1 and 2. */
+    let stripAbove = input.operation == .open && (input.actions == .open || input.laneWidth < M.wideRow)
+    let shelves = stripAbove ? gap + M.stripHeight : 0
+    frames.itemOpen = input.item == .open && !input.pad && input.headroom - shelves - gap >= M.itemMinHeight
+
+    /* Rule 3: the pills. */
+    var x = input.laneLeading
+    func pill(_ width: CGFloat) -> CGRect {
+      let rect = CGRect(x: x, y: (M.rowHeight - M.buttonHeight) / 2, width: width, height: M.buttonHeight)
+      x += width + gap
+      return rect
+    }
+    if input.actions == .folded { frames.actions = pill(M.actionsPillWidth) }
+    if input.operation == .folded { frames.operation = pill(input.operationPillWidth) }
+    if input.item == .folded || (input.item == .open && !frames.itemOpen) { frames.item = pill(M.itemPillWidth) }
+    let pillsEnd = x
+    let pills = pillsEnd > input.laneLeading
+
+    /* Centred on the view, kept between \a start and \a end. */
+    func centred(_ width: CGFloat, _ start: CGFloat, _ end: CGFloat) -> CGFloat {
+      max(start, min(input.width / 2 - width / 2, end - width))
+    }
+    let barY = (M.rowHeight - M.barHeight) / 2
+
+    /* Rule 4: the bar. */
+    if input.actions == .open {
+      let width = max(0, min(input.actionsWidth, laneEnd - pillsEnd))
+      frames.actions = CGRect(x: centred(width, pillsEnd, laneEnd), y: barY, width: width, height: M.barHeight)
+    }
+
+    /* Rule 5, in the row. */
+    if input.operation == .open && !stripAbove {
+      let width = max(0, min(input.operationWidth, 1000, laneEnd - pillsEnd))
+      frames.operation = CGRect(x: centred(width, pillsEnd, laneEnd), y: barY, width: width, height: M.stripHeight)
+    }
+
+    /* Rules 6 and 7: the shelves, from the top of what is in the row. */
+    let barInRow = input.actions == .open || (input.operation == .open && !stripAbove)
+    var base = barInRow ? barY - gap : pills ? (M.rowHeight - M.buttonHeight) / 2 - gap : barY + M.barHeight
+    if stripAbove {
+      let width = max(0, min(input.operationWidth, 1000, input.laneWidth))
+      frames.operation = CGRect(x: centred(width, input.laneLeading, laneEnd), y: base - M.stripHeight,
+                                width: width, height: M.stripHeight)
+      base -= M.stripHeight + gap
+    }
+    if input.pad {
+      let leading = frames.actions.map { input.actions == .open ? $0.minX : input.laneLeading } ?? input.laneLeading
+      let padX = max(input.laneLeading, min(leading, laneEnd - M.padSize.width))
+      frames.pad = CGRect(x: padX, y: base - M.padSize.height, width: M.padSize.width, height: M.padSize.height)
+      base -= M.padSize.height + gap
+    }
+    if frames.itemOpen {
+      /* What is left of the headroom above the shelves below it. */
+      let height = max(0, min(input.itemMaxHeight, base + input.headroom))
+      frames.item = CGRect(x: input.laneLeading, y: base - height, width: max(0, min(input.laneWidth, 520)),
+                           height: height)
+    }
+
+    /* Rule 8: above the highest of the bar, the strip and the pad. */
+    let top = [frames.actions.flatMap { input.actions == .open ? $0.minY : nil },
+               frames.operation.flatMap { input.operation == .open ? $0.minY : nil }, frames.pad?.minY]
+      .compactMap { $0 }.min() ?? barY
+    frames.nameY = top - 28
+    return frames
+  }
+
   /** The gizmo and its buttons in the top trailing corner below \a top, before Blender reports
    * where they are: Blender's default size and its four buttons below it. */
   static func predictedGizmo(size: CGSize, top: CGFloat, leading: Bool, bottom: Bool, sideInsets: UIEdgeInsets)
@@ -241,11 +380,48 @@ enum ShellLayout {
   /** \name Self-test
    * \{ */
 
+  /** The bottom stack's configurations the self-test covers: (name, input), over a lane. */
+  private static func stackCases(width: CGFloat, lane: Band, headroom: CGFloat, itemMaxHeight: CGFloat)
+    -> [(name: String, input: BottomStackInput, card: CGSize?)]
+  {
+    var cases: [(name: String, input: BottomStackInput, card: CGSize?)] = []
+    let actions: [(String, BottomStackInput.Fold, CGFloat)] = [
+      ("", .none, 0), (" actions", .folded, 0), (" actions open 300", .open, 300), (" actions open 2000", .open, 2000)]
+    let operations: [(String, BottomStackInput.Fold, CGFloat)] = [
+      ("", .none, 0), (" operation", .folded, 0), (" operation open 420", .open, 420),
+      (" operation open 2000", .open, 2000)]
+    let items: [(String, BottomStackInput.Fold, CGSize?)] = [
+      ("", .none, nil), (" item", .folded, nil), (" item open 86", .open, CGSize(width: 438, height: 86)),
+      (" item open 200", .open, CGSize(width: 438, height: 200))]
+    for a in actions {
+      for pad in a.1 == .open ? [false, true] : [false] {
+        for o in operations {
+          for i in items {
+            var input = BottomStackInput(width: width, laneLeading: lane.laneLeading, laneWidth: lane.laneWidth,
+                                         headroom: headroom, itemMaxHeight: itemMaxHeight)
+            input.actions = a.1
+            input.actionsWidth = a.2
+            input.operation = o.1
+            input.operationPillWidth = 96
+            input.operationWidth = o.2
+            input.item = i.1
+            input.pad = pad
+            cases.append((a.0 + (pad ? " pad" : "") + o.0 + i.0, input, i.2))
+          }
+        }
+      }
+    }
+    return cases
+  }
+
   /**
    * Every layout over a grid: seven widths and a short window, the tool rail on each edge, open
-   * and closed, the gizmo top or bottom, the actions folded or open, the Item card off or open;
-   * any two zones that overlap are logged as `selftest:`, then the count. Nothing on screen
-   * changes; it runs once at launch when `PLATYPUS_LAYOUT_SELFTEST=1`.
+   * and closed, the gizmo top or bottom, and every configuration of the bottom stack (the
+   * actions, the last operation, the Item card, the number pad), placed by #bottomStack, the
+   * function the row itself uses. Three checks, each logged as `selftest:`: no two zones overlap;
+   * every zone lies inside the window and the stack's below the tool row; an open card's slot
+   * is at least #ShellMetrics.itemMinHeight tall. Then the count. Nothing on screen changes; it
+   * runs once at launch when `PLATYPUS_LAYOUT_SELFTEST=1`.
    */
   static func selfTest() {
     guard ProcessInfo.processInfo.environment["PLATYPUS_LAYOUT_SELFTEST"] == "1" else { return }
@@ -253,78 +429,96 @@ enum ShellLayout {
                  CGSize(width: 797, height: 1024), CGSize(width: 683, height: 1024), CGSize(width: 560, height: 1024),
                  CGSize(width: 440, height: 1024), CGSize(width: 797, height: 600)]
     let header: CGFloat = 74, toolRow: CGFloat = 44, safeBottom: CGFloat = 20
-    var layouts = 0, overlaps = 0
+    var layouts = 0, overlaps = 0, outside = 0, short = 0
     var seen = Set<String>()
+    func say(_ key: String, _ detail: String) {
+      if seen.insert(key).inserted { WM_native_ui_log("selftest", "\(key) \(detail)") }
+    }
     for size in sizes {
       let widthClass = WidthClass.of(width: size.width, phone: false, previous: .wide)
       let rowShown = widthClass != .compact
       let top = header + (rowShown ? toolRow + 6 : 0)
+      let window = CGRect(origin: .zero, size: size)
       for edge in [RailEdge.leading, .trailing, .top, .bottom] {
         for open in [false, true] {
           for gizmoBottom in [false, true] {
-            for actionsOpen in [false, true] {
-              for itemRows in [0, 2] {
-                layouts += 1
-                let tools = RailState()
-                tools.docked = open
-                let predicted = predictedGizmo(size: size, top: top, leading: false, bottom: gizmoBottom,
-                                               sideInsets: .zero)
-                let safe = CGRect(origin: .zero, size: size).inset(by: UIEdgeInsets(
-                  top: top, left: 0, bottom: safeBottom, right: 0))
-                let content = SidebarContent(brush: nil, buttons: true, selecting: true)
-                let rail = RailLayout(safe: safe, tray: 0, tools: tools, toolCount: 18, brushes: nil, brushCount: 0,
-                                      sidebar: content, leftHanded: false, gizmo: predicted.footprint, toolEdge: edge)
-                let lane = Self.band(size: size, sideInsets: .zero, safeBottom: safeBottom, tray: 0,
-                                rails: RailFrames(rail), gizmo: predicted.gizmo, footprint: predicted.footprint,
-                                keyboardLift: 0)
-                var zones: [(String, CGRect)] = [("gizmo", predicted.footprint)]
-                zones.append(("header", CGRect(x: 0, y: 0, width: size.width, height: header)))
-                if rowShown {
-                  zones.append(("tool settings", CGRect(x: 14, y: header + 6, width: size.width - 28, height: toolRow)))
+            let tools = RailState()
+            tools.docked = open
+            let predicted = predictedGizmo(size: size, top: top, leading: false, bottom: gizmoBottom,
+                                           sideInsets: .zero)
+            let safe = window.inset(by: UIEdgeInsets(top: top, left: 0, bottom: safeBottom, right: 0))
+            let content = SidebarContent(brush: nil, buttons: true, selecting: true)
+            let rail = RailLayout(safe: safe, tray: 0, tools: tools, toolCount: 18, brushes: nil, brushCount: 0,
+                                  sidebar: content, leftHanded: false, gizmo: predicted.footprint, toolEdge: edge)
+            let lane = Self.band(size: size, sideInsets: .zero, safeBottom: safeBottom, tray: 0,
+                                 rails: RailFrames(rail), gizmo: predicted.gizmo, footprint: predicted.footprint,
+                                 keyboardLift: 0)
+            var fixed: [(String, CGRect)] = [("gizmo", predicted.footprint)]
+            fixed.append(("header", CGRect(x: 0, y: 0, width: size.width, height: header)))
+            if rowShown {
+              fixed.append(("tool settings", CGRect(x: 14, y: header + 6, width: size.width - 28, height: toolRow)))
+            }
+            fixed.append(("tools", CGRect(x: rail.toolCenter.x - rail.toolWidth / 2,
+                                          y: rail.toolCenter.y - rail.toolHeight / 2,
+                                          width: rail.toolWidth, height: rail.toolHeight)))
+            if !content.isEmpty && !rail.sidebarTucked {
+              let sidebar = rail.sidebarRow != nil ?
+                CGSize(width: content.height, height: PaintSidebar.rowThickness) :
+                CGSize(width: PaintSidebar.width, height: content.height)
+              fixed.append(("sidebar", CGRect(x: rail.sidebarCenter.x - sidebar.width / 2,
+                                              y: rail.sidebarCenter.y - sidebar.height / 2,
+                                              width: sidebar.width, height: sidebar.height)))
+            }
+            let rowY = size.height - lane.rowBottom - ShellMetrics.rowHeight
+            let headroom = rowY - top - 8
+            let condition = "\(Int(size.width))x\(Int(size.height)) \(edge.rawValue)\(open ? " open" : "") " +
+              "gizmo \(gizmoBottom ? "bottom" : "top")"
+            for stackCase in stackCases(width: size.width, lane: lane, headroom: headroom,
+                                        itemMaxHeight: size.height * 0.4)
+            {
+              layouts += 1
+              let frames = bottomStack(stackCase.input)
+              func inWindow(_ rect: CGRect) -> CGRect { rect.offsetBy(dx: 0, dy: rowY) }
+              /* An open card or the pad: the bottom-leading part of its slot it draws in. */
+              func standing(_ slot: CGRect, _ size: CGSize) -> CGRect {
+                let width = min(size.width, slot.width), height = min(size.height, slot.height)
+                return CGRect(x: slot.minX, y: slot.maxY - height, width: width, height: height)
+              }
+              var stack: [(String, CGRect)] = []
+              if let rect = frames.actions { stack.append(("actions", inWindow(rect))) }
+              if let rect = frames.operation { stack.append(("operation", inWindow(rect))) }
+              if let rect = frames.pad { stack.append(("number pad", inWindow(standing(rect, ShellMetrics.padSize)))) }
+              if let rect = frames.item {
+                stack.append(("item", inWindow(frames.itemOpen ? standing(rect, stackCase.card ?? rect.size) : rect)))
+                if frames.itemOpen && rect.height < ShellMetrics.itemMinHeight {
+                  short += 1
+                  say("\(condition)\(stackCase.name): item slot \(Int(rect.height)) tall",
+                      "under \(Int(ShellMetrics.itemMinHeight))")
                 }
-                zones.append(("tools", CGRect(x: rail.toolCenter.x - rail.toolWidth / 2,
-                                              y: rail.toolCenter.y - rail.toolHeight / 2,
-                                              width: rail.toolWidth, height: rail.toolHeight)))
-                if !content.isEmpty && !rail.sidebarTucked {
-                  let sidebar = rail.sidebarRow != nil ?
-                    CGSize(width: content.height, height: PaintSidebar.rowThickness) :
-                    CGSize(width: PaintSidebar.width, height: content.height)
-                  zones.append(("sidebar", CGRect(x: rail.sidebarCenter.x - sidebar.width / 2,
-                                                  y: rail.sidebarCenter.y - sidebar.height / 2,
-                                                  width: sidebar.width, height: sidebar.height)))
+              }
+              let zones = fixed + stack
+              for (i, a) in zones.enumerated() {
+                for b in zones[(i + 1)...] {
+                  let overlap = a.1.intersection(b.1)
+                  guard !overlap.isNull, overlap.width > 1, overlap.height > 1 else { continue }
+                  overlaps += 1
+                  say("\(condition)\(stackCase.name): \(a.0) ∩ \(b.0)", "\(Int(overlap.width))x\(Int(overlap.height))")
                 }
-                let rowY = size.height - lane.rowBottom - ShellMetrics.rowHeight
-                let barWidth = actionsOpen ? min(lane.laneWidth, 600) : ShellMetrics.actionsPillWidth
-                let barX = actionsOpen ? min(max(size.width / 2 - barWidth / 2, lane.laneLeading),
-                                             lane.laneLeading + lane.laneWidth - barWidth) : lane.laneLeading
-                let barHeight = actionsOpen ? ShellMetrics.barHeight : ShellMetrics.buttonHeight
-                zones.append(("actions", CGRect(x: barX, y: rowY + (ShellMetrics.rowHeight - barHeight) / 2,
-                                                width: barWidth, height: barHeight)))
-                if itemRows > 0 {
-                  let height = 48 + CGFloat(itemRows) * 38
-                  zones.append(("item", CGRect(x: lane.laneLeading, y: rowY - 8 - height,
-                                               width: min(lane.laneWidth, 420), height: height)))
-                }
-                for (i, a) in zones.enumerated() {
-                  for b in zones[(i + 1)...] {
-                    let overlap = a.1.intersection(b.1)
-                    guard !overlap.isNull, overlap.width > 1, overlap.height > 1 else { continue }
-                    overlaps += 1
-                    let key = "\(Int(size.width))x\(Int(size.height)) \(edge.rawValue)\(open ? " open" : "") " +
-                      "gizmo \(gizmoBottom ? "bottom" : "top")\(actionsOpen ? " actions" : "")" +
-                      "\(itemRows > 0 ? " item" : ""): \(a.0) ∩ \(b.0)"
-                    if seen.insert(key).inserted {
-                      WM_native_ui_log("selftest", "\(key) \(Int(overlap.width))x\(Int(overlap.height))")
-                    }
-                  }
-                }
+              }
+              for (zone, rect) in zones {
+                let bounds = stack.contains(where: { $0.0 == zone }) ?
+                  CGRect(x: 0, y: top, width: size.width, height: size.height - top) : window
+                guard !bounds.insetBy(dx: -1, dy: -1).contains(rect) else { continue }
+                outside += 1
+                say("\(condition)\(stackCase.name): \(zone) outside",
+                    "\(Int(rect.width))x\(Int(rect.height)) at \(Int(rect.minX)),\(Int(rect.minY))")
               }
             }
           }
         }
       }
     }
-    WM_native_ui_log("selftest", "\(layouts) layouts, \(overlaps) overlaps")
+    WM_native_ui_log("selftest", "\(layouts) layouts, \(overlaps) overlaps, \(outside) outside, \(short) short")
   }
 
   /** \} */

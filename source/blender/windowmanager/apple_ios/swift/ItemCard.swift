@@ -53,6 +53,8 @@ struct ItemCard: View {
   let tool: String
   /** Folded by the person for this tool. */
   @Binding var folded: Bool
+  /** Shown as its pill: folded, or with no room to open, see #ShellLayout.bottomStack. */
+  var pill = false
   /** At most this tall, with its header: the rows scroll beyond it. */
   var maxHeight: CGFloat = 300
   @State private var rowsHeight: CGFloat = 0
@@ -72,20 +74,32 @@ struct ItemCard: View {
 
   var body: some View {
     let rows = Self.rows(model, tool: tool)
-    if folded {
+    if pill {
       Button {
-        withAnimation(.easeOut(duration: 0.18)) { folded = false }
+        if folded {
+          withAnimation(.easeOut(duration: 0.18)) { folded = false }
+        }
+        else {
+          /* Open, but without room: say why rather than do nothing. */
+          ShellModel.current?.messages.say(NumberPadState.shared.shown ?
+            "The Item card opens when the number pad closes" : "No room above the bottom row for the Item card",
+            level: "info")
+        }
       } label: {
         Label("Item", systemImage: "chevron.up")
           .labelStyle(.titleAndIcon)
           .font(.subheadline)
           .foregroundStyle(.primary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.7)
+          .frame(width: ShellMetrics.itemPillWidth - 28)
           .padding(.horizontal, 14)
           .frame(height: ShellMetrics.buttonHeight)
           .contentShape(Capsule())
       }
       .buttonStyle(.plain)
       .panelGlass(interactive: true, in: Capsule())
+      .layoutZone("item")
       .accessibilityIdentifier("blender.item.folded")
     }
     else {

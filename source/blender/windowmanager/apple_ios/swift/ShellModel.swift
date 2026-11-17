@@ -367,6 +367,8 @@ final class ShellModel {
   var searchOpen = false
   /** One finger uses the active tool rather than orbiting the view. */
   var fingerUsesTool = false
+  /** What is open in the bottom row, see #QuickActionsRow. */
+  let stack = BottomStackState()
 
   /** The latest window's model, for commands sent from where no window is at hand. */
   static weak var current: ShellModel?

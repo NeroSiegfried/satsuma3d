@@ -29,8 +29,18 @@ enum ShellMetrics {
   static let barCircle: CGFloat = 42
   /** From the bottom edge of the safe area. */
   static let rowBottom: CGFloat = 6
-  /** Wide enough for the strip to open in the row itself, beside the actions. */
+  /** A lane wide enough for the strip to open in the row itself, beside the actions. */
   static let wideRow: CGFloat = 700
+  /** Between the pieces of the bottom stack, see #ShellLayout.bottomStack. */
+  static let stackGap: CGFloat = 8
+  /** The last operation's open strip: the actions bar's height. */
+  static let stripHeight: CGFloat = 50
+  /** The Item card folded, or with no room to open. */
+  static let itemPillWidth: CGFloat = 84
+  /** The number pad as built: 4 × 56 + 3 × 6 + 16 by 4 × 44 + 3 × 6 + 16. */
+  static let padSize = CGSize(width: 258, height: 210)
+  /** The Item card's header and one row: less room than this and it shows as its pill. */
+  static let itemMinHeight: CGFloat = 92
 }
 
 /* -------------------------------------------------------------------- */
@@ -320,22 +330,33 @@ struct QuickActionPressStyle<S: Shape>: ButtonStyle {
 /** \name The row
  * \{ */
 
+/** What is open in the bottom row: held by the window's model, so the snapshot script can open
+ * and fold each piece (`stack actions|operation|item open|fold`), see #ShellSnapshots. */
+@MainActor
+@Observable
+final class BottomStackState {
+  /** The quick actions are a bar rather than their pill. */
+  var actionsOpen = false
+  /** The operation the strip was opened for; another operation arrives folded. */
+  var redoOpenID: String?
+  /** The Item card folded by the person, for this tool. */
+  var itemFolded = false
+}
+
 struct QuickActionsRow: View {
   static let barSpace = "blender.quick-actions.bar"
   let model: ShellModel
   let redo: PanelsModel
   /** The 3D View's sidebar Item tab, see #ItemCard. */
   let item: PanelsModel
-  @State private var itemFolded = false
   @AppStorage(ItemCardTools.shownKey) private var itemCardEnabled = true
   /** The held action's name and its middle in the bar, shown above the bar as Blender's tooltip. */
   @State private var heldName: (text: String, x: CGFloat)?
   @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
-  @State private var actionsOpen = false
+  /** What is open, held by the window's model so a script can drive it, see #BottomStackState. */
+  private var stack: BottomStackState { model.stack }
   /** Opened because an operation started waiting, rather than by the person. */
   @State private var openedForModal = false
-  /** The operation the user opened the strip for; another operation arrives folded. */
-  @State private var redoOpenID: String?
   /** Blender's count of requests to open the strip (F9, the Edit menu), to open it for a new one. */
   @State private var redoShowRequests: UInt32?
   @State private var redoError: String?
@@ -370,7 +391,7 @@ struct QuickActionsRow: View {
   }
 
   private var redoOpen: Bool {
-    redoOpenID != nil && redoOpenID == redo.operationKey && !redo.operationColumns.isEmpty
+    stack.redoOpenID != nil && stack.redoOpenID == redo.operationKey && !redo.operationColumns.isEmpty
   }
 
   /** The last operation's short name, while it has settings to adjust. */
@@ -387,6 +408,29 @@ struct QuickActionsRow: View {
     UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: 0.36, dampingFraction: 0.86)
   }
 
+  /** The Item card is wanted and has rows for the tool. */
+  private var itemShown: Bool { itemWanted && !ItemCard.rows(item, tool: model.activeTool).isEmpty }
+
+  /** What is open, for #ShellLayout.bottomStack. */
+  private func stackInput(width: CGFloat, band: ShellLayout.Band, headroom: CGFloat, height: CGFloat)
+    -> BottomStackInput
+  {
+    var input = BottomStackInput(width: width, laneLeading: band.laneLeading, laneWidth: band.laneWidth,
+                                 headroom: headroom, itemMaxHeight: height * 0.4)
+    if !actions.isEmpty {
+      input.actions = stack.actionsOpen ? .open : .folded
+      input.actionsWidth = ceil(actionItemsWidth) + actionsBarChrome
+    }
+    if let title = redoTitle {
+      input.operation = redoOpen ? .open : .folded
+      input.operationPillWidth = redoPillWidth(title)
+      input.operationWidth = ceil(redoContentWidth) + 48
+    }
+    if itemShown { input.item = stack.itemFolded ? .folded : .open }
+    input.pad = modalRunning && NumberPadState.shared.shown
+    return input
+  }
+
   var body: some View {
     GeometryReader { geometry in
       let width = geometry.size.width
@@ -399,91 +443,62 @@ struct QuickActionsRow: View {
         gizmo: model.navigationGizmoRect?.offsetBy(dx: -origin.x, dy: -origin.y),
         footprint: model.navigationFrame?.offsetBy(dx: -origin.x, dy: -origin.y),
         keyboardLift: KeyboardLift.shared.stripLift)
-      let laneLeading = band.laneLeading
-      let laneWidth = band.laneWidth
-      let wide = width >= ShellMetrics.wideRow
-      let pillWidth = redoTitle.map(redoPillWidth) ?? 0
-      /* With the actions open, the last operation's name and settings sit above them, so neither
-       * covers the other; folded, its pill follows the Actions pill in the row. */
-      let redoAbove = actionsOpen && !actions.isEmpty
-      let pillInRow = redoPillTitle != nil && !redoAbove
-      let barWidth = actionsBarWidth(maxWidth: laneWidth)
-      let actionsWidth = actions.isEmpty ? 0 : actionsOpen ? barWidth : ShellMetrics.actionsPillWidth
-      let rowWidth = actionsWidth + (pillInRow ? (actionsWidth > 0 ? 8 : 0) + pillWidth : 0)
-      /* Folded, the pills rest beside the tool rail; open, the row centers on the viewport,
-       * staying in the lane. */
-      let rowX = actionsOpen ?
-        min(max(width / 2 - rowWidth / 2, laneLeading), laneLeading + laneWidth - rowWidth) : laneLeading
+      /* From the row's top up to 8 points under the header and the tool settings row. */
+      let rowTop = geometry.size.height - band.rowBottom - ShellMetrics.rowHeight
+      let headroom = rowTop - (model.topBarBottom - origin.y) - 8
+      /* Every piece's frame from one function, which the self-test checks too: nothing here
+       * computes a position (ROUND5 Stage 6A). */
+      let frames = ShellLayout.bottomStack(stackInput(width: width, band: band, headroom: headroom,
+                                                      height: geometry.size.height))
       VStack(spacing: 0) {
         Spacer(minLength: 0)
         /* Merging only glass that touches, so neighbouring buttons stay separate capsules. */
         PanelGlassGroup(spacing: 2) {
-          ZStack(alignment: .leading) {
-            if !actions.isEmpty {
-              actionsMorph(frame: CGRect(x: rowX, y: 0, width: actionsWidth,
-                                         height: actionsOpen ? ShellMetrics.barHeight : ShellMetrics.buttonHeight),
-                           itemsWidth: barWidth - actionsBarChrome)
+          ZStack(alignment: .topLeading) {
+            if let frame = frames.actions {
+              actionsMorph(frame: frame, itemsWidth: frame.width - actionsBarChrome)
             }
-            if let title = redoTitle {
-              redoMorph(title: title, frame: redoOpen ?
-                          stripFrame(width: width, laneLeading: laneLeading, laneWidth: laneWidth,
-                                     wide: wide && !redoAbove, actionsWidth: actionsWidth) :
-                          redoAbove ?
-                          CGRect(x: rowX + actionsWidth - pillWidth,
-                                 y: -(ShellMetrics.barHeight / 2 + 8 + ShellMetrics.buttonHeight / 2),
-                                 width: pillWidth, height: ShellMetrics.buttonHeight) :
-                          CGRect(x: rowX + rowWidth - pillWidth, y: 0, width: pillWidth,
-                                 height: ShellMetrics.buttonHeight))
+            if let title = redoTitle, let frame = frames.operation {
+              redoMorph(title: title, frame: frame)
+            }
+            if itemShown, let slot = frames.item {
+              if frames.itemOpen {
+                /* Standing on the slot's bottom edge, growing upward: its height is its own. */
+                ItemCard(model: item, tool: model.activeTool, folded: Bindable(stack).itemFolded, pill: false,
+                         maxHeight: slot.height)
+                  .frame(maxWidth: slot.width, alignment: .leading)
+                  .fixedSize(horizontal: true, vertical: false)
+                  .placed(in: slot, alignment: .bottomLeading)
+                  .transition(.opacity)
+              }
+              else {
+                ItemCard(model: item, tool: model.activeTool, folded: Bindable(stack).itemFolded, pill: true)
+                  .placed(in: slot)
+                  .transition(.opacity)
+              }
+            }
+            /* While an operation waits: the number pad, for typing a value into it. The
+             * operation's own words (a move's values) are at the top, see #ToolRails. */
+            if let slot = frames.pad {
+              NumberPad(model: model)
+                .layoutZone("number pad")
+                .placed(in: slot, alignment: .bottomLeading)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
             /* The held action's name, as the tool rail names its tools: above everything else in
              * the row, clear of the finger and of the last operation above the bar. */
             if let heldName {
-              let above: CGFloat = redoTitle == nil ? 0 : redoOpen ? 60 + 8 : ShellMetrics.buttonHeight + 8
+              let barX = frames.actions?.minX ?? band.laneLeading
               ShellNameLabel(text: heldName.text)
                 .alignmentGuide(.leading) { d in
-                  d.width / 2 - min(max(rowX + heldName.x, d.width / 2 + 8), width - d.width / 2 - 8)
+                  d.width / 2 - min(max(barX + heldName.x, d.width / 2 + 8), width - d.width / 2 - 8)
                 }
-                .offset(y: -(ShellMetrics.barHeight / 2 + 10 + above + 18))
+                .offset(y: frames.nameY - 18)
                 .zIndex(2)
                 .transition(.opacity)
             }
           }
-          .frame(width: width, height: ShellMetrics.rowHeight, alignment: .leading)
-          /* Above the row, as overlays: an overlay never changes the size of what it is over, so
-           * the row stays where its padding puts it however tall these are. Placed inside the row's
-           * stack, they made it taller and pushed the row down by half their height. */
-          .overlay(alignment: .topLeading) {
-            /* The selection's transform, above the row and above the last operation's strip
-             * when that is above it too. */
-            if itemWanted && !ItemCard.rows(item, tool: model.activeTool).isEmpty {
-              let stripAbove: CGFloat = redoTitle == nil ? 0 :
-                (redoAbove ? ShellMetrics.buttonHeight + 8 : (redoOpen && !wide ? 60 + 8 : 0))
-              ItemCard(model: item, tool: model.activeTool, folded: $itemFolded,
-                       maxHeight: geometry.size.height * 0.4)
-                .frame(maxWidth: min(laneWidth, 520), alignment: .leading)
-                .fixedSize(horizontal: true, vertical: false)
-                .alignmentGuide(.top) { d in d.height + 8 + stripAbove }
-                .offset(x: laneLeading)
-                .transition(.opacity)
-            }
-          }
-          .overlay(alignment: .topLeading) {
-            /* While an operation waits: its name and what it says, and the number pad, above
-             * the bar. */
-            if modalRunning {
-              VStack(alignment: .leading, spacing: 8) {
-                /* The operation's own words (a move's values) are at the top, see #ToolRails. */
-                if NumberPadState.shared.shown {
-                  NumberPad(model: model)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-                }
-              }
-              .alignmentGuide(.top) { d in
-                d.height + 8 + (ShellMetrics.barHeight - ShellMetrics.rowHeight) / 2
-              }
-              .offset(x: rowX)
-            }
-          }
+          .frame(width: width, height: ShellMetrics.rowHeight, alignment: .topLeading)
         }
       }
       /* Above the keyboard while one of the strip's fields is typed into; the viewport stays. */
@@ -495,10 +510,10 @@ struct QuickActionsRow: View {
       /* Another operation arrives folded, unless Blender said its settings show. */
       withAnimation(animation) {
         if let key, RevealCoordinator.shared.opensOperation(redo.operation?.idname) {
-          redoOpenID = key
+          stack.redoOpenID = key
         }
-        else if redoOpenID != key {
-          redoOpenID = nil
+        else if stack.redoOpenID != key {
+          stack.redoOpenID = nil
         }
       }
     }
@@ -506,32 +521,32 @@ struct QuickActionsRow: View {
       /* The decision may come after the settings: open them for it then. */
       guard let key = redo.operationKey, !redo.operationColumns.isEmpty,
             RevealCoordinator.shared.opensOperation(redo.operation?.idname) else { return }
-      withAnimation(animation) { redoOpenID = key }
+      withAnimation(animation) { stack.redoOpenID = key }
     }
     .animation(.easeOut(duration: 0.12), value: heldName?.text)
     .onChange(of: itemWanted, initial: true) { _, wanted in item.setShown(wanted) }
     .onChange(of: modalRunning) { _, running in
       /* The waiting operation's bar opens by itself, and folds when it ends if it opened so. */
       withAnimation(animation) {
-        if running && !actionsOpen {
-          actionsOpen = true
+        if running && !stack.actionsOpen {
+          stack.actionsOpen = true
           openedForModal = true
         }
         else if !running {
-          if openedForModal { actionsOpen = false }
+          if openedForModal { stack.actionsOpen = false }
           openedForModal = false
           NumberPadState.shared.shown = false
         }
       }
     }
     /* Folded for one tool, open again for the next. */
-    .onChange(of: model.activeTool) { _, _ in itemFolded = false }
+    .onChange(of: model.activeTool) { _, _ in stack.itemFolded = false }
     .onChange(of: redo.operation?.shown, initial: true) { _, requests in
       /* Asked to open (F9, the Edit menu): open for this operation. */
       if let requests, let seen = redoShowRequests, requests > seen, !redo.operationColumns.isEmpty {
         withAnimation(animation) {
-          redoOpenID = redo.operationKey
-          actionsOpen = false
+          stack.redoOpenID = redo.operationKey
+          stack.actionsOpen = false
         }
       }
       redoShowRequests = requests ?? redoShowRequests
@@ -555,11 +570,6 @@ struct QuickActionsRow: View {
     8 + ShellMetrics.barCircle + (contextMenuAvailable ? ShellMetrics.barCircle : 0)
   }
 
-  /** The bar hugs its actions, which scroll when the lane is narrower. */
-  private func actionsBarWidth(maxWidth: CGFloat) -> CGFloat {
-    actionsBarChrome + min(ceil(actionItemsWidth), max(0, maxWidth - actionsBarChrome))
-  }
-
   /** The actions: icons, a hold naming each, deleting in red; titles between hairlines where there is no icon. */
   private var actionItems: some View {
     HStack(spacing: 0) {
@@ -579,16 +589,17 @@ struct QuickActionsRow: View {
 
   private func toggleActions() {
     /* The strip stays open: it moves above the actions. */
-    withAnimation(animation) { actionsOpen.toggle() }
+    withAnimation(animation) { stack.actionsOpen.toggle() }
   }
 
   /**
    * The pill and the bar are one glass capsule: opening grows the pill into the bar, centered on
-   * the viewport, and the close button at its leading end folds it back into the pill.
+   * the viewport, and the close button at its leading end folds it back into the pill. \a frame
+   * is from #ShellLayout.bottomStack.
    */
   private func actionsMorph(frame: CGRect, itemsWidth: CGFloat) -> some View {
     ZStack(alignment: .leading) {
-      if actionsOpen {
+      if stack.actionsOpen {
         HStack(spacing: 0) {
           Button(action: toggleActions) {
             Image(systemName: "xmark")
@@ -651,9 +662,9 @@ struct QuickActionsRow: View {
     .coordinateSpace(name: Self.barSpace)
     .clipShape(ShellShape())
     /* Not interactive glass once open, which would take the touches of the actions on it. */
-    .panelGlass(interactive: !actionsOpen, in: Capsule())
+    .panelGlass(interactive: !stack.actionsOpen, in: Capsule())
     .layoutZone("actions")
-    .offset(x: frame.minX)
+    .offset(x: frame.minX, y: frame.minY)
     .animation(animation, value: actions)
   }
 
@@ -662,7 +673,7 @@ struct QuickActionsRow: View {
 
   /** As wide as the title, from 72 to 136 points with its margins. */
   private func closeRedo() {
-    withAnimation(animation) { redoOpenID = nil }
+    withAnimation(animation) { stack.redoOpenID = nil }
   }
 
   private func redoWidthChanged(_ width: CGFloat) {
@@ -672,27 +683,6 @@ struct QuickActionsRow: View {
   private func redoPillWidth(_ title: String) -> CGFloat {
     let measured = ceil((title as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: 17)]).width)
     return min(136 - 24, max(72 - 24, measured)) + 24
-  }
-
-  /** The strip hugs its settings, after the close button and its margin. */
-  private func stripWidth(maxWidth: CGFloat) -> CGFloat {
-    min(max(0, maxWidth), min(1000, ceil(redoContentWidth) + 48))
-  }
-
-  /** Where the strip opens, in the row's space, centered on its y. */
-  private func stripFrame(width: CGFloat, laneLeading: CGFloat, laneWidth: CGFloat, wide: Bool,
-                          actionsWidth: CGFloat) -> CGRect {
-    if wide {
-      /* Opened in the row, after the Actions pill, centered on the viewport. */
-      let start = laneLeading + actionsWidth + (actionsWidth > 0 ? 8 : 0)
-      let strip = stripWidth(maxWidth: laneLeading + laneWidth - start)
-      return CGRect(x: min(max(width / 2 - strip / 2, start), laneLeading + laneWidth - strip), y: 0,
-                    width: strip, height: 60)
-    }
-    /* Above the row, centered on the window, beside its sides. */
-    let strip = stripWidth(maxWidth: laneWidth)
-    let x = max(model.sideInsets.left, min((width - strip) / 2, width - model.sideInsets.right - strip))
-    return CGRect(x: x, y: -(ShellMetrics.rowHeight / 2 + 8 + 30), width: strip, height: 60)
   }
 
   /**
@@ -707,13 +697,12 @@ struct QuickActionsRow: View {
         RedoContent(model: redo, close: closeRedo, widthChanged: redoWidthChanged)
           .environment(\.inOperationStrip, true)
           .frame(width: frame.width, height: frame.height)
-          .layoutZone("operation")
           .accessibilityIdentifier("blender.redo.strip")
           .transition(.opacity)
       }
       else {
         Button {
-          withAnimation(animation) { redoOpenID = redo.operationKey }
+          withAnimation(animation) { stack.redoOpenID = redo.operationKey }
         } label: {
           Text(title)
             .lineLimit(1)
@@ -741,6 +730,7 @@ struct QuickActionsRow: View {
     .clipShape(shape)
     /* Not interactive glass once open, which would take the touches of the controls on it. */
     .panelGlass(interactive: !redoOpen, in: shape)
+    .layoutZone("operation")
     .offset(x: frame.minX, y: frame.minY)
     .transition(.scale(scale: 0.8, anchor: .leading).combined(with: .opacity))
   }

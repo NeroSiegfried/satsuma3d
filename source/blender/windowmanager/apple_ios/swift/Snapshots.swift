@@ -14,6 +14,8 @@
  * - `size <width> <height>`: ask Stage Manager for a window this size, in points (the scene's
  *   size restrictions, set to it and put back when the script ends);
  * - `rail <leading|trailing|top|bottom>`: the edge the tool rail rests on;
+ * - `stack <actions|operation|item> <open|fold>`: open or fold a piece of the bottom row, see
+ *   #BottomStackState (`operation open` opens the last operation's strip, if there is one);
  * - `wait <seconds>`;
  * - `shot <name>`: every window of the scene, drawn into `tmp/shots/<name>.png`.
  *
@@ -90,6 +92,27 @@ enum ShellSnapshots {
       case "rail":
         if let edge = words.first, RailEdge(rawValue: edge) != nil {
           UserDefaults.standard.set(edge, forKey: "BlenderToolRailEdge")
+        }
+        try? await Task.sleep(for: .milliseconds(600))
+      case "stack":
+        guard words.count >= 2, let model = ShellModel.current, ["open", "fold"].contains(words[1]) else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        let open = words[1] == "open"
+        withAnimation(.easeOut(duration: 0.2)) {
+          switch words[0] {
+            case "actions":
+              model.stack.actionsOpen = open
+            case "operation":
+              let key = ShellPanels.current?.panels.redo.operationKey
+              if open && key == nil { WM_native_ui_log("snapshot", "stack operation open: no last operation") }
+              model.stack.redoOpenID = open ? key : nil
+            case "item":
+              model.stack.itemFolded = !open
+            default:
+              WM_native_ui_log("snapshot", "unknown step: \(step)")
+          }
         }
         try? await Task.sleep(for: .milliseconds(600))
       case "wait":

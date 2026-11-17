@@ -257,6 +257,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
    * settles, and as the conditions of the layout checker's lines. */
   private func noteWindow() {
     let size = view.bounds.size
+    LayoutChecker.shared.bounds = CGRect(origin: .zero, size: size)
     let style = ShellStyle.current == .glass ? "glass" : "blender"
     let line = "\(Int(size.width))x\(Int(size.height)) \(model.widthClass.name) rung \(model.headerRung) \(style)"
     guard line != windowLine else { return }
