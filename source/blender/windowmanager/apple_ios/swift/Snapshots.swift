@@ -20,6 +20,9 @@
  * - `wait <seconds>`;
  * - `shot <name>`: every window of the scene, drawn into `tmp/shots/<name>.png`.
  *
+ * Launch with `PLATYPUS_SCRATCH_DOCUMENT=1` too: the app then opens a fresh copy of the General
+ * template instead of the last document, and `send` and `tool` steps run only there.
+ *
  * The viewport may come out black: the chrome is what is checked.
  */
 
@@ -53,7 +56,18 @@ enum ShellSnapshots {
         try? await Task.sleep(for: .milliseconds(100))
       }
       try? await Task.sleep(for: .seconds(3))
+      /* Steps that edit (`send`, `tool`) run only in the check's own copy of the General template
+       * (`PLATYPUS_SCRATCH_DOCUMENT`, see `wm_apple_ios_launcher.mm`): a document saves itself,
+       * and a script must never change someone's work. */
+      let path = wm_apple_ios_document_url()?.path ?? ""
+      let scratch = path.contains("/platypus-scratch/")
+      WM_native_ui_log("snapshot", "script in \(scratch ? "scratch document" : "a person's document") \((path as NSString).lastPathComponent)")
       for step in steps {
+        let verb = step.split(separator: " ").first.map(String.init) ?? ""
+        if !scratch && ["send", "tool"].contains(verb) {
+          WM_native_ui_log("snapshot", "refused outside the scratch document: \(step)")
+          continue
+        }
         await run(step)
       }
       WM_native_ui_log("snapshot", "script done")

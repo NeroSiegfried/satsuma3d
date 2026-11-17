@@ -311,6 +311,77 @@ static UIDocumentCreationIntent const launcher_template_intent = @"template";
 static UIDocumentCreationIntent const launcher_general_intent = @"general";
 
 /**
+ * A launch for checks (`PLATYPUS_SCRATCH_DOCUMENT` in the environment, set by a developer's
+ * scripted launch, see `Snapshots.swift`) works in a fresh copy of the General template in the
+ * app's temporary folder, never in the person's document: its scripts edit, and a document saves
+ * itself. Its bookmark is not kept, so the next ordinary launch continues in the person's
+ * document, and that launch deletes the copy and its auto-save.
+ */
+static NSString *const launcher_scratch_name = @"PlatypusCheck";
+
+static NSURL *launcherScratchFolder()
+{
+  return [NSURL fileURLWithPath:[NSTemporaryDirectory()
+                                    stringByAppendingPathComponent:@"platypus-scratch"]
+                    isDirectory:YES];
+}
+
+/** Remove the copy and the auto-saves Blender kept of it (named after it, see
+ * #wm_apple_ios_autosave_location). */
+static void launcherScratchRemove()
+{
+  NSFileManager *files = NSFileManager.defaultManager;
+  [files removeItemAtURL:launcherScratchFolder() error:nil];
+  NSURL *support = [files URLsForDirectory:NSApplicationSupportDirectory
+                                 inDomains:NSUserDomainMask]
+                       .firstObject;
+  NSURL *blender = [support URLByAppendingPathComponent:@"Blender" isDirectory:YES];
+  NSString *prefix = [launcher_scratch_name stringByAppendingString:@"_"];
+  for (NSURL *version in [files contentsOfDirectoryAtURL:blender
+                              includingPropertiesForKeys:nil
+                                                 options:0
+                                                   error:nil])
+  {
+    NSURL *autosave = [version URLByAppendingPathComponent:@"datafiles/autosave" isDirectory:YES];
+    for (NSURL *item in [files contentsOfDirectoryAtURL:autosave
+                             includingPropertiesForKeys:nil
+                                                options:0
+                                                  error:nil])
+    {
+      if ([item.lastPathComponent hasPrefix:prefix]) {
+        [files removeItemAtURL:item error:nil];
+      }
+    }
+  }
+}
+
+/** A new copy of the General template, replacing any earlier one, or nil. */
+static NSURL *launcherScratchCreate()
+{
+  launcherScratchRemove();
+  NSURL *seed = nil;
+  for (NSDictionary *item in wm_apple_ios_document_templates()) {
+    if ([item[@"id"] isEqual:@"general"]) {
+      seed = item[@"url"];
+      break;
+    }
+  }
+  NSFileManager *files = NSFileManager.defaultManager;
+  NSURL *folder = launcherScratchFolder();
+  NSURL *url = [folder
+      URLByAppendingPathComponent:[launcher_scratch_name stringByAppendingString:@".blend"]];
+  if (!seed || ![files createDirectoryAtURL:folder
+                    withIntermediateDirectories:YES
+                                     attributes:nil
+                                          error:nil] ||
+      ![files copyItemAtURL:seed toURL:url error:nil])
+  {
+    return nil;
+  }
+  return url;
+}
+
+/**
  * The document launcher, in the app's first window, shown at once on launch while Blender starts
  * behind it. It owns the open document; Blender's window shows only while one is open.
  */
@@ -367,6 +438,8 @@ static NSURL *launcher_pending_url = nil;
   NSURL *_creationSource;
   /** A copy of the new document, kept until the browser has imported it. */
   NSURL *_creationBackup;
+  /** A launch for checks, in a copy of the General template, see #launcher_scratch_name. */
+  BOOL _scratch;
 #if defined(APPLE_TARGET_VISIONOS)
   NSObject<WMIOSLauncherOrnaments> *_ornaments;
 #endif
@@ -433,7 +506,17 @@ static NSURL *launcher_pending_url = nil;
   NSURL *url = [[launcher_pending_url retain] autorelease];
   [launcher_pending_url release];
   launcher_pending_url = nil;
-  if (url == nil) {
+  if (NSProcessInfo.processInfo.environment[@"PLATYPUS_SCRATCH_DOCUMENT"] != nil) {
+    /* Never the person's document, not even one the system asked to open: a check works in its
+     * own copy, or in nothing. */
+    _scratch = YES;
+    url = launcherScratchCreate();
+    NSLog(@"Platypus: scratch document %@", url.path ?: @"could not be created");
+  }
+  else {
+    launcherScratchRemove();
+  }
+  if (url == nil && !_scratch) {
     /* Continue in the document that was open when the app was left. */
     NSData *bookmark = [NSUserDefaults.standardUserDefaults dataForKey:launcher_open_document_key];
     BOOL stale = NO;
@@ -779,7 +862,8 @@ static NSURL *launcher_pending_url = nil;
                                      includingResourceValuesForKeys:nil
                                                       relativeToURL:nil
                                                               error:nil];
-  if (bookmark) {
+  /* A check's copy is never continued in: the next launch opens the person's document. */
+  if (bookmark && !_scratch) {
     [NSUserDefaults.standardUserDefaults setObject:bookmark forKey:launcher_open_document_key];
   }
   /* Blender has loaded the file: show it. */

@@ -41,6 +41,9 @@ enum ShellMetrics {
   static let padSize = CGSize(width: 258, height: 210)
   /** The number pad with its keys at their narrowest, 45 points: 4 × 45 + 3 × 6 + 16. */
   static let padMinWidth: CGFloat = 214
+  /** The open actions bar at its narrowest that still works: its two circles and one action
+   * (42 + 42 + 48). Folded pills beside it become icons before it gets less, see rule 9. */
+  static let barMinWidth: CGFloat = 132
   /** The Item card's header and one row: less room than this and it shows as its pill. */
   static let itemMinHeight: CGFloat = 92
 }

@@ -405,8 +405,8 @@ struct PropertiesPanel: View {
 
 /**
  * The Properties editor's tabs as Blender draws them: a column of icons at its leading edge, in
- * Blender's order with a gap between its groups, the active one in the panels' lighter grey
- * joining the content beside it (the accent in glass). The column scrolls where the tabs do not
+ * Blender's order with a gap between its groups, on Blender's darker navigation-bar grey, the
+ * active one in the editor's grey joining the content beside it (the accent in glass). The column scrolls where the tabs do not
  * fit, and brings the active tab into view when it appears and whenever the tab or the tabs
  * change (ROUND5 7B, report 28). A hold names a tab.
  */
@@ -443,6 +443,8 @@ struct PropertiesTabColumn: View {
       }
     }
     .frame(width: Self.width)
+    .frame(maxHeight: .infinity, alignment: .top)
+    .background(glass ? Color.clear : ShellStyle.navigationBar)
     .accessibilityElement(children: .contain)
     .accessibilityLabel("Tabs")
   }
@@ -470,7 +472,7 @@ struct PropertiesTabColumn: View {
       }
       .foregroundStyle(selected && glass ? Color.white : .primary)
       .frame(width: 36, height: 36)
-      .background(selected ? (glass ? Color.accentColor : ShellStyle.panel) : .clear, in: shape)
+      .background(selected ? (glass ? Color.accentColor : ShellStyle.region) : .clear, in: shape)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)

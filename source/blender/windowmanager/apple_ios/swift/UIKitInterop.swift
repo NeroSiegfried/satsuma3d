@@ -532,6 +532,9 @@ enum ShellStyle: String {
    * and the tooltips. */
   static let region = Color(red: 0x30 / 255, green: 0x30 / 255, blue: 0x30 / 255)
   static let panel = Color(red: 0x3d / 255, green: 0x3d / 255, blue: 0x3d / 255)
+  /** The Properties editor's tab column (its navigation bar, drawn with the sidebars'
+   * `tab_back`, `resources.cc`), darker than the editor so the active tab joins the content. */
+  static let navigationBar = Color(red: 0x18 / 255, green: 0x18 / 255, blue: 0x18 / 255)
   static let outline = Color(red: 0x24 / 255, green: 0x24 / 255, blue: 0x24 / 255)
   static let selection = Color(red: 0x47 / 255, green: 0x72 / 255, blue: 0xb3 / 255)
   static let tooltip = Color(red: 0x19 / 255, green: 0x19 / 255, blue: 0x19 / 255)

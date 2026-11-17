@@ -294,7 +294,8 @@ enum ShellLayout {
    *    card. A slot is where a view stands, anchored at its bottom-leading corner.
    * 7. With nothing in the row, the first shelf rests on the row's content line.
    * 8. The held action's name stands above the bar, the strip and the pad.
-   * 9. While the pills and their gaps are wider than the lane, the last named pill becomes a
+   * 9. While the pills and their gaps are wider than the lane, or leave the open actions bar
+   *    less than #ShellMetrics.barMinWidth, the last named pill becomes a
    *    circle with its icon alone: Item, then the operation, then Actions (decision 31). The
    *    number pad narrows with the lane, and below its narrowest it is centred on the view.
    */
@@ -318,7 +319,13 @@ enum ShellLayout {
     func pillsWidth() -> CGFloat {
       pills.reduce(0) { $0 + $1.width } + gap * CGFloat(max(0, pills.count - 1))
     }
-    for piece in [BottomStackPill.item, .operation, .actions] where pillsWidth() > input.laneWidth {
+    /* Also while the open bar beside them would get less than its narrowest. */
+    func crowded() -> Bool {
+      let width = pillsWidth()
+      return width > input.laneWidth ||
+        (input.actions == .open && !pills.isEmpty && input.laneWidth - width - gap < M.barMinWidth)
+    }
+    for piece in [BottomStackPill.item, .operation, .actions] where crowded() {
       guard let index = pills.firstIndex(where: { $0.piece == piece }) else { continue }
       pills[index].width = M.buttonHeight
       frames.iconPills.insert(piece)
