@@ -57,6 +57,10 @@ struct ItemCard: View {
   var pill = false
   /** At most this tall, with its header: the rows scroll beyond it. */
   var maxHeight: CGFloat = 300
+  /** The pill as a circle with its icon alone, the lane having no room for its name (decision 31). */
+  var iconOnly = false
+  /** The pill's name while it is held, nil after: the row shows it above. */
+  var named: (String?) -> Void = { _ in }
   @State private var rowsHeight: CGFloat = 0
 
   static func rows(_ model: PanelsModel, tool: String) -> [ItemRow] {
@@ -74,18 +78,15 @@ struct ItemCard: View {
 
   var body: some View {
     let rows = Self.rows(model, tool: tool)
-    if pill {
-      Button {
-        if folded {
-          withAnimation(.easeOut(duration: 0.18)) { folded = false }
-        }
-        else {
-          /* Open, but without room: say why rather than do nothing. */
-          ShellModel.current?.messages.say(NumberPadState.shared.shown ?
-            "The Item card opens when the number pad closes" : "No room above the bottom row for the Item card",
-            level: "info")
-        }
-      } label: {
+    if pill && iconOnly {
+      BottomStackIconPill(systemImage: "number", image: BlenderIcon.image("OBJECT_DATA"), name: "Item", named: named,
+                          action: unfold)
+        .panelGlass(interactive: true, in: Capsule())
+        .layoutZone("item")
+        .accessibilityIdentifier("blender.item.folded")
+    }
+    else if pill {
+      Button(action: unfold) {
         Label("Item", systemImage: "chevron.up")
           .labelStyle(.titleAndIcon)
           .font(.subheadline)
@@ -138,6 +139,19 @@ struct ItemCard: View {
       .panelGlass(in: ShellShape(glassRadius: 20))
       .layoutZone("item")
       .accessibilityIdentifier("blender.item")
+    }
+  }
+
+  /** The pill's tap: open the card, or say why it cannot open. */
+  private func unfold() {
+    if folded {
+      withAnimation(.easeOut(duration: 0.18)) { folded = false }
+    }
+    else {
+      /* Open, but without room: say why rather than do nothing. */
+      ShellModel.current?.messages.say(NumberPadState.shared.shown ?
+        "The Item card opens when the number pad closes" : "No room above the bottom row for the Item card",
+        level: "info")
     }
   }
 

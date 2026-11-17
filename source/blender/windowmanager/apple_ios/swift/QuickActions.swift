@@ -39,6 +39,8 @@ enum ShellMetrics {
   static let itemPillWidth: CGFloat = 84
   /** The number pad as built: 4 × 56 + 3 × 6 + 16 by 4 × 44 + 3 × 6 + 16. */
   static let padSize = CGSize(width: 258, height: 210)
+  /** The number pad with its keys at their narrowest, 45 points: 4 × 45 + 3 × 6 + 16. */
+  static let padMinWidth: CGFloat = 214
   /** The Item card's header and one row: less room than this and it shows as its pill. */
   static let itemMinHeight: CGFloat = 92
 }
@@ -335,6 +337,58 @@ struct BarCircleButton: View {
   }
 }
 
+/**
+ * A pill of the bottom row as a circle with its icon alone, where the lane has no room for its
+ * name (#ShellLayout.bottomStack, rule 9): a tap does what the pill does, a hold names it above
+ * the row, as the tool rail names its tools, and lifting after the hold does nothing more.
+ */
+struct BottomStackIconPill: View {
+  let systemImage: String
+  var image: UIImage? = nil
+  let name: String
+  /** Its name while held, nil after. */
+  let named: (String?) -> Void
+  let action: () -> Void
+  @State private var heldToName = false
+
+  var body: some View {
+    Button {
+      if heldToName {
+        heldToName = false
+        return
+      }
+      action()
+    } label: {
+      Group {
+        if let image {
+          Image(uiImage: image).renderingMode(.template).resizable().scaledToFit().frame(width: 22, height: 22)
+        }
+        else {
+          Image(systemName: systemImage).font(.system(size: 17, weight: .semibold))
+        }
+      }
+      .foregroundStyle(.primary)
+      .frame(width: ShellMetrics.buttonHeight, height: ShellMetrics.buttonHeight)
+      .contentShape(Circle())
+    }
+    .buttonStyle(.plain)
+    .simultaneousGesture(
+      LongPressGesture(minimumDuration: 0.4, maximumDistance: 12)
+        .onEnded { _ in
+          Haptics.selection()
+          heldToName = true
+          named(name)
+        }
+        .sequenced(before: DragGesture(minimumDistance: 0))
+        .onEnded { _ in
+          named(nil)
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { heldToName = false }
+        })
+    .help(name)
+    .accessibilityLabel(name)
+  }
+}
+
 /** Highlights a control on the bar while it is pressed. */
 struct QuickActionPressStyle<S: Shape>: ButtonStyle {
   let shape: S
@@ -372,8 +426,9 @@ struct QuickActionsRow: View {
   /** The 3D View's sidebar Item tab, see #ItemCard. */
   let item: PanelsModel
   @AppStorage(ItemCardTools.shownKey) private var itemCardEnabled = true
-  /** The held action's name and its middle in the bar, shown above the bar as Blender's tooltip. */
-  @State private var heldName: (text: String, x: CGFloat)?
+  /** The held action's name and its middle, in the bar's coordinates or (a pill's) the row's, shown
+   * above the row as Blender's tooltip. */
+  @State private var heldName: (text: String, x: CGFloat, inRow: Bool)?
   @AppStorage(ShellStyle.key) private var style = ShellStyle.blender.rawValue
   /** What is open, held by the window's model so a script can drive it, see #BottomStackState. */
   private var stack: BottomStackState { model.stack }
@@ -478,10 +533,11 @@ struct QuickActionsRow: View {
         PanelGlassGroup(spacing: 2) {
           ZStack(alignment: .topLeading) {
             if let frame = frames.actions {
-              actionsMorph(frame: frame, itemsWidth: frame.width - actionsBarChrome)
+              actionsMorph(frame: frame, itemsWidth: frame.width - actionsBarChrome,
+                           icon: frames.iconPills.contains(.actions))
             }
             if let title = redoTitle, let frame = frames.operation {
-              redoMorph(title: title, frame: frame)
+              redoMorph(title: title, frame: frame, icon: frames.iconPills.contains(.operation))
             }
             if itemShown, let slot = frames.item {
               if frames.itemOpen {
@@ -494,7 +550,10 @@ struct QuickActionsRow: View {
                   .transition(.opacity)
               }
               else {
-                ItemCard(model: item, tool: model.activeTool, folded: Bindable(stack).itemFolded, pill: true)
+                ItemCard(model: item, tool: model.activeTool, folded: Bindable(stack).itemFolded, pill: true,
+                         iconOnly: frames.iconPills.contains(.item)) { name in
+                  heldName = name.map { ($0, slot.midX, true) }
+                }
                   .placed(in: slot)
                   .transition(.opacity)
               }
@@ -502,7 +561,7 @@ struct QuickActionsRow: View {
             /* While an operation waits: the number pad, for typing a value into it. The
              * operation's own words (a move's values) are at the top, see #ToolRails. */
             if let slot = frames.pad {
-              NumberPad(model: model)
+              NumberPad(model: model, width: slot.width)
                 .layoutZone("number pad")
                 .placed(in: slot, alignment: .bottomLeading)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -510,7 +569,7 @@ struct QuickActionsRow: View {
             /* The held action's name, as the tool rail names its tools: above everything else in
              * the row, clear of the finger and of the last operation above the bar. */
             if let heldName {
-              let barX = frames.actions?.minX ?? band.laneLeading
+              let barX = heldName.inRow ? 0 : frames.actions?.minX ?? band.laneLeading
               ShellNameLabel(text: heldName.text)
                 .alignmentGuide(.leading) { d in
                   d.width / 2 - min(max(barX + heldName.x, d.width / 2 + 8), width - d.width / 2 - 8)
@@ -584,6 +643,11 @@ struct QuickActionsRow: View {
     }
   }
 
+  /** A pill's name while held, above its middle in the row, see #BottomStackIconPill. */
+  private func namePill(_ frame: CGRect) -> (String?) -> Void {
+    { name in heldName = name.map { ($0, frame.midX, true) } }
+  }
+
   /* -------------------------------------------------------------------- */
   /* Actions */
 
@@ -603,7 +667,7 @@ struct QuickActionsRow: View {
             .frame(width: 1, height: 22)
         }
         QuickActionBarItem(action: action, model: model) { text, x in
-          heldName = text.map { ($0, x) }
+          heldName = text.map { ($0, x, false) }
         }
       }
     }
@@ -619,7 +683,7 @@ struct QuickActionsRow: View {
    * the viewport, and the close button at its leading end folds it back into the pill. \a frame
    * is from #ShellLayout.bottomStack.
    */
-  private func actionsMorph(frame: CGRect, itemsWidth: CGFloat) -> some View {
+  private func actionsMorph(frame: CGRect, itemsWidth: CGFloat, icon: Bool) -> some View {
     ZStack(alignment: .leading) {
       if stack.actionsOpen {
         HStack(spacing: 0) {
@@ -641,6 +705,14 @@ struct QuickActionsRow: View {
         .padding(.horizontal, 4)
         .frame(height: frame.height)
         .transition(.opacity)
+      }
+      else if icon {
+        /* No room for its name in the lane: a circle, which a hold names. */
+        BottomStackIconPill(systemImage: "ellipsis", name: "Actions", named: namePill(frame), action: toggleActions)
+          .accessibilityLabel("Show Quick Actions")
+          .accessibilityValue("Collapsed")
+          .accessibilityIdentifier("blender.quick-actions.toggle")
+          .transition(.opacity)
       }
       else {
         Button(action: toggleActions) {
@@ -701,7 +773,7 @@ struct QuickActionsRow: View {
    * The pill and the strip are one glass shape, so opening grows the pill's frame into the strip's
    * and closing folds it back, while their contents cross over inside it.
    */
-  private func redoMorph(title: String, frame: CGRect) -> some View {
+  private func redoMorph(title: String, frame: CGRect, icon: Bool) -> some View {
     ZStack(alignment: .leading) {
       if redoOpen {
         RedoContent(model: redo, close: closeRedo, widthChanged: redoWidthChanged)
@@ -709,6 +781,22 @@ struct QuickActionsRow: View {
           .frame(width: frame.width, height: frame.height)
           .accessibilityIdentifier("blender.redo.strip")
           .transition(.opacity)
+      }
+      else if icon {
+        /* No room for its name in the lane: a circle, which a hold names. */
+        BottomStackIconPill(systemImage: "slider.horizontal.3", name: title, named: namePill(frame)) {
+          withAnimation(animation) { stack.redoOpenID = redo.operationKey }
+        }
+        .accessibilityLabel("Adjust \(redo.title)")
+        .accessibilityHint("Show last operation controls")
+        .accessibilityIdentifier("blender.redo.collapsed")
+        .transition(.opacity)
+        .background {
+          /* Measured ahead of opening, so the strip grows straight to its width. */
+          RedoContent(model: redo, close: closeRedo, widthChanged: redoWidthChanged)
+            .frame(width: 1, height: 1)
+            .hidden()
+        }
       }
       else {
         Button {
@@ -764,6 +852,12 @@ final class NumberPadState {
 
 struct NumberPad: View {
   let model: ShellModel
+  /** The slot's width, which its keys share: 56 points each at most, 45 at least, see
+   * #ShellLayout.bottomStack (rule 9). */
+  var width = ShellMetrics.padSize.width
+
+  /** Four keys, three gaps of 6 and the margins of 8. */
+  private var keyWidth: CGFloat { max(45, min(56, ((width - 16 - 18) / 4).rounded(.down))) }
 
   private let rows: [[(String, String)]] = [
     [("7", "SEVEN"), ("8", "EIGHT"), ("9", "NINE"), ("⌫", "BACK_SPACE")],
@@ -789,7 +883,7 @@ struct NumberPad: View {
             } label: {
               Text(title)
                 .font(.system(size: 20, weight: .medium))
-                .frame(width: 56, height: 44)
+                .frame(width: keyWidth, height: 44)
                 .background(Color.primary.opacity(0.08), in: ShellShape(glassRadius: 12))
                 .contentShape(Rectangle())
             }

@@ -151,4 +151,14 @@ create = [args for line, args in calls(bridge, 'protocol::CreateNumber')]
 check(any('precision' in args for args in create) and 'ui_but_calc_float_precision' in bridge,
       "The bridge sends Blender's precision for each number")
 
+# 6E: in a lane too narrow for them, the pills become circles and the number pad's keys narrow
+# (decision 31): the rule is in the layout function, and the pad takes its width from its slot.
+layout = code['ShellLayout.swift']
+check('iconPills' in layout and 'padMinWidth' in layout,
+      "bottomStack shortens the pills and narrows the number pad in a narrow lane (ROUND5 6E)")
+pad = code['QuickActions.swift']
+pad = pad[pad.index('struct NumberPad'):]
+check(not re.search(r'\.frame\(width:\s*56\b', pad) and 'NumberPad(model: model, width:' in code['QuickActions.swift'],
+      "The number pad's keys take their width from its slot, not a literal 56 (ROUND5 6E)")
+
 print('PASS: native shell sources ' + json.dumps(checks))

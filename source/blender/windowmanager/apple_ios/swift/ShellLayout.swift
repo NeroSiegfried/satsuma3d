@@ -217,6 +217,11 @@ struct BottomStackInput: Equatable {
   var pad = false
 }
 
+/** A piece of the bottom stack that can stand in the row as a pill. */
+enum BottomStackPill: Hashable {
+  case actions, operation, item
+}
+
 /** Where each piece of the bottom stack stands, in the row's coordinates: the origin at the
  * top-leading corner of the row, y negative above it. */
 struct BottomStackFrames: Equatable {
@@ -227,10 +232,13 @@ struct BottomStackFrames: Equatable {
   /** The Item pill; or, when #itemOpen, the slot the card stands in. */
   var item: CGRect?
   var itemOpen = false
-  /** The slot the number pad stands in. */
+  /** The slot the number pad stands in: its keys narrow with it, see #NumberPad. */
   var pad: CGRect?
   /** The held action's name, its centre. */
   var nameY: CGFloat = 0
+  /** Pills shown as a circle with their icon alone, the lane being too narrow for their names
+   * (rule 9); a hold names them. */
+  var iconPills: Set<BottomStackPill> = []
 }
 
 @MainActor
@@ -286,6 +294,9 @@ enum ShellLayout {
    *    card. A slot is where a view stands, anchored at its bottom-leading corner.
    * 7. With nothing in the row, the first shelf rests on the row's content line.
    * 8. The held action's name stands above the bar, the strip and the pad.
+   * 9. While the pills and their gaps are wider than the lane, the last named pill becomes a
+   *    circle with its icon alone: Item, then the operation, then Actions (decision 31). The
+   *    number pad narrows with the lane, and below its narrowest it is centred on the view.
    */
   nonisolated static func bottomStack(_ input: BottomStackInput) -> BottomStackFrames {
     typealias M = ShellMetrics
@@ -298,18 +309,32 @@ enum ShellLayout {
     let shelves = stripAbove ? gap + M.stripHeight : 0
     frames.itemOpen = input.item == .open && !input.pad && input.headroom - shelves - gap >= M.itemMinHeight
 
-    /* Rule 3: the pills. */
-    var x = input.laneLeading
-    func pill(_ width: CGFloat) -> CGRect {
-      let rect = CGRect(x: x, y: (M.rowHeight - M.buttonHeight) / 2, width: width, height: M.buttonHeight)
-      x += width + gap
-      return rect
+    /* Rule 3: the pills, in order; rule 9: named while they fit the lane, else icons, the last
+     * first. */
+    var pills: [(piece: BottomStackPill, width: CGFloat)] = []
+    if input.actions == .folded { pills.append((.actions, M.actionsPillWidth)) }
+    if input.operation == .folded { pills.append((.operation, input.operationPillWidth)) }
+    if input.item == .folded || (input.item == .open && !frames.itemOpen) { pills.append((.item, M.itemPillWidth)) }
+    func pillsWidth() -> CGFloat {
+      pills.reduce(0) { $0 + $1.width } + gap * CGFloat(max(0, pills.count - 1))
     }
-    if input.actions == .folded { frames.actions = pill(M.actionsPillWidth) }
-    if input.operation == .folded { frames.operation = pill(input.operationPillWidth) }
-    if input.item == .folded || (input.item == .open && !frames.itemOpen) { frames.item = pill(M.itemPillWidth) }
+    for piece in [BottomStackPill.item, .operation, .actions] where pillsWidth() > input.laneWidth {
+      guard let index = pills.firstIndex(where: { $0.piece == piece }) else { continue }
+      pills[index].width = M.buttonHeight
+      frames.iconPills.insert(piece)
+    }
+    var x = input.laneLeading
+    for pill in pills {
+      let rect = CGRect(x: x, y: (M.rowHeight - M.buttonHeight) / 2, width: pill.width, height: M.buttonHeight)
+      x += pill.width + gap
+      switch pill.piece {
+        case .actions: frames.actions = rect
+        case .operation: frames.operation = rect
+        case .item: frames.item = rect
+      }
+    }
     let pillsEnd = x
-    let pills = pillsEnd > input.laneLeading
+    let inRow = pillsEnd > input.laneLeading
 
     /* Centred on the view, kept between \a start and \a end. */
     func centred(_ width: CGFloat, _ start: CGFloat, _ end: CGFloat) -> CGFloat {
@@ -331,7 +356,7 @@ enum ShellLayout {
 
     /* Rules 6 and 7: the shelves, from the top of what is in the row. */
     let barInRow = input.actions == .open || (input.operation == .open && !stripAbove)
-    var base = barInRow ? barY - gap : pills ? (M.rowHeight - M.buttonHeight) / 2 - gap : barY + M.barHeight
+    var base = barInRow ? barY - gap : inRow ? (M.rowHeight - M.buttonHeight) / 2 - gap : barY + M.barHeight
     if stripAbove {
       let width = max(0, min(input.operationWidth, 1000, input.laneWidth))
       frames.operation = CGRect(x: centred(width, input.laneLeading, laneEnd), y: base - M.stripHeight,
@@ -339,9 +364,13 @@ enum ShellLayout {
       base -= M.stripHeight + gap
     }
     if input.pad {
+      /* Rule 9: its keys narrow to the lane, down to their narrowest; below that it is centred on
+       * the view, as wide as its narrowest. */
+      let width = max(M.padMinWidth, min(M.padSize.width, input.laneWidth))
       let leading = frames.actions.map { input.actions == .open ? $0.minX : input.laneLeading } ?? input.laneLeading
-      let padX = max(input.laneLeading, min(leading, laneEnd - M.padSize.width))
-      frames.pad = CGRect(x: padX, y: base - M.padSize.height, width: M.padSize.width, height: M.padSize.height)
+      let padX = input.laneWidth < M.padMinWidth ? max(0, (input.width - width) / 2) :
+        max(input.laneLeading, min(leading, laneEnd - width))
+      frames.pad = CGRect(x: padX, y: base - M.padSize.height, width: width, height: M.padSize.height)
       base -= M.padSize.height + gap
     }
     if frames.itemOpen {
@@ -487,7 +516,8 @@ enum ShellLayout {
               var stack: [(String, CGRect)] = []
               if let rect = frames.actions { stack.append(("actions", inWindow(rect))) }
               if let rect = frames.operation { stack.append(("operation", inWindow(rect))) }
-              if let rect = frames.pad { stack.append(("number pad", inWindow(standing(rect, ShellMetrics.padSize)))) }
+              /* The pad is its slot: its keys take the slot's width. */
+              if let rect = frames.pad { stack.append(("number pad", inWindow(rect))) }
               if let rect = frames.item {
                 stack.append(("item", inWindow(frames.itemOpen ? standing(rect, stackCase.card ?? rect.size) : rect)))
                 if frames.itemOpen && rect.height < ShellMetrics.itemMinHeight {
