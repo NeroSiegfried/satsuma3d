@@ -20,6 +20,8 @@
  * - `op <IDNAME> [name=value ...]`: run a Blender operator, as a button runs it;
  * - `pad open|close`: the number pad of a waiting operation;
  * - `panel <key end> open|close`: a Properties panel, such as `panel PT_surface open`;
+ * - `popover shading|close`: the 3D View's shading popover;
+ * - `prefs open|close`: Preferences;
  * - `wait <seconds>`;
  * - `shot <name>`: every window of the scene, drawn into `tmp/shots/<name>.png`.
  *
@@ -166,6 +168,20 @@ enum ShellSnapshots {
           break
         }
         properties.setOpen(panel, words[1] == "open")
+        try? await Task.sleep(for: .seconds(1))
+      case "popover":
+        /* The 3D View's shading popover, as its header button opens it: `popover shading|close`. */
+        if words.first == "shading" { SwiftScenePanels.current?.showShadingTab("SHADING") }
+        ShellModel.current?.shadingOpen = words.first == "shading"
+        try? await Task.sleep(for: .seconds(1))
+      case "prefs":
+        /* Preferences, as Settings opens them: `prefs open|close`. */
+        if words.first == "open" {
+          SqueezePalette.shared.showSettings?()
+        }
+        else {
+          scene?.windows.first?.rootViewController?.presentedViewController?.dismiss(animated: false)
+        }
         try? await Task.sleep(for: .seconds(1))
       case "wait":
         try? await Task.sleep(for: .seconds(Double(words.first ?? "") ?? 0.5))
