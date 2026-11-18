@@ -443,6 +443,24 @@ for icon, where, line in sorted(artwork_allowed - artwork_uses):
 check(not (artwork_allowed - artwork_uses), "Every artwork line of branding_allowed.txt is still found in its file")
 
 
+# 9G.3 (decision 69): the UV Editor marks the selection in the theme's colours, which Blender sends
+# as its UV Editor reads them; none is a constant in the shell. It follows UV Sync Selection, which
+# its ⋯ menu switches.
+image_editor_text = (SWIFT / 'ImageEditor.swift').read_text(encoding='utf-8')
+image_native_text = (ROOT / 'source/blender/editors/space_image/image_native.cc').read_text(encoding='utf-8')
+uv_drawing = image_editor_text[image_editor_text.index('private func rebuildUVPath'):
+                               image_editor_text.index('/** The selected vertices')] + \
+    image_editor_text[image_editor_text.index('struct UVTheme'):image_editor_text.index('extension CGPoint')]
+check(all(('"%s"' % key) in image_native_text and ('"%s"' % key) in image_editor_text
+          for key in ('face_select', 'active', 'wire_edit', 'edge_select', 'vertex_select', 'seam')) and
+      'get_color_type_4fv' in image_native_text,
+      "9G.3: the UV Editor's colours come from Blender's theme, sent with the image view")
+check(not re.search(r'UIColor\((?:red|white):\s*[0-9.]', uv_drawing),
+      "9G.3: no UV selection colour is a constant in the shell")
+check('UV Sync Selection' in image_editor_text and 'tool_settings.use_uv_select_sync' in image_editor_text and
+      'uvedit_face_visible_test(scene, face)' in image_native_text,
+      "9G.3: the UV Editor follows UV Sync Selection, which its menu switches")
+
 # 8C: About shows the licences the app carries, never a copy typed into the code; every row has
 # what VoiceOver reads; it is reached from the launcher, Settings and the app menu.
 about_text = (SWIFT / 'AboutSheet.swift').read_text(encoding='utf-8')

@@ -71,8 +71,8 @@ final class ImageEditorModel {
   private(set) var imageSize: CGSize = .zero
   /** The image the picture is of. */
   private(set) var pictureName = ""
-  /** UV edges, two points each, in UV space. */
-  private(set) var uvs: [Float] = []
+  /** The UVs as the UV Editor draws them, with the selection (ROUND5 9G.3). */
+  private(set) var uvs = UVOverlay()
   /** Bumped to fit the image in the view, as when another one shows. */
   private(set) var fitRequest = 0
   /** Bumped to show the image's pixels one to one on the screen. */
@@ -129,15 +129,28 @@ final class ImageEditorModel {
     }
   }
 
-  /** Why the UV Editor has nothing to draw, in one line, or nil: Blender's `uv_state`. */
+  /** Why the UV Editor has nothing to draw, in one line, or nil: Blender's `uv_state`. Also when a
+   * very large mesh is drawn only in part. */
   var uvAbsence: String? {
     guard mode == .uv, let state = snapshot?.string("uv_state") else { return nil }
     switch state {
       case "no_map": return "This object has no UV map"
       case "no_mesh": return "Select a mesh to see its UVs"
-      default: return nil
+      default: return uvs.capped ? "Too many faces: only part of the UVs is shown" : nil
     }
   }
+
+  /** The scene's UV Sync Selection, which decides what the UV Editor shows (ROUND5 9G.3). */
+  var uvSync: Bool { snapshot?.bool("uv_sync") == true }
+
+  /** Turn the scene's UV Sync Selection on or off, as the UV Editor's header does. */
+  func setUVSync(_ on: Bool) {
+    guard on != uvSync else { return }
+    Operators.run("WM_OT_context_toggle", ["data_path": .text("tool_settings.use_uv_select_sync")])
+  }
+
+  /** The theme's colours for the UVs, as Blender's UV Editor reads them; Blender sends them. */
+  var uvTheme: UVTheme { UVTheme(snapshot?.dict("uv_theme"), selectMode: snapshot?.string("uv_select_mode")) }
 
   func setShown(_ shown: Bool) {
     guard shown != self.shown else { return }
@@ -216,11 +229,10 @@ final class ImageEditorModel {
       imageSize = size
       makePicture()
     }
-    var segments: UnsafeMutablePointer<Float>?
-    var count: Int32 = 0
-    if WM_native_ui_image_take_uvs(&segments, &count) {
-      uvs = segments.map { Array(UnsafeBufferPointer(start: $0, count: Int(count))) } ?? []
-      free(segments)
+    var taken = WMNativeImageUVs()
+    if WM_native_ui_image_take_uvs(&taken) {
+      uvs = UVOverlay(taken)
+      WM_native_ui_image_uvs_free(&taken)
     }
   }
 
@@ -479,6 +491,14 @@ struct ImageEditorPanel: View {
       }
       if model.mode == .uv {
         Section {
+          /* What the view shows, as Blender's header switch: every face, marked by the mesh's
+           * selection, or only the selected faces (ROUND5 9G.3). */
+          Toggle(isOn: Binding(get: { model.uvSync }, set: { model.setUVSync($0) })) {
+            Label("UV Sync Selection", systemImage: "arrow.triangle.2.circlepath")
+          }
+          .accessibilityIdentifier("blender.image.uv_sync")
+        }
+        Section {
           /* Selecting and moving UVs by hand is Blender's own UV Editor's (ROUND5 9B.6, decision
            * 55): its UV Editing workspace, added from the startup file where this one has none. */
           Button("Edit UVs in Desktop Interface", systemImage: "macwindow") {
@@ -673,7 +693,7 @@ private struct ImageCanvas: UIViewRepresentable {
     view.show(picture: square ? nil : model.picture, size: square ? ImageCanvasView.unitSquare : model.imageSize,
               checker: model.channels == .colorAlpha)
     view.show(grid: square)
-    view.show(uvs: model.drawsUVs ? model.uvs : [])
+    view.show(uvs: model.drawsUVs ? model.uvs : UVOverlay(), theme: model.uvTheme)
     view.fit(request: model.fitRequest)
     view.actualSize(request: model.actualSizeRequest)
     view.obscured = UIEdgeInsets(top: obscured.top, left: obscured.leading, bottom: obscured.bottom,
@@ -695,11 +715,21 @@ final class ImageCanvasView: UIView, UIScrollViewDelegate {
   private let gridLayer = CAShapeLayer()
   private let squareLayer = CAShapeLayer()
   private var gridShown = false
+  /* The UVs, bottom to top as Blender's UV Editor draws them (ROUND5 9G.3): the selected faces'
+   * fill, the active face's, every edge's dark outline, the edges, the seams, the selected edges
+   * and the selected vertices. */
+  private let faceLayer = CAShapeLayer()
+  private let activeFaceLayer = CAShapeLayer()
+  private let outlineLayer = CAShapeLayer()
   private let uvLayer = CAShapeLayer()
+  private let seamLayer = CAShapeLayer()
+  private let selectedEdgeLayer = CAShapeLayer()
+  private let vertexLayer = CAShapeLayer()
+  private var uvTheme = UVTheme(nil, selectMode: nil)
   /** Behind the image, unzoomed. */
   private let checker = UIView()
   private var imageSize: CGSize = .zero
-  private var uvs: [Float] = []
+  private var uvs = UVOverlay()
   private var fitSeen = -1
   private var actualSizeSeen = 0
   /** Fitted, and kept so as the view changes size, until zoomed or panned. */
@@ -764,14 +794,16 @@ final class ImageCanvasView: UIView, UIScrollViewDelegate {
       content.layer.addSublayer(layer)
     }
 
-    uvLayer.fillColor = nil
-    uvLayer.strokeColor = UIColor(white: 1, alpha: 0.7).cgColor
-    uvLayer.shadowColor = UIColor.black.cgColor
-    uvLayer.shadowOpacity = 0.5
-    uvLayer.shadowRadius = 0.5
-    uvLayer.shadowOffset = .zero
-    uvLayer.actions = ["path": NSNull(), "lineWidth": NSNull(), "bounds": NSNull(), "position": NSNull()]
-    content.layer.addSublayer(uvLayer)
+    for layer in uvLayers {
+      layer.fillColor = nil
+      layer.lineJoin = .round
+      layer.lineCap = .round
+      layer.actions = ["path": NSNull(), "lineWidth": NSNull(), "bounds": NSNull(), "position": NSNull(),
+                       "fillColor": NSNull(), "strokeColor": NSNull(), "hidden": NSNull()]
+      content.layer.addSublayer(layer)
+    }
+    faceLayer.fillRule = .nonZero
+    outlineLayer.strokeColor = UIColor.black.cgColor
 
     doubleTap.addTarget(self, action: #selector(doubleTapped(_:)))
     doubleTap.numberOfTapsRequired = 2
@@ -890,7 +922,7 @@ final class ImageCanvasView: UIView, UIScrollViewDelegate {
     picture.frame = content.bounds
     gridLayer.frame = content.bounds
     squareLayer.frame = content.bounds
-    uvLayer.frame = content.bounds
+    for layer in uvLayers { layer.frame = content.bounds }
     scroll.contentSize = size
     scroll.zoomScale = scale
     updateZoomLimits()
@@ -927,9 +959,14 @@ final class ImageCanvasView: UIView, UIScrollViewDelegate {
     updateLineWidth()
   }
 
-  func show(uvs next: [Float]) {
-    guard next != uvs else { return }
+  private var uvLayers: [CAShapeLayer] {
+    [faceLayer, activeFaceLayer, outlineLayer, uvLayer, seamLayer, selectedEdgeLayer, vertexLayer]
+  }
+
+  func show(uvs next: UVOverlay, theme: UVTheme) {
+    guard next != uvs || theme != uvTheme else { return }
     uvs = next
+    uvTheme = theme
     rebuildUVPath()
   }
 
@@ -1032,28 +1069,76 @@ final class ImageCanvasView: UIView, UIScrollViewDelegate {
   }
 
   private func rebuildUVPath() {
-    let path = CGMutablePath()
     let w = CGFloat(imageSize.width), h = CGFloat(imageSize.height)
-    if w > 0, h > 0 {
-      var i = 0
-      while i + 3 < uvs.count {
-        path.move(to: CGPoint(x: CGFloat(uvs[i]) * w, y: (1 - CGFloat(uvs[i + 1])) * h))
-        path.addLine(to: CGPoint(x: CGFloat(uvs[i + 2]) * w, y: (1 - CGFloat(uvs[i + 3])) * h))
-        i += 4
-      }
+    let faces = CGMutablePath(), active = CGMutablePath(), all = CGMutablePath(), plain = CGMutablePath()
+    let seams = CGMutablePath(), selected = CGMutablePath()
+    func point(_ values: [Float], _ i: Int) -> CGPoint {
+      CGPoint(x: CGFloat(values[i]) * w, y: (1 - CGFloat(values[i + 1])) * h)
     }
-    uvLayer.path = path
-    uvLayer.isHidden = uvs.isEmpty
+    if w > 0, h > 0 {
+      var corner = 0
+      for (index, size) in uvs.faceSizes.enumerated() {
+        guard size > 2, (corner + size) * 2 <= uvs.faces.count else { break }
+        let path = index == uvs.activeFace ? active : faces
+        path.move(to: point(uvs.faces, corner * 2))
+        for k in 1..<size { path.addLine(to: point(uvs.faces, (corner + k) * 2)) }
+        path.closeSubpath()
+        corner += size
+      }
+      var vertexPoints = Set<CGPoint.HashablePoint>()
+      for e in 0..<min(uvs.flags.count, uvs.edges.count / 4) {
+        let a = point(uvs.edges, e * 4), b = point(uvs.edges, e * 4 + 2)
+        let flags = uvs.flags[e]
+        all.move(to: a)
+        all.addLine(to: b)
+        let target = flags & UVOverlay.selected != 0 ? selected : flags & UVOverlay.seam != 0 ? seams : plain
+        target.move(to: a)
+        target.addLine(to: b)
+        if flags & UVOverlay.seam != 0 && target !== seams {
+          seams.move(to: a)
+          seams.addLine(to: b)
+        }
+        if uvTheme.showsVertices {
+          if flags & UVOverlay.vertexA != 0 { vertexPoints.insert(.init(a)) }
+          if flags & UVOverlay.vertexB != 0 { vertexPoints.insert(.init(b)) }
+        }
+      }
+      vertexCentres = vertexPoints.map { CGPoint(x: $0.x, y: $0.y) }
+    }
+    faceLayer.path = faces
+    activeFaceLayer.path = active
+    outlineLayer.path = all
+    uvLayer.path = plain
+    seamLayer.path = seams
+    selectedEdgeLayer.path = selected
+    faceLayer.fillColor = uvTheme.faceSelect.cgColor
+    activeFaceLayer.fillColor = uvTheme.active.cgColor
+    uvLayer.strokeColor = uvTheme.edge.cgColor
+    seamLayer.strokeColor = uvTheme.seam.cgColor
+    selectedEdgeLayer.strokeColor = uvTheme.edgeSelect.cgColor
+    vertexLayer.fillColor = uvTheme.vertexSelect.cgColor
+    for layer in uvLayers { layer.isHidden = uvs.flags.isEmpty }
     updateLineWidth()
   }
+
+  /** The selected vertices, drawn as dots of a size on screen that stays as the view zooms. */
+  private var vertexCentres: [CGPoint] = []
 
   /** One point wide on screen, at any zoom. */
   private func updateLineWidth() {
     let scale = max(scroll.zoomScale, 0.0001)
     gridLayer.lineWidth = 1 / scale
     squareLayer.lineWidth = 1 / scale
-    uvLayer.lineWidth = 1 / scale
-    uvLayer.shadowRadius = 0.5 / scale
+    /* As Blender draws them: edges a point wide inside a dark outline, the selected ones over the
+     * rest, and the selected vertices as dots. */
+    for layer in [uvLayer, seamLayer, selectedEdgeLayer] { layer.lineWidth = 1.5 / scale }
+    outlineLayer.lineWidth = 3 / scale
+    let radius = 3 / scale
+    let dots = CGMutablePath()
+    for centre in vertexCentres {
+      dots.addEllipse(in: CGRect(x: centre.x - radius, y: centre.y - radius, width: radius * 2, height: radius * 2))
+    }
+    vertexLayer.path = dots
   }
 
   private func zoomDidChange() {
@@ -1173,3 +1258,90 @@ extension ImageEditorModel: HardwareKeyTarget {
 }
 
 /** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name The UVs and Their Selection
+ * What Blender sends of a mesh's UVs for the UV Editor (ROUND5 9G.3), `WM_native_ui_image_take_uvs`.
+ * \{ */
+
+/** Every edge drawn, with what it shows, and the selected faces for their fill. */
+struct UVOverlay: Equatable {
+  static let selected: UInt8 = 1 << 0
+  static let seam: UInt8 = 1 << 1
+  static let vertexA: UInt8 = 1 << 2
+  static let vertexB: UInt8 = 1 << 3
+
+  /** Two points each, in UV space, and a flag for each edge. */
+  var edges: [Float] = []
+  var flags: [UInt8] = []
+  /** The selected faces' corners, one face after the other, and how many each has. */
+  var faces: [Float] = []
+  var faceSizes: [Int] = []
+  var activeFace = -1
+  /** A very large mesh was cut short. */
+  var capped = false
+
+  init() {}
+
+  init(_ taken: WMNativeImageUVs) {
+    let count = Int(taken.edge_count)
+    if let edges = taken.edges, let flags = taken.edge_flags, count > 0 {
+      self.edges = Array(UnsafeBufferPointer(start: edges, count: count * 4))
+      self.flags = Array(UnsafeBufferPointer(start: flags, count: count))
+    }
+    if let sizes = taken.face_sizes, let corners = taken.faces, taken.face_count > 0 {
+      faceSizes = UnsafeBufferPointer(start: sizes, count: Int(taken.face_count)).map(Int.init)
+      faces = Array(UnsafeBufferPointer(start: corners, count: faceSizes.reduce(0, +) * 2))
+    }
+    activeFace = Int(taken.active_face)
+    capped = taken.capped
+  }
+}
+
+/** The theme's colours for the UVs, as Blender sends them from its theme: never constants. */
+struct UVTheme: Equatable {
+  var faceSelect: UIColor
+  var active: UIColor
+  var edge: UIColor
+  var edgeSelect: UIColor
+  var vertexSelect: UIColor
+  var seam: UIColor
+  /** Blender draws the vertices in vertex select mode. */
+  var showsVertices: Bool
+
+  init(_ theme: JSON?, selectMode: String?) {
+    func color(_ key: String) -> UIColor {
+      let values = (theme?[key] as? [Any])?.compactMap { ($0 as? NSNumber)?.doubleValue } ?? []
+      guard values.count == 4 else { return .clear }
+      return UIColor(red: values[0], green: values[1], blue: values[2], alpha: values[3])
+    }
+    faceSelect = color("face_select")
+    active = color("active")
+    /* Unselected edges as Blender's UV Editor draws them in its outline style: the wire colour, half
+     * as strong where edges are selected as edges. */
+    let wire = color("wire_edit")
+    if selectMode == "VERTEX" {
+      edge = wire
+    }
+    else {
+      var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+      wire.getRed(&r, green: &g, blue: &b, alpha: &a)
+      edge = UIColor(red: r * 0.5, green: g * 0.5, blue: b * 0.5, alpha: a * 0.5)
+    }
+    edgeSelect = color("edge_select")
+    vertexSelect = color("vertex_select")
+    seam = color("seam")
+    showsVertices = selectMode == "VERTEX"
+  }
+}
+
+extension CGPoint {
+  /** A point as a set's member. */
+  struct HashablePoint: Hashable {
+    let x: CGFloat, y: CGFloat
+    init(_ point: CGPoint) { x = point.x; y = point.y }
+  }
+}
+
+/** \} */
+

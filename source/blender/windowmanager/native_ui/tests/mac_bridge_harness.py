@@ -44,8 +44,17 @@ flush = getattr(lib, "_ZN7blender27WM_native_ui_flush_commandsEPNS_8bContextE")
 flush.argtypes = [ctypes.c_void_p]
 image_update = getattr(lib, "_ZN7blender25WM_native_ui_image_updateEPNS_8bContextE")
 image_update.argtypes = [ctypes.c_void_p]
+class NativeImageUVs(ctypes.Structure):
+    """`WMNativeImageUVs` (ROUND5 9G.3)."""
+    _fields_ = [("edges", ctypes.POINTER(ctypes.c_float)), ("edge_flags", ctypes.POINTER(ctypes.c_uint8)),
+                ("edge_count", ctypes.c_int), ("faces", ctypes.POINTER(ctypes.c_float)),
+                ("face_sizes", ctypes.POINTER(ctypes.c_int)), ("face_count", ctypes.c_int),
+                ("active_face", ctypes.c_int), ("capped", ctypes.c_bool)]
+
+
 lib.WM_native_ui_image_take_uvs.restype = ctypes.c_bool
-lib.WM_native_ui_image_take_uvs.argtypes = [ctypes.POINTER(ctypes.POINTER(ctypes.c_float)), ctypes.POINTER(ctypes.c_int)]
+lib.WM_native_ui_image_take_uvs.argtypes = [ctypes.POINTER(NativeImageUVs)]
+lib.WM_native_ui_image_uvs_free.argtypes = [ctypes.POINTER(NativeImageUVs)]
 lib.free.argtypes = [ctypes.c_void_p]
 lib.WM_native_ui_viewport_insets_set.argtypes = [ctypes.c_float, ctypes.c_float]
 
@@ -799,14 +808,17 @@ REVEAL_EXPECTED = {"uv_unwrap": "editor:uv", "uv_smart_project": "editor:uv"}
 
 
 def _take_uvs():
-    """The UV edges the bridge published since the last look, or None (`WM_native_ui_image_take_uvs`)."""
-    segments = ctypes.POINTER(ctypes.c_float)()
-    count = ctypes.c_int()
-    if not lib.WM_native_ui_image_take_uvs(ctypes.byref(segments), ctypes.byref(count)):
+    """The UVs the bridge published since the last look, or None (`WM_native_ui_image_take_uvs`): the
+    edges' points and flags, the selected faces' corner counts, the active face, the cap."""
+    taken = NativeImageUVs()
+    if not lib.WM_native_ui_image_take_uvs(ctypes.byref(taken)):
         return None
-    values = [round(segments[i], 5) for i in range(count.value)] if segments else []
-    if segments:
-        lib.free(segments)
+    sizes = [taken.face_sizes[i] for i in range(taken.face_count)]
+    values = {"edges": [round(taken.edges[i], 5) for i in range(taken.edge_count * 4)],
+              "flags": [taken.edge_flags[i] for i in range(taken.edge_count)],
+              "faces": [round(taken.faces[i], 5) for i in range(sum(sizes) * 2)],
+              "face_sizes": sizes, "active": taken.active_face, "capped": taken.capped}
+    lib.WM_native_ui_image_uvs_free(ctypes.byref(taken))
     return values
 
 
@@ -893,8 +905,48 @@ def _reveal_uv_editor():
         state["undone"] = _publish_uvs()
         if state["undone"] != state["before"]:
             problems.append("the published UVs did not come back after ed.undo")
-        report["uv_counts"] = {k: len(state.get(k) or []) for k in ("before", "after", "undone")}
-        for key in ("before", "after", "undone", "last"):
+        report["uv_counts"] = {k: len((state.get(k) or {}).get("edges", [])) // 4 for k in ("before", "after", "undone")}
+        # ROUND5 9G.3: one face selected changes the published flags and faces, not the edges; with
+        # UV Sync Selection off only that face is published.
+        bpy.context.scene.tool_settings.use_uv_select_sync = True
+        bpy.ops.mesh.select_all(action='SELECT')
+        state.update(phase="all", wait=3)
+    elif phase == "all":
+        state["all"] = _publish_uvs()
+        import bmesh
+        mesh = bpy.context.edit_object.data
+        state["face_count"] = len(bmesh.from_edit_mesh(mesh).faces)
+        bpy.ops.mesh.select_all(action='DESELECT')
+        bm = bmesh.from_edit_mesh(mesh)
+        bm.faces.ensure_lookup_table()
+        bm.faces[0].select_set(True)
+        bm.select_flush_mode()
+        bmesh.update_edit_mesh(mesh)
+        # A notifier, as a tap's selection sends one, without changing what is selected.
+        bpy.ops.mesh.select_mode(type='FACE')
+        state.update(phase="one", wait=3)
+    elif phase == "one":
+        state["one"] = _publish_uvs()
+        bpy.context.scene.tool_settings.use_uv_select_sync = False
+        state.update(phase="unsynced", wait=3)
+    elif phase == "unsynced":
+        state["unsynced"] = _publish_uvs()
+        everything, one, unsynced = state["all"] or {}, state["one"] or {}, state["unsynced"] or {}
+        report["uv_selection"] = {
+            name: {"edges": len(v.get("edges", [])) // 4, "selected_edges": sum(1 for f in v.get("flags", []) if f & 1),
+                   "faces": len(v.get("face_sizes", [])), "active": v.get("active"), "capped": v.get("capped")}
+            for name, v in (("all", everything), ("one", one), ("sync_off", unsynced))}
+        if one.get("edges") != everything.get("edges"):
+            problems.append("selecting one face changed the published edges, not only their flags")
+        if one.get("flags") == everything.get("flags"):
+            problems.append("selecting one face did not change the published flags")
+        if len(one.get("face_sizes", [])) != 1 or len(everything.get("face_sizes", [])) != state["face_count"]:
+            problems.append("the selected faces published are not the selection: %s" % report["uv_selection"])
+        if len(unsynced.get("edges", [])) // 4 != 4 or len(unsynced.get("face_sizes", [])) != 1:
+            problems.append("with UV Sync Selection off the one selected face is not published alone: %s" %
+                            report["uv_selection"])
+        bpy.context.scene.tool_settings.use_uv_select_sync = True
+        for key in ("before", "after", "undone", "last", "all", "one", "unsynced"):
             state.pop(key, None)
         # Edit UVs in Desktop Interface, on a document without the UV Editing workspace.
         workspace = bpy.data.workspaces.get("UV Editing")

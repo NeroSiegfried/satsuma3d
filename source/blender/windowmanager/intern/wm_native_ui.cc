@@ -226,7 +226,7 @@ std::shared_ptr<const io::serialize::DictionaryValue> bridge_image_state;
 bool bridge_image_shown = false;
 /** Its picture and UVs, taken by the native editor when they change. */
 GHOST_Latest<ed::image::NativeImagePixels> bridge_image_pixels;
-GHOST_Latest<std::vector<float>> bridge_image_uvs;
+GHOST_Latest<ed::image::NativeImageUVs> bridge_image_uvs;
 /** The picture changed since it was last sent, which waits a little while painting. */
 bool bridge_image_pixels_pending = true;
 bool bridge_image_uvs_pending = true;
@@ -6243,10 +6243,11 @@ void WM_native_ui_image_update(bContext *C)
                             std::chrono::milliseconds(33), took * 2);
   }
   if (bridge_image_uvs_pending) {
-    static std::vector<float> sent;
+    /* Also when only the selection changed (ROUND5 9G.3): it is part of what is sent. */
+    static ed::image::NativeImageUVs sent;
     static bool sent_any = false;
     bridge_image_uvs_pending = false;
-    std::vector<float> uvs = ed::image::native_image_uvs(C);
+    ed::image::NativeImageUVs uvs = ed::image::native_image_uvs(C);
     if (!sent_any || uvs != sent) {
       sent_any = true;
       sent = uvs;
@@ -6282,24 +6283,49 @@ extern "C" bool WM_native_ui_image_take_pixels(char **r_name,
   return true;
 }
 
-extern "C" bool WM_native_ui_image_take_uvs(float **r_segments, int *r_count)
+template<typename T> static T *bridge_malloc_copy(const std::vector<T> &values)
 {
-  std::vector<float> uvs;
+  if (values.empty()) {
+    return nullptr;
+  }
+  T *copy = static_cast<T *>(std::malloc(values.size() * sizeof(T)));
+  if (copy) {
+    std::memcpy(copy, values.data(), values.size() * sizeof(T));
+  }
+  return copy;
+}
+
+extern "C" bool WM_native_ui_image_take_uvs(WMNativeImageUVs *r_uvs)
+{
+  ed::image::NativeImageUVs uvs;
   if (!bridge_image_uvs.take(uvs)) {
     return false;
   }
-  *r_count = int(uvs.size());
-  *r_segments = nullptr;
-  if (!uvs.empty()) {
-    *r_segments = static_cast<float *>(std::malloc(uvs.size() * sizeof(float)));
-    if (*r_segments) {
-      std::memcpy(*r_segments, uvs.data(), uvs.size() * sizeof(float));
-    }
-    else {
-      *r_count = 0;
-    }
+  *r_uvs = {};
+  r_uvs->edges = bridge_malloc_copy(uvs.edges);
+  r_uvs->edge_flags = bridge_malloc_copy(uvs.edge_flags);
+  r_uvs->faces = bridge_malloc_copy(uvs.faces);
+  r_uvs->face_sizes = bridge_malloc_copy(uvs.face_sizes);
+  const bool complete = (r_uvs->edges || uvs.edges.empty()) &&
+                        (r_uvs->edge_flags || uvs.edge_flags.empty()) &&
+                        (r_uvs->faces || uvs.faces.empty()) &&
+                        (r_uvs->face_sizes || uvs.face_sizes.empty());
+  if (complete) {
+    r_uvs->edge_count = int(uvs.edge_flags.size());
+    r_uvs->face_count = int(uvs.face_sizes.size());
+    r_uvs->active_face = uvs.active_face;
   }
+  r_uvs->capped = uvs.capped;
   return true;
+}
+
+extern "C" void WM_native_ui_image_uvs_free(WMNativeImageUVs *uvs)
+{
+  std::free(uvs->edges);
+  std::free(uvs->edge_flags);
+  std::free(uvs->faces);
+  std::free(uvs->face_sizes);
+  *uvs = {};
 }
 
 double WM_native_ui_engine_idle_seconds(bContext *C)

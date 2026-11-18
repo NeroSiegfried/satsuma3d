@@ -157,9 +157,22 @@ bool WM_native_ui_image_take_pixels(char *WM_NATIVE_UI_NULLABLE *WM_NATIVE_UI_NO
                                     int *r_height,
                                     int *r_full_width,
                                     int *r_full_height);
-/** The UV edges over it when they changed, two points each, freed with `free`. */
-bool WM_native_ui_image_take_uvs(float *WM_NATIVE_UI_NULLABLE *WM_NATIVE_UI_NONNULL r_segments,
-                                 int *r_count);
+/** The UVs over it as the UV Editor draws them (ROUND5 9G.3), see #NativeImageUVs in
+ * `ED_image_native.hh`: each edge's two points and flags, the selected faces' corners and their
+ * counts, the active face's index or -1, and whether a large mesh was cut short. */
+typedef struct WMNativeImageUVs {
+  float *WM_NATIVE_UI_NULLABLE edges;
+  uint8_t *WM_NATIVE_UI_NULLABLE edge_flags;
+  int edge_count;
+  float *WM_NATIVE_UI_NULLABLE faces;
+  int *WM_NATIVE_UI_NULLABLE face_sizes;
+  int face_count;
+  int active_face;
+  bool capped;
+} WMNativeImageUVs;
+/** The UVs when they or their selection changed, freed with #WM_native_ui_image_uvs_free. */
+bool WM_native_ui_image_take_uvs(WMNativeImageUVs *r_uvs);
+void WM_native_ui_image_uvs_free(WMNativeImageUVs *uvs);
 
 /** \} */
 

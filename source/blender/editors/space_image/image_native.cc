@@ -52,8 +52,12 @@
 #include "IMB_imbuf_types.hh"
 
 #include "ED_image_native.hh"
+#include "ED_mesh.hh"
 #include "ED_paint.hh"
 #include "ED_undo.hh"
+#include "ED_uvedit.hh"
+
+#include "UI_resources.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
@@ -290,6 +294,38 @@ std::shared_ptr<DictionaryValue> read_images(bContext *C, const DictionaryValue 
                                                                                           "mesh";
   }
   result.append_str("uv_state", uv_state);
+  /* How the UV Editor marks the selection (ROUND5 9G.3): the scene's UV Sync Selection, the select
+   * mode that applies, and the theme's colours as Blender's UV Editor reads them (`space_image`,
+   * and the 3D View's for seams, which the image editor's theme has none of). */
+  if (const Scene *scene = CTX_data_scene(C)) {
+    const ToolSettings *ts = scene->toolsettings;
+    const bool sync = (ts->uv_flag & UV_FLAG_SELECT_SYNC) != 0;
+    result.append_int("uv_sync", sync);
+    const char *select_mode = "FACE";
+    if (sync ? (ts->selectmode & SCE_SELECT_VERTEX) : (ts->uv_selectmode & UV_SELECT_VERT)) {
+      select_mode = "VERTEX";
+    }
+    else if (sync ? (ts->selectmode & SCE_SELECT_EDGE) : (ts->uv_selectmode & UV_SELECT_EDGE)) {
+      select_mode = "EDGE";
+    }
+    result.append_str("uv_select_mode", select_mode);
+  }
+  auto theme = result.append_dict("uv_theme");
+  const auto theme_color = [&](const char *name, const int colorid, const int spacetype) {
+    float color[4];
+    ui::theme::get_color_type_4fv(colorid, spacetype, color);
+    auto values = theme->append_array(name);
+    for (const float value : color) {
+      values->append_double(value);
+    }
+  };
+  theme_color("face", TH_FACE, SPACE_IMAGE);
+  theme_color("face_select", TH_FACE_SELECT, SPACE_IMAGE);
+  theme_color("active", TH_EDITMESH_ACTIVE, SPACE_IMAGE);
+  theme_color("wire_edit", TH_WIRE_EDIT, SPACE_IMAGE);
+  theme_color("edge_select", TH_EDGE_SELECT, SPACE_IMAGE);
+  theme_color("vertex_select", TH_VERTEX_SELECT, SPACE_IMAGE);
+  theme_color("seam", TH_SEAM, SPACE_VIEW3D);
   if (shown) {
     auto image = result.append_dict("image");
     image->append_str("name", shown->id.name + 2);
@@ -598,64 +634,95 @@ bool native_image_pixels(bContext *C, const DictionaryValue &state, NativeImageP
   return true;
 }
 
-std::vector<float> native_image_uvs(bContext *C)
+NativeImageUVs native_image_uvs(bContext *C)
 {
-  /* Each edge of each face as two points, of the active object's UV map. Hidden faces are left
-   * out in Edit Mode. Big meshes are cut short: an overlay, not something to edit. */
+  /* Big meshes are cut short, and the view says so: an overlay, not something to edit. */
   constexpr size_t max_edges = 200000;
-  std::vector<float> segments;
+  NativeImageUVs uvs;
   Object *ob = CTX_data_active_object(C);
-  if (!ob || ob->type != OB_MESH) {
-    return segments;
+  const Scene *scene = CTX_data_scene(C);
+  if (!ob || ob->type != OB_MESH || !scene) {
+    return uvs;
   }
   Mesh *mesh = reinterpret_cast<Mesh *>(ob->data);
   const StringRefNull uv_name = mesh->active_uv_map_name();
   if (uv_name.is_empty()) {
-    return segments;
+    return uvs;
   }
+  const auto add_edge = [&](const float a[2], const float b[2], const uint8_t flags) {
+    uvs.edges.insert(uvs.edges.end(), {a[0], a[1], b[0], b[1]});
+    uvs.edge_flags.push_back(flags);
+  };
   if (BMEditMesh *em = mesh->runtime->edit_mesh.get()) {
     BMesh *bm = em->bm;
-    const int offset = CustomData_get_offset_named(&bm->ldata, CD_PROP_FLOAT2, uv_name);
-    if (offset == -1) {
-      return segments;
+    const BMUVOffsets offsets = BM_uv_map_offsets_get(bm);
+    if (offsets.uv == -1) {
+      return uvs;
     }
+    BMFace *active = EDBM_uv_active_face_get(em, false, false);
     BMFace *face;
     BMIter iter;
     BM_ITER_MESH (face, &iter, bm, BM_FACES_OF_MESH) {
-      if (BM_elem_flag_test(face, BM_ELEM_HIDDEN)) {
+      /* Blender's rule: with UV Sync Selection every face the 3D View shows, otherwise only the
+       * mesh's selected faces. */
+      if (!uvedit_face_visible_test(scene, face)) {
         continue;
+      }
+      if (uvs.edge_flags.size() >= max_edges) {
+        uvs.capped = true;
+        break;
       }
       BMLoop *first = BM_FACE_FIRST_LOOP(face);
       BMLoop *loop = first;
-      do {
-        const float *a = BM_ELEM_CD_GET_FLOAT_P(loop, offset);
-        const float *b = BM_ELEM_CD_GET_FLOAT_P(loop->next, offset);
-        segments.insert(segments.end(), {a[0], a[1], b[0], b[1]});
-      } while ((loop = loop->next) != first);
-      if (segments.size() / 4 >= max_edges) {
-        break;
+      if (face == active || uvedit_face_select_test(scene, bm, face)) {
+        if (face == active) {
+          uvs.active_face = int(uvs.face_sizes.size());
+        }
+        uvs.face_sizes.push_back(face->len);
+        do {
+          const float *uv = BM_ELEM_CD_GET_FLOAT_P(loop, offsets.uv);
+          uvs.faces.insert(uvs.faces.end(), {uv[0], uv[1]});
+        } while ((loop = loop->next) != first);
       }
+      do {
+        uint8_t flags = 0;
+        if (uvedit_edge_select_test(scene, bm, loop, offsets)) {
+          flags |= NATIVE_UV_EDGE_SELECTED;
+        }
+        if (BM_elem_flag_test(loop->e, BM_ELEM_SEAM)) {
+          flags |= NATIVE_UV_EDGE_SEAM;
+        }
+        if (uvedit_uv_select_test(scene, bm, loop, offsets)) {
+          flags |= NATIVE_UV_EDGE_VERT_A;
+        }
+        if (uvedit_uv_select_test(scene, bm, loop->next, offsets)) {
+          flags |= NATIVE_UV_EDGE_VERT_B;
+        }
+        add_edge(BM_ELEM_CD_GET_FLOAT_P(loop, offsets.uv),
+                 BM_ELEM_CD_GET_FLOAT_P(loop->next, offsets.uv),
+                 flags);
+      } while ((loop = loop->next) != first);
     }
-    return segments;
+    return uvs;
   }
+  /* Outside Edit Mode every face, nothing marked. */
   const bke::AttributeAccessor attributes = mesh->attributes();
-  const VArraySpan<float2> uvs = *attributes.lookup<float2>(uv_name, bke::AttrDomain::Corner);
-  if (uvs.is_empty()) {
-    return segments;
+  const VArraySpan<float2> corner_uvs = *attributes.lookup<float2>(uv_name, bke::AttrDomain::Corner);
+  if (corner_uvs.is_empty()) {
+    return uvs;
   }
   const OffsetIndices faces = mesh->faces();
   for (const int face : faces.index_range()) {
-    const IndexRange corners = faces[face];
-    for (const int i : corners.index_range()) {
-      const float2 a = uvs[corners[i]];
-      const float2 b = uvs[corners[(i + 1) % corners.size()]];
-      segments.insert(segments.end(), {a.x, a.y, b.x, b.y});
-    }
-    if (segments.size() / 4 >= max_edges) {
+    if (uvs.edge_flags.size() >= max_edges) {
+      uvs.capped = true;
       break;
     }
+    const IndexRange corners = faces[face];
+    for (const int i : corners.index_range()) {
+      add_edge(corner_uvs[corners[i]], corner_uvs[corners[(i + 1) % corners.size()]], 0);
+    }
   }
-  return segments;
+  return uvs;
 }
 
 }  // namespace blender::ed::image
