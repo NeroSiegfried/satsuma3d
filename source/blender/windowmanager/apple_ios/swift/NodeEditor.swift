@@ -3004,7 +3004,8 @@ struct DockedEditorLayer<Content: View>: View {
   /** The viewport ends under the panel's rounded corners, and changes size once a drag ends
    * rather than on every step of it. */
   private func cover(_ height: CGFloat, live: Bool = false) {
-    /* Eased as the viewport itself is, see `ViewportContainer`. */
+    /* The panel is eased; the 3D view takes its new size once the panel has landed, see
+     * `ViewportContainer.coverChanged`. */
     let covered = max(0, height * fraction - 24)
     if covered != cover {
       if live {

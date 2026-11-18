@@ -661,6 +661,13 @@ check('CheckDocumentBanner.install(in: view)' in window_text and 'PLATYPUS_SCRAT
       window_text[window_text.index('enum CheckDocumentBanner'):] and 'CheckDocumentBanner.label' in snapshots_text,
       "10E.5: a check launch says on screen that its document is a throwaway copy, left out of the shots")
 
+# ROUND5 10C (decision 59): an editor that takes a share of the window resizes the 3D view once per
+# transition, never on the frames of its slide.
+viewport_container = window_text[window_text.index('final class ViewportContainer'):window_text.index('struct ViewportView')]
+check('CADisplayLink' not in viewport_container and 'private func coverChanged()' in viewport_container and
+      'asyncAfter(deadline: .now() + Self.slideDuration' in viewport_container,
+      "10C: the cover reaches Blender once, after the editor slides in and before it slides out")
+
 # ROUND5 10A (decision 60): every change of the viewport's size is logged with its cause, at the
 # one place the shell sets the drawable and where the bridge sees a 3D View's region change.
 setters = [name for name, text in code.items() if re.search(r'drawableSize\s*=[^=]', text)]

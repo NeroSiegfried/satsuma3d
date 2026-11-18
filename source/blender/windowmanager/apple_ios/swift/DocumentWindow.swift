@@ -617,16 +617,21 @@ extension DocumentController: UIGestureRecognizerDelegate {
 final class ViewportContainer: UIView {
   let metalView: MTKView
   /** Set while the panel's handle is dragged: the cover is followed at once. */
-  var live = false
+  var live = false {
+    didSet {
+      /* Let go: what is set is what Blender has, at once. */
+      if live != oldValue { coverChanged() }
+    }
+  }
   var bottomCover: CGFloat = 0 {
     didSet {
-      if bottomCover != oldValue { animateCover() }
+      if bottomCover != oldValue { coverChanged() }
     }
   }
   /** What the Image Editor beside the viewport covers. */
   var trailingCover: CGFloat = 0 {
     didSet {
-      if trailingCover != oldValue { animateCover() }
+      if trailingCover != oldValue { coverChanged() }
     }
   }
   /** What the sidebars lying over the viewport cover at its sides (ROUND5 10B), from the window's
@@ -642,12 +647,14 @@ final class ViewportContainer: UIView {
       if trailingInset != oldValue { setNeedsLayout() }
     }
   }
-  /** The covers as the viewport is shaped now, eased toward the set ones alongside the panel. */
+  /** The covers Blender has, which follow the set ones once per transition (ROUND5 10C). */
   private var shownCover: CGFloat = 0
   private var shownTrailingCover: CGFloat = 0
-  private var coverAnimation: (from: CGFloat, fromTrailing: CGFloat, start: CFTimeInterval)?
-  private var displayLink: CADisplayLink?
-  private static let coverDuration: CFTimeInterval = 0.42
+  /** A cover that grows, applied once the editor has slid in. */
+  private var pendingCover: DispatchWorkItem?
+  /** How long an editor takes to slide in: the docked editors' and the Image Editor's ease of
+   * 0.42 s, and the timeline's spring, which settles by then. */
+  private static let slideDuration: TimeInterval = 0.45
 
   init(metalView: MTKView) {
     self.metalView = metalView
@@ -656,40 +663,37 @@ final class ViewportContainer: UIView {
     addSubview(metalView)
   }
 
-  private func animateCover() {
-    /* Dragging the panel's handle is followed at once, so the viewport keeps up with the
-     * finger; the panel opening or closing is eased alongside it. */
-    guard window != nil, !UIAccessibility.isReduceMotionEnabled, !live else {
-      coverAnimation = nil
-      displayLink?.invalidate()
-      displayLink = nil
+  /**
+   * An editor that takes a share of the window makes the 3D view smaller once, after it has slid
+   * in, and larger once, before it slides out (ROUND5 10C, decision 59): Blender's region is never
+   * smaller than what shows, so no empty band is seen, and each transition is one resize instead
+   * of one per frame of the slide. Dragging a divider or a handle (`live`) is followed at once,
+   * as dragging an area's edge is on the desktop; with Reduce Motion the editor appears at once,
+   * and the cover with it.
+   */
+  private func coverChanged() {
+    pendingCover?.cancel()
+    pendingCover = nil
+    let grows = bottomCover > shownCover || trailingCover > shownTrailingCover
+    /* What shrinks goes at once: the region grows before the editor slides out. */
+    shownCover = min(shownCover, bottomCover)
+    shownTrailingCover = min(shownTrailingCover, trailingCover)
+    guard grows, window != nil, !UIAccessibility.isReduceMotionEnabled, !live else {
       shownCover = bottomCover
       shownTrailingCover = trailingCover
       setNeedsLayout()
       return
     }
-    coverAnimation = (shownCover, shownTrailingCover, CACurrentMediaTime())
-    if displayLink == nil {
-      let link = CADisplayLink(target: self, selector: #selector(stepCover))
-      link.add(to: .main, forMode: .common)
-      displayLink = link
-    }
-  }
-
-  @objc private func stepCover(_ link: CADisplayLink) {
-    guard let animation = coverAnimation else { return }
-    let t = min(1, (CACurrentMediaTime() - animation.start) / Self.coverDuration)
-    /* Eased out, as the panel slides. */
-    let eased = 1 - pow(1 - t, 3)
-    shownCover = animation.from + (bottomCover - animation.from) * eased
-    shownTrailingCover = animation.fromTrailing + (trailingCover - animation.fromTrailing) * eased
     setNeedsLayout()
-    layoutIfNeeded()
-    if t >= 1 {
-      coverAnimation = nil
-      link.invalidate()
-      displayLink = nil
+    let apply = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.pendingCover = nil
+      self.shownCover = self.bottomCover
+      self.shownTrailingCover = self.trailingCover
+      self.setNeedsLayout()
     }
+    pendingCover = apply
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.slideDuration, execute: apply)
   }
 
   @available(*, unavailable)
