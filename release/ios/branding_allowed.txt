@@ -95,3 +95,19 @@ AboutSheet.swift | credit: About's "not affiliated with or endorsed by the Blend
 AboutSheet.swift | credit: About's credit to the Blender project | The Blender project and its contributors
 wm_apple_ios_launcher.mm | internal key: the developer check document's file name (PLATYPUS_SCRATCH_DOCUMENT launches only); its auto-saves are found by this prefix | PlatypusCheck
 wm_apple_ios_launcher.mm | internal key: developer log line for a scripted check launch | Platypus: scratch document %@
+
+# Artwork (ROUND5 9G.2, decision 67): pictures are swept as words are. Blender's two logo icons,
+# ICON_BLENDER (`'BLENDER'` in Python) and ICON_BLENDER_LOGO_LARGE, may be used only where they mark
+# a Blender file or credit Blender's own work, or where the iPad never shows them. One line per use:
+# `artwork <icon> <file> | <reason> | <the source line holding it>`, the file by path from the
+# repository root and the line as written, without its indentation. Reasons: file type, credit,
+# not on the iPad. `tests/python/bl_native_shell_sources.py` fails on a use not listed here and on a
+# line here no longer found. The app's own mark is ICON_SATSUMA_GLYPH (`release/ios/satsuma_glyph.svg`).
+artwork ICON_BLENDER source/blender/editors/space_file/filelist/filelist.cc | file type: a Blender file in the file browser, without a preview | return (is_main || file->preview_icon_id) ? ICON_FILE_BLEND : ICON_BLENDER;
+artwork ICON_BLENDER source/blender/makesrna/intern/rna_main.cc | file type: the Blend-File Data's icon, as the Outliner's "Blender File" shows it (decision 34) | RNA_def_struct_ui_icon(srna, ICON_BLENDER);
+artwork ICON_BLENDER source/blender/makesrna/intern/rna_space.cc | file type: the file browser's filter for the items inside Blender files | RNA_def_property_ui_icon(prop, ICON_BLENDER, 0);
+artwork ICON_BLENDER_LOGO_LARGE source/blender/windowmanager/intern/wm_splash_screen.cc | not on the iPad: Blender's About popup, which the iPad replaces by its own About (wm_splash_native_about) | ImBuf *ibuf = ui::svg_icon_bitmap(ICON_BLENDER_LOGO_LARGE, size, show_color);
+artwork ICON_BLENDER source/blender/windowmanager/intern/wm_window_csd_draw.cc | not on the iPad: window decorations Blender draws on Linux (Wayland) | ICON_BLENDER,
+artwork ICON_BLENDER scripts/startup/bl_ui/space_topbar.py | not on the iPad: desktop Blender's application menu; the iPad's carries ICON_SATSUMA_GLYPH | icon = 'SATSUMA_GLYPH' if "native_interface_toggle" in dir(bpy.ops.wm) else 'BLENDER'
+artwork ICON_BLENDER scripts/startup/bl_ui/space_userpref.py | credit: Preferences › Add-ons marks the add-ons made by Blender ("Official") | 'OFFICIAL': 'BLENDER',
+artwork ICON_BLENDER scripts/addons_core/bl_pkg/bl_extension_ui.py | credit: Preferences › Add-ons marks the add-ons that come with Blender ("Core") | 'BLENDER',  # `ADDON_TYPE_LEGACY_CORE`.

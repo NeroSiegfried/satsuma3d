@@ -1015,6 +1015,16 @@ if(WITH_BLENDER)
     endforeach()
     unset(svg_name_upper)
 
+    # The iPad app's own mark, for its app-menu button in Blender's own interface (ROUND5 9G.2,
+    # decision 67): one colour on the icon grid, coloured by the theme as every other icon is.
+    data_to_c_simple(../../../../release/ios/satsuma_glyph.svg SRC)
+    list(APPEND SVG_CONTENTS_H
+      "extern const char datatoc_satsuma_glyph_svg[]\;\n"
+    )
+    list(APPEND SVG_CONTENTS_C
+      "case blender::ICON_SATSUMA_GLYPH: return datatoc_satsuma_glyph_svg\;\n"
+    )
+
     list(JOIN SVG_CONTENTS_C "" SVG_CONTENTS_C)
     list(JOIN SVG_CONTENTS_H "" SVG_CONTENTS_H)
 

@@ -112,7 +112,9 @@ class TOPBAR_MT_editor_menus(Menu):
 
         # Allow calling this menu directly (this might not be a header area).
         if getattr(context.area, "show_menus", False):
-            layout.menu("TOPBAR_MT_blender", text="", icon='BLENDER')
+            # The iPad app's menu carries its own mark: Blender's logo marks Blender files there.
+            icon = 'SATSUMA_GLYPH' if "native_interface_toggle" in dir(bpy.ops.wm) else 'BLENDER'
+            layout.menu("TOPBAR_MT_blender", text="", icon=icon)
         else:
             layout.menu("TOPBAR_MT_blender", text="Blender")
 
@@ -131,7 +133,9 @@ class TOPBAR_MT_blender(Menu):
     def draw(self, _context):
         layout = self.layout
 
-        layout.operator("wm.splash")
+        # The iPad app has no splash: its own About takes the place of both (it names the app).
+        if "native_interface_toggle" not in dir(bpy.ops.wm):
+            layout.operator("wm.splash")
         layout.operator("wm.splash_about")
 
         layout.separator()

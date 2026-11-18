@@ -196,6 +196,8 @@ wmNativeInterface native_interface_create()
   native.interface_scale = WM_native_ui_interface_scale;
   /* The document's front door (ROUND5 9D.2): keys that open File › New and Open Recent. */
   native.document_command = WM_apple_ios_document_command;
+  native.about_show = WM_apple_ios_about_show;
+  native.app_name = WM_apple_ios_app_name;
   return native;
 }
 

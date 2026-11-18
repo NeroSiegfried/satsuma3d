@@ -42,6 +42,11 @@ void WM_apple_ios_document_window_changed();
 void WM_apple_ios_document_set_modified(bool modified);
 /** Open the document at an `NSURL *` the system handed to the app. */
 void WM_apple_ios_open_url(void *url);
+/** The app's own About, from Blender's splash and About operators, see
+ * #wmNativeInterface::about_show. */
+void WM_apple_ios_about_show();
+/** The app's name, as the system shows it. */
+const char *WM_apple_ios_app_name();
 
 /**
  * Fingers moving objects with the Tweak tool, see `wm_apple_ios_finger_tweak.cc`. GHOST asks

@@ -189,6 +189,15 @@ struct wmNativeInterface {
    * also called by the commands' operators. True when the platform took the command.
    */
   bool (*document_command)(bContext *C, wmDocumentCommand command, const char *argument) = nullptr;
+
+  /**
+   * Show the app's own About, which takes the place of Blender's splash and About popups, also
+   * from Blender's own menu in its own interface (ROUND5 9G.2, decision 35): their logo is
+   * Blender's, not the app's.
+   */
+  void (*about_show)() = nullptr;
+  /** The app's name, which its About item in Blender's own menu carries. */
+  const char *(*app_name)() = nullptr;
 };
 
 /** The registered native interface, or null for Blender's own. */

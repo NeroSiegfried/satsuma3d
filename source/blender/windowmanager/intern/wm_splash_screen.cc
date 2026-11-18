@@ -15,6 +15,7 @@
  */
 
 #include <cstring>
+#include <string>
 
 #include "DNA_screen_types.h"
 #include "DNA_userdef_types.h"
@@ -46,6 +47,7 @@
 #include "UI_resources.hh"
 
 #include "WM_api.hh"
+#include "WM_native_interface.hh"
 #include "WM_types.hh"
 
 #include "wm.hh"
@@ -407,10 +409,28 @@ static ui::Block *wm_block_splash_create(bContext *C, ARegion *region, void * /*
   return block;
 }
 
+/**
+ * A native interface shows its app's own About in place of Blender's splash and About (ROUND5
+ * 9G.2, decision 35), also when Blender's own menu asks in Blender's own interface: their logo is
+ * Blender's, which marks only Blender files there.
+ */
+static bool wm_splash_native_about()
+{
+  const wmNativeInterface *native = WM_native_interface();
+  if (native == nullptr || native->about_show == nullptr) {
+    return false;
+  }
+  native->about_show();
+  return true;
+}
+
 static wmOperatorStatus wm_splash_invoke(bContext *C,
                                          wmOperator * /*op*/,
                                          const wmEvent * /*event*/)
 {
+  if (wm_splash_native_about()) {
+    return OPERATOR_FINISHED;
+  }
   ui::popup_block_invoke(C, wm_block_splash_create, nullptr, nullptr);
 
   return OPERATOR_FINISHED;
@@ -493,6 +513,9 @@ static wmOperatorStatus wm_splash_about_invoke(bContext *C,
                                                wmOperator * /*op*/,
                                                const wmEvent * /*event*/)
 {
+  if (wm_splash_native_about()) {
+    return OPERATOR_FINISHED;
+  }
   ui::popup_block_invoke(C, wm_block_about_create, nullptr, nullptr);
 
   return OPERATOR_FINISHED;
@@ -506,6 +529,14 @@ void WM_OT_splash_about(wmOperatorType *ot)
 
   ot->invoke = wm_splash_about_invoke;
   ot->poll = WM_operator_winactive;
+
+  /* Named after the app whose About it shows (#wm_splash_native_about). */
+  const wmNativeInterface *native = WM_native_interface();
+  if (native && native->about_show && native->app_name && native->app_name()[0]) {
+    static const std::string name = std::string("About ") + native->app_name();
+    ot->name = name.c_str();
+    ot->description = "Open a window with information about this app";
+  }
 }
 
 /** \} */

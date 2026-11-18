@@ -339,7 +339,7 @@ def branded(text):
 allowed, bad_lines = {}, []
 REASONS = ('file type', 'keymap name', 'style name', 'credit', 'internal key')
 for number, line in enumerate((ROOT / 'release/ios/branding_allowed.txt').read_text(encoding='utf-8').splitlines(), 1):
-    if not line.strip() or line.startswith('#'):
+    if not line.strip() or line.startswith('#') or line.startswith('artwork '):
         continue
     parts = line.split(' | ', 2)
     if len(parts) != 3 or not parts[1].startswith(REASONS) or not branded(parts[2]):
@@ -362,6 +362,85 @@ stale = sorted('%s | %s' % key for key in allowed if not key[0].startswith('menu
 for line in stale:
     print('branding_allowed.txt: no longer found, remove it: %s' % line)
 check(not stale, "Every line of branding_allowed.txt is still found in its file")
+
+
+# 9G.2: pictures are swept as words are (decision 67). Every use of Blender's two logo icons, in
+# Blender's C and C++, its Python interface and the shell, is a line of branding_allowed.txt's
+# artwork section, with its reason, and every line there is still found.
+LOGOS = ('ICON_BLENDER', 'ICON_BLENDER_LOGO_LARGE')
+ARTWORK_REASONS = ('file type', 'credit', 'not on the iPad')
+
+
+def python_icon_lines(text):
+    """The lines of Python \a text naming a logo icon: as an `icon=` argument, or a value of a
+    name holding "icon" (a table of icons), as (icon, line number)."""
+    import ast
+    names = {'BLENDER': 'ICON_BLENDER', 'BLENDER_LOGO_LARGE': 'ICON_BLENDER_LOGO_LARGE'}
+    found = set()
+
+    def visit(node):
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Constant) and sub.value in names:
+                found.add((names[sub.value], sub.lineno))
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, ast.keyword) and node.arg == 'icon':
+            visit(node.value)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any('icon' in (getattr(t, 'id', None) or getattr(t, 'attr', None) or '').lower() for t in targets):
+                # A table of icons: a dictionary's values, or every element.
+                for value in node.value.values if isinstance(node.value, ast.Dict) else [node.value]:
+                    visit(value)
+    return found
+
+
+artwork_uses = set()  # (icon, path, line text)
+C_SUFFIXES = ('.c', '.cc', '.cpp', '.h', '.hh', '.m', '.mm')
+for top in ('source', 'intern'):
+    for path in (ROOT / top).rglob('*'):
+        if path.suffix not in C_SUFFIXES or path.name == 'UI_icons.hh' or not path.is_file():
+            continue
+        text = path.read_text(encoding='utf-8', errors='replace')
+        if 'ICON_BLENDER' not in text:
+            continue
+        for line in text.splitlines():
+            for icon in re.findall(r'\b(ICON_BLENDER(?:_LOGO_LARGE)?)\b', line):
+                artwork_uses.add((icon, path.relative_to(ROOT).as_posix(), line.strip()))
+for top in ('scripts/startup', 'scripts/modules', 'scripts/addons_core'):
+    for path in (ROOT / top).rglob('*.py'):
+        text = path.read_text(encoding='utf-8', errors='replace')
+        if 'BLENDER' not in text:
+            continue
+        lines = text.splitlines()
+        for icon, number in python_icon_lines(text):
+            artwork_uses.add((icon, path.relative_to(ROOT).as_posix(), lines[number - 1].strip()))
+for path in sorted(SHELL.glob('swift/*.swift')) + sorted(SHELL.glob('*.mm')):
+    for line in path.read_text(encoding='utf-8').splitlines():
+        if re.search(r'["\']BLENDER(?:_LOGO_LARGE)?["\']', line):
+            artwork_uses.add(('ICON_BLENDER', path.relative_to(ROOT).as_posix(), line.strip()))
+check(len(artwork_uses) >= 5, "The artwork sweep finds Blender's logo icons where Blender uses them")
+
+artwork_allowed, artwork_bad = set(), []
+for number, line in enumerate((ROOT / 'release/ios/branding_allowed.txt').read_text(encoding='utf-8').splitlines(), 1):
+    if not line.startswith('artwork '):
+        continue
+    parts = line.split(' | ', 2)
+    head = parts[0].split(' ')
+    if len(parts) != 3 or len(head) != 3 or head[1] not in LOGOS or not parts[1].startswith(ARTWORK_REASONS):
+        artwork_bad.append(number)
+        continue
+    artwork_allowed.add((head[1], head[2], parts[2]))
+for number in artwork_bad:
+    print('branding_allowed.txt:%d: not `artwork <icon> <file> | <reason> | <line>` with a reason from %s' %
+          (number, ARTWORK_REASONS))
+check(not artwork_bad, "Every artwork line of branding_allowed.txt names the icon, the file, a reason and the line")
+for icon, where, line in sorted(artwork_uses - artwork_allowed):
+    print('%s: %s uses %s and is not on release/ios/branding_allowed.txt: Blender\'s logo marks only Blender '
+          'files and credits; the app\'s mark is ICON_SATSUMA_GLYPH (ROUND5 9G.2, decision 67)' % (where, line, icon))
+check(not (artwork_uses - artwork_allowed), "Every use of Blender's logo icons is on the allow-list's artwork section")
+for icon, where, line in sorted(artwork_allowed - artwork_uses):
+    print('branding_allowed.txt: artwork no longer found, remove it: %s %s | %s' % (icon, where, line))
+check(not (artwork_allowed - artwork_uses), "Every artwork line of branding_allowed.txt is still found in its file")
 
 
 # 8C: About shows the licences the app carries, never a copy typed into the code; every row has

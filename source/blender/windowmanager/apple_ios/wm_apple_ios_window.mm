@@ -35,6 +35,28 @@ void *WM_apple_ios_window_controller(void *metal_view, GHOST_WindowIOS *window, 
   return controller;
 }
 
+void WM_apple_ios_about_show()
+{
+  /* Blender asks from its own loop; About is presented by UIKit (`SwiftAbout`). */
+  dispatch_async(dispatch_get_main_queue(), ^{
+    Class about_class = NSClassFromString(@"WMIOSSwiftAbout");
+    UIViewController *presenter = wm_apple_ios_top_presenter();
+    if (about_class && presenter) {
+      [(id)about_class performSelector:@selector(presentFrom:) withObject:presenter];
+    }
+  });
+}
+
+const char *WM_apple_ios_app_name()
+{
+  static std::string name;
+  if (name.empty()) {
+    NSString *app = wm_apple_ios_app_name();
+    name = app.length ? app.UTF8String : "";
+  }
+  return name.c_str();
+}
+
 }  // namespace blender
 
 extern "C" void wm_apple_ios_document_controller_closed(id controller)

@@ -1159,6 +1159,9 @@ DEF_ICON_VECTOR(NODE_SOCKET_TEXT)
 DEF_ICON_VECTOR(NODE_SOCKET_MASK)
 DEF_ICON_VECTOR(NODE_SOCKET_SOUND)
 
+/* The iPad app's mark (`release/ios/satsuma_glyph.svg`), last so that no icon's number moves. */
+DEF_ICON(SATSUMA_GLYPH)
+
 /* add as needed. */
 
 /* Undefine all types. */
