@@ -246,3 +246,14 @@ void wm_apple_ios_dialog_cancel(uint64_t identifier)
     }
   });
 }
+
+extern "C" int wm_apple_ios_dialogs_cancel_all(void)
+{
+  int count = 0;
+  for (WMIOSDialogRequest *request in [[dialog_queue copy] autorelease]) {
+    /* As Cancel: Blender is told, unlike #wm_apple_ios_dialog_cancel, which Blender asks. */
+    [request finish:-1];
+    count++;
+  }
+  return count;
+}

@@ -15,6 +15,8 @@ import UIKit
 /** What the toolbar's menus do outside the window: presenting sheets, sharing and saving. */
 @MainActor
 final class ShellCommands {
+  /** The open document's, for a check script's steps (`Snapshots.swift`). */
+  static weak var current: ShellCommands?
   weak var presenter: UIViewController?
   var render: SwiftRender?
   var settings: SwiftSettings?
@@ -26,6 +28,7 @@ final class ShellCommands {
   init(model: ShellModel, shell: ShellPanels) {
     self.model = model
     self.shell = shell
+    Self.current = self
   }
 
   func setFingerUsesTool(_ useTool: Bool) {

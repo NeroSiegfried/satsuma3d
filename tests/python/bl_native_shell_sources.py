@@ -624,10 +624,14 @@ LOG_KINDS = {
     'layout': 'layout checks', 'selftest': 'layout checks',
     'snapshot': 'the steps of developer checks',
     'active': 'a mark at most once a minute while the app is in use',
+    'input': 'input that arrived while a sheet was open',
 }
 writers = ''.join(path.read_text(encoding='utf-8', errors='replace')
                   for path in (SWIFT.parents[3]).rglob('*') if path.suffix in ('.cc', '.mm', '.swift'))
 kinds = set(re.findall(r'WM_native_ui_(?:session_)?log\(\s*"(\w+)"', writers))
+# GHOST writes through its native interface's `log` hook (ROUND5 9G.1).
+kinds |= set(re.findall(r'ios_log\(\s*@"(\w+)"', (ROOT / 'intern/ghost/intern/GHOST_WindowIOS.mm')
+                        .read_text(encoding='utf-8')))
 kinds |= set(re.findall(r'\?\s*"(warning)"\s*:\s*"(info)"', writers)[0]) if '"warning" : "info"' in writers else set()
 about_description = ' '.join(re.findall(r'"([^"]*)"', about_text[about_text.index('static let description'):
                                                                   about_text.index('/** Write the log out')]))

@@ -82,6 +82,9 @@ struct GHOST_IOSNativeInterface {
   void (*document_modified)(bool modified) = nullptr;
   /** Open the document at an `NSURL *`, which the system handed to the app. */
   void (*open_url)(void *url) = nullptr;
+  /** A line in the session's log, such as input arriving while something is presented above the
+   * viewport (ROUND5 9G.1). */
+  void (*log)(const char *kind, const char *text) = nullptr;
 };
 
 /** Register the native interface, before the app starts, see #GHOST_iosmain. */
@@ -137,6 +140,13 @@ CGPoint GHOST_ios_window_pixels(GHOST_WindowIOS *window, CGPoint point);
 void GHOST_ios_window_drop_files(GHOST_WindowIOS *window,
                                  NSArray<NSString *> *paths,
                                  CGPoint point);
+/**
+ * The input gate's answer at a point of the view, given as fractions of its width and height
+ * (ROUND5 9G.1, decision 66): nil when Blender takes input there, otherwise why it does not, such
+ * as "presented UIHostingController". Keys, touches, the Pencil, scroll, pinch, rotation and hover
+ * all ask the same question; a check script's `gate` step writes this answer to the log.
+ */
+NSString *GHOST_ios_window_gate(GHOST_WindowIOS *window, CGPoint fraction);
 
 /** A document window's view controller, see #GHOST_IOSNativeInterface::window_controller. */
 @protocol GHOST_IOSWindowController <NSObject>

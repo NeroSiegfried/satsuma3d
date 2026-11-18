@@ -23,6 +23,13 @@
  * - `popover shading|close`: the 3D View's shading popover;
  * - `prefs open|close`: Preferences;
  * - `about open|close`: About and Licences, as the app menu and the launcher open it (ROUND5 8C);
+ * - `gate <label>`: the input gate's answer (ROUND5 9G.1) at the viewport's middle and at a point
+ *   left of the middle, where a sheet's dimmed surround is, written to the log as
+ *   `gate <label> centre <answer> side <answer>`: `takes`, or why Blender is given no input there;
+ * - `present render|search|templates`: the render sheet, Search, or the template picker as File ›
+ *   New… opens it (the last only in the scratch document); `present close`: what is presented, as
+ *   its Cancel would;
+ * - `dialog cancel`: every native dialog and alert, as their Cancel;
  * - `edit <identifier>`: put a number field into editing, as a tap does, so a shot shows the full
  *   value it is typed from (ROUND5 7E.7): the first field shown whose node key ends in it, or
  *   whose `<property>.<label>` it is, such as `location.X` or `scale.X`; logged either way;
@@ -123,7 +130,7 @@ enum ShellSnapshots {
         let inScratch = scratch && (now == nil || now!.contains("/platypus-scratch/"))
         /* `editor uv desktop` changes the document's workspaces, as the desktop's tabs do. */
         if !inScratch && (["send", "tool", "op", "panel", "key", "document"].contains(verb) ||
-                          step.hasPrefix("editor uv desktop")) {
+                          step.hasPrefix("editor uv desktop") || step.hasPrefix("present templates")) {
           WM_native_ui_log("snapshot", "refused outside the scratch document: \(step)")
           continue
         }
@@ -245,6 +252,45 @@ enum ShellSnapshots {
         else {
           SwiftAbout.dismiss()
         }
+        try? await Task.sleep(for: .seconds(1))
+      case "gate":
+        /* What every input asks before it reaches Blender (ROUND5 9G.1, decision 66). */
+        let label = words.first ?? "-"
+        func answer(_ x: CGFloat, _ y: CGFloat) -> String {
+          wm_apple_ios_window_gate(ShellModel.current?.window, CGPoint(x: x, y: y)).map { "blocked (\($0))" } ?? "takes"
+        }
+        WM_native_ui_log("snapshot", "gate \(label) centre \(answer(0.5, 0.5)) side \(answer(0.12, 0.5))")
+      case "present":
+        guard let what = words.first else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        switch what {
+          case "render":
+            /* As the top bar's Render button shows its sheet, without rendering. */
+            ShellCommands.current?.render?.showRenders()
+          case "search":
+            ShellModel.current?.searchOpen = true
+          case "templates":
+            /* As File › New… does inside a document: the template picker, cancelled by `present
+             * close` before anything is made. */
+            if let root = shownRoot { wm_apple_ios_new_document(root) }
+          case "close":
+            ShellModel.current?.searchOpen = false
+            var top = shownRoot
+            while let presented = top?.presentedViewController { top = presented }
+            if let top, top !== shownRoot { top.presentingViewController?.dismiss(animated: false) }
+          default:
+            WM_native_ui_log("snapshot", "unknown step: \(step)")
+        }
+        WM_native_ui_log("snapshot", step)
+        try? await Task.sleep(for: .seconds(1.5))
+      case "dialog":
+        guard words.first == "cancel" else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        WM_native_ui_log("snapshot", "dialog cancel: \(wm_apple_ios_dialogs_cancel_all())")
         try? await Task.sleep(for: .seconds(1))
       case "edit":
         guard let identifier = words.first else {

@@ -142,6 +142,11 @@ extern "C" bool wm_apple_ios_window_press_key(
   return true;
 }
 
+extern "C" NSString *wm_apple_ios_window_gate(void *window, CGPoint fraction)
+{
+  return window ? GHOST_ios_window_gate(ghost_window(window), fraction) : @"no window";
+}
+
 extern "C" void wm_apple_ios_window_hold_modifier(void *window, const char *key, const bool down)
 {
   if (!window || !key) {

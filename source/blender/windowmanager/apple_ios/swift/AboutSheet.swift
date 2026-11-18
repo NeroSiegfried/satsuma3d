@@ -97,7 +97,8 @@ enum SessionLogShare {
    * messages and documents can name files and objects. */
   static let description = "The session log lists the commands you ran with their settings, the messages the app "
     + "showed, when documents opened and saved, which interface showed, window and viewport sizes, layout checks, "
-    + "the steps of developer checks, and a mark at most once a minute while the app is in use. It can include "
+    + "the steps of developer checks, input that arrived while a sheet was open, "
+    + "and a mark at most once a minute while the app is in use. It can include "
     + "the names of your files and objects. It stays on this iPad unless you share it."
 
   /** Write the log out and share a copy of it from \a presenter, or say why there is none. */

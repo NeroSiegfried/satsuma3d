@@ -8,6 +8,14 @@
 #import "GHOST_IOSWindowInput.hh"
 
 /* Input the native interface responds to, see #GHOST_IOSNativeInterface. */
+static void ios_log(NSString *kind, NSString *text)
+{
+  const GHOST_IOSNativeInterface *native = GHOST_ios_native_interface();
+  if (native && native->log) {
+    native->log(kind.UTF8String, text.UTF8String);
+  }
+}
+
 static void ios_pencil_hover(bool active, int x, int y)
 {
   if (const GHOST_IOSNativeInterface *native = GHOST_ios_native_interface()) {
@@ -574,6 +582,7 @@ UIWindow *document_window = nil;
 
       switch (event_type) {
         case UserInputEvent::EventTypes::CURSOR_MOVE:
+          pointer_parked = false;
           window->updatePointerPosition(event_info.location.x, event_info.location.y);
           system->pushEvent(std::make_unique<GHOST_EventCursor>(system->getMilliSeconds(),
                                                                 GHOST_kEventCursorMove,
@@ -711,13 +720,55 @@ UIWindow *document_window = nil;
   {
     return [self touchBeganInBlenderViewport:touch];
   }
+  /* The pointer's hover is followed by its handler, which clears Blender's highlight where the
+   * gate closes (ROUND5 9G.1); the trackpad's pinch and twist ask the gate here. */
+  if (gestureRecognizer == pointer_hover_recognizer) {
+    return YES;
+  }
+  const CGPoint point = [touch locationInView:self];
+  NSString *reason = [self blockedAt:point];
+  if (reason != nil) {
+    [self inputBehind:(gestureRecognizer == trackpad_rotation_recognizer ? @"trackpad rotation" :
+                       gestureRecognizer == trackpad_pinch_recognizer    ? @"trackpad pinch" :
+                                                                           @"pointer touch")
+               reason:reason
+                   at:point];
+    return NO;
+  }
   return YES;
+}
+
+/**
+ * Scroll and transform events are no touches: #gestureRecognizer:shouldReceiveTouch: never sees
+ * them. They ask the gate where the pointer is (ROUND5 9G.1, decision 66).
+ */
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+       shouldReceiveEvent:(UIEvent *)event
+{
+  if (event.type != UIEventTypeScroll && event.type != UIEventTypeTransform) {
+    return YES;
+  }
+  const CGPoint point = [self pointerLocation];
+  NSString *reason = [self blockedAt:point];
+  if (reason == nil) {
+    return YES;
+  }
+  NSString *kind = gestureRecognizer == trackpad_scroll_recognizer   ? @"trackpad scroll" :
+                   gestureRecognizer == wheel_scroll_recognizer      ? @"wheel" :
+                   gestureRecognizer == trackpad_pinch_recognizer    ? @"trackpad pinch" :
+                   gestureRecognizer == trackpad_rotation_recognizer ? @"trackpad rotation" :
+                                                                       ios_event_kind(event);
+  [self inputBehind:kind reason:reason at:point];
+  return NO;
 }
 
 - (BOOL)touchBeganInBlenderViewport:(UITouch *)touch
 {
-  return touch.view == window->getView() ||
-         (touch.type == UITouchTypePencil && [self isBlenderPencilInputView:touch.view]);
+  /* The gate's first half too (ROUND5 9G.1): a touch that begins while something is presented
+   * is never Blender's, whatever it lands on. */
+  return (touch.view == window->getView() ||
+          (touch.type == UITouchTypePencil && [self isBlenderPencilInputView:touch.view])) &&
+         [self blockedReason] == nil;
 }
 
 - (BOOL)isBlenderPencilInputView:(UIView *)view
@@ -916,6 +967,26 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
     [super sendEvent:event];
     return;
   }
+  /* Where a pointer is, for scroll and transform events, which carry no place (ROUND5 9G.1). */
+  for (UITouch *touch in event.allTouches) {
+    if (touch.type == UITouchTypeIndirectPointer) {
+      pointer_location = [touch locationInView:self];
+      pointer_location_known = true;
+    }
+  }
+  /* Which path input takes while something is presented: the session's log says (ROUND5 9G.1,
+   * G3). Only noted, never kept from UIKit: what is presented takes it. */
+  if (event.type == UIEventTypeScroll || event.type == UIEventTypeTransform ||
+      event.type == UIEventTypeHover ||
+      (event.type == UIEventTypeTouches &&
+       [event.allTouches anyObject].phase == UITouchPhaseBegan))
+  {
+    if (NSString *reason = [self blockedReason]) {
+      [self inputBehind:[@"event " stringByAppendingString:ios_event_kind(event)]
+                 reason:reason
+                     at:[self pointerLocation]];
+    }
+  }
   if (event.type == UIEventTypeTouches) {
     NSUInteger fingers = 0;
     for (UITouch *touch in event.allTouches) {
@@ -1037,6 +1108,165 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
 }
 
 /* -------------------------------------------------------------------- */
+/* The gate (ROUND5 9G.1, decision 66)
+ *
+ * Nothing reaches Blender while something is presented above the viewport: keys, touches, the
+ * Pencil, scroll, pinch, rotation and hover all ask the same question. Its first half, whether the
+ * document shows with nothing presented above it in any window of the scene, is the keyboard's
+ * too (#blenderTakesKeyboard); its second, for a pointer or a touch, whether the view under the
+ * point is Blender's: the Metal view or its navigation input. */
+
+/** Why Blender takes no input anywhere now, or nil: the document hidden, or something presented
+ * above it (a sheet, an alert, a popover, a menu) in this window or one in front of it. */
+- (NSString *)blockedReason
+{
+  if (!window || !system) {
+    return @"no window";
+  }
+  if (self.hidden || !GHOST_ios_document_window_visible()) {
+    return @"document hidden";
+  }
+  for (UIWindow *other in self.windowScene.windows) {
+    /* The launcher's window stays behind this one: what it presents is not seen. */
+    if (other.hidden || (other != self && other.windowLevel < self.windowLevel)) {
+      continue;
+    }
+    UIViewController *presented = other.rootViewController.presentedViewController;
+    if (presented != nil) {
+      while (presented.presentedViewController != nil) {
+        presented = presented.presentedViewController;
+      }
+      return [@"presented " stringByAppendingString:NSStringFromClass(presented.class)];
+    }
+    /* The system's menus, such as the shell's popup menus (`ShellMenuPresenter`), are no
+     * presented controllers: their container lies over the window while one shows. */
+    for (UIView *view in other.subviews) {
+      NSString *name = NSStringFromClass(view.class);
+      if (!view.hidden && view.alpha > 0.01 &&
+          ([name containsString:@"ContextMenu"] || [name containsString:@"EditMenu"]))
+      {
+        return [@"menu " stringByAppendingString:name];
+      }
+    }
+  }
+  return nil;
+}
+
+/** Why Blender takes no pointer or touch at \a point, in the window's points, or nil. */
+- (NSString *)blockedAt:(CGPoint)point
+{
+  if (NSString *reason = [self blockedReason]) {
+    return reason;
+  }
+  UIView *hit = [self hitTest:point withEvent:nil];
+  if (![self isBlenderPencilInputView:hit]) {
+    return [@"over " stringByAppendingString:hit ? NSStringFromClass(hit.class) : @"nothing"];
+  }
+  return nil;
+}
+
+- (BOOL)blenderTakesPointerAt:(CGPoint)point
+{
+  return [self blockedAt:point] == nil;
+}
+
+/** The window's point a pointer was last seen at, or the viewport's middle before any. */
+- (CGPoint)pointerLocation
+{
+  if (pointer_location_known || !window) {
+    return pointer_location;
+  }
+  const CGRect bounds = window->getView().bounds;
+  return [window->getView() convertPoint:CGPointMake(CGRectGetMidX(bounds), CGRectGetMidY(bounds))
+                                  toView:self];
+}
+
+/**
+ * Input of \a kind arrived while something is presented, and Blender is not given it: logged (at
+ * most every two seconds for each kind, ROUND5 9G.1, so a session's log says which path delivered
+ * it), navigation's momentum stopped, and Blender's hover highlight cleared.
+ */
+- (void)inputBehind:(NSString *)kind reason:(NSString *)reason at:(CGPoint)point
+{
+  if (![reason hasPrefix:@"presented"] && ![reason hasPrefix:@"menu"]) {
+    return;
+  }
+  [self stopOrbitMomentum];
+  [self parkPointer];
+  if (!behind_logged) {
+    behind_logged = [[NSMutableDictionary alloc] init];
+  }
+  NSDate *last = behind_logged[kind];
+  if (last && -last.timeIntervalSinceNow < 2.0) {
+    return;
+  }
+  behind_logged[kind] = [NSDate date];
+  UIView *hit = [self hitTest:point withEvent:nil];
+  ios_log(@"input",
+          [NSString stringWithFormat:@"behind sheet: %@ at %d,%d, %@, hit %@",
+                                     kind,
+                                     int(point.x),
+                                     int(point.y),
+                                     reason,
+                                     hit ? NSStringFromClass(hit.class) : @"nothing"]);
+}
+
+/** Blender's cursor off the view, which clears what it highlights under it, until the pointer or
+ * a key brings it back (#generateUserInputEvents:, #handleKeyboardEvent:keyWindow:). */
+- (void)parkPointer
+{
+  ios_pencil_hover(false, 0, 0);
+  ios_navigation_hover(false);
+  if (pointer_parked || !window || !system) {
+    return;
+  }
+  pointer_parked = true;
+  system->pushEvent(std::make_unique<GHOST_EventCursor>(system->getMilliSeconds(),
+                                                        GHOST_kEventCursorMove,
+                                                        window,
+                                                        -10000,
+                                                        -10000,
+                                                        GHOST_TABLET_DATA_NONE));
+}
+
+/** A recognizer's input of \a kind at its place: true if Blender may have it. Otherwise it is
+ * noted and the gesture is cancelled, so none of it reaches Blender. */
+- (BOOL)gate:(UIGestureRecognizer *)sender kind:(NSString *)kind
+{
+  const CGPoint point = [sender locationInView:self];
+  NSString *reason = [self blockedAt:point];
+  if (reason == nil) {
+    return YES;
+  }
+  [self inputBehind:kind reason:reason at:point];
+  if (sender.state == UIGestureRecognizerStateBegan ||
+      sender.state == UIGestureRecognizerStateChanged)
+  {
+    sender.enabled = NO;
+    sender.enabled = YES;
+  }
+  return NO;
+}
+
+static NSString *ios_event_kind(UIEvent *event)
+{
+  switch (event.type) {
+    case UIEventTypeTouches:
+      return @"touch";
+    case UIEventTypeScroll:
+      return @"scroll";
+    case UIEventTypeHover:
+      return @"hover";
+    case UIEventTypeTransform:
+      return @"transform";
+    case UIEventTypePresses:
+      return @"key";
+    default:
+      return [NSString stringWithFormat:@"event %d", int(event.type)];
+  }
+}
+
+/* -------------------------------------------------------------------- */
 /* Hardware keyboard
  *
  * Keys go to Blender's keymap as on the desktop, except while text is typed into a native field
@@ -1046,9 +1276,8 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
 
 - (bool)blenderTakesKeyboard
 {
-  if (!window || !system || self.hidden || !GHOST_ios_document_window_visible() ||
-      self.rootViewController.presentedViewController != nil)
-  {
+  /* The gate's first half, which the pointer's shares (ROUND5 9G.1): the two cannot disagree. */
+  if ([self blockedReason] != nil) {
     return false;
   }
   UIResponder *responder = current_first_responder();
@@ -1129,6 +1358,14 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
       CGPoint middle = CGPointMake(size.width / 2, size.height / 2);
       middle = window->scalePointToWindow(middle);
       UserInputEvent move(&middle, nullptr, nullptr, false);
+      move.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
+      [self generateUserInputEvents:move];
+    }
+    else if (down && pointer_parked) {
+      /* Blender's cursor was moved off the view while something was presented (#parkPointer):
+       * the key goes to the editor under the pointer, where it was. */
+      CGPoint back = CGPointMake(pointer_x, pointer_y);
+      UserInputEvent move(&back, nullptr, nullptr, false);
       move.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
       [self generateUserInputEvents:move];
     }
@@ -1247,9 +1484,17 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
   if (!window || pointer_touch) {
     return;
   }
-  const bool hovering = (sender.state == UIGestureRecognizerStateBegan ||
-                         sender.state == UIGestureRecognizerStateChanged) &&
-                        [self pointerOverViewport:[sender locationInView:self]];
+  const CGPoint in_window = [sender locationInView:self];
+  pointer_location = in_window;
+  pointer_location_known = true;
+  const bool moving = sender.state == UIGestureRecognizerStateBegan ||
+                      sender.state == UIGestureRecognizerStateChanged;
+  NSString *reason = moving ? [self blockedAt:in_window] : nil;
+  if (reason != nil) {
+    /* Behind something presented, Blender's highlight under the pointer is cleared too. */
+    [self inputBehind:@"pointer hover" reason:reason at:in_window];
+  }
+  const bool hovering = moving && reason == nil;
   if (!hovering) {
     /* Paint cursors and hover highlights show while something hovers over the view. */
     ios_pencil_hover(false, 0, 0);
@@ -1344,7 +1589,7 @@ static GHOST_TButton pointer_button(int index)
 
 - (void)handleTrackpadScroll:(UIPanGestureRecognizer *)sender
 {
-  if (!window || !system) {
+  if (!window || !system || ![self gate:sender kind:@"trackpad scroll"]) {
     return;
   }
   if (sender.state == UIGestureRecognizerStateBegan) {
@@ -1378,7 +1623,7 @@ static GHOST_TButton pointer_button(int index)
 
 - (void)handleWheelScroll:(UIPanGestureRecognizer *)sender
 {
-  if (!window || !system) {
+  if (!window || !system || ![self gate:sender kind:@"wheel"]) {
     return;
   }
   if (sender.state == UIGestureRecognizerStateBegan) {
@@ -1421,7 +1666,7 @@ static int32_t trackpad_units(double value, double *remainder)
 {
   static CGFloat last_scale = 1.0;
   static double remainder = 0.0;
-  if (!window || !system) {
+  if (!window || !system || ![self gate:sender kind:@"trackpad pinch"]) {
     return;
   }
   if (sender.state == UIGestureRecognizerStateBegan) {
@@ -1453,7 +1698,7 @@ static int32_t trackpad_units(double value, double *remainder)
 - (void)handleTrackpadRotation:(UIRotationGestureRecognizer *)sender
 {
   static double remainder = 0.0;
-  if (!window || !system) {
+  if (!window || !system || ![self gate:sender kind:@"trackpad rotation"]) {
     return;
   }
   if (sender.state == UIGestureRecognizerStateBegan) {
@@ -1793,7 +2038,7 @@ static UIBezierPath *pointer_move()
 - (void)updateOrbitMomentum:(CADisplayLink *)display_link
 {
   if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive ||
-      pencil_button_active)
+      pencil_button_active || [self blockedReason] != nil)
   {
     [self stopOrbitMomentum];
     return;
@@ -1869,15 +2114,17 @@ static UIBezierPath *pointer_move()
 
 - (void)handleHover:(GHOSTUIHoverGestureRecognizer *)sender
 {
-  if (!pencil_context_menu.active &&
-      (sender.state == UIGestureRecognizerStateBegan ||
-       sender.state == UIGestureRecognizerStateChanged) &&
-      ![self isBlenderPencilInputView:[self hitTest:[sender locationInView:(UIView *)self]
-                                          withEvent:nil]])
+  if (!pencil_context_menu.active && (sender.state == UIGestureRecognizerStateBegan ||
+                                     sender.state == UIGestureRecognizerStateChanged))
   {
-    ios_navigation_hover(false);
-    ios_pencil_hover(false, 0, 0);
-    return;
+    /* The gate (ROUND5 9G.1): the same question as every other input. */
+    const CGPoint point = [sender locationInView:(UIView *)self];
+    if (NSString *reason = [self blockedAt:point]) {
+      [self inputBehind:@"pencil hover" reason:reason at:point];
+      ios_navigation_hover(false);
+      ios_pencil_hover(false, 0, 0);
+      return;
+    }
   }
   if ([pencil_context_menu handlePencilHover:sender]) {
     ios_navigation_hover(false);
@@ -3342,6 +3589,20 @@ UIWindow<GHOST_IOSInputWindow> *GHOST_ios_window_native(GHOST_WindowIOS *window)
 CGPoint GHOST_ios_window_pixels(GHOST_WindowIOS *window, CGPoint point)
 {
   return window->scalePointToWindow(point);
+}
+
+NSString *GHOST_ios_window_gate(GHOST_WindowIOS *window, CGPoint fraction)
+{
+  GHOSTUIWindow *native = (GHOSTUIWindow *)window->rootWindow;
+  UIView *view = window->getView();
+  if (native == nil || view == nil) {
+    return @"no window";
+  }
+  const CGRect bounds = view.bounds;
+  const CGPoint point = [view
+      convertPoint:CGPointMake(bounds.size.width * fraction.x, bounds.size.height * fraction.y)
+            toView:native];
+  return [native blockedAt:point];
 }
 
 void GHOST_ios_window_drop_files(GHOST_WindowIOS *window,

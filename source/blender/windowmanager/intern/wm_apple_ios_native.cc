@@ -240,6 +240,7 @@ GHOST_IOSNativeInterface ghost_interface_create()
   native.document_window_changed = WM_apple_ios_document_window_changed;
   native.document_modified = WM_apple_ios_document_set_modified;
   native.open_url = WM_apple_ios_open_url;
+  native.log = WM_native_ui_log;
   return native;
 }
 

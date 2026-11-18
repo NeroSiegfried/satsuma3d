@@ -187,6 +187,14 @@ typedef struct UserInputEvent {
   UITouch *pointer_touch;
   UIEventButtonMask pointer_buttons;
   CGPoint scroll_translation;
+  /* The gate (ROUND5 9G.1): where a pointer was last seen, in the window's points, which scroll
+   * and transform events, having no place of their own, are checked at; whether Blender's cursor
+   * was moved off the view to clear its hover highlight while something is presented; when each
+   * kind of input arriving behind something presented was last logged. */
+  CGPoint pointer_location;
+  bool pointer_location_known;
+  bool pointer_parked;
+  NSMutableDictionary<NSString *, NSDate *> *behind_logged;
 
   /* Data from the Apple pencil */
   UITouch *current_pencil_touch;
@@ -257,6 +265,10 @@ typedef struct UserInputEvent {
 - (void)handleTap:(GHOSTUITapGestureRecognizer *)sender;
 - (void)handlePan:(GHOSTUIPanGestureRecognizer *)sender;
 - (void)stopOrbitMomentum;
+/* The gate (ROUND5 9G.1, decision 66). */
+- (NSString *)blockedReason;
+- (NSString *)blockedAt:(CGPoint)point;
+- (BOOL)blenderTakesPointerAt:(CGPoint)point;
 - (void)updateOrbitMomentum:(CADisplayLink *)display_link;
 - (void)applicationWillResignActive:(NSNotification *)notification;
 - (void)handlePan2f:(GHOSTUIPanGestureRecognizer *)sender;

@@ -33,6 +33,12 @@ void wm_apple_ios_window_send_key(void *_Nullable window, const char *_Nonnull k
  * know. */
 bool wm_apple_ios_window_press_key(
     void *_Nullable window, const char *_Nonnull key, bool shift, bool ctrl, bool alt);
+/** The input gate's answer at a point of the viewport, as fractions of its width and height:
+ * nil when Blender takes input there, otherwise why not (ROUND5 9G.1), for a check's `gate`. */
+NSString *_Nullable wm_apple_ios_window_gate(void *_Nullable window, CGPoint fraction);
+/** Cancel every native dialog and alert shown or waiting, as their Cancel would; how many. For a
+ * check's `dialog cancel` step. */
+int wm_apple_ios_dialogs_cancel_all(void);
 /** "shift" or "ctrl" held down or let go, for an operator running to read. */
 void wm_apple_ios_window_hold_modifier(void *_Nullable window, const char *_Nonnull key, bool down);
 /** Whether a document is open that the launcher can go back from, and going back. */
