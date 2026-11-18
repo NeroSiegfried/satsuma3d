@@ -627,12 +627,19 @@ final class ViewportContainer: UIView {
     let size = CGSize(width: max(1, frame.width * scale), height: max(1, frame.height * scale))
     WM_native_ui_viewport_cover_set(Float((shownCover * scale).rounded()))
     WM_native_ui_viewport_trailing_cover_set(Float((shownTrailingCover * scale).rounded()))
+    /* Logged against the size last logged, not the drawable's own: GHOST's view resizes its
+     * drawable by itself as its frame changes (`autoResizeDrawable`). */
+    if size != loggedDrawable {
+      noteDrawable(size, from: loggedDrawable)
+      loggedDrawable = size
+    }
     if metalView.drawableSize != size {
-      noteDrawable(size, from: metalView.drawableSize)
       metalView.drawableSize = size
     }
   }
 
+  /** The drawable's size as last logged. */
+  private var loggedDrawable = CGSize.zero
   /** The window's size when the drawable last changed, to tell a window's resize from the
    * interface's. */
   private var drawableWindowSize = CGSize.zero

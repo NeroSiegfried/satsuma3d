@@ -615,7 +615,7 @@ check(not positional, "9F: no ForEach row reads a live list by a captured positi
 setters = [name for name, text in code.items() if re.search(r'drawableSize\s*=[^=]', text)]
 check(setters == ['DocumentWindow.swift'], "10A: only the viewport's container sets the drawable (%s)" % setters)
 container = window_text[window_text.index('final class ViewportContainer'):]
-check('noteDrawable(size, from: metalView.drawableSize)' in container and '"drawable \\(' in container,
+check('noteDrawable(size, from: loggedDrawable)' in container and '"drawable \\(' in container,
       "10A: each change of the drawable writes a `viewport drawable` line")
 check('bridge_viewport_regions_note(C);' in bridge_text and '"region {}x{} <- {}x{} ({})"' in bridge_text,
       "10A: each change of a 3D View region's size writes a `viewport region` line")
