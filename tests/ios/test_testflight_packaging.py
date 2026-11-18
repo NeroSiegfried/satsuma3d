@@ -6,6 +6,7 @@
 
 import json
 import plistlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -322,6 +323,33 @@ class IdentityTest(unittest.TestCase):
         # compiler leaves a missing layer out without failing.
         named = {layer['image-name'] for group in document['groups'] for layer in group['layers']}
         self.assertEqual(named, {layer.name for layer in (icon / 'Assets').iterdir()})
+
+    def test_versions_kept_apart(self):
+        """The app's version (`CFBundleShortVersionString`, 0.1.0) is not Blender's (5.1.2).
+
+        Only About shows the app's version; everything that needs Blender's (templates'
+        `minimumBlender`) reads it as compiled. When the template check read the app's version,
+        every template was refused: no Choose a Template, no Start Creating, no check document.
+        """
+        readers = sorted(
+            str(path.relative_to(self.ROOT))
+            for folder in ('source/blender/windowmanager', 'intern/ghost', 'scripts/startup')
+            for path in (self.ROOT / folder).rglob('*')
+            if path.suffix in ('.mm', '.m', '.cc', '.hh', '.h', '.swift', '.py') and path.is_file()
+            and 'CFBundleShortVersionString' in path.read_text(errors='replace'))
+        self.assertEqual(readers, ['source/blender/windowmanager/apple_ios/swift/AppIdentity.swift'])
+        header = (self.ROOT / 'source/blender/blenkernel/BKE_blender_version.h').read_text()
+        number = lambda name: int(re.search(rf'#define {name} (\d+)', header).group(1))
+        blender = [number('BLENDER_VERSION') // 100, number('BLENDER_VERSION') % 100,
+                   number('BLENDER_VERSION_PATCH')]
+        manifests = [self.ROOT / 'release/ios/templates/library/manifest.json']
+        installed = self.ROOT.parent / 'build_ios_device/bin/Blender.app/Assets'
+        manifests += sorted(installed.glob('*/datafiles/templates/manifest.json'))
+        for manifest in manifests:
+            templates = json.loads(manifest.read_text())['templates']
+            self.assertTrue(templates, manifest)
+            for template in templates:
+                self.assertLessEqual(template['minimumBlender'], blender, (manifest, template['id']))
 
     def test_privacy_manifest(self):
         """ROUND5 8D: the app's manifest tracks nothing, collects nothing, and names only Apple's reasons."""

@@ -272,6 +272,26 @@ static void launcherScratchRemove()
   }
 }
 
+/** What check launches leave in the temporary folder: snapshot pictures (`Snapshots.swift`) and
+ * the packaged build's device test with its result (`tests/ios/testflight_device_test.py`).
+ * Removed by an ordinary launch, as the scratch copy is, so the person's app keeps none of it. */
+static void launcherCheckOutputRemove()
+{
+  NSFileManager *files = NSFileManager.defaultManager;
+  for (NSString *name in @[ @"shots", @"testflight-check", @"testflight_device_test.py" ]) {
+    [files removeItemAtPath:[NSTemporaryDirectory() stringByAppendingPathComponent:name]
+                      error:nil];
+  }
+}
+
+/** Whether \a url is the check's own copy (or anything else in its folder). */
+static BOOL launcherIsScratch(NSURL *url)
+{
+  NSString *folder = launcherScratchFolder().URLByStandardizingPath.URLByResolvingSymlinksInPath.path;
+  NSString *path = url.URLByStandardizingPath.URLByResolvingSymlinksInPath.path;
+  return path && [path hasPrefix:[folder stringByAppendingString:@"/"]];
+}
+
 /** A new copy of the General template, replacing any earlier one, or nil. */
 static NSURL *launcherScratchCreate()
 {
@@ -448,6 +468,7 @@ static NSURL *launcher_pending_url = nil;
   }
   else {
     launcherScratchRemove();
+    launcherCheckOutputRemove();
   }
   if (url == nil && !_scratch) {
     /* Continue in the document that was open when the app was left. */
@@ -771,6 +792,15 @@ static NSURL *launcher_pending_url = nil;
 
 - (void)setDocument:(UIDocument *)document
 {
+  /* A check launch works in its own copy or in nothing, whatever asks for a document: the system
+   * restoring the last one included (seen 2026-11-18: a check launch showed the person's file
+   * although the launcher opened none). Its scripts edit, and a document saves itself. */
+  if (NSProcessInfo.processInfo.environment[@"PLATYPUS_SCRATCH_DOCUMENT"] != nil && document != nil &&
+      !launcherIsScratch(document.fileURL))
+  {
+    NSLog(@"scratch launch: refused to open %@", document.fileURL.lastPathComponent);
+    return;
+  }
   /* The launcher starts without a document too, before it reopens the last one. */
   const BOOL closed = self.document != nil && document == nil;
   [super setDocument:document];

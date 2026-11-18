@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #import "wm_apple_ios_blend_document.hh"
 
+#include "BKE_blender_version.h"
 #include "GHOST_IOSRuntime.hh"
 #import "wm_apple_ios_launcher.hh"
 
@@ -283,10 +284,12 @@ static BOOL templateVersionSupported(id minimum)
       return NO;
     }
   }
-  NSArray *current = [[NSBundle.mainBundle
-      objectForInfoDictionaryKey:@"CFBundleShortVersionString"] componentsSeparatedByString:@"."];
+  /* Blender's version, as compiled: a template needs Blender, and the app's own version
+   * (its short version string, ROUND5 8A) is a different number. */
+  const NSInteger current[3] = {
+      BLENDER_VERSION / 100, BLENDER_VERSION % 100, BLENDER_VERSION_PATCH};
   for (NSUInteger i = 0; i < 3; i++) {
-    const NSInteger available = i < current.count ? [current[i] integerValue] : 0;
+    const NSInteger available = current[i];
     const NSInteger required = [minimum[i] integerValue];
     if (required != available) {
       return required < available;
