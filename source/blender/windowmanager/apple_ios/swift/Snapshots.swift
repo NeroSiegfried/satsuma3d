@@ -201,12 +201,12 @@ enum ShellSnapshots {
           SqueezePalette.shared.showSettings?()
         }
         else {
-          scene?.windows.first?.rootViewController?.presentedViewController?.dismiss(animated: false)
+          shownRoot?.presentedViewController?.dismiss(animated: false)
         }
         try? await Task.sleep(for: .seconds(1))
       case "about":
         /* About, as the app menu opens it: `about open|close`. */
-        if words.first == "open", let root = scene?.windows.first?.rootViewController {
+        if words.first == "open", let root = shownRoot {
           SwiftAbout.present(from: root)
         }
         else {
@@ -230,6 +230,14 @@ enum ShellSnapshots {
       default:
         WM_native_ui_log("snapshot", "unknown step: \(step)")
     }
+  }
+
+  /** The root of the window being shown, as a person's tap would reach it. The scene's first
+   * window is the launcher's, which stays behind the document's window and is not drawn: a sheet
+   * presented there is never seen (an `about` step showed nothing on 2026-11-18). */
+  private static var shownRoot: UIViewController? {
+    let shown = scene?.windows.filter { !$0.isHidden } ?? []
+    return (shown.first(where: \.isKeyWindow) ?? shown.last)?.rootViewController
   }
 
   private static var scene: UIWindowScene? {
