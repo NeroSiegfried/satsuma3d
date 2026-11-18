@@ -410,9 +410,9 @@ static ui::Block *wm_block_splash_create(bContext *C, ARegion *region, void * /*
 }
 
 /**
- * A native interface shows its app's own About in place of Blender's splash and About (ROUND5
- * 9G.2, decision 35), also when Blender's own menu asks in Blender's own interface: their logo is
- * Blender's, which marks only Blender files there.
+ * A native interface shows its app's own About in place of Blender's About (ROUND5 9G.2,
+ * decision 35), also when Blender's own menu asks in Blender's own interface: its logo is
+ * Blender's, which marks only Blender files there. It has no splash (#wm_splash_invoke).
  */
 static bool wm_splash_native_about()
 {
@@ -428,8 +428,11 @@ static wmOperatorStatus wm_splash_invoke(bContext *C,
                                          wmOperator * /*op*/,
                                          const wmEvent * /*event*/)
 {
-  if (wm_splash_native_about()) {
-    return OPERATOR_FINISHED;
+  /* A native interface has no splash: Blender asks for it at start when no file is loaded
+   * (#WM_init_splash_on_startup), where its About must not open either. */
+  const wmNativeInterface *native = WM_native_interface();
+  if (native && native->about_show) {
+    return OPERATOR_CANCELLED;
   }
   ui::popup_block_invoke(C, wm_block_splash_create, nullptr, nullptr);
 
