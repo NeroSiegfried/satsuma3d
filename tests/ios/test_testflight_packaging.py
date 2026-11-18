@@ -353,6 +353,8 @@ class BuildScriptTest(unittest.TestCase):
             self.assertNotIn(word, text)
         self.assertIn('<key>destination</key><string>export</string>', text)
         self.assertIn('--without-plugins', text)
+        # The icon follows the checkout, not a stale cache entry (the icon's folder was renamed).
+        self.assertIn('-UIOS_APP_ICON -UIOS_APP_ICON_NAME', text)
 
     def run_with(self, settings):
         with tempfile.TemporaryDirectory() as temporary:

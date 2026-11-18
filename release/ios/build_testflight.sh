@@ -104,11 +104,15 @@ main() {
   # ad hoc ("-"). Packaging strips nothing it needs: the archive signs everything again.
   export EXPANDED_CODE_SIGN_IDENTITY="${SIGNING_IDENTITY:--}"
 
-  # 1. Configure.
+  # 1. Configure. The icon is the checkout's (`source/creator/CMakeLists.txt`'s defaults): its
+  # cache entries are dropped first, because a changed default never reaches an existing cache.
+  # 8J renamed the icon (`platypus.icon` to `satsuma.icon`) and the next incremental tester build
+  # failed in the asset catalog step, still pointing at the old folder.
   step configure
   local team_args=()
   [ -n "$TEAM_ID" ] && team_args=(-DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="$TEAM_ID")
   cmake -S "$checkout" -B "$BUILD_DIR" -G Xcode \
+    -UIOS_APP_ICON -UIOS_APP_ICON_NAME \
     -DWITH_APPLE_CROSSPLATFORM=ON -DAPPLE_TARGET_DEVICE=ios \
     -DIOS_MIN_DEPLOYMENT_TARGET="$MINIMUM_OS" \
     -DLIBDIR="$LIBDIR" \
