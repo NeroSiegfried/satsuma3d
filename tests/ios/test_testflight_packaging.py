@@ -309,7 +309,7 @@ class OidnReplacementsTest(unittest.TestCase):
         self.assertIn('no framework lookup', ' '.join(self.problems(prebuilt, prebuilt)))
         self.set(out, minimum='15.0')
         self.assertTrue(any(problem.startswith('minos 15.0') for problem in self.problems(prebuilt, out)))
-        self.set(out, True, '14.0', '-Wl,-rpath,/Users/someone/build/lib')
+        self.set(out, True, '14.0', '-Wl,-rpath,/opt/builder/oidn/lib')
         self.assertTrue(any('run paths' in problem for problem in self.problems(prebuilt, out)))
         self.set(out)
         (out / self.METAL).unlink()
