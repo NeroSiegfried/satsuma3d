@@ -2549,6 +2549,13 @@ static wmKeyMapItem *wm_eventmatch_modal_keymap_items(const wmKeyMap *keymap,
   return nullptr;
 }
 
+/**
+ * The first key-map item a key press matched but skipped for the native interface, see
+ * #wm_keymap_item_native_hidden: once the press ends unhandled, the interface is told, so a key
+ * never does nothing (#wmNativeInterface::keymap_item_skipped). Cleared for each event.
+ */
+static const wmKeyMapItem *wm_native_skipped_kmi = nullptr;
+
 /** A native interface may keep key presses and mouse buttons from operators that show Blender's
  * own interface. */
 static bool wm_keymap_item_native_hidden(const wmEvent *event, const wmKeyMapItem *kmi)
@@ -2557,7 +2564,17 @@ static bool wm_keymap_item_native_hidden(const wmEvent *event, const wmKeyMapIte
     return false;
   }
   const wmNativeInterface *native = WM_native_interface();
-  return native && native->keymap_item_hidden && native->keymap_item_hidden(kmi);
+  if (!(native && native->keymap_item_hidden && native->keymap_item_hidden(kmi))) {
+    return false;
+  }
+  /* Key presses only: not releases, repeats or mouse buttons. The matching loops run once per
+   * handler, so this only records; #wm_event_do_handlers reports once the event is done. */
+  if (wm_native_skipped_kmi == nullptr && ISKEYBOARD(event->type) && event->val == KM_PRESS &&
+      (event->flag & WM_EVENT_IS_REPEAT) == 0)
+  {
+    wm_native_skipped_kmi = kmi;
+  }
+  return true;
 }
 
 struct wmEvent_ModalMapStore {
@@ -4305,6 +4322,7 @@ void wm_event_do_handlers(bContext *C)
     wmEvent *event;
     while ((event = static_cast<wmEvent *>(win.runtime->event_queue.first))) {
       eHandlerActionFlag action = WM_HANDLER_CONTINUE;
+      wm_native_skipped_kmi = nullptr;
 
       /* Force handling drag if a key is pressed even if the drag threshold has not been met.
        * Needed so tablet actions (which typically use a larger threshold) can click-drag
@@ -4487,6 +4505,17 @@ void wm_event_do_handlers(bContext *C)
             GPU_render_end();
             return;
           }
+        }
+      }
+
+      /* A key press that only matched items the native interface keeps from Blender, and that no
+       * other key-map went on to handle: the interface does or says what it answers, once. */
+      if (wm_native_skipped_kmi != nullptr) {
+        const wmKeyMapItem *skipped = wm_native_skipped_kmi;
+        wm_native_skipped_kmi = nullptr;
+        const wmNativeInterface *native = WM_native_interface();
+        if (wm_action_not_handled(action) && native && native->keymap_item_skipped) {
+          native->keymap_item_skipped(C, skipped);
         }
       }
 

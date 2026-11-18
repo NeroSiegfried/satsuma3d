@@ -169,6 +169,12 @@ struct wmNativeInterface {
    * way.
    */
   bool (*keymap_item_hidden)(const wmKeyMapItem *kmi) = nullptr;
+  /**
+   * A key press matched \a kmi, which #keymap_item_hidden kept from Blender, and nothing else
+   * handled it: the interface does its own version of the command or says where it is. Called
+   * once per press, never for releases, repeats or mouse buttons.
+   */
+  void (*keymap_item_skipped)(bContext *C, const wmKeyMapItem *kmi) = nullptr;
 };
 
 /** The registered native interface, or null for Blender's own. */

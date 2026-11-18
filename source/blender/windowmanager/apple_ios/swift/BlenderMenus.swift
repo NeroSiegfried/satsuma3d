@@ -498,6 +498,9 @@ final class ShellMenuPresenter {
   private lazy var button: AnchorButton = {
     let button = AnchorButton(type: .custom)
     button.showsMenuAsPrimaryAction = true
+    /* Blender's order, top to bottom, also where the menu opens upward: UIKit otherwise reverses
+     * a menu that opens above its anchor (seen 2026-11-18 on U's UV Mapping and X's Delete). */
+    button.preferredMenuElementOrder = .fixed
     button.backgroundColor = .clear
     button.isAccessibilityElement = false
     button.isUserInteractionEnabled = false
@@ -532,6 +535,11 @@ final class ShellMenuPresenter {
     button.performPrimaryAction()
     tapped = nil
     WM_native_ui_log("menu", "\(kind) at \(Int(rect.midX)),\(Int(rect.midY))")
+  }
+
+  /** Close the menu shown with #present, if it still shows. */
+  func dismiss() {
+    button.contextMenuInteraction?.dismissMenu()
   }
 }
 

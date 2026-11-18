@@ -31,7 +31,7 @@ def main():
     parser.add_argument("--flatbuffers-python", required=True,
                         help="A directory holding the `flatbuffers` Python package")
     parser.add_argument("--scenario", default="actions", choices=("actions", "tabs", "menus", "mirror", "reveal", "knife", "precision", "material",
-                                 "extensions"),
+                                 "extensions", "keys"),
                         help="`actions`: the palette, long press and radial. `tabs`: every Properties tab in every mode")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory() as directory:
@@ -52,7 +52,8 @@ def main():
             extra = ["--offline-mode"]
         subprocess.run([args.blender, "--factory-startup", *extra, "--python", os.path.join(HERE, "mac_bridge_harness.py"),
                         "--", directory, report, args.scenario,
-                        os.path.join(HERE, "..", "..", "..", "..", "..", "release", "ios", "branding_allowed.txt")],
+                        os.path.join(HERE, "..", "..", "..", "..", "..", "release", "ios", "branding_allowed.txt"),
+                        os.path.join(HERE, "..", "..", "..", "..", "..", "release", "ios", "key_stand_ins.txt")],
                        check=True, timeout=300, env=env)
         with open(report) as f:
             result = json.load(f)

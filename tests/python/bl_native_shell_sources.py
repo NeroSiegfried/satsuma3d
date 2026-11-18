@@ -524,4 +524,32 @@ check('static func entry(tab: String, shading: String, path: [String])' in code[
 check('case "edit":' in (SWIFT / 'Snapshots.swift').read_text(encoding='utf-8') and 'NumberFieldEditRequest.notification' in controls,
       "7E.7: the snapshot step `edit <identifier>` puts a number field into editing")
 
+# ROUND5 9A.6 (decision 52): a key kept from Blender does the shell's own version of its command
+# only where the shell has one. `release/ios/key_stand_ins.txt` lists them; the shell carries out
+# exactly these, and Blender's side names only these (the Mac harness's `keys` scenario).
+stand_in_lines = [line for line in (ROOT / 'release/ios/key_stand_ins.txt').read_text(encoding='utf-8').splitlines()
+                  if line.strip() and not line.startswith('#')]
+stand_ins = {line.split(' | ', 1)[0] for line in stand_in_lines}
+check(all(' | ' in line for line in stand_in_lines) and stand_ins,
+      "Every line of key_stand_ins.txt is `<command> | <what the shell does>`")
+window_text = (SWIFT / 'DocumentWindow.swift').read_text(encoding='utf-8')
+run_start = window_text.index('private func runStandIn(')
+run_body = window_text[run_start:balanced(window_text, window_text.index('{', run_start), '{', '}')]
+handled = set(re.findall(r'case "([a-z_]+)":', run_body))
+check(handled == stand_ins,
+      "The shell carries out exactly the key stand-ins of key_stand_ins.txt (shell: %s, file: %s)" %
+      (sorted(handled), sorted(stand_ins)))
+bridge_text = (SWIFT.parents[1] / 'intern/wm_native_ui.cc').read_text(encoding='utf-8')
+stand_in_function = bridge_text[bridge_text.index('static const char *bridge_key_stand_in('):]
+stand_in_function = stand_in_function[:stand_in_function.index('\n}\n')]
+named = set(re.findall(r'return "([a-z_]+)";', stand_in_function))
+check(named <= stand_ins, "Blender names only stand-ins of key_stand_ins.txt (%s)" % sorted(named - stand_ins))
+pull = window_text[window_text.index('private func pullMenuPopup('):run_start]
+check('has nothing to show here' in pull and '"\\(menu) empty"' in pull and 'title: title' in pull,
+      "9A.3: an empty menu from a key is said and logged, and a popup's menu has its title")
+snapshots_text = (SWIFT / 'Snapshots.swift').read_text(encoding='utf-8')
+check('case "key":' in snapshots_text and 'case "menu":' in snapshots_text and
+      'wm_apple_ios_window_press_key(' in snapshots_text,
+      "9A.9: the snapshot steps `key <NAME> [shift] [ctrl] [alt]` and `menu close`")
+
 print('PASS: native shell sources ' + json.dumps(checks))

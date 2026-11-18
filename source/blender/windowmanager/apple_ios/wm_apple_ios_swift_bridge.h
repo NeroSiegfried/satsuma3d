@@ -28,6 +28,11 @@ NSURL *_Nullable wm_apple_ios_document_url(void);
 bool wm_apple_ios_window_presented_frame(void *_Nullable window);
 CGPoint wm_apple_ios_window_pixels(void *_Nullable window, CGPoint point);
 void wm_apple_ios_window_send_key(void *_Nullable window, const char *_Nonnull key);
+/** A key pressed and let go with the modifiers held, as a keyboard sends it, by Blender's event
+ * name (`U`, `F2`, `SPACE`), the pointer at the viewport's middle. False for a key it does not
+ * know. */
+bool wm_apple_ios_window_press_key(
+    void *_Nullable window, const char *_Nonnull key, bool shift, bool ctrl, bool alt);
 /** "shift" or "ctrl" held down or let go, for an operator running to read. */
 void wm_apple_ios_window_hold_modifier(void *_Nullable window, const char *_Nonnull key, bool down);
 /** Whether a document is open that the launcher can go back from, and going back. */

@@ -11,6 +11,10 @@
 
 #import "wm_apple_ios_interface.hh"
 
+#include <algorithm>
+#include <string>
+#include <utility>
+
 /** Blender's main window, shown over the launcher while a document is open. */
 static UIViewController<WMIOSDocumentController> *document_controller = nil;
 
@@ -69,6 +73,73 @@ extern "C" void wm_apple_ios_window_send_key(void *window, const char *key)
   if (ghost_key != GHOST_kKeyUnknown) {
     GHOST_ios_window_send_key(ghost_window(window), ghost_key);
   }
+}
+
+/** A key by Blender's event type name, as the key-map names it: `U`, `F2`, `SPACE`, `ONE`. */
+static GHOST_TKey ghost_key_from_name(const char *name)
+{
+  const std::string key = name;
+  if (key.size() == 1 && key[0] >= 'A' && key[0] <= 'Z') {
+    return GHOST_TKey(GHOST_kKeyA + (key[0] - 'A'));
+  }
+  const auto is_digit = [](const char c) { return c >= '0' && c <= '9'; };
+  if (key.size() >= 2 && key.size() <= 3 && key[0] == 'F' &&
+      std::all_of(key.begin() + 1, key.end(), is_digit))
+  {
+    const int number = std::stoi(key.substr(1));
+    if (number >= 1 && number <= 24) {
+      return GHOST_TKey(GHOST_kKeyF1 + number - 1);
+    }
+  }
+  static const char *digits[] = {
+      "ZERO", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE"};
+  for (int i = 0; i < 10; i++) {
+    if (key == digits[i]) {
+      return GHOST_TKey(GHOST_kKey0 + i);
+    }
+  }
+  static const std::pair<const char *, GHOST_TKey> named[] = {
+      {"SPACE", GHOST_kKeySpace},
+      {"ESC", GHOST_kKeyEsc},
+      {"RET", GHOST_kKeyEnter},
+      {"TAB", GHOST_kKeyTab},
+      {"BACK_SPACE", GHOST_kKeyBackSpace},
+      {"DEL", GHOST_kKeyDelete},
+      {"HOME", GHOST_kKeyHome},
+      {"END", GHOST_kKeyEnd},
+      {"LEFT_ARROW", GHOST_kKeyLeftArrow},
+      {"RIGHT_ARROW", GHOST_kKeyRightArrow},
+      {"UP_ARROW", GHOST_kKeyUpArrow},
+      {"DOWN_ARROW", GHOST_kKeyDownArrow},
+      {"COMMA", GHOST_kKeyComma},
+      {"PERIOD", GHOST_kKeyPeriod},
+      {"SLASH", GHOST_kKeySlash},
+      {"MINUS", GHOST_kKeyMinus},
+      {"EQUAL", GHOST_kKeyEqual},
+      {"ACCENT_GRAVE", GHOST_kKeyAccentGrave},
+      {"LEFT_BRACKET", GHOST_kKeyLeftBracket},
+      {"RIGHT_BRACKET", GHOST_kKeyRightBracket},
+  };
+  for (const auto &[text, ghost] : named) {
+    if (key == text) {
+      return ghost;
+    }
+  }
+  return GHOST_kKeyUnknown;
+}
+
+extern "C" bool wm_apple_ios_window_press_key(
+    void *window, const char *key, const bool shift, const bool ctrl, const bool alt)
+{
+  if (!window || !key) {
+    return false;
+  }
+  const GHOST_TKey ghost_key = ghost_key_from_name(key);
+  if (ghost_key == GHOST_kKeyUnknown) {
+    return false;
+  }
+  GHOST_ios_window_press_key(ghost_window(window), ghost_key, shift, ctrl, alt);
+  return true;
 }
 
 extern "C" void wm_apple_ios_window_hold_modifier(void *window, const char *key, const bool down)

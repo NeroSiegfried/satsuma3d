@@ -421,12 +421,50 @@ extension DocumentController: UIGestureRecognizerDelegate {
       }
       return
     }
-    guard let menu = data("menu")?.value(type: Blender_NativeUI_TextValue.self)?.value else { return }
+    if let command = data("command")?.value(type: Blender_NativeUI_TextValue.self)?.value {
+      runStandIn(command)
+      return
+    }
+    guard let menu = data("menu")?.value(type: Blender_NativeUI_TextValue.self)?.value else {
+      WM_native_ui_log("menu", "popup \(top.key) asked for nothing this interface knows")
+      return
+    }
+    /* Its title, as Blender's popup has: "UV Mapping", "Delete". */
+    let title = top.label.isEmpty ? menu : top.label
+    let anchor = popupAnchor(point)
     Task { @MainActor in
-      guard let items = await BlenderMenus.shared.fetch(BlenderMenus.route(menu)), !items.isEmpty else { return }
-      ShellMenuPresenter.shared.present(BlenderMenus.uiMenu(items), at: popupAnchor(point),
+      /* An empty answer is said, never dropped (ROUND5 9A.3). */
+      guard let items = await BlenderMenus.shared.fetch(BlenderMenus.route(menu)), !items.isEmpty else {
+        model.messages.say("\(title) has nothing to show here")
+        WM_native_ui_log("menu", "\(menu) empty")
+        return
+      }
+      ShellMenuPresenter.shared.present(BlenderMenus.uiMenu(items, title: title), at: anchor,
                                         in: metalView, kind: "menu " + menu)
     }
+  }
+
+  /**
+   * The interface's own version of a command a key asked for, which Blender's own interface would
+   * show (ROUND5 9A.6): only what a button here already does. The commands are listed in
+   * `release/ios/key_stand_ins.txt`, which `bl_native_shell_sources.py` checks against this.
+   */
+  private func runStandIn(_ command: String) {
+    switch command {
+      case "search":
+        model.searchOpen = true
+      case "settings":
+        commands.settings?.present()
+      case "properties":
+        shell.panels.toggleInspector()
+      case "interface":
+        commands.setInterfaceHidden(!model.interfaceHidden)
+      default:
+        model.messages.say("This key's command is not in the iPad interface", level: "warning")
+        WM_native_ui_log("menu", "stand-in \(command) unknown")
+        return
+    }
+    WM_native_ui_log("menu", "stand-in \(command)")
   }
 
   @objc private func contextMenuPress(_ press: UILongPressGestureRecognizer) {

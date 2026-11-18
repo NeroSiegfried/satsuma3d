@@ -176,6 +176,15 @@ std::string dialog_edit(bContext *C, PanelsData &data, const EditRequest &reques
 void menu_write(bContext *C, StringRef route, wm::native_ui::ViewBuilder &builder);
 /** Run the menu item at \a route. */
 void menu_run(bContext *C, StringRef route);
+/**
+ * Whether the interface draws the menu \a idname here, by itself or as the root of a route: the
+ * menu exists, its poll passes in \a C, and it is one the interface shows (the menu bars, Add,
+ * Import and Export, the mode's context menu, a Properties tab's) or one Blender asked to pop up,
+ * see #menu_popup_asked. What it cannot draw, Blender draws (`bridge_menu_popup`).
+ */
+bool menu_can_show(bContext *C, StringRef idname);
+/** Blender asked for \a idname to pop up, as a key or a pie does: drawn where it is asked for. */
+void menu_popup_asked(StringRef idname);
 /** Calls \a fn in a Properties editor showing \a tab, as its menus are drawn in, or as it is
  * without a tab, or for the Tool tab. */
 void in_properties_tab(bContext *C, StringRef tab, FunctionRef<void()> fn);

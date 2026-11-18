@@ -3264,6 +3264,58 @@ void GHOST_ios_window_send_key(GHOST_WindowIOS *window, GHOST_TKey key)
       std::make_unique<GHOST_EventKey>(time, GHOST_kEventKeyUp, window, key, false, nullptr));
 }
 
+void GHOST_ios_window_press_key(GHOST_WindowIOS *window,
+                                GHOST_TKey key,
+                                const bool shift,
+                                const bool ctrl,
+                                const bool alt)
+{
+  GHOST_SystemIOS *system = window->getSystem();
+  if (system == nullptr || key == GHOST_kKeyUnknown) {
+    return;
+  }
+  /* The pointer at the middle of the view, the viewport, as a keyboard's first key without a
+   * Pencil, mouse or trackpad puts it (#handleKeyboardEvent:keyWindow:). */
+  const CGSize size = window->getView().bounds.size;
+  CGPoint middle = CGPointMake(size.width / 2, size.height / 2);
+  middle = window->scalePointToWindow(middle);
+  window->updatePointerPosition(middle.x, middle.y);
+  system->pushEvent(std::make_unique<GHOST_EventCursor>(system->getMilliSeconds(),
+                                                        GHOST_kEventCursorMove,
+                                                        window,
+                                                        middle.x,
+                                                        middle.y,
+                                                        GHOST_TABLET_DATA_NONE));
+  const std::pair<bool, std::pair<GHOST_TKey, GHOST_TModifierKey>> modifiers[] = {
+      {shift, {GHOST_kKeyLeftShift, GHOST_kModifierKeyLeftShift}},
+      {ctrl, {GHOST_kKeyLeftControl, GHOST_kModifierKeyLeftControl}},
+      {alt, {GHOST_kKeyLeftAlt, GHOST_kModifierKeyLeftAlt}},
+  };
+  const auto push = [&](const GHOST_TKey pushed, const bool down) {
+    system->pushEvent(std::make_unique<GHOST_EventKey>(system->getMilliSeconds(),
+                                                       down ? GHOST_kEventKeyDown :
+                                                              GHOST_kEventKeyUp,
+                                                       window,
+                                                       pushed,
+                                                       false,
+                                                       nullptr));
+  };
+  for (const auto &[held, modifier] : modifiers) {
+    if (held) {
+      GHOST_ios_set_modifier_held(modifier.second, true);
+      push(modifier.first, true);
+    }
+  }
+  push(key, true);
+  push(key, false);
+  for (const auto &[held, modifier] : modifiers) {
+    if (held) {
+      GHOST_ios_set_modifier_held(modifier.second, false);
+      push(modifier.first, false);
+    }
+  }
+}
+
 void GHOST_ios_window_hold_modifier(GHOST_WindowIOS *window, GHOST_TKey key, const bool down)
 {
   GHOST_SystemIOS *system = window->getSystem();

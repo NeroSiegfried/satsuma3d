@@ -12,10 +12,13 @@
 
 #pragma once
 
+#include <string>
+
 namespace blender {
 
 struct ARegion;
 struct bContext;
+struct wmKeyMapItem;
 struct wmOperator;
 struct wmOperatorType;
 struct wmNotifier;
@@ -100,6 +103,55 @@ bool WM_native_ui_stylus_roll(float *r_angle, float r_tilt[2]);
 void WM_native_ui_tweak_drag(bool *r_move, bool *r_roll, bool *r_tilt);
 /** Held + and - buttons make a selection add or subtract, see #wmNativeInterface. */
 void WM_native_ui_operator_input_adjust(bContext *C, wmOperator *op);
+
+/**
+ * What a key-map item's key does while the platform's interface shows (ROUND5 9A): never nothing.
+ * It runs as on the desktop, and what it opens shows natively, or it is kept from Blender, as it
+ * would show Blender's own interface over the platform's: then the interface does its own version
+ * of the command, or says where the command is.
+ */
+struct WMNativeKeyAnswer {
+  enum class Kind {
+    /** As on the desktop. */
+    Runs,
+    /** A menu or pie, drawn natively, see `bridge_menu_popup`. */
+    Menu,
+    /** An operator's choice of its enum items, see `bridge_enum_popup`. */
+    Choice,
+    /** An operator's properties: asked in a native dialog, or adjusted after it runs. */
+    Dialog,
+    /** Rename Active Item's field (F2), see `bridge_panel_popup`. */
+    Rename,
+    /** Kept from Blender: the interface's own version of the command, #command. */
+    StandIn,
+    /** Kept from Blender: the interface says so, #text. */
+    Says,
+  };
+  Kind kind = Kind::Runs;
+  /** A stand-in's command, one of `release/ios/key_stand_ins.txt`. */
+  std::string command;
+  /** What is said, for #Kind::Says, when asked with a context. */
+  std::string text;
+  /** The menu a #Kind::Menu item opens. */
+  std::string menu;
+
+  bool hidden() const
+  {
+    return kind == Kind::StandIn || kind == Kind::Says;
+  }
+};
+
+/**
+ * What \a kmi's key does in the platform's interface. \a C may be null, when only whether it is
+ * kept from Blender matters: the said text is then left empty. In Blender's own interface every
+ * key runs.
+ */
+WMNativeKeyAnswer WM_native_ui_keymap_item_answer(bContext *C, const wmKeyMapItem *kmi);
+/** Whether a key or mouse button skips \a kmi, see #wmNativeInterface::keymap_item_hidden. */
+bool WM_native_ui_keymap_item_hidden(const wmKeyMapItem *kmi);
+/** A key press matched only items kept from Blender, \a kmi first: do or say what it answers,
+ * see #wmNativeInterface::keymap_item_skipped. */
+void WM_native_ui_keymap_item_skipped(bContext *C, const wmKeyMapItem *kmi);
 
 /** \} */
 

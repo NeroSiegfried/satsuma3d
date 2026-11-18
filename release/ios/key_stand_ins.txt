@@ -1,0 +1,14 @@
+# The iPad interface's own commands that a key may stand in for (ROUND5 9A.6, decision 52): a key
+# whose command would show Blender's own interface over the iPad's does the iPad's version of it
+# instead. Only what the shell already does from a button is here: none is made up for a key.
+#
+# One line per command: `<command> | <what the shell does, and from which button>`.
+#
+# Read by both sides: `bridge_key_stand_in` in `wm_native_ui.cc` names these commands, the Mac
+# bridge harness's `keys` scenario fails on a stand-in that is not here, and
+# `tests/python/bl_native_shell_sources.py` fails unless `runStandIn` in `DocumentWindow.swift`
+# carries out exactly these.
+search | opens Search, as the top bar's Search button does (F3, Space in some key-maps)
+settings | opens Settings, as the More menu's Settings does (Ctrl+Comma)
+properties | shows or hides Properties, as the top bar's Properties button does (N)
+interface | hides or shows the interface around the viewport, as the More menu's Hide Interface does (Ctrl+Space)

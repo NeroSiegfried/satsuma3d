@@ -21,6 +21,8 @@ REPORT = argv[1]
 SCENARIO = argv[2] if len(argv) > 2 else "actions"
 # The "Blender" strings the app may show (ROUND5 8A.7), read by the `menus` scenario.
 ALLOWED = argv[3] if len(argv) > 3 else None
+# The shell's own commands a key may stand in for (ROUND5 9A.6), read by the `keys` scenario.
+STAND_INS = argv[4] if len(argv) > 4 else None
 
 import flatbuffers  # noqa: E402
 from Blender.NativeUI import (  # noqa: E402
@@ -229,6 +231,9 @@ def pump():
             view = views.setdefault(update.Subscription(), {"top": None, "nodes": {}, "children": {}})
             if update.Reset():
                 view.update(top=s(update.Top()), nodes={}, children={})
+            elif update.Top():
+                # A view whose top node changed key, as the popup's does for each request.
+                view["top"] = s(update.Top())
             for j in range(update.NodesLength()):
                 buffer = update.Nodes(j)
                 key, entry = decode_node(bytearray(buffer.NodeAsNumpy().tobytes()))
@@ -361,15 +366,15 @@ def enter(mode):
     if bpy.context.mode != 'OBJECT':
         bpy.ops.object.mode_set(mode='OBJECT')
     cube = bpy.data.objects["Cube"]
-    if mode in {"object", "edit_mesh", "sculpt"}:
+    if mode in {"object", "edit_mesh", "sculpt", "weight_paint", "vertex_paint", "texture_paint"}:
         bpy.ops.object.select_all(action='DESELECT')
         cube.select_set(True)
         bpy.context.view_layer.objects.active = cube
         if mode == "edit_mesh":
             bpy.ops.object.mode_set(mode='EDIT')
             bpy.ops.mesh.select_all(action='SELECT')
-        elif mode == "sculpt":
-            bpy.ops.object.mode_set(mode='SCULPT')
+        elif mode in {"sculpt", "weight_paint", "vertex_paint", "texture_paint"}:
+            bpy.ops.object.mode_set(mode=mode.upper())
     elif mode == "edit_curve":
         bpy.ops.curve.primitive_bezier_curve_add(enter_editmode=True)
     elif mode == "edit_armature":
@@ -936,6 +941,157 @@ def tick_material():
     return 0.3
 
 
+# ROUND5 9A.8: a key never does nothing. In each mode, every item of the key-maps that apply in the
+# 3D View, as the `keys` view reads them, with what its key does in the iPad interface: runs, a
+# menu, a choice, a dialog, the rename field, a stand-in or a line that says so. Fails when (a) a
+# key's menu passes its poll and, asked for as a key asks (`wm.call_menu`, the popup hook), comes
+# back empty; (b) an item has no answer, or says nothing; (c) a stand-in names a command the shell
+# does not have (`release/ios/key_stand_ins.txt`). Then one item runs through the popup's own route:
+# U's UV Mapping › Unwrap Angle Based, and the mesh's UVs must change.
+KEY_MODES = ("object", "edit_mesh", "sculpt", "weight_paint", "vertex_paint", "texture_paint", "edit_curve",
+             "edit_armature", "pose")
+ANSWERS = ("runs", "menu ", "choice", "dialog", "rename", "stand-in ", "says ")
+keys_state = {"mode": 0, "phase": "enter", "wait": 0, "table": [], "problems": [], "menus": {}, "counts": {}}
+
+
+def stand_ins():
+    with open(STAND_INS, encoding="utf-8") as f:
+        return {line.split(" | ", 1)[0] for line in f.read().splitlines() if line.strip() and not line.startswith("#")}
+
+
+def _uvs():
+    import bmesh
+    mesh = bpy.data.objects["Cube"].data
+    bm = bmesh.from_edit_mesh(mesh)
+    layer = bm.loops.layers.uv.active
+    return [tuple(round(c, 5) for c in loop[layer].uv) for face in bm.faces for loop in face.loops] if layer else []
+
+
+def _call_menu(operator, name):
+    window, area, region = _view3d()
+    with bpy.context.temp_override(window=window, area=area, region=region):
+        getattr(bpy.ops.wm, operator)(name=name)
+
+
+def tick_keys():
+    global step
+    state = keys_state
+    try:
+        pump()
+        step += 1
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            state["stand_ins"] = stand_ins()
+            return 0.25
+        if state["wait"] > 0:
+            state["wait"] -= 1
+            return 0.25
+        if state["mode"] >= len(KEY_MODES):
+            return _keys_uv_route()
+        mode = KEY_MODES[state["mode"]]
+        if state["phase"] == "enter":
+            enter(mode)
+            subs["keys"] = subscribe("keys")
+            state.update(phase="read", wait=3)
+        elif state["phase"] == "read":
+            top = tree(subs["keys"]) or {}
+            lib.WM_native_ui_unsubscribe(subs.pop("keys"))
+            rows = top.get("children", [])
+            if not rows:
+                state["problems"].append("%s: the keys view listed no key-map items" % mode)
+            state["menus"] = {}
+            counts = state["counts"].setdefault(mode, {})
+            for row in rows:
+                keymap, _index = row["key"].split("\t", 1)
+                call, _tab, answer = (row.get("value") or "").partition("\t")
+                state["table"].append("%s | %s | %s | %s | %s" % (mode, keymap, row.get("label") or "", call, answer))
+                kind = next((a.strip() for a in ANSWERS if answer == a or answer.startswith(a)), None)
+                counts[kind or "none"] = counts.get(kind or "none", 0) + 1
+                if kind is None:
+                    state["problems"].append("%s: %s %s has no answer (%r)" % (mode, keymap, call, answer))
+                elif kind == "says" and not answer[len("says "):].strip():
+                    state["problems"].append("%s: %s %s says nothing" % (mode, keymap, call))
+                elif kind == "stand-in" and answer[len("stand-in "):] not in state["stand_ins"]:
+                    state["problems"].append("%s: %s %s stands in for %r, which the shell does not have" %
+                                             (mode, keymap, call, answer[len("stand-in "):]))
+                elif kind == "menu":
+                    _menu, name, poll = answer.split(" ")
+                    if poll == "poll" and name not in state["menus"]:
+                        operator = "call_menu_pie" if call.startswith("WM_OT_call_menu_pie") else "call_menu"
+                        state["menus"][name] = operator
+            # Asked for as a key asks: through the popup hook, which lets the interface draw it.
+            for name, operator in state["menus"].items():
+                _call_menu(operator, name)
+                subs["menu " + name] = subscribe("menu", route=name)
+            state.update(phase="check", wait=4)
+        elif state["phase"] == "check":
+            for name in state["menus"]:
+                sub = subs.pop("menu " + name)
+                items = [n for n in (tree(sub) or {}).get("children", []) if n.get("label")]
+                lib.WM_native_ui_unsubscribe(sub)
+                state["table"].append("%s | menu | %s | %d items" % (mode, name, len(items)))
+                if not items:
+                    state["problems"].append("%s: the menu %s passes its poll and shows no items" % (mode, name))
+            state.update(mode=state["mode"] + 1, phase="enter")
+        if step > 600:
+            finish("timeout")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        report["table"] = state["table"]
+        finish("error")
+        return None
+    return 0.25
+
+
+def _keys_uv_route():
+    """U in Edit Mode, through the popup's own route: the popup view names the menu and its title, the
+    menu view lists it, and its Unwrap Angle Based changes the mesh's UVs."""
+    state = keys_state
+    uv = state.setdefault("uv", {"phase": "enter"})
+    if uv["phase"] == "enter":
+        enter("edit_mesh")
+        subs["popup"] = subscribe("popup")
+        uv["phase"] = "ask"
+        state["wait"] = 2
+    elif uv["phase"] == "ask":
+        uv["before"] = _uvs()
+        _call_menu("call_menu", "VIEW3D_MT_uv_map")
+        uv["phase"] = "popup"
+        state["wait"] = 2
+    elif uv["phase"] == "popup":
+        top = tree(subs["popup"]) or {}
+        named = next((n.get("value") for n in top.get("children", []) if n["key"] == "menu"), None)
+        uv["popup"] = {"title": top.get("label"), "menu": named}
+        if named != "VIEW3D_MT_uv_map" or top.get("label") != "UV Mapping":
+            state["problems"].append("U's popup is %r, not UV Mapping (VIEW3D_MT_uv_map)" % uv["popup"])
+        subs["uvmenu"] = subscribe("menu", route=named or "VIEW3D_MT_uv_map")
+        uv["phase"] = "run"
+        state["wait"] = 2
+    elif uv["phase"] == "run":
+        items = (tree(subs["uvmenu"]) or {}).get("children", [])
+        uv["items"] = [n.get("label") for n in items if n.get("label")]
+        unwrap = next((n for n in items if n.get("label") == "Unwrap Angle Based"), None)
+        if unwrap is None:
+            state["problems"].append("UV Mapping has no Unwrap Angle Based: %s" % uv["items"])
+        else:
+            invoke(subs["uvmenu"], unwrap["key"], 950)
+        uv["phase"] = "after"
+        state["wait"] = 3
+    elif uv["phase"] == "after":
+        after = _uvs()
+        uv["ack"] = acks.get(950)
+        uv["changed"] = bool(after) and after != uv["before"]
+        if uv["ack"] != "ok" or not uv["changed"]:
+            state["problems"].append("Unwrap Angle Based through the popup's route did not change the UVs "
+                                     "(ack %r, changed %r)" % (uv["ack"], uv["changed"]))
+        del uv["before"]
+        report.update(table=state["table"], counts=state["counts"], uv_route=uv, problems=state["problems"])
+        finish("done" if not state["problems"] else "error")
+        return None
+    return 0.25
+
+
 def tick_extensions():
     """ROUND5 8E.1: started offline as the iPad starts, online access stays off and cannot be turned
     on, and the bundled extension (LoopTools) still turns on and registers its operators."""
@@ -969,5 +1125,5 @@ def tick_extensions():
 
 
 bpy.app.timers.register({"material": tick_material, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror,
-                         "extensions": tick_extensions}.get(SCENARIO, tick_actions),
+                         "extensions": tick_extensions, "keys": tick_keys}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

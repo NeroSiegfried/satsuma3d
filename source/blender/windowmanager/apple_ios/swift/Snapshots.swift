@@ -26,6 +26,10 @@
  * - `edit <identifier>`: put a number field into editing, as a tap does, so a shot shows the full
  *   value it is typed from (ROUND5 7E.7): the first field shown whose node key ends in it, or
  *   whose `<property>.<label>` it is, such as `location.X` or `scale.X`; logged either way;
+ * - `key <NAME> [shift] [ctrl] [alt]`: a key pressed and let go, by Blender's event name (`U`, `F2`,
+ *   `SPACE`), as a hardware keyboard sends it, with the pointer at the viewport's middle (ROUND5
+ *   9A.9); logged when the key is not known;
+ * - `menu close`: close a menu, choice or field a key or step opened, and Search;
  * - `wait <seconds>`;
  * - `shot <name>`: every window of the scene, drawn into `tmp/shots/<name>.png`.
  *
@@ -90,7 +94,7 @@ enum ShellSnapshots {
       WM_native_ui_log("snapshot", "script in \(scratch ? "scratch document" : "a person's document") \((path as NSString).lastPathComponent)")
       for step in steps {
         let verb = step.split(separator: " ").first.map(String.init) ?? ""
-        if !scratch && ["send", "tool", "op", "panel"].contains(verb) {
+        if !scratch && ["send", "tool", "op", "panel", "key"].contains(verb) {
           WM_native_ui_log("snapshot", "refused outside the scratch document: \(step)")
           continue
         }
@@ -223,6 +227,28 @@ enum ShellSnapshots {
         try? await Task.sleep(for: .milliseconds(800))
         WM_native_ui_log("snapshot", request.claimedBy.map { "edit \(identifier): editing \($0)" } ??
                          "edit \(identifier): no number field shown matches")
+      case "key":
+        /* `key S shift`: the modifiers in any order after the key. */
+        let parts = step.split(separator: " ").dropFirst().map(String.init)
+        guard let name = parts.first, let model = ShellModel.current else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        let held = Set(parts.dropFirst())
+        if !wm_apple_ios_window_press_key(model.window, name, held.contains("shift"), held.contains("ctrl"),
+                                          held.contains("alt")) {
+          WM_native_ui_log("snapshot", "key \(name): not a key the script knows")
+        }
+        try? await Task.sleep(for: .seconds(1))
+      case "menu":
+        guard words.first == "close" else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        ShellMenuPresenter.shared.dismiss()
+        ShellModel.current?.searchOpen = false
+        scene?.windows.first?.rootViewController?.presentedViewController?.dismiss(animated: false)
+        try? await Task.sleep(for: .milliseconds(600))
       case "wait":
         try? await Task.sleep(for: .seconds(Double(words.first ?? "") ?? 0.5))
       case "shot":

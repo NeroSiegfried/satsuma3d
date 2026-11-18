@@ -44,6 +44,7 @@
 #include "BLI_path_utils.hh"
 #include "BLI_string.h"
 #include "BLI_serialize.hh"
+#include "BLI_set.hh"
 #include "BLI_time.h"
 #include "BLI_timer.h"
 #include "DNA_view3d_types.h"
@@ -85,6 +86,7 @@
 #include "MEM_guardedalloc.h"
 
 #include "RNA_access.hh"
+#include "RNA_path.hh"
 
 #include "SEQ_sequencer.hh"
 #include "RNA_define.hh"
@@ -100,6 +102,7 @@
 
 #include "WM_api.hh"
 #include "WM_gizmo_api.hh"
+#include "WM_keymap.hh"
 #include "WM_native_interface.hh"
 #include "WM_native_ui.h"
 #include "wm_native_ui_timing.hh"
@@ -139,6 +142,8 @@
 namespace blender::ui::native {
 void menu_write(bContext *C, StringRef route, wm::native_ui::ViewBuilder &builder);
 void menu_run(bContext *C, StringRef route);
+bool menu_can_show(bContext *C, StringRef idname);
+void menu_popup_asked(StringRef idname);
 }  // namespace blender::ui::native
 namespace blender::ed::graph {
 std::shared_ptr<io::serialize::DictionaryValue> native_graph_read(
@@ -3648,6 +3653,9 @@ struct BridgePopup {
   };
   std::vector<Item> items;
   bool rename = false;
+  /** One of the interface's own commands, which a key stands in for, see
+   * #WM_native_ui_keymap_item_answer: `search`, `settings`, `properties` or `interface`. */
+  std::string command;
   float x = 0.5f, y = 0.5f;
 };
 BridgePopup bridge_popup;
@@ -3665,6 +3673,14 @@ void bridge_popup_show(bContext *C, BridgePopup popup)
     }
   }
   popup.number = bridge_popup.number + 1;
+  /* What Blender asked for, so a report of a key that did nothing can be read off the log: asked
+   * here, then shown (`menu … at`) or empty (`menu … empty`) by the interface. */
+  const std::string line = !popup.menu.empty()    ? popup.menu :
+                           !popup.op_name.empty() ? "choice " + popup.op_name :
+                           popup.rename           ? std::string("rename") :
+                           !popup.command.empty() ? "command " + popup.command :
+                                                    std::string("nothing");
+  WM_native_ui_session_log("popup", line.c_str());
   bridge_popup = std::move(popup);
   views::view_type_dirty("popup");
 }
@@ -3696,6 +3712,11 @@ void bridge_popup_view_build(bContext * /*C*/,
   if (popup.rename) {
     builder.add(top, "rename", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
       return bridge_data(buffer, true);
+    });
+  }
+  if (!popup.command.empty()) {
+    builder.add(top, "command", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      return bridge_data(buffer, std::string_view(popup.command));
     });
   }
   if (!popup.op_name.empty()) {
@@ -3734,6 +3755,108 @@ views::CommandResult bridge_popup_view_command(bContext *C,
                                           bridge_popup.prop_name.c_str(),
                                           value->value()->c_str());
   return views::CommandResult::Done;
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name The Keys View
+ *
+ * Every item of the key-maps that apply in the 3D View now, in the order the event system tries
+ * them (the viewport's, the editor's, then the window's), with what its key does in the native
+ * interface, see #WM_native_ui_keymap_item_answer. For the Mac bridge harness's `keys` scenario,
+ * which fails when one is left without an answer. Each item is a node keyed
+ * `<key-map>\t<index>`, labelled with its key, holding `<operator>\t<answer>`; the answer is
+ * `runs`, `menu <name> <poll|no-poll|missing>`, `choice`, `dialog`, `rename`,
+ * `stand-in <command>` or `says <text>`.
+ * \{ */
+
+static std::string bridge_key_answer_text(bContext *C, const WMNativeKeyAnswer &answer)
+{
+  using Kind = WMNativeKeyAnswer::Kind;
+  switch (answer.kind) {
+    case Kind::Runs:
+      return "runs";
+    case Kind::Menu: {
+      MenuType *mt = WM_menutype_find(answer.menu.c_str(), true);
+      return "menu " + answer.menu + " " +
+             (mt == nullptr ? "missing" : WM_menutype_poll(C, mt) ? "poll" : "no-poll");
+    }
+    case Kind::Choice:
+      return "choice";
+    case Kind::Dialog:
+      return "dialog";
+    case Kind::Rename:
+      return "rename";
+    case Kind::StandIn:
+      return "stand-in " + answer.command;
+    case Kind::Says:
+      return "says " + answer.text;
+  }
+  return "unknown";
+}
+
+void bridge_keys_view_build(bContext *C,
+                            const views::Params & /*params*/,
+                            views::ViewData * /*data*/,
+                            views::ViewBuilder &builder)
+{
+  const NodeId top = builder.top("keys", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return views::protocol::CreateGroup(buffer);
+  });
+  wmWindowManager *wm = CTX_wm_manager(C);
+  wmWindow *win = CTX_wm_window(C);
+  ScrArea *area = CTX_wm_area(C);
+  ARegion *region = area && area->spacetype == SPACE_VIEW3D ?
+                        BKE_area_find_region_type(area, RGN_TYPE_WINDOW) :
+                        nullptr;
+  if (wm == nullptr || win == nullptr || region == nullptr) {
+    return;
+  }
+  ARegion *region_prev = CTX_wm_region(C);
+  CTX_wm_region_set(C, region);
+  Set<const wmKeyMap *> seen;
+  for (ListBaseT<wmEventHandler> *handlers :
+       {&region->runtime->handlers, &area->handlers, &win->runtime->handlers})
+  {
+    for (wmEventHandler &handler_base : *handlers) {
+      if (handler_base.type != WM_HANDLER_TYPE_KEYMAP) {
+        continue;
+      }
+      auto *handler = reinterpret_cast<wmEventHandler_Keymap *>(&handler_base);
+      wmEventHandler_KeymapResult km_result;
+      WM_event_get_keymaps_from_handler(wm, win, handler, &km_result);
+      for (int km_index = 0; km_index < km_result.keymaps_len; km_index++) {
+        wmKeyMap *keymap = km_result.keymaps[km_index];
+        if (keymap == nullptr || !seen.add(keymap) || !WM_keymap_poll(C, keymap)) {
+          continue;
+        }
+        int index = -1;
+        for (wmKeyMapItem &kmi : keymap->items) {
+          index++;
+          if ((kmi.flag & KMI_INACTIVE) || kmi.idname[0] == '\0') {
+            continue;
+          }
+          std::string call = kmi.idname;
+          if (kmi.ptr && WM_operatortype_find(kmi.idname, true)) {
+            call += "(" +
+                    RNA_pointer_as_string_keywords(C, kmi.ptr, false, false, true, 256) + ")";
+          }
+          const std::string text = call + "\t" +
+                                   bridge_key_answer_text(
+                                       C, WM_native_ui_keymap_item_answer(C, &kmi));
+          const std::string key = WM_keymap_item_to_string(&kmi, false).value_or("");
+          builder.add(top,
+                      std::string(keymap->idname) + "\t" + std::to_string(index),
+                      [&](ViewBuffer &buffer, NodeFields &fields) {
+                        fields.label = key;
+                        return bridge_data(buffer, std::string_view(text));
+                      });
+        }
+      }
+    }
+  }
+  CTX_wm_region_set(C, region_prev);
 }
 
 /** \} */
@@ -4473,6 +4596,13 @@ void WM_native_ui_views_register()
   popup.command = bridge_popup_view_command;
   view_type_add(std::move(popup));
 
+  ViewType keys;
+  keys.name = "keys";
+  /* Read once, by a test, as the mode it is asked in. */
+  keys.notifiers = {0};
+  keys.build = bridge_keys_view_build;
+  view_type_add(std::move(keys));
+
   ViewType preferences_list;
   preferences_list.name = "preferences_list";
   /* Listed with Python, four times a second at most. */
@@ -4990,8 +5120,11 @@ static void bridge_reveal_after(bContext *C, wmOperator *op, const std::string &
 
 /** \} */
 
+bool bridge_menu_popup(bContext *C, const char *menu);
+
 /** For the Mac bridge harness: install the after-command hook the iPad interface installs, so
- * what is shown after each command can be checked without a device. Only where no native
+ * what is shown after each command can be checked without a device, and its menu popups, so a
+ * key's menu is asked for as a key asks for it (the `keys` scenario). Only where no native
  * interface is installed. */
 extern "C" void WM_native_ui_test_install_hooks()
 {
@@ -4999,6 +5132,7 @@ extern "C" void WM_native_ui_test_install_hooks()
   if (WM_native_interface() == nullptr) {
     hooks.operator_finished = WM_native_ui_operator_finished;
     hooks.state_changed = WM_native_ui_tag_changed;
+    hooks.menu_popup = bridge_menu_popup;
     WM_native_interface_set(&hooks);
   }
 }
@@ -5035,11 +5169,23 @@ void WM_native_ui_operator_finished(bContext *C, wmOperator *op)
  */
 bool bridge_menu_popup(bContext *C, const char *menu)
 {
-  if (WM_native_ui_desktop_mode() || WM_menutype_find(menu, true) == nullptr) {
+  if (WM_native_ui_desktop_mode()) {
+    return false;
+  }
+  /* Blender asked for it where its key-map matched, so it is what the desktop would draw here.
+   * What the interface cannot draw (no such menu, or its poll fails), Blender's own popup draws,
+   * or explains, as before the interface existed. */
+  ui::native::menu_popup_asked(menu);
+  if (!ui::native::menu_can_show(C, menu)) {
+    WM_native_ui_session_log("popup", (std::string(menu) + " drawn by Blender").c_str());
     return false;
   }
   BridgePopup popup;
   popup.menu = menu;
+  /* Its title, as Blender's popup has: "UV Mapping", "Delete". */
+  if (MenuType *mt = WM_menutype_find(menu, true)) {
+    popup.title = CTX_IFACE_(mt->translation_context, mt->label);
+  }
   bridge_popup_show(C, std::move(popup));
   return true;
 }
@@ -5078,9 +5224,15 @@ bool bridge_enum_popup(bContext *C, wmOperator *op, PropertyRNA *prop)
   return true;
 }
 
+/** The panels #bridge_panel_popup shows natively: Rename Active Item's (F2). */
+static bool bridge_panel_popup_takes(const StringRef panel)
+{
+  return panel == "TOPBAR_PT_name";
+}
+
 bool bridge_panel_popup(bContext *C, const char *panel)
 {
-  if (WM_native_ui_desktop_mode() || !STREQ(panel, "TOPBAR_PT_name")) {
+  if (WM_native_ui_desktop_mode() || !bridge_panel_popup_takes(panel)) {
     return false;
   }
   BridgePopup popup;
@@ -5088,6 +5240,193 @@ bool bridge_panel_popup(bContext *C, const char *panel)
   bridge_popup_show(C, std::move(popup));
   return true;
 }
+
+/* -------------------------------------------------------------------- */
+/** \name What a Key Does in the Native Interface
+ *
+ * ROUND5 9A, decisions 51 and 52: a key Blender answers on the desktop is never swallowed. Its
+ * key-map item runs as there, and what it opens shows natively (a menu, an operator's choice or
+ * dialog, the rename field); or it is kept from Blender, as it would show Blender's own interface
+ * over the platform's (popovers, search, toolbars, sidebars, the screen's layout), and then the
+ * interface does its own version of the command where it has one, a stand-in, or says where the
+ * command is. The Mac bridge harness's `keys` scenario reads every item of the 3D View's key-maps
+ * through the `keys` view and fails when one is left without an answer.
+ * \{ */
+
+/**
+ * The interface's own version of a command kept from Blender, by the operator and, where needed,
+ * its properties: one of the commands of `release/ios/key_stand_ins.txt`, which the shell carries
+ * out (`DocumentWindow.swift`, #pullMenuPopup) and the harness checks against. Only what the shell
+ * already does from a button: none is made up for a key. Null where it has none.
+ */
+static const char *bridge_key_stand_in(const wmKeyMapItem *kmi, const wmOperatorType *ot)
+{
+  const StringRef idname = ot->idname;
+  if (ELEM(idname, "WM_OT_search_menu", "WM_OT_search_operator", "WM_OT_search_single_menu")) {
+    return "search";
+  }
+  if (idname == "SCREEN_OT_userpref_show") {
+    return "settings";
+  }
+  if (idname == "SCREEN_OT_screen_full_area") {
+    return "interface";
+  }
+  if (idname == "WM_OT_context_toggle" && kmi->ptr &&
+      RNA_struct_find_property(kmi->ptr, "data_path") &&
+      RNA_string_get(kmi->ptr, "data_path") == "space_data.show_region_ui")
+  {
+    return "properties";
+  }
+  if (idname == "SCREEN_OT_region_toggle" && kmi->ptr &&
+      RNA_struct_find_property(kmi->ptr, "region_type") &&
+      RNA_enum_get(kmi->ptr, "region_type") == RGN_TYPE_UI)
+  {
+    return "properties";
+  }
+  return nullptr;
+}
+
+/** A command kept from Blender, by the name a person knows it by: a sidebar or toolbar by the
+ * setting \a kmi toggles, as "Toolbar" (T), otherwise the operator's. */
+static std::string bridge_key_command_name(bContext *C, const wmKeyMapItem *kmi, wmOperatorType *ot)
+{
+  if (C && kmi->ptr && RNA_struct_find_property(kmi->ptr, "data_path")) {
+    const std::string path = RNA_string_get(kmi->ptr, "data_path");
+    PointerRNA context = RNA_pointer_create_discrete(nullptr, RNA_Context, C);
+    PointerRNA owner;
+    PropertyRNA *prop = nullptr;
+    if (!path.empty() && RNA_path_resolve_property(&context, path.c_str(), &owner, &prop) && prop) {
+      const char *name = RNA_property_ui_name(prop);
+      if (name && name[0]) {
+        return name;
+      }
+    }
+  }
+  return WM_operatortype_name(ot, kmi->ptr);
+}
+
+WMNativeKeyAnswer WM_native_ui_keymap_item_answer(bContext *C, const wmKeyMapItem *kmi)
+{
+  using Kind = WMNativeKeyAnswer::Kind;
+  WMNativeKeyAnswer answer;
+  if (WM_native_ui_desktop_mode() || kmi->idname[0] == '\0') {
+    return answer;
+  }
+  wmOperatorType *ot = WM_operatortype_find(kmi->idname, true);
+  if (ot == nullptr) {
+    return answer;
+  }
+  const StringRef idname = ot->idname;
+  bool hidden = false;
+  if (ELEM(idname, "WM_OT_call_menu", "WM_OT_call_menu_pie")) {
+    answer.kind = Kind::Menu;
+    if (kmi->ptr && RNA_struct_find_property(kmi->ptr, "name")) {
+      answer.menu = RNA_string_get(kmi->ptr, "name");
+    }
+    return answer;
+  }
+  if (idname == "WM_OT_call_panel") {
+    /* The panels with a native answer run, as F2's Rename Active Item; other panels would show
+     * Blender's popover. */
+    const std::string panel = kmi->ptr && RNA_struct_find_property(kmi->ptr, "name") ?
+                                  RNA_string_get(kmi->ptr, "name") :
+                                  std::string();
+    if (bridge_panel_popup_takes(panel)) {
+      answer.kind = Kind::Rename;
+      return answer;
+    }
+    hidden = true;
+  }
+  /* What would show Blender's own interface over the platform's. */
+  static const Set<StringRef> shows_interface = {
+      "WM_OT_call_asset_shelf_popover",
+      "WM_OT_context_menu_enum",
+      "WM_OT_context_pie_enum",
+      "WM_OT_search_menu",
+      "WM_OT_search_operator",
+      "WM_OT_search_single_menu",
+      "WM_OT_toolbar",
+      "WM_OT_toolbar_fallback_pie",
+      "WM_OT_toolbar_prompt",
+      "WM_OT_batch_rename",
+      "SCREEN_OT_region_toggle",
+      "SCREEN_OT_region_flip",
+      "SCREEN_OT_repeat_history",
+      "SCREEN_OT_screen_full_area",
+      "SCREEN_OT_space_type_set_or_cycle",
+      "SCREEN_OT_workspace_cycle",
+      "SCREEN_OT_userpref_show",
+      "SCREEN_OT_info_log_show",
+  };
+  if (shows_interface.contains(idname)) {
+    hidden = true;
+  }
+  /* Sidebars and toolbars, as N and T show them. */
+  if (idname == "WM_OT_context_toggle" && kmi->ptr &&
+      RNA_struct_find_property(kmi->ptr, "data_path") &&
+      StringRef(RNA_string_get(kmi->ptr, "data_path")).startswith("space_data.show_region_"))
+  {
+    hidden = true;
+  }
+  /* A search through an enum's items, which has no native form. */
+  if (ot->invoke == WM_enum_search_invoke) {
+    hidden = true;
+  }
+  if (!hidden) {
+    /* An operator that asks before it runs: its choice shows natively (`bridge_enum_popup`), its
+     * properties in the native dialog or the last operation's strip (`props_dialog`,
+     * `redo_show`). */
+    if (ot->invoke == WM_menu_invoke) {
+      answer.kind = Kind::Choice;
+    }
+    else if (ELEM(ot->invoke,
+                  WM_operator_props_popup,
+                  WM_operator_props_popup_call,
+                  WM_operator_props_popup_confirm))
+    {
+      answer.kind = Kind::Dialog;
+    }
+    return answer;
+  }
+  if (const char *command = bridge_key_stand_in(kmi, ot)) {
+    answer.kind = Kind::StandIn;
+    answer.command = command;
+    return answer;
+  }
+  answer.kind = Kind::Says;
+  if (C) {
+    answer.text = fmt::format("{} is not in the iPad interface. It is in the Desktop Interface.",
+                              bridge_key_command_name(C, kmi, ot));
+  }
+  return answer;
+}
+
+bool WM_native_ui_keymap_item_hidden(const wmKeyMapItem *kmi)
+{
+  return WM_native_ui_keymap_item_answer(nullptr, kmi).hidden();
+}
+
+void WM_native_ui_keymap_item_skipped(bContext *C, const wmKeyMapItem *kmi)
+{
+  const WMNativeKeyAnswer answer = WM_native_ui_keymap_item_answer(C, kmi);
+  const std::string key = WM_keymap_item_to_string(kmi, false).value_or(std::string("?"));
+  if (answer.kind == WMNativeKeyAnswer::Kind::StandIn) {
+    WM_native_ui_session_log(
+        "key", (key + " stand-in " + answer.command + " " + kmi->idname).c_str());
+    BridgePopup popup;
+    popup.command = answer.command;
+    bridge_popup_show(C, std::move(popup));
+    return;
+  }
+  /* A key always says something: Says, or a key-map item that changed to run since it matched. */
+  WM_native_ui_session_log("key", (key + " hidden " + kmi->idname).c_str());
+  WM_native_ui_notice(RPT_INFO,
+                      answer.text.empty() ?
+                          (std::string(kmi->idname) + " did not run in the iPad interface").c_str() :
+                          answer.text.c_str());
+}
+
+/** \} */
 
 void bridge_apply_viewport_preferences(bContext *C)
 {

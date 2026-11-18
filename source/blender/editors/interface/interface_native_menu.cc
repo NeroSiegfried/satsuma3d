@@ -504,19 +504,11 @@ static void native_menu(bContext *C,
   }
   const char *context_id = native_context_menu_id(C);
   const std::string resolved = root == "context" ? (context_id ? context_id : "") : root;
-  /* A Properties tab's menus are drawn in a Properties editor of their own, see
-   * #native::in_properties_tab, and checked as the viewport's. */
-  const bool properties_menu = CTX_wm_space_properties(C) &&
-                               WM_menutype_find(resolved.c_str(), true);
-  if (!ELEM(resolved,
-            "TOPBAR_MT_editor_menus",
-            "VIEW3D_MT_editor_menus",
-            "VIEW3D_MT_add",
-            /* The Share menu's Import and Export. */
-            "TOPBAR_MT_file_import",
-            "TOPBAR_MT_file_export") &&
-      (!context_id || resolved != context_id) && !properties_menu)
-  {
+  /* Sculpt Mode's context menu, and the other modes' that are panels of settings, are opened as
+   * a panel below; every menu is what #native::menu_can_show allows. */
+  const bool context_panel = context_id && resolved == context_id &&
+                             WM_menutype_find(resolved.c_str(), true) == nullptr;
+  if (!context_panel && !native::menu_can_show(C, resolved)) {
     return;
   }
   /* What `first` names its items' routes after: the menu, and its tab. */
@@ -580,6 +572,42 @@ static std::string native_context_menu_heading(bContext *C)
 }
 
 namespace native {
+
+/** The menus Blender asked the interface to pop up, by a key or a pie, see #menu_popup_asked. */
+static Set<std::string> &menus_asked()
+{
+  static Set<std::string> asked;
+  return asked;
+}
+
+void menu_popup_asked(const StringRef idname)
+{
+  menus_asked().add(std::string(idname));
+}
+
+bool menu_can_show(bContext *C, const StringRef idname)
+{
+  MenuType *mt = WM_menutype_find(std::string(idname).c_str(), true);
+  if (mt == nullptr) {
+    return false;
+  }
+  const char *context_id = native_context_menu_id(C);
+  const bool root = ELEM(idname,
+                         "TOPBAR_MT_editor_menus",
+                         "VIEW3D_MT_editor_menus",
+                         "VIEW3D_MT_add",
+                         /* The Share menu's Import and Export. */
+                         "TOPBAR_MT_file_import",
+                         "TOPBAR_MT_file_export") ||
+                    (context_id && idname == context_id) ||
+                    /* A Properties tab's menus are drawn in a Properties editor of their own, see
+                     * #in_properties_tab, and checked as the viewport's. */
+                    CTX_wm_space_properties(C) != nullptr ||
+                    /* Where Blender asked for it, its key-map matched: what the desktop would
+                     * draw there. */
+                    menus_asked().contains(std::string(idname));
+  return root && WM_menutype_poll(C, mt);
+}
 
 void menu_write(bContext *C, const StringRef route, ViewBuilder &builder)
 {
