@@ -95,10 +95,13 @@ the tag `testers/<version>-<build>` is free. It sends nothing unless called with
 `xcodebuild -exportArchive` and export options `method` `app-store-connect`, `destination`
 `upload` (Xcode's own account, from its settings), tags the commit `testers/<version>-<build>`
 and pushes that tag alone. Each upload is the owner's word, given for that build (gate G4).
-Xcode 27.2 also offers, unexercised here: export `method` `validation` (listed by
-`xcodebuild -help`, undescribed), and `xcrun altool --validate-app <ipa>` / `--upload-package <ipa>`
-with an App Store Connect API key or an app-specific password; validation against the store needs
-the app's record. A full build takes hours the first time and wants about twice the development build
+Validating without uploading (Xcode 27.2): export `method` `validation` is Xcode's "Validate with
+App Store Connect" (`IDEDistributionMethodiOSAppStoreValidation` in `IDEDistribution.framework`).
+It refuses `destination` `export` ("expected one of {upload}"): it sends the package to Apple's
+validation service, which needs the app's record in App Store Connect, so it is run only on the
+owner's word, like an upload. `xcrun altool --validate-app <ipa>` does the same with an App Store
+Connect API key or an app-specific password. Everything checkable on this Mac (signature, profile,
+entitlements, layout, privacy manifests, identity) is checked by `build_testflight.sh`. A full build takes hours the first time and wants about twice the development build
 directory's size free.
 
 **NumPy.** The prebuilt libraries ship NumPy's modules as `MH_BUNDLE`, which cannot become
