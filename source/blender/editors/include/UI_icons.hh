@@ -893,6 +893,9 @@ DEF_ICON(USER)
 DEF_ICON(EXPERIMENTAL)
 DEF_ICON(MEMORY)
 
+/* The iPad app's mark (`release/ios/satsuma_glyph.svg`, ROUND5 9G.2). */
+DEF_ICON(SATSUMA_GLYPH)
+
 /* The items above are initiated sequentially while the ones that
  * follow are initiated individually. Therefore this item marks
  * the boundary. Add regular SVG icons above this one. */
@@ -1158,9 +1161,6 @@ DEF_ICON_VECTOR(NODE_SOCKET_SCENE)
 DEF_ICON_VECTOR(NODE_SOCKET_TEXT)
 DEF_ICON_VECTOR(NODE_SOCKET_MASK)
 DEF_ICON_VECTOR(NODE_SOCKET_SOUND)
-
-/* The iPad app's mark (`release/ios/satsuma_glyph.svg`), last so that no icon's number moves. */
-DEF_ICON(SATSUMA_GLYPH)
 
 /* add as needed. */
 
