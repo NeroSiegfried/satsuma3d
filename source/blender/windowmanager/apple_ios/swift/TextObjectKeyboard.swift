@@ -45,6 +45,7 @@ struct TextObjectKeyboard: View {
         .padding(.bottom, model.safeAreaInsets.bottom + model.bottomTray + 16)
         .transition(.opacity.combined(with: .scale(scale: 0.9)))
         .accessibilityIdentifier("blender.text.keyboard")
+        .bottomControl("keyboard bar")
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)

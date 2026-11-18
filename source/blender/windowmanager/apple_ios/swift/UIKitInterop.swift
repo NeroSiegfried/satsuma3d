@@ -736,7 +736,12 @@ final class LayoutChecker {
   /** The window, in the coordinates zones report: a zone reaching more than a point outside it is
    * logged as `outside window`. Empty until the window says its size. */
   var bounds = CGRect.null {
-    didSet { if bounds != oldValue { schedule() } }
+    didSet {
+      if bounds != oldValue {
+        schedule()
+        sendBottomBand()
+      }
+    }
   }
   /** The window is being resized: frames pass through each other for a moment, which is not an
    * overlap anyone sees. Checked once more when it ends. */
@@ -770,6 +775,46 @@ final class LayoutChecker {
     guard frames[zone] != next else { return }
     frames[zone] = next
     schedule()
+    if Self.bottomZones.contains(zone) { sendBottomBand() }
+  }
+
+  /* -------------------------------------------------------------------- */
+  /* The bottom controls' band (ROUND5 9G.5) */
+
+  /** Zones that are controls along the window's bottom edge while they stand there: the Actions
+   * button and bar, the last operation's strip, the tool button or the bottom rail. */
+  private static let bottomZones: Set<String> = ["actions", "operation", "tools", "brushes"]
+  /** Controls along the bottom that are not checked for overlaps, such as the keyboard's bar. */
+  private var bottomOnly: [String: CGRect] = [:]
+  private var sentBand: Float = -1
+
+  func setBottomControl(_ zone: String, _ frame: CGRect?) {
+    let next = frame.flatMap { $0.width >= 1 && $0.height >= 1 ? $0 : nil }
+    guard bottomOnly[zone] != next else { return }
+    bottomOnly[zone] = next
+    sendBottomBand()
+  }
+
+  /** The top of the highest control standing along the window's bottom edge, in window pixels from
+   * the bottom, from the same frames the layout checker reads: framing keeps what it frames above
+   * it (`WM_native_ui_bottom_controls_set`). The navigation gizmo keeps to the tray, as before. */
+  private func sendBottomBand() {
+    guard !bounds.isNull, !bounds.isEmpty, let model = ShellModel.current else { return }
+    /* Standing along the edge: reaching to within this of the safe area's bottom. */
+    let reach = bounds.maxY - model.safeAreaInsets.bottom - 72
+    var top = bounds.maxY
+    for (zone, frame) in frames where Self.bottomZones.contains(zone) && frame.maxY >= reach {
+      /* A rail standing along a side is not a bottom control, even where it reaches down. */
+      if ["tools", "brushes"].contains(zone) && frame.width < frame.height * 0.8 { continue }
+      top = min(top, frame.minY)
+    }
+    for frame in bottomOnly.values where frame.maxY >= reach {
+      top = min(top, frame.minY)
+    }
+    let band = Float(max(0, (bounds.maxY - top) * model.pointScale).rounded())
+    guard band != sentBand else { return }
+    sentBand = band
+    WM_native_ui_bottom_controls_set(band)
   }
 
   private func schedule() {
@@ -809,6 +854,13 @@ final class LayoutChecker {
 }
 
 extension View {
+  /** Report this control's frame as one standing along the window's bottom edge, which framing
+   * keeps clear of, without checking it for overlaps (ROUND5 9G.5). */
+  func bottomControl(_ zone: String) -> some View {
+    onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { LayoutChecker.shared.setBottomControl(zone, $0) }
+      .onDisappear { LayoutChecker.shared.setBottomControl(zone, nil) }
+  }
+
   /** Report this control's frame, in the window, as one of the zones over the viewport. */
   func layoutZone(_ zone: String) -> some View {
     onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { LayoutChecker.shared.set(zone, $0) }
