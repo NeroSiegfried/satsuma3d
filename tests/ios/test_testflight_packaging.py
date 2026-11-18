@@ -380,6 +380,103 @@ class BuildScriptTest(unittest.TestCase):
         self.assertIn('must name its source', result.stderr)
 
 
+class UploadScriptTest(unittest.TestCase):
+    """ROUND5 8L, L4: `upload_testflight.sh` prints what it would send and refuses without the build
+    number repeated. Run in a throwaway repository whose `github` remote is a local bare one, with an
+    `xcodebuild` stand-in that records any call: nothing can reach Apple. It is never called here
+    with the right number."""
+    SCRIPT = Path(__file__).resolve().parents[2] / 'release/ios/upload_testflight.sh'
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.repo = root / 'checkout'
+        script = self.repo / 'release/ios/upload_testflight.sh'
+        script.parent.mkdir(parents=True)
+        script.write_text(self.SCRIPT.read_text())
+        self.git('init', '-q', '-b', 'ipad/main')
+        self.git('add', '.')
+        self.git('commit', '-q', '-m', 'one')
+        self.commit = self.git('rev-parse', 'HEAD')
+        self.git('init', '-q', '--bare', str(root / 'remote.git'), cwd=root)
+        self.git('remote', 'add', 'github', str(root / 'remote.git'))
+        self.git('push', '-q', 'github', 'ipad/main')
+        self.build = root / 'build'
+        app = self.build / 'Satsuma3D.xcarchive/Products/Applications/Blender.app'
+        app.mkdir(parents=True)
+        self.info = {'CFBundleIdentifier': 'app.example', 'CFBundleShortVersionString': '0.1.0',
+                     'CFBundleVersion': '3', 'CFBundleDisplayName': 'Example',
+                     'SatsumaSourceCommit': self.commit}
+        self.app = app
+        self.write_info()
+        (self.build / 'export').mkdir()
+        (self.build / 'export/Example.ipa').write_bytes(b'')
+        self.settings = root / 'testflight.env'
+        self.settings.write_text(f'BUNDLE_ID=app.example\nMARKETING_VERSION=0.1.0\nBUILD_NUMBER=3\n'
+                                 f'BUILD_DIR={self.build}\n')
+        self.bin = root / 'bin'
+        self.bin.mkdir()
+        self.called = root / 'xcodebuild-called'
+        stand_in = self.bin / 'xcodebuild'
+        stand_in.write_text(f'#!/bin/sh\necho "$@" >> {self.called}\nexit 1\n')
+        stand_in.chmod(0o755)
+
+    def git(self, *args, cwd=None):
+        return subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                               '-c', 'core.hooksPath=/dev/null', *args], cwd=cwd or self.repo,
+                              check=True, capture_output=True, text=True).stdout.strip()
+
+    def write_info(self):
+        (self.app / 'Info.plist').write_bytes(plistlib.dumps(self.info))
+
+    def run_script(self, *args):
+        import os
+        environment = dict(os.environ, PATH=f'{self.bin}:{os.environ["PATH"]}')
+        result = subprocess.run(['bash', str(self.repo / 'release/ios/upload_testflight.sh'), *args,
+                                 str(self.settings)], capture_output=True, text=True, timeout=60,
+                                env=environment)
+        self.assertFalse(self.called.exists(), 'xcodebuild was called')
+        return result
+
+    def test_prints_and_sends_nothing_without_the_flag(self):
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for text in ('app.example', '0.1.0', 'build      3', self.commit, 'source     on github/ipad/main',
+                     'ITSAppUsesNonExemptEncryption  (absent)', 'Nothing sent', '--upload-build 3'):
+            self.assertIn(text, result.stdout)
+
+    def test_refuses_a_wrong_build_number(self):
+        for number in ('2', '30', ''):
+            result = self.run_script('--upload-build', number) if number else self.run_script('--upload-build')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn('== upload', result.stdout)
+
+    def test_refuses_a_commit_not_on_github(self):
+        self.git('commit', '-q', '--allow-empty', '-m', 'local only')
+        self.info['SatsumaSourceCommit'] = self.git('rev-parse', 'HEAD')
+        self.write_info()
+        result = self.run_script('--upload-build', '3')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("is not on github's ipad/main", result.stdout)
+
+    def test_refuses_an_archive_other_than_the_settings(self):
+        self.info['CFBundleVersion'] = '4'
+        self.write_info()
+        result = self.run_script('--upload-build', '4')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("the archive's build is 4, the settings say 3", result.stdout)
+
+    def test_uploads_only_through_xcode_and_pushes_only_the_tag(self):
+        text = self.SCRIPT.read_text()
+        self.assertIn('<key>destination</key><string>upload</string>', text)
+        self.assertIn('<key>method</key><string>app-store-connect</string>', text)
+        pushes = [line.strip() for line in text.splitlines() if 'push' in line and line.strip().startswith('git ')]
+        self.assertEqual(pushes, ['git -C "$checkout" push "$REMOTE" "refs/tags/$tag"'])
+        for word in ('altool', 'iTMSTransporter', 'curl'):
+            self.assertNotIn(word, text)
+
+
 class ModuleLoaderTest(unittest.TestCase):
     """A library that loads its own modules at run time finds them as frameworks (2026-11-18)."""
 

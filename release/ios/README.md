@@ -84,7 +84,21 @@ address, team, identity, profile). The script, logging each step to `<build dir>
    says what is missing.
 
 Uploading is a separate step on the owner's word; the script has no upload code path, and a test
-holds that. A full build takes hours the first time and wants about twice the development build
+holds that.
+
+**Uploading** (ROUND5 8L, L4) is `upload_testflight.sh [<settings>]`. It reads the archive and the
+exported `.ipa` that `build_testflight.sh` made, prints the app, version, build number, source
+commit and encryption key it would send, and checks that the archive matches the settings, that
+the commit is on the `github` remote's `ipad/main` (`git ls-remote`; nothing is fetched) and that
+the tag `testers/<version>-<build>` is free. It sends nothing unless called with
+`--upload-build <n>`, `<n>` being the archive's build number. Then it uploads with
+`xcodebuild -exportArchive` and export options `method` `app-store-connect`, `destination`
+`upload` (Xcode's own account, from its settings), tags the commit `testers/<version>-<build>`
+and pushes that tag alone. Each upload is the owner's word, given for that build (gate G4).
+Xcode 27.2 also offers, unexercised here: export `method` `validation` (listed by
+`xcodebuild -help`, undescribed), and `xcrun altool --validate-app <ipa>` / `--upload-package <ipa>`
+with an App Store Connect API key or an app-specific password; validation against the store needs
+the app's record. A full build takes hours the first time and wants about twice the development build
 directory's size free.
 
 **NumPy.** The prebuilt libraries ship NumPy's modules as `MH_BUNDLE`, which cannot become
