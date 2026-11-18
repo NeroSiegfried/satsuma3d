@@ -67,15 +67,17 @@ address, team, identity, profile). The script, logging each step to `<build dir>
 3. stages the complete app with `cmake --install` (`bin/Blender.app`, not `bin/Release`);
 4. rebuilds NumPy's modules as dynamic libraries with `build_numpy_ios.sh` and proves them with
    `check_numpy_replacements.py` (see below);
-5. runs `prepare_testflight.py --without-plugins`: every library becomes a framework, each Python
+5. rebuilds OpenImageDenoise with its framework loader with `build_oidn_ios.sh` and proves it with
+   `check_oidn_replacements.py` (see below);
+6. runs `prepare_testflight.py --without-plugins` with both sets of replacements: every library becomes a framework, each Python
    module gets its `.fwork` marker, each framework whose binary uses a required reason API gets
    a privacy manifest, any app extension is left out (decision 36), and
    the layout is checked (`check_prepared`);
-6. checks the prepared app: its identity in `Info.plist` (id, name, version, build, source
+7. checks the prepared app: its identity in `Info.plist` (id, name, version, build, source
    address and commit, iPad only, minimum OS), the icon and glyphs in `Assets.car`
    (`check_icons`), `required_reason_apis.py`, and
    `tests/ios/test_testflight_packaging.py`;
-7. only with a team, a signing identity, an installed profile for `<team>.<bundle id>` that grants
+8. only with a team, a signing identity, an installed profile for `<team>.<bundle id>` that grants
    `entitlements.plist`, and a clean checkout: archives with `archive_testflight.py` and exports
    an `.ipa` with `xcodebuild -exportArchive` (`method` `app-store-connect`, `destination`
    `export`, `manageAppVersionAndBuildNumber` false). Without them it stops after the checks and
@@ -91,17 +93,30 @@ against `versions.cmake`'s hash) with its vendored Meson and the recipe's cross 
 relinks every module as `MH_DYLIB`. Meson asks the Mac's Python for the extension suffix, so it
 runs with `_PYTHON_SYSCONFIGDATA_NAME=_sysconfigdata__darwin_arm64-iphoneos` and a `PYTHONPATH`
 holding only that file from the iOS Python; without that the modules are named for the Mac and
-the app never finds them. OpenImageDenoise must be built with `oidn_ios_frameworks.diff` so its
-Metal module resolves as a framework; `prepare_testflight.py` refuses one built without it. The
-prebuilt `lib/ios_arm64` library of 2026-10-06 lacks it: on the iPad its framework layout reports
-"no supported devices found" (2026-11-18), so a tester build waits for that library's rebuild.
+the app never finds them.
+
+**OpenImageDenoise.** It loads its Metal device module at run time from the folder its core library
+is in; in the framework layout that module is a sibling framework, which only a core built with
+`oidn_ios_frameworks.diff` looks for. The prebuilt `lib/ios_arm64` library of 2026-10-06 lacks it:
+on the iPad its framework layout reported "no supported devices found" (2026-11-18), and
+`prepare_testflight.py` refuses it (`MODULE_LOADERS`). `build_oidn_ios.sh <work dir> <output dir>`
+rebuilds the version in `versions.cmake` (hash checked) with `oidn.diff` and
+`oidn_ios_frameworks.diff`, the Metal device only, as `openimagedenoise.cmake` does for iOS, and
+writes the three libraries under the prebuilt names and install names, without the build's run
+paths. `check_oidn_replacements.py` compares them with the prebuilt set (names, install names,
+architecture, minimum iOS, dependencies, exports), and checks that the core holds the framework
+lookup and that the framework name it asks for (`OpenImageDenoise_` + module, with Release's empty
+postfix) is the name packaging gives the module. About a minute; the development build keeps the
+prebuilt libraries (its loose layout finds the module either way).
 
 The pieces can also be run by hand:
 
 ```sh
 release/ios/build_numpy_ios.sh /path/to/numpy-work /path/to/replacements
+release/ios/build_oidn_ios.sh /path/to/oidn-work /path/to/oidn-replacements
 python3 release/ios/prepare_testflight.py /path/to/bin/Blender.app /path/to/prepared/Blender.app \
-  --replacement-directory /path/to/replacements --without-plugins
+  --replacement-directory /path/to/replacements --replacement-directory /path/to/oidn-replacements \
+  --without-plugins
 python3 release/ios/required_reason_apis.py /path/to/prepared/Blender.app
 python3 release/ios/archive_testflight.py /path/to/prepared/Blender.app /path/to/Blender.xcarchive \
   --profile /path/to/profile.mobileprovision --identity SIGNING_IDENTITY \

@@ -328,13 +328,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=Path)
     parser.add_argument('output', type=Path)
-    parser.add_argument('--replacement-directory', type=Path)
+    parser.add_argument('--replacement-directory', type=Path, action='append', default=[],
+                        help='Libraries to package instead of the app\'s own, by file name: NumPy\'s '
+                             'relinked modules, the rebuilt OpenImageDenoise. May be given more than once')
     parser.add_argument('--without-plugins', action='store_true',
                         help='Leave out app extensions, such as the thumbnailer, which need App IDs of their own')
     args = parser.parse_args()
     replacements = {}
-    if args.replacement_directory:
-        for path in args.replacement_directory.rglob('*'):
+    for directory in args.replacement_directory:
+        for path in directory.rglob('*'):
             if path.is_file() and path.suffix in ('.so', '.dylib'):
                 if path.name in replacements:
                     raise ValueError(f'Duplicate replacement: {path.name}')

@@ -266,6 +266,82 @@ class NumpyReplacementsTest(unittest.TestCase):
         self.assertIn('replaces no bundled module', problems)
 
 
+@unittest.skipUnless(sys.platform == 'darwin', 'Requires the iPhoneOS SDK')
+class OidnReplacementsTest(unittest.TestCase):
+    """ROUND5 8K: the rebuilt OpenImageDenoise stands in for the prebuilt set, finds its device module
+    as a framework, and asks for the framework name packaging gives it."""
+    ROOT = Path(__file__).resolve().parents[2]
+    CORE = 'libOpenImageDenoise_core.2.4.1.dylib'
+    METAL = 'libOpenImageDenoise_device_metal.2.4.1.dylib'
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
+
+    def library(self, folder, name, source, *arguments, minimum='14.0'):
+        folder.mkdir(parents=True, exist_ok=True)
+        path = self.root / (name + '.c')
+        path.write_text(source)
+        subprocess.run(['xcrun', '--sdk', 'iphoneos', 'clang', '-arch', 'arm64', '-isysroot', self.sdk,
+                        f'-miphoneos-version-min={minimum}', '-dynamiclib',
+                        f'-Wl,-install_name,@rpath/{name}', str(path), *map(str, arguments),
+                        '-o', str(folder / name)], check=True, capture_output=True)
+
+    def set(self, folder, lookup=True, minimum='14.0', *arguments):
+        strings = ['oidn_init_module_', 'OpenImageDenoise_'] + (['.framework/'] if lookup else [])
+        core = ''.join(f'static __attribute__((used)) const char *s{i} = "{text}";\n' for i, text in enumerate(strings))
+        self.library(folder, self.CORE, core + 'int oidnNewDevice(void) { return 1; }', *arguments, minimum=minimum)
+        self.library(folder, self.METAL, 'void oidn_init_module_device_metal_v20401(void) {}',
+                     folder / self.CORE, *arguments, minimum=minimum)
+
+    def problems(self, prebuilt, replacements):
+        from check_oidn_replacements import check
+        return [problem for _, problems in check(prebuilt, replacements) for problem in problems]
+
+    def test_check(self):
+        prebuilt, out = self.root / 'prebuilt', self.root / 'out'
+        self.set(prebuilt, lookup=False)
+        self.set(out)
+        self.assertEqual(self.problems(prebuilt, out), [])
+        # The prebuilt core itself, without the patch: refused.
+        self.assertIn('no framework lookup', ' '.join(self.problems(prebuilt, prebuilt)))
+        self.set(out, minimum='15.0')
+        self.assertTrue(any(problem.startswith('minos 15.0') for problem in self.problems(prebuilt, out)))
+        self.set(out, True, '14.0', '-Wl,-rpath,/Users/someone/build/lib')
+        self.assertTrue(any('run paths' in problem for problem in self.problems(prebuilt, out)))
+        self.set(out)
+        (out / self.METAL).unlink()
+        (out / 'libOpenImageDenoise_device_metal.dylib').write_bytes((prebuilt / self.METAL).read_bytes())
+        problems = self.problems(prebuilt, out)
+        self.assertTrue(any(problem.startswith('no replacement') for problem in problems))
+        self.assertIn('replaces no prebuilt library', problems)
+
+    def test_framework_names_agree(self):
+        """The patched core asks for `OpenImageDenoise_` + module + SHARED_POSTFIX (empty in Release)
+        as `<name>.framework/<name>`; packaging names the module's framework the same."""
+        from prepare_testflight import framework_name
+        patch = (self.ROOT / 'build_files/build_environment/patches/oidn_ios_frameworks.diff').read_text()
+        self.assertIn('OIDN_LIBRARY_NAME "_" + name + SHARED_POSTFIX', patch)
+        self.assertIn('"../" + frameworkName + ".framework/" + frameworkName', patch)
+        self.assertEqual(framework_name(Path(self.METAL), Path('.')), 'OpenImageDenoise_device_metal')
+        self.assertEqual(framework_name(Path(self.CORE), Path('.')), 'OpenImageDenoise_core')
+
+    def test_build_script_follows_the_recipe(self):
+        script = (self.ROOT / 'release/ios/build_oidn_ios.sh').read_text()
+        recipe = (self.ROOT / 'build_files/build_environment/cmake/openimagedenoise.cmake').read_text()
+        for patch in ('oidn.diff', 'oidn_ios_frameworks.diff'):
+            self.assertIn(patch, recipe)
+            self.assertIn(patch, script)
+        for option in ('-DOIDN_DEVICE_METAL=ON', '-DOIDN_DEVICE_CPU=OFF', '-DOIDN_APPS=OFF',
+                       '-DOIDN_FILTER_RTLIGHTMAP=OFF'):
+            self.assertIn(option, script)
+        testflight = (self.ROOT / 'release/ios/build_testflight.sh').read_text()
+        self.assertIn('--replacement-directory "$denoiser"', testflight)
+        self.assertIn('check_oidn_replacements.py', testflight)
+
+
 class BuildScriptTest(unittest.TestCase):
     """ROUND5 8F.4: `build_testflight.sh` makes a tester build and never sends it anywhere."""
     SCRIPT = Path(__file__).resolve().parents[2] / 'release/ios/build_testflight.sh'

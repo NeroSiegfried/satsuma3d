@@ -12,11 +12,12 @@
 #   2. build      the `install` target, unsigned
 #   3. stage      `cmake --install`: the complete app at <build-dir>/bin/Blender.app
 #   4. numpy      NumPy's modules rebuilt and relinked as dynamic libraries (`build_numpy_ios.sh`)
-#   5. prepare    every library a framework, without app extensions (`prepare_testflight.py`)
-#   6. checks     identity, layout, privacy manifests, artwork (`test_testflight_packaging.py`)
-#   7. archive    signed `.xcarchive` (`archive_testflight.py`), and
-#   8. export     an App Store `.ipa` on disk (`xcodebuild -exportArchive`, destination `export`)
-# Steps 7 and 8 run only when the settings name a team and a signing identity, a provisioning
+#   5. oidn       OpenImageDenoise rebuilt to find its device module as a framework (`build_oidn_ios.sh`)
+#   6. prepare    every library a framework, without app extensions (`prepare_testflight.py`)
+#   7. checks     identity, layout, privacy manifests, artwork (`test_testflight_packaging.py`)
+#   8. archive    signed `.xcarchive` (`archive_testflight.py`), and
+#   9. export     an App Store `.ipa` on disk (`xcodebuild -exportArchive`, destination `export`)
+# Steps 8 and 9 run only when the settings name a team and a signing identity, a provisioning
 # profile for <team>.<bundle id> is installed, and the checkout is clean; otherwise the script
 # stops after the checks and says what is missing. **It never uploads**: there is no upload step,
 # and the export options say `destination` `export`. Uploading is the owner's, each time (G4).
@@ -29,7 +30,7 @@
 #
 # Needs Xcode with the iPhoneOS SDK and its Metal toolchain, Homebrew's cmake, ninja and
 # pkg-config, the libraries in `lib/ios_arm64` and `lib/macos_arm64`, and network access the first
-# time (NumPy's source release).
+# time (NumPy's and OpenImageDenoise's source releases).
 
 set -euo pipefail
 
@@ -162,16 +163,31 @@ main() {
     tail -1 "$logs/numpy.log"
   fi
 
-  # 5. Prepare.
+  # 5. OpenImageDenoise, with its framework loader (ROUND5 8K). Reused like NumPy's.
+  step oidn
+  local denoiser="$BUILD_DIR/oidn_replacements"
+  local bundled_oidn="$LIBDIR/openimagedenoise/lib"
+  if [ -d "$denoiser" ] && (cd "$release" && "$python" -B check_oidn_replacements.py \
+       "$bundled_oidn" "$denoiser") > "$logs/oidn-check.log" 2>&1; then
+    echo "  reusing $denoiser"
+  else
+    rm -rf "$denoiser"
+    PREBUILT="$bundled_oidn" "$release/build_oidn_ios.sh" "$BUILD_DIR/oidn" "$denoiser" \
+      > "$logs/oidn.log" 2>&1 || fail_log oidn
+    tail -1 "$logs/oidn.log"
+  fi
+
+  # 6. Prepare.
   step prepare
   local prepared="$BUILD_DIR/prepared/Blender.app"
   rm -rf "$prepared"
   (cd "$release" && "$python" -B prepare_testflight.py "$app" "$prepared" \
-     --replacement-directory "$replacements" --without-plugins) > "$logs/prepare.log" 2>&1 \
+     --replacement-directory "$replacements" --replacement-directory "$denoiser" \
+     --without-plugins) > "$logs/prepare.log" 2>&1 \
     || fail_log prepare
   tail -1 "$logs/prepare.log"
 
-  # 6. Checks.
+  # 7. Checks.
   step checks
   "$python" -B - "$prepared" "$BUNDLE_ID" "$PRODUCT_NAME" "$MARKETING_VERSION" "$BUILD_NUMBER" \
     "$SOURCE_URL" "$MINIMUM_OS" "$commit" <<'PYTHON' || fail "the prepared app's identity is wrong"
@@ -208,7 +224,7 @@ problems = check_icons(sys.argv[1]); [print("  " + p) for p in problems]; sys.ex
   echo "  $(ls -d "$prepared"/Frameworks/*.framework | wc -l | tr -d ' ') frameworks," \
     "$(du -sm "$prepared" | awk '{print $1}') MB"
 
-  # 7–8. Archive and export, only with everything a signed build needs.
+  # 8–9. Archive and export, only with everything a signed build needs.
   local missing=()
   [ -n "$TEAM_ID" ] || missing+=("TEAM_ID (the paid team, gate G1)")
   [ -n "$SIGNING_IDENTITY" ] || missing+=("SIGNING_IDENTITY (a signing certificate of that team)")
