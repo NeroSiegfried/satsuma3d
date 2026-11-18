@@ -152,7 +152,7 @@ final class RevealCoordinator {
   /** Properties on \a tab, opened if closed. */
   func open(properties tab: String) {
     guard let panels = SwiftScenePanels.current else { return }
-    panels.setInspectorShown(true)
+    panels.setInspectorShown(true, by: "reveal")
     if !tab.isEmpty { panels.properties.selectTab(tab) }
   }
 

@@ -722,6 +722,8 @@ LOG_KINDS = {
     'snapshot': 'the steps of developer checks',
     'active': 'a mark at most once a minute while the app is in use',
     'input': 'input that arrived while a sheet was open',
+    'gizmo': 'the gestures on the navigation gizmo',
+    'panel': 'when side panels opened and closed',
 }
 writers = ''.join(path.read_text(encoding='utf-8', errors='replace')
                   for path in (SWIFT.parents[3]).rglob('*') if path.suffix in ('.cc', '.mm', '.swift'))
@@ -740,6 +742,26 @@ check('active' in kinds and 'PresenceRecognizer()' in window_text,
       "10E: input writes an `active` line (touches in Swift, keys and pointers in Blender)")
 check(re.search(r'static bool session_log_enabled\(\)\s*\{[^}]*return true;', bridge_text) is not None,
       "10E: the session log is written in both interfaces")
+
+# ROUND5 12A/12B (decision 74): a drag on the navigation gizmo is the app's orbit, and only a hold
+# opens the menu of views. The pie is opened in one place, the hold's beginning; the pan's handler
+# calls the window's drag entry and touches no pie.
+gizmo_text = (SWIFT / 'ViewGizmo.swift').read_text(encoding='utf-8')
+opens = [m.start() for m in re.finditer(r'pieVisible\s*=\s*true', gizmo_text)]
+hold_began = re.search(r'func holdBegan\(model: ShellModel\) \{.*?\n  \}', gizmo_text, re.S)
+check(len(opens) == 1 and hold_began is not None and hold_began.start() < opens[0] < hold_began.end(),
+      "12B: the pie of views opens only where the hold begins (%d places)" % len(opens))
+pan = re.search(r'@objc func drag\(_ gesture: UIPanGestureRecognizer\) \{.*?\n    \}', gizmo_text, re.S)
+check(pan is not None and 'dragBegan' in pan.group(0) and 'pieVisible' not in pan.group(0) and
+      'release(' not in pan.group(0) and 'hover(' not in pan.group(0),
+      "12A: a drag on the gizmo calls the orbit's entry and never the pie")
+drag_entry = re.search(r'func dragBegan\(.*?\n  \}', gizmo_text, re.S)
+check(drag_entry is not None and 'wm_apple_ios_window_navigation_drag' in drag_entry.group(0),
+      "12A: the gizmo's drag goes to the window's one orbit")
+ghost_text = (ROOT / 'intern/ghost/intern/GHOST_WindowIOS.mm').read_text(encoding='utf-8')
+check(ghost_text.count('orbit_gesture_id = ++') == 1 and '[self orbitBegin:true]' in ghost_text and
+      '[self orbitBegin:false]' in ghost_text,
+      "12A: one orbit in the window: the view's drag and the gizmo's begin it in one place")
 
 # Found by 10A's measurement: the shell skips the first reveal it sees, so Blender publishes one
 # (number 0) before any command; otherwise the first command of a session revealed nothing.

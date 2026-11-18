@@ -51,7 +51,7 @@ final class SwiftScenePanels {
   /** A narrow window, where only one of Properties and the Outliner fits beside the viewport. */
   var narrow = false {
     didSet {
-      if narrow && showInspector && showHierarchy { setHierarchyShown(false) }
+      if narrow && showInspector && showHierarchy { setHierarchyShown(false, by: "narrow window") }
     }
   }
   private var shadingVisible = false
@@ -90,17 +90,27 @@ final class SwiftScenePanels {
   }
 
   /** Shown or closed, also by the system, as when a sheet is swiped away. */
-  func setInspectorShown(_ shown: Bool) {
+  /** Show or hide Properties; \a cause names who did, for the session's log (ROUND5 12C.2):
+   * `button` (a hand), `reveal`, `script`, `narrow window`. */
+  func setInspectorShown(_ shown: Bool, by cause: String = "button") {
     guard shown != showInspector else { return }
     showInspector = shown
-    if shown && narrow { showHierarchy = false }
+    WM_native_ui_log("panel", "properties \(shown ? "open" : "closed") (\(cause))")
+    if shown && narrow && showHierarchy {
+      showHierarchy = false
+      WM_native_ui_log("panel", "outliner closed (narrow window)")
+    }
     applyVisibility()
   }
 
-  func setHierarchyShown(_ shown: Bool) {
+  func setHierarchyShown(_ shown: Bool, by cause: String = "button") {
     guard shown != showHierarchy else { return }
     showHierarchy = shown
-    if shown && narrow { showInspector = false }
+    WM_native_ui_log("panel", "outliner \(shown ? "open" : "closed") (\(cause))")
+    if shown && narrow && showInspector {
+      showInspector = false
+      WM_native_ui_log("panel", "properties closed (narrow window)")
+    }
     applyVisibility()
   }
 
@@ -109,6 +119,8 @@ final class SwiftScenePanels {
     /* Windows of their own stay open beside the editor. */
     return
 #endif
+    if showInspector { WM_native_ui_log("panel", "properties closed (dismissed)") }
+    if showHierarchy { WM_native_ui_log("panel", "outliner closed (dismissed)") }
     showInspector = false
     showHierarchy = false
     applyVisibility()

@@ -33,6 +33,9 @@
  * - `edit <identifier>`: put a number field into editing, as a tap does, so a shot shows the full
  *   value it is typed from (ROUND5 7E.7): the first field shown whose node key ends in it, or
  *   whose `<property>.<label>` it is, such as `location.X` or `scale.X`; logged either way;
+ * - `gizmo drag <dx> <dy>|hold|release`: what the navigation gizmo's recognizers call (ROUND5 12A,
+ *   12B): a drag of that many points from the gizmo, which turns the view; the hold, which opens
+ *   the menu of views; letting go of it. Not the recognizers themselves;
  * - `key <NAME> [shift] [ctrl] [alt]`: a key pressed and let go, by Blender's event name (`U`, `F2`,
  *   `SPACE`), as a hardware keyboard sends it, with the pointer at the viewport's middle (ROUND5
  *   9A.9); logged when the key is not known;
@@ -129,7 +132,7 @@ enum ShellSnapshots {
         let now = wm_apple_ios_document_url()?.path
         let inScratch = scratch && (now == nil || now!.contains("/platypus-scratch/"))
         /* `editor uv desktop` changes the document's workspaces, as the desktop's tabs do. */
-        if !inScratch && (["send", "tool", "op", "panel", "key", "document"].contains(verb) ||
+        if !inScratch && (["send", "tool", "op", "panel", "key", "document", "gizmo"].contains(verb) ||
                           step.hasPrefix("editor uv desktop") || step.hasPrefix("present templates")) {
           WM_native_ui_log("snapshot", "refused outside the scratch document: \(step)")
           continue
@@ -202,7 +205,7 @@ enum ShellSnapshots {
           WM_native_ui_log("snapshot", "unknown step: \(step)")
           break
         }
-        panels.setInspectorShown(true)
+        panels.setInspectorShown(true, by: "script")
         try? await Task.sleep(for: .milliseconds(600))
         panels.properties.selectTab(tab)
         try? await Task.sleep(for: .seconds(1))
@@ -302,6 +305,34 @@ enum ShellSnapshots {
         try? await Task.sleep(for: .milliseconds(800))
         WM_native_ui_log("snapshot", request.claimedBy.map { "edit \(identifier): editing \($0)" } ??
                          "edit \(identifier): no number field shown matches")
+      case "gizmo":
+        /* ROUND5 12A/12B: what the gizmo's recognizers call, not the recognizers. `gizmo drag <dx>
+         * <dy>`: a drag from the gizmo of that many points; `gizmo hold`; `gizmo release`. */
+        guard let model = ShellModel.current, let gizmo = ViewGizmoState.current else {
+          WM_native_ui_log("snapshot", "gizmo: no gizmo shown")
+          break
+        }
+        if words.first == "drag", words.count >= 3, let dx = Double(words[1]), let dy = Double(words[2]) {
+          gizmo.dragBegan(model: model, translation: .zero)
+          if !gizmo.dragging { WM_native_ui_log("snapshot", "gizmo drag: not taken") }
+          for i in 1...20 {
+            try? await Task.sleep(for: .milliseconds(16))
+            gizmo.dragMoved(model: model, translation: CGPoint(x: dx * Double(i) / 20, y: dy * Double(i) / 20))
+          }
+          gizmo.dragEnded(model: model, translation: CGPoint(x: dx, y: dy), velocity: .zero, cancelled: false)
+        }
+        else if words.first == "hold" {
+          gizmo.holdBegan(model: model)
+        }
+        else if words.first == "release" {
+          gizmo.release(at: nil)
+        }
+        else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        WM_native_ui_log("snapshot", step)
+        try? await Task.sleep(for: .seconds(1))
       case "key":
         /* `key S shift`: the modifiers in any order after the key. */
         let parts = step.split(separator: " ").dropFirst().map(String.init)
@@ -340,8 +371,8 @@ enum ShellSnapshots {
           WM_native_ui_log("snapshot", "unknown step: \(step)")
           break
         }
-        if words[0] == "properties" { panels.setInspectorShown(words[1] == "open") }
-        else { panels.setHierarchyShown(words[1] == "open") }
+        if words[0] == "properties" { panels.setInspectorShown(words[1] == "open", by: "script") }
+        else { panels.setHierarchyShown(words[1] == "open", by: "script") }
         WM_native_ui_log("snapshot", step)
         try? await Task.sleep(for: .seconds(1))
       case "mark":
