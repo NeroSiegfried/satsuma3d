@@ -130,6 +130,33 @@ def check_prepared(app):
         if not origin.is_file() or origin.read_text().strip() != str(marker.relative_to(app)):
             problems.append(f'{origin.relative_to(app)} does not name {marker.relative_to(app)}')
     problems += [f'leftover signature {path.relative_to(app)}' for path in app.rglob('_CodeSignature')]
+    problems += module_loader_problems(app)
+    return problems
+
+
+# Libraries that load modules of their own by path at run time, and the text their loader holds
+# when it looks for those modules as sibling frameworks (a patch of the library's build).
+MODULE_LOADERS = {
+    # The literal alone, as the compiler keeps it: the framework's install name, set when it is
+    # packaged, holds `.framework/` too.
+    'OpenImageDenoise_core': (b'oidn_init_module_', b'\0.framework/\0',
+                              'build_files/build_environment/patches/oidn_ios_frameworks.diff'),
+}
+
+
+def module_loader_problems(app):
+    """The frameworks of \a app whose run-time module loader looks only beside itself: in the
+    framework layout it finds nothing, and the library fails at run time with nothing failing
+    here. Seen 2026-11-18: the prebuilt OpenImageDenoise said "no supported devices found" on the
+    iPad, its Metal module in a framework of its own."""
+    problems = []
+    for name, (loader, framework_lookup, patch) in MODULE_LOADERS.items():
+        binary = Path(app) / 'Frameworks' / f'{name}.framework' / name
+        if binary.is_file():
+            data = binary.read_bytes()
+            if loader in data and framework_lookup not in data:
+                problems.append(f'{name}: loads its modules only from its own folder, so they are not '
+                                f'found as frameworks; rebuild the library with {patch}')
     return problems
 
 

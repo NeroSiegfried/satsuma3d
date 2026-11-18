@@ -294,6 +294,21 @@ class BuildScriptTest(unittest.TestCase):
         self.assertIn('must name its source', result.stderr)
 
 
+class ModuleLoaderTest(unittest.TestCase):
+    """A library that loads its own modules at run time finds them as frameworks (2026-11-18)."""
+
+    def test_loader_without_framework_lookup(self):
+        from prepare_testflight import module_loader_problems
+        with tempfile.TemporaryDirectory() as folder:
+            app = Path(folder) / 'App.app'
+            binary = app / 'Frameworks/OpenImageDenoise_core.framework/OpenImageDenoise_core'
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b'\0oidn_init_module_\0@rpath/OpenImageDenoise_core.framework/OpenImageDenoise_core\0')
+            self.assertEqual(len(module_loader_problems(app)), 1)
+            binary.write_bytes(b'\0oidn_init_module_\0.framework/\0')
+            self.assertEqual(module_loader_problems(app), [])
+
+
 class IdentityTest(unittest.TestCase):
     """ROUND5 8A/8B: the iPad app's template names the configured identity and icon, not Blender's."""
     ROOT = Path(__file__).resolve().parents[2]

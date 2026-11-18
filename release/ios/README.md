@@ -92,7 +92,9 @@ relinks every module as `MH_DYLIB`. Meson asks the Mac's Python for the extensio
 runs with `_PYTHON_SYSCONFIGDATA_NAME=_sysconfigdata__darwin_arm64-iphoneos` and a `PYTHONPATH`
 holding only that file from the iOS Python; without that the modules are named for the Mac and
 the app never finds them. OpenImageDenoise must be built with `oidn_ios_frameworks.diff` so its
-Metal module resolves as a framework.
+Metal module resolves as a framework; `prepare_testflight.py` refuses one built without it. The
+prebuilt `lib/ios_arm64` library of 2026-10-06 lacks it: on the iPad its framework layout reports
+"no supported devices found" (2026-11-18), so a tester build waits for that library's rebuild.
 
 The pieces can also be run by hand:
 
