@@ -59,6 +59,11 @@ lib.free.argtypes = [ctypes.c_void_p]
 lib.WM_native_ui_viewport_insets_set.argtypes = [ctypes.c_float, ctypes.c_float]
 lib.WM_native_ui_top_bar_set.argtypes = [ctypes.c_float]
 lib.WM_native_ui_bottom_tray_set.argtypes = [ctypes.c_float]
+# ROUND5 9G.5: the band the controls along the bottom stand in, which framing keeps clear of. Absent
+# from builds before it, which the `insets` scenario then measures with the tray alone.
+BOTTOM_CONTROLS = getattr(lib, "WM_native_ui_bottom_controls_set", None)
+if BOTTOM_CONTROLS is not None:
+    BOTTOM_CONTROLS.argtypes = [ctypes.c_float]
 
 
 def text_param(builder, key, value):
@@ -1440,6 +1445,7 @@ def tick_insets():
             lib.WM_native_ui_test_install_hooks()
             subs["toolbar"] = subscribe("toolbar")
             enter("object")
+            report["default_view"] = list(_view3d()[2].data.view_rotation)
             for ob in bpy.context.view_layer.objects:
                 ob.select_set(ob.name == "Cube")
             bpy.context.view_layer.objects.active = bpy.data.objects["Cube"]
@@ -1488,20 +1494,168 @@ def tick_insets():
                     abs(inset["centre"][1] - expected_y) > 3:
                 problems.append("with insets the cube is not in the middle of what shows: %s, expected %.1f, %.1f" %
                                 (inset["centre"], expected_x, expected_y))
-            if abs(inset["frame"]["distance"] / before["frame"]["distance"] - ratio) > 0.01:
-                problems.append("the distance did not fit what shows: %.3f, expected ratio %.3f" %
-                                (inset["frame"]["distance"] / before["frame"]["distance"], ratio))
+            # How far is the corner fit's business (ROUND5 9G.5): the cases below.
             if abs(after["frame"]["distance"] - before["frame"]["distance"]) > 1e-4 or not after["centre"] or \
                     abs(after["centre"][0] - width / 2.0) > 2:
                 problems.append("without insets again the framing is not as before")
             report.update(expected_x=expected_x, expected_y=expected_y, expected_ratio=ratio, problems=problems)
-            finish("done" if not problems else "error")
-            return None
+            _fit_setup()
+        elif step >= 20:
+            if _fit_tick(step - 20):
+                finish("done" if not report["problems"] else "error")
+                return None
     except Exception:
         report["error"] = traceback.format_exc()
         finish("error")
         return None
     return 0.3
+
+
+# ROUND5 9G.5: after any framing command, in the iPad interface, every corner of the framed box is
+# drawn inside the clear part of the view (less the sidebars, the top bar and the bottom controls'
+# band), and the box is not framed too far away. A flat plane seen from the top keeps Blender's own
+# distance. The default cube from the default view failed this before 9G.5.
+# Set the view, let it draw (a projection's change reaches `is_persp` only then), frame, let it draw, measure.
+FIT_TICKS = 5
+
+
+def _fit_insets(name, size):
+    width, height = size
+    if name == "none":
+        return (0, 0, 0, 0)
+    if name == "sidebar":
+        return (0, int(width * 0.25), 0, 0)
+    return (int(width * 0.2), int(width * 0.25), int(height * 0.15), int(height * 0.12))
+
+
+def _fit_set(insets):
+    leading, trailing, top, bottom = insets
+    lib.WM_native_ui_viewport_insets_set(ctypes.c_float(leading), ctypes.c_float(trailing))
+    lib.WM_native_ui_top_bar_set(ctypes.c_float(top + _region_top_gap() if top else 0))
+    band = ctypes.c_float(bottom + _region().y if bottom else 0)
+    if BOTTOM_CONTROLS is not None:
+        BOTTOM_CONTROLS(band)
+        lib.WM_native_ui_bottom_tray_set(ctypes.c_float(0))
+    else:
+        lib.WM_native_ui_bottom_tray_set(band)
+
+
+def _fit_setup():
+    from math import pi
+    from mathutils import Euler
+    bpy.context.preferences.view.smooth_view = 0
+    objects = {"cube": bpy.data.objects["Cube"]}
+    bpy.ops.mesh.primitive_cube_add(location=(1, 2, 0.5), scale=(5, 0.5, 0.5))
+    objects["bar"] = bpy.context.active_object
+    bpy.ops.mesh.primitive_cube_add(location=(-2, 0, 1), scale=(0.5, 0.5, 5))
+    objects["tower"] = bpy.context.active_object
+    bpy.ops.mesh.primitive_monkey_add(location=(0.5, -1, 0.3))
+    objects["suzanne"] = bpy.context.active_object
+    bpy.ops.mesh.primitive_plane_add(size=2, location=(0, 0, 0))
+    objects["plane"] = bpy.context.active_object
+    report["fit_objects"] = {k: v.name for k, v in objects.items()}
+    views = {
+        "default": report["default_view"],
+        "front": list(Euler((pi / 2, 0, 0)).to_quaternion()),
+        "right": list(Euler((pi / 2, 0, pi / 2)).to_quaternion()),
+        "top": [1.0, 0.0, 0.0, 0.0],
+    }
+    cases = []
+    for target, view in (("cube", "default"), ("bar", "front"), ("bar", "right"), ("bar", "top"),
+                         ("tower", "default"), ("suzanne", "default")):
+        for persp in ("PERSP", "ORTHO"):
+            for insets in ("none", "sidebar", "four"):
+                cases.append({"target": target, "view": view, "persp": persp, "insets": insets})
+    cases.append({"target": "plane", "view": "top", "persp": "PERSP", "insets": "none", "blender": True})
+    report["fit_views"] = views
+    report["fit_cases"] = cases
+    report["fit"] = []
+
+
+def _fit_box(ob):
+    from mathutils import Vector
+    world = [ob.matrix_world @ Vector(c) for c in ob.bound_box]
+    lo = [min(v[i] for v in world) for i in range(3)]
+    hi = [max(v[i] for v in world) for i in range(3)]
+    return [Vector(((hi if i & 1 else lo)[0], (hi if i & 2 else lo)[1], (hi if i & 4 else lo)[2])) for i in range(8)]
+
+
+def _fit_blender_distance(region, size):
+    """`ED_view3d_radius_to_dist` with Blender's margin (1.4), in perspective, for a box whose longest
+    side is \a size: the view's half angle has the tangent 18 / lens, doubled by the viewport's zoom."""
+    lens = _view3d()[1].spaces.active.lens
+    aspect = max(region.width, region.height) / min(region.width, region.height)
+    return (size / 2.0) * 1.4 / (18.0 / lens * 2.0) * aspect
+
+
+def _fit_tick(index):
+    from bpy_extras.view3d_utils import location_3d_to_region_2d
+    from mathutils import Quaternion
+    cases = report["fit_cases"]
+    case_index, phase = divmod(index, FIT_TICKS)
+    if case_index >= len(cases):
+        _fit_set((0, 0, 0, 0))
+        failed = [r for r in report["fit"] if r["problems"]]
+        report["fit_failed"] = len(failed)
+        report["problems"] += ["%s %s %s %s: %s" % (r["target"], r["view"], r["persp"], r["insets"], "; ".join(r["problems"]))
+                               for r in failed]
+        return True
+    case = cases[case_index]
+    window, area, region = _view3d()
+    rv3d = region.data
+    size = [region.width, region.height]
+    insets = _fit_insets(case["insets"], size)
+    ob = bpy.data.objects[report["fit_objects"][case["target"]]]
+    if phase == 0:
+        _fit_set(insets)
+        bpy.ops.object.select_all(action='DESELECT')
+        ob.select_set(True)
+        bpy.context.view_layer.objects.active = ob
+        rv3d.view_perspective = case["persp"]
+        rv3d.view_rotation = Quaternion(report["fit_views"][case["view"]])
+        # From afar and off centre, so the result owes nothing to where the view was.
+        rv3d.view_distance = 40.0
+        rv3d.view_location = (3.0, -2.0, 1.0)
+        return False
+    if phase == 2:
+        case["frame"] = _frame_selected()
+        return False
+    if phase < FIT_TICKS - 1:
+        return False
+    if rv3d.is_perspective != (case["persp"] == "PERSP"):
+        report["problems"].append("the view did not take %s before framing" % case["persp"])
+    leading, trailing, top, bottom = insets
+    shown = (size[0] - leading - trailing, size[1] - top - bottom)
+    points = [location_3d_to_region_2d(region, rv3d, c) for c in _fit_box(ob)]
+    result = dict(case, distance=round(rv3d.view_distance, 4), region=size, clear=[leading, bottom, size[0] - trailing,
+                                                                                    size[1] - top], problems=[])
+    if None in points:
+        result["problems"].append("a corner is behind the eye")
+    else:
+        xs = [p.x for p in points]
+        ys = [p.y for p in points]
+        result["corners"] = [[round(x, 1), round(y, 1)] for x, y in zip(xs, ys)]
+        outside = [i for i, (x, y) in enumerate(zip(xs, ys))
+                   if x < leading - 1 or x > size[0] - trailing + 1 or y < bottom - 1 or y > size[1] - top + 1]
+        if outside:
+            result["problems"].append("corners %s outside the clear part" % outside)
+        fill = max((max(xs) - min(xs)) / shown[0], (max(ys) - min(ys)) / shown[1])
+        result["fill"] = round(fill, 3)
+        # Blender's own fit for the clear part is kept where it already shows everything (decision 71):
+        # for a long box it leaves the box smaller than 60 %, and that is Blender's view, not a fault.
+        own = _fit_blender_distance(region, max(ob.dimensions)) * min(size) / min(shown)
+        result["blender_clear"] = round(own, 4)
+        if fill < 0.6 and abs(rv3d.view_distance - own) > 1e-3 * own:
+            result["problems"].append("framed too far away: %.0f %% of the tight side at %.4f, Blender's own %.4f" %
+                                      (fill * 100, rv3d.view_distance, own))
+    if case.get("blender"):
+        dims = ob.dimensions
+        expected = _fit_blender_distance(region, max(dims))
+        result["blender_distance"] = round(expected, 4)
+        if abs(rv3d.view_distance - expected) > 1e-3 * expected:
+            result["problems"].append("not Blender's own distance: %.4f, expected %.4f" % (rv3d.view_distance, expected))
+    report["fit"].append(result)
+    return False
 
 
 bpy.app.timers.register({"material": tick_material, "insets": tick_insets, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror,

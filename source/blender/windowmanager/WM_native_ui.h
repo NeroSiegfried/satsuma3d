@@ -132,6 +132,10 @@ void WM_native_ui_session_log_active(void);
 void WM_native_ui_top_bar_set(float fraction);
 /** How much of the window's height, from the bottom, the asset pane and timeline cover. */
 void WM_native_ui_bottom_tray_set(float fraction);
+/** The top of the highest control standing along the window's bottom edge (the Actions button, the
+ * tool button or the bottom rail, the action bar, the keyboard's bar), in window pixels from the
+ * bottom: what framing keeps clear of (ROUND5 9G.5). */
+void WM_native_ui_bottom_controls_set(float pixels);
 /** How many pixels of the window's bottom a panel covers, such as the node editor, which the
  * viewport is shortened by. */
 void WM_native_ui_viewport_cover_set(float pixels);

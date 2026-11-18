@@ -18,7 +18,9 @@
 
 #include "BLI_bounds.hh"
 #include "BLI_listbase.h"
+#include "BLI_math_matrix.h"
 #include "BLI_math_matrix.hh"
+#include "BLI_math_rotation.h"
 #include "BLI_math_vector.h"
 
 #include "DEG_depsgraph_query.hh"
@@ -37,6 +39,10 @@
 #include "view3d_navigate.hh" /* own include */
 
 #ifdef WITH_NATIVE_UI
+#  include <fmt/format.h>
+#  include <string>
+
+#  include "WM_native_ui.h"
 #  include "WM_native_ui.hh"
 #endif
 
@@ -145,33 +151,20 @@ static void view3d_from_minmax(bContext *C,
   negate_v3(ofs_new);
 
 #ifdef WITH_NATIVE_UI
-  /* The native interface's sidebars lie over the view (ROUND5 10B), and its top bar and the
-   * controls along the bottom (9G.4): fit what is framed in the part they leave showing, and
-   * centre it there. Without them nothing changes. */
-  int leading, trailing, top, bottom;
-  if (rv3d->persp != RV3D_CAMOB &&
-      WM_native_ui_view3d_frame_insets(
-          CTX_wm_window(C), region, &leading, &trailing, &top, &bottom))
-  {
-    const float shown_x = float(region->winx - leading - trailing);
-    const float shown_y = float(region->winy - top - bottom);
-    const float dist_old = rv3d->dist;
-    if (do_zoom) {
-      /* The fit is to the shorter side, in pixels of the same size: the shown part's shorter side
-       * may be shorter than the region's. */
-      dist_new *= float(std::min(region->winx, region->winy)) / std::min(shown_x, shown_y);
-    }
-    /* Moving the view's centre by a window distance moves the scene with it: the framed centre
-     * goes from the region's middle to the shown part's (region pixels run upward). */
-    const float shift[2] = {float(leading - trailing) / 2.0f, float(bottom - top) / 2.0f};
-    float centre[3], delta[3];
-    negate_v3_v3(centre, rv3d->ofs);
-    ED_view3d_win_to_delta(region, shift, ED_view3d_calc_zfac(rv3d, centre), delta, true);
-    if (dist_old > 0.0f) {
-      mul_v3_fl(delta, (do_zoom ? dist_new : dist_old) / dist_old);
-    }
-    add_v3_v3(ofs_new, delta);
-  }
+  /* The iPad interface's bars, sidebars and bottom controls (ROUND5 10B, 9G.4, 9G.5). In camera
+   * view, as Blender leaves it, nothing changes. */
+  ED_view3d_native_frame(CTX_data_ensure_evaluated_depsgraph(C),
+                         CTX_wm_window(C),
+                         v3d,
+                         region,
+                         rv3d->persp == RV3D_CAMOB ? RV3D_CAMOB :
+                                                     (rv3d->is_persp ? RV3D_PERSP : RV3D_ORTHO),
+                         rv3d->viewquat,
+                         min,
+                         max,
+                         true,
+                         ofs_new,
+                         do_zoom ? &dist_new : nullptr);
 #endif
 
   V3D_SmoothParams sview = {nullptr};
@@ -189,6 +182,104 @@ static void view3d_from_minmax(bContext *C,
 
   /* Smooth-view does view-lock #RV3D_BOXVIEW copy. */
 }
+
+#ifdef WITH_NATIVE_UI
+bool ED_view3d_native_frame(const Depsgraph *depsgraph,
+                            const wmWindow *win,
+                            const View3D *v3d,
+                            const ARegion *region,
+                            const char persp,
+                            const float viewquat[4],
+                            const float min[3],
+                            const float max[3],
+                            const bool fit_box,
+                            float r_ofs[3],
+                            float *r_dist)
+{
+  int leading, trailing, top, bottom;
+  if (persp == RV3D_CAMOB || region == nullptr || region->regiondata == nullptr ||
+      !WM_native_ui_view3d_frame_insets(win, region, &leading, &trailing, &top, &bottom))
+  {
+    return false;
+  }
+  const RegionView3D *rv3d = static_cast<const RegionView3D *>(region->regiondata);
+  /* The clear part: the region less the sidebars, the top bar and the bottom controls' band. */
+  const float short_px = float(std::min(region->winx, region->winy));
+  const float shown_x = float(region->winx - leading - trailing);
+  const float shown_y = float(region->winy - top - bottom);
+  /* By #ED_view3d_radius_to_dist's own definition, at distance d the view's shorter side shows
+   * d / k each way from the axis, at the centre's depth in perspective (z / k at depth z) and at
+   * every depth in orthographic. So a pixel is 2 / (k * shorter side) per unit of depth. */
+  const float k = ED_view3d_radius_to_dist(v3d, region, depsgraph, persp, true, 1.0f);
+  const float pixel = 2.0f / (k * short_px);
+  /* The clear part's half sizes, and where its middle stands off the axis, per unit of depth. */
+  const float half[2] = {shown_x * pixel / 2.0f, shown_y * pixel / 2.0f};
+  const float shift[2] = {float(leading - trailing) / 2.0f * pixel,
+                          float(bottom - top) / 2.0f * pixel};
+  /* World to view: the rotation the view will have (z towards the eye). */
+  float rot[3][3];
+  quat_to_mat3(rot, viewquat);
+
+  float centre[3], extent[3];
+  mid_v3_v3v3(centre, min, max);
+  sub_v3_v3v3(extent, max, min);
+  const float size = max_fff(extent[0], extent[1], extent[2]);
+  const float blender = r_dist ? *r_dist : 0.0f;
+  float dist = r_dist ? *r_dist : rv3d->dist;
+  float fit = 0.0f, own = dist;
+  if (r_dist) {
+    /* Blender's own fit for the clear part: its fit is to the shorter side, in pixels of the same
+     * size, and the clear part's shorter side may be shorter than the region's. */
+    own = *r_dist * short_px / std::min(shown_x, shown_y);
+    if (!fit_box) {
+      /* A rectangle drawn on the view, already made the region's shape: it fits the clear part. */
+      own = *r_dist * std::max(float(region->winx) / shown_x, float(region->winy) / shown_y);
+    }
+    else if (size >= 0.0001f) {
+      /* Every corner inside the clear part, with this much to spare on the tight side. A corner
+       * is inside when |v.a + s.a * v.z| <= (h.a / margin) * (d - v.z) in perspective, and
+       * |v.a| <= (h.a / margin) * d in orthographic. */
+      const float margin = 1.15f;
+      for (int i = 0; i < 8; i++) {
+        float v[3] = {((i & 1) ? max[0] : min[0]) - centre[0],
+                      ((i & 2) ? max[1] : min[1]) - centre[1],
+                      ((i & 4) ? max[2] : min[2]) - centre[2]};
+        mul_m3_v3(rot, v);
+        for (int a = 0; a < 2; a++) {
+          fit = std::max(fit,
+                         persp == RV3D_ORTHO ?
+                             fabsf(v[a]) * margin / half[a] :
+                             v[2] + fabsf(v[a] + shift[a] * v[2]) * margin / half[a]);
+        }
+      }
+    }
+    /* Blender's own where it already shows all of it; its soft minimum is already in it. */
+    dist = std::max(fit, own);
+    *r_dist = dist;
+  }
+  /* The framed centre moves from the region's middle to the clear part's: the scene moves with the
+   * view's offset, by the shift at the centre's depth. */
+  float delta[3] = {shift[0] * dist, shift[1] * dist, 0.0f};
+  mul_transposed_m3_v3(rot, delta);
+  negate_v3_v3(r_ofs, centre);
+  add_v3_v3(r_ofs, delta);
+
+  const std::string line = fmt::format("frame {} {}: distance {:.3f} (corners {:.3f}, Blender {:.3f} "
+                                       "{:.3f} for the clear part) clear {}x{} of {}x{}",
+                                       persp == RV3D_ORTHO ? "ortho" : "persp",
+                                       !r_dist ? "centre" : (fit_box ? "box" : "rectangle"),
+                                       dist,
+                                       fit,
+                                       blender,
+                                       own,
+                                       int(shown_x),
+                                       int(shown_y),
+                                       region->winx,
+                                       region->winy);
+  WM_native_ui_log("viewport", line.c_str());
+  return true;
+}
+#endif
 
 /**
  * Same as #view3d_from_minmax but for all regions (except cameras).

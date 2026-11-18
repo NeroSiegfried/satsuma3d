@@ -6085,6 +6085,15 @@ extern "C" void WM_native_ui_bottom_tray_set(const float pixels)
   }
 }
 
+/* The top of the highest control standing along the window's bottom edge, in window pixels from
+ * the bottom (ROUND5 9G.5). Framing keeps clear of it; the navigation gizmo keeps to the tray. */
+static std::atomic<float> bridge_bottom_controls = 0.0f;
+
+extern "C" void WM_native_ui_bottom_controls_set(const float pixels)
+{
+  bridge_bottom_controls.store(pixels);
+}
+
 /* Set from the native interface: telling Blender a message waits wakes its loop. */
 extern "C" void WM_native_ui_viewport_cover_set(const float pixels)
 {
@@ -6163,45 +6172,49 @@ bool WM_native_ui_view3d_frame_insets(const wmWindow *win,
 {
   *r_top = 0;
   *r_bottom = 0;
-  const bool sides = WM_native_ui_view3d_insets(region, r_leading, r_trailing);
+  WM_native_ui_view3d_insets(region, r_leading, r_trailing);
   if (win == nullptr || region == nullptr || region->regiontype != RGN_TYPE_WINDOW ||
       WM_native_ui_desktop_mode())
   {
-    return sides;
+    return false;
   }
   const SpaceType *space = BKE_spacetype_from_id(SPACE_VIEW3D);
   if (space == nullptr || region->runtime->type != BKE_regiontype_from_id(space, RGN_TYPE_WINDOW)) {
-    return sides;
+    return false;
   }
-  /* The top bar (header and tool settings row) and the controls along the bottom (the action bar
-   * and what stands above it), in window pixels from the window's top and bottom, as the
-   * navigation gizmo keeps clear of them: the same values, so the two cannot disagree (ROUND5
-   * 9G.4). In the region's own pixels here. */
+  /* The top bar (header and tool settings row), as the navigation gizmo keeps clear of it, and
+   * the band the controls along the bottom stand in (ROUND5 9G.5: the Actions button, the tool
+   * button or the bottom rail, the action bar, the keyboard's bar), in window pixels from the
+   * window's top and bottom; the gizmo's tray when it reaches higher. In the region's own pixels
+   * here. */
   const int above_region = WM_window_native_pixel_y(win) - region->winrct.ymax - 1;
+  const int band = std::max(int(bridge_bottom_controls.load()), int(bridge_bottom_tray.load()));
   const int top = std::max(0, int(bridge_top_bar.load()) - above_region);
-  const int bottom = std::max(0, int(bridge_bottom_tray.load()) - region->winrct.ymin);
+  const int bottom = std::max(0, band - region->winrct.ymin);
   const bool used = top + bottom > 0 && region->winy - top - bottom >= region->winy / 5;
   /* What framing kept clear of, and from what, as a `viewport frame` line (ROUND5 9G.4). */
   const std::string line = fmt::format(
-      "frame insets {} {} {} {} of {}x{}: top bar {} bottom tray {} window {} region {}..{}{}",
+      "frame insets {} {} {} {} of {}x{}: top bar {} bottom controls {} bottom tray {} window {} "
+      "region {}..{}{}",
       *r_leading,
       *r_trailing,
-      top,
-      bottom,
+      used ? top : 0,
+      used ? bottom : 0,
       region->winx,
       region->winy,
       int(bridge_top_bar.load()),
+      int(bridge_bottom_controls.load()),
       int(bridge_bottom_tray.load()),
       WM_window_native_pixel_y(win),
       region->winrct.ymin,
       region->winrct.ymax,
-      used ? "" : " (not used)");
+      used || top + bottom == 0 ? "" : " (top and bottom not used: too little left)");
   WM_native_ui_log("viewport", line.c_str());
-  if (!used) {
-    return sides;
+  if (used) {
+    *r_top = top;
+    *r_bottom = bottom;
   }
-  *r_top = top;
-  *r_bottom = bottom;
+  /* In the iPad interface always, with no insets too: the corners are fitted there (9G.5). */
   return true;
 }
 

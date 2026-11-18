@@ -12,6 +12,8 @@
 
 #include "WM_api.hh"
 
+#include "ED_view3d.hh"
+
 #include "view3d_intern.hh"
 
 #include "view3d_navigate.hh" /* own include */
@@ -37,6 +39,25 @@ static wmOperatorStatus viewcenter_cursor_exec(bContext *C, wmOperator *op)
     /* non camera center */
     float ofs_new[3];
     negate_v3_v3(ofs_new, scene->cursor.location);
+#ifdef WITH_NATIVE_UI
+    {
+      /* Centred in the part of the view the iPad interface leaves clear (ROUND5 9G.5). */
+      float point[3];
+      negate_v3_v3(point, ofs_new);
+      ED_view3d_native_frame(CTX_data_ensure_evaluated_depsgraph(C),
+                             CTX_wm_window(C),
+                             v3d,
+                             region,
+                             rv3d->persp == RV3D_CAMOB ? RV3D_CAMOB :
+                                                         (rv3d->is_persp ? RV3D_PERSP : RV3D_ORTHO),
+                             rv3d->viewquat,
+                             point,
+                             point,
+                             false,
+                             ofs_new,
+                             nullptr);
+    }
+#endif
 
     V3D_SmoothParams sview = {nullptr};
     sview.ofs = ofs_new;

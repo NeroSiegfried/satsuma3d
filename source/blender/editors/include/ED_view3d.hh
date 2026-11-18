@@ -912,6 +912,39 @@ float ED_view3d_radius_to_dist(const View3D *v3d,
                                bool use_aspect,
                                float radius);
 
+#ifdef WITH_NATIVE_UI
+/**
+ * The iPad interface's framing (ROUND5 9G.5), the one place every command that frames settles
+ * its new centre and distance after Blender's own: the box from \a min to \a max is centred in the
+ * part of \a region no bar, sidebar or bottom control covers, and every one of its corners is drawn
+ * inside that part with a margin. Where Blender's own fit (for that part) already does that, its
+ * distance is kept to the digit.
+ *
+ * Changes nothing and returns false in the Desktop Interface, in camera view (\a persp is
+ * #RV3D_CAMOB), and for anything but a 3D View's main region.
+ *
+ * \param persp: The projection the view has once framed (#RV3D_PERSP or #RV3D_ORTHO).
+ * \param viewquat: The rotation it has once framed.
+ * \param fit_box: Fit the box's corners (a box with no size is not zoomed). False for a command
+ * that frames a rectangle drawn on the view (Zoom Region): \a r_dist is only scaled from the
+ * region to the clear part.
+ * \param r_ofs: Blender's new offset in, the one to use out.
+ * \param r_dist: Blender's new distance in, the one to use out; null for a command that does not
+ * zoom, which is only centred.
+ */
+bool ED_view3d_native_frame(const Depsgraph *depsgraph,
+                            const wmWindow *win,
+                            const View3D *v3d,
+                            const ARegion *region,
+                            char persp,
+                            const float viewquat[4],
+                            const float min[3],
+                            const float max[3],
+                            bool fit_box,
+                            float r_ofs[3],
+                            float *r_dist);
+#endif
+
 /**
  * allow for small values [0.5 - 2.5],
  * and large values, FLT_MAX by clamping by the area size

@@ -937,6 +937,22 @@ static bool view3d_localview_init(const Depsgraph *depsgraph,
           }
         }
 
+#ifdef WITH_NATIVE_UI
+        /* The iPad interface's framing (ROUND5 9G.5), as Frame Selected's. From camera view, as
+         * Blender leaves it, nothing changes. */
+        ED_view3d_native_frame(depsgraph,
+                               win,
+                               v3d,
+                               &region,
+                               camera_old ? char(RV3D_CAMOB) : rv3d->persp,
+                               rv3d->viewquat,
+                               min,
+                               max,
+                               true,
+                               ofs_new,
+                               ok_dist ? &dist_new : nullptr);
+#endif
+
         V3D_SmoothParams sview_params = {};
         sview_params.camera_old = camera_old;
         sview_params.ofs = ofs_new;

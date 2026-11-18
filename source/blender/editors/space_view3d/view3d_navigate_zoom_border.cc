@@ -20,6 +20,8 @@
 
 #include "RNA_access.hh"
 
+#include "ED_view3d.hh"
+
 #include "view3d_intern.hh"
 #include "view3d_navigate.hh" /* own include */
 
@@ -153,6 +155,27 @@ static wmOperatorStatus view3d_zoom_border_exec(bContext *C, wmOperator *op)
     yscale = (BLI_rcti_size_y(&rect) / vb[1]);
     dist_new *= max_ff(xscale, yscale);
   }
+
+#ifdef WITH_NATIVE_UI
+  if (zoom_in) {
+    /* The rectangle fits the part of the view the iPad interface leaves clear, and is centred
+     * there (ROUND5 9G.5). */
+    float point[3];
+    negate_v3_v3(point, ofs_new);
+    ED_view3d_native_frame(CTX_data_ensure_evaluated_depsgraph(C),
+                           CTX_wm_window(C),
+                           v3d,
+                           region,
+                           rv3d->persp == RV3D_CAMOB ? RV3D_CAMOB :
+                                                       (rv3d->is_persp ? RV3D_PERSP : RV3D_ORTHO),
+                           rv3d->viewquat,
+                           point,
+                           point,
+                           false,
+                           ofs_new,
+                           &dist_new);
+  }
+#endif
 
   if (!zoom_in) {
     sub_v3_v3v3(dvec, ofs_new, rv3d->ofs);
