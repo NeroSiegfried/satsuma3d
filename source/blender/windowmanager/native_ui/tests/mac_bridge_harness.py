@@ -57,6 +57,8 @@ lib.WM_native_ui_image_take_uvs.argtypes = [ctypes.POINTER(NativeImageUVs)]
 lib.WM_native_ui_image_uvs_free.argtypes = [ctypes.POINTER(NativeImageUVs)]
 lib.free.argtypes = [ctypes.c_void_p]
 lib.WM_native_ui_viewport_insets_set.argtypes = [ctypes.c_float, ctypes.c_float]
+lib.WM_native_ui_top_bar_set.argtypes = [ctypes.c_float]
+lib.WM_native_ui_bottom_tray_set.argtypes = [ctypes.c_float]
 
 
 def text_param(builder, key, value):
@@ -1403,6 +1405,18 @@ def _frame_selected():
     return {"distance": rv3d.view_distance, "location": list(rv3d.view_location)}
 
 
+def _region():
+    return _view3d()[2]
+
+
+def _region_top_gap():
+    """Window pixels above the 3D View's region, which the top bar's height counts from. The window's
+    height in pixels is where its highest region ends (`Window.height` is in points)."""
+    window, _area, region = _view3d()
+    top = max(r.y + r.height for area in window.screen.areas for r in area.regions)
+    return top - (region.y + region.height)
+
+
 def _shown_centre():
     """Where the cube's centre is drawn, in region pixels, from the view's current matrices."""
     from bpy_extras.view3d_utils import location_3d_to_region_2d
@@ -1434,22 +1448,32 @@ def tick_insets():
         elif step == 7:
             report["before"]["centre"] = _shown_centre()
             report["insets"] = [int(size[0] * 0.3), int(size[0] * 0.25)]
+            # ROUND5 9G.4: the top bar and the controls along the bottom, from the window's top and
+            # bottom, which the region fills here.
+            report["bars"] = [int(size[1] * 0.2), int(size[1] * 0.1)]
             lib.WM_native_ui_viewport_insets_set(ctypes.c_float(report["insets"][0]), ctypes.c_float(report["insets"][1]))
+            lib.WM_native_ui_top_bar_set(ctypes.c_float(report["bars"][0] + _region_top_gap()))
+            lib.WM_native_ui_bottom_tray_set(ctypes.c_float(report["bars"][1] + _region().y))
         elif step == 10:
             report["with"] = {"size": size, "gizmo_x": _gizmo_x(), "frame": _frame_selected()}
         elif step == 13:
             report["with"]["centre"] = _shown_centre()
             lib.WM_native_ui_viewport_insets_set(ctypes.c_float(0), ctypes.c_float(0))
+            lib.WM_native_ui_top_bar_set(ctypes.c_float(0))
+            lib.WM_native_ui_bottom_tray_set(ctypes.c_float(0))
         elif step == 16:
             report["after"] = {"size": size, "gizmo_x": _gizmo_x(), "frame": _frame_selected()}
         elif step == 19:
             report["after"]["centre"] = _shown_centre()
             before, inset, after = report["before"], report["with"], report["after"]
             leading, trailing = report["insets"]
+            top, bottom = report["bars"]
             width, height = before["size"]
             shown = width - leading - trailing
+            shown_y = height - top - bottom
             expected_x = (leading + width - trailing) / 2.0
-            ratio = min(width, height) / min(shown, height)
+            expected_y = (bottom + height - top) / 2.0
+            ratio = min(width, height) / min(shown, shown_y)
             problems = []
             if inset["size"] != before["size"] or after["size"] != before["size"]:
                 problems.append("the region's size changed: %s, %s, %s" % (before["size"], inset["size"], after["size"]))
@@ -1460,16 +1484,17 @@ def tick_insets():
                 problems.append("the gizmo did not come back: %s -> %s" % (before["gizmo_x"], after["gizmo_x"]))
             if not before["centre"] or abs(before["centre"][0] - width / 2.0) > 2:
                 problems.append("without insets the cube is not framed in the middle: %s" % before["centre"])
-            if not inset["centre"] or abs(inset["centre"][0] - expected_x) > 3:
-                problems.append("with insets the cube is not in the middle of what shows: %s, expected x %.1f" %
-                                (inset["centre"], expected_x))
+            if not inset["centre"] or abs(inset["centre"][0] - expected_x) > 3 or \
+                    abs(inset["centre"][1] - expected_y) > 3:
+                problems.append("with insets the cube is not in the middle of what shows: %s, expected %.1f, %.1f" %
+                                (inset["centre"], expected_x, expected_y))
             if abs(inset["frame"]["distance"] / before["frame"]["distance"] - ratio) > 0.01:
                 problems.append("the distance did not fit what shows: %.3f, expected ratio %.3f" %
                                 (inset["frame"]["distance"] / before["frame"]["distance"], ratio))
             if abs(after["frame"]["distance"] - before["frame"]["distance"]) > 1e-4 or not after["centre"] or \
                     abs(after["centre"][0] - width / 2.0) > 2:
                 problems.append("without insets again the framing is not as before")
-            report.update(expected_x=expected_x, expected_ratio=ratio, problems=problems)
+            report.update(expected_x=expected_x, expected_y=expected_y, expected_ratio=ratio, problems=problems)
             finish("done" if not problems else "error")
             return None
     except Exception:

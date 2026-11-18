@@ -187,6 +187,16 @@ float WM_native_ui_viewport_trailing_inset();
 /** The sidebars' insets as they apply to \a region, in its own pixels: only a 3D View's main
  * region, in the iPad interface, while a fifth of it at least is left showing. False when none. */
 bool WM_native_ui_view3d_insets(const ARegion *region, int *r_leading, int *r_trailing);
+/** What framing keeps clear of in \a region (ROUND5 9G.4): the sidebars, as
+ * #WM_native_ui_view3d_insets, and the top bar and the controls along the bottom, as the
+ * navigation gizmo does (#WM_native_ui_top_bar_ymax, #WM_native_ui_bottom_tray_ymin). False when
+ * none. */
+bool WM_native_ui_view3d_frame_insets(const wmWindow *win,
+                                      const ARegion *region,
+                                      int *r_leading,
+                                      int *r_trailing,
+                                      int *r_top,
+                                      int *r_bottom);
 /** The lowest and highest region pixels the navigation gizmo may use, clear of the interface. */
 int WM_native_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region);
 int WM_native_ui_top_bar_ymax(const wmWindow *win, const ARegion *region);

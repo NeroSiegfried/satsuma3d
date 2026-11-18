@@ -754,9 +754,24 @@ check(columns_text.index('viewportView(leading:') < columns_text.index('HStack(s
       'layers(bottom: false, viewport: false)' in columns_text,
       "10B: the viewport fills the window behind the columns, not inside them")
 check('WM_native_ui_viewport_insets_set(' in window_text[window_text.index('final class ViewportContainer'):] and 'WM_native_ui_view3d_insets(region' in
-      (SWIFT.parents[2] / 'editors/screen/area.cc').read_text(encoding='utf-8') and 'WM_native_ui_view3d_insets(region' in
+      (SWIFT.parents[2] / 'editors/screen/area.cc').read_text(encoding='utf-8') and 'WM_native_ui_view3d_frame_insets(' in
       (SWIFT.parents[2] / 'editors/space_view3d/view3d_navigate_view_all.cc').read_text(encoding='utf-8'),
       "10B: the sidebars reach Blender as insets, read by the visible rectangle and by framing")
+# 9G.4: framing keeps clear of the top bar and the controls along the bottom too, by the values the
+# navigation gizmo keeps clear of.
+frame_text = (SWIFT.parents[1] / 'intern/wm_native_ui.cc').read_text(encoding='utf-8')
+frame_text = frame_text[frame_text.index('bool WM_native_ui_view3d_frame_insets('):]
+frame_text = frame_text[:frame_text.index('\n}\n')]
+check('bridge_top_bar' in frame_text and 'bridge_bottom_tray' in frame_text and
+      'WM_native_ui_view3d_insets(region' in frame_text,
+      "9G.4: framing keeps clear of the sidebars, the top bar and the controls along the bottom")
+history_text = (SWIFT.parents[1] / 'intern/wm_files.cc').read_text(encoding='utf-8')
+history_text = history_text[history_text.index('static void wm_history_file_update()\n{'):]
+history_text = history_text[:history_text.index('\n}\n')]
+check('PLATYPUS_SCRATCH_DOCUMENT' in history_text,
+      "9G.4: a check launch adds nothing to the recent-files list")
+check('images.first' not in image_native_text,
+      "9G.4: the Image Editor shows an image only when one is chosen or painted on, never the first one")
 
 check('CheckDocumentBanner.install(in: view)' in window_text and 'PLATYPUS_SCRATCH_DOCUMENT"] != nil' in
       window_text[window_text.index('enum CheckDocumentBanner'):] and 'CheckDocumentBanner.label' in snapshots_text,

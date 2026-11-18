@@ -6154,6 +6154,40 @@ bool WM_native_ui_view3d_insets(const ARegion *region, int *r_leading, int *r_tr
   return true;
 }
 
+bool WM_native_ui_view3d_frame_insets(const wmWindow *win,
+                                      const ARegion *region,
+                                      int *r_leading,
+                                      int *r_trailing,
+                                      int *r_top,
+                                      int *r_bottom)
+{
+  *r_top = 0;
+  *r_bottom = 0;
+  const bool sides = WM_native_ui_view3d_insets(region, r_leading, r_trailing);
+  if (win == nullptr || region == nullptr || region->regiontype != RGN_TYPE_WINDOW ||
+      WM_native_ui_desktop_mode())
+  {
+    return sides;
+  }
+  const SpaceType *space = BKE_spacetype_from_id(SPACE_VIEW3D);
+  if (space == nullptr || region->runtime->type != BKE_regiontype_from_id(space, RGN_TYPE_WINDOW)) {
+    return sides;
+  }
+  /* The top bar (header and tool settings row) and the controls along the bottom (the action bar
+   * and what stands above it), in window pixels from the window's top and bottom, as the
+   * navigation gizmo keeps clear of them: the same values, so the two cannot disagree (ROUND5
+   * 9G.4). In the region's own pixels here. */
+  const int above_region = WM_window_native_pixel_y(win) - region->winrct.ymax - 1;
+  const int top = std::max(0, int(bridge_top_bar.load()) - above_region);
+  const int bottom = std::max(0, int(bridge_bottom_tray.load()) - region->winrct.ymin);
+  if (top + bottom == 0 || region->winy - top - bottom < region->winy / 5) {
+    return sides;
+  }
+  *r_top = top;
+  *r_bottom = bottom;
+  return true;
+}
+
 bool WM_native_ui_navigation_top()
 {
   return bridge_navigation_top.load();

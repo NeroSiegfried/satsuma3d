@@ -1736,6 +1736,13 @@ static void wm_history_file_update()
   if (blendfile_path[0] == '\0') {
     return;
   }
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* A check launch works only in its own throwaway documents (`PLATYPUS_SCRATCH_DOCUMENT`): they
+   * are no one's recent files (ROUND5 9G.4). */
+  if (BLI_getenv("PLATYPUS_SCRATCH_DOCUMENT") != nullptr) {
+    return;
+  }
+#endif
 
   recent = static_cast<RecentFile *>(G.recent_files.first);
   /* Refresh #BLENDER_HISTORY_FILE of recent opened files, when current file was changed. */

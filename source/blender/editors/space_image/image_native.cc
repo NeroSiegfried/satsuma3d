@@ -135,12 +135,10 @@ Image *shown_image(bContext *C, const DictionaryValue *state)
   if (slot) {
     return slot;
   }
-  /* The UV Editor shows an image only when one is chosen, as Blender's does: otherwise the unit
-   * square, not whatever image comes first (a Render Result without pixels hid the UVs). */
-  if (state && state->lookup_str("mode").value_or("") == "uv") {
-    return nullptr;
-  }
-  return static_cast<Image *>(bmain->images.first);
+  /* An image shows only when one is chosen or painted on, as in Blender's editors: otherwise the
+   * UV Editor's unit square, or the Image Editor's No Image page, not whatever image comes first
+   * (an empty Render Result, ROUND5 9B and 9G.4). */
+  return nullptr;
 }
 
 const char *source_name(const Image &ima)

@@ -145,20 +145,25 @@ static void view3d_from_minmax(bContext *C,
   negate_v3(ofs_new);
 
 #ifdef WITH_NATIVE_UI
-  /* The native interface's sidebars lie over the view (ROUND5 10B): fit what is framed in the part
-   * they leave showing, and centre it there. Without sidebars nothing changes. */
-  int leading, trailing;
-  if (rv3d->persp != RV3D_CAMOB && WM_native_ui_view3d_insets(region, &leading, &trailing)) {
-    const float shown = float(region->winx - leading - trailing);
+  /* The native interface's sidebars lie over the view (ROUND5 10B), and its top bar and the
+   * controls along the bottom (9G.4): fit what is framed in the part they leave showing, and
+   * centre it there. Without them nothing changes. */
+  int leading, trailing, top, bottom;
+  if (rv3d->persp != RV3D_CAMOB &&
+      WM_native_ui_view3d_frame_insets(
+          CTX_wm_window(C), region, &leading, &trailing, &top, &bottom))
+  {
+    const float shown_x = float(region->winx - leading - trailing);
+    const float shown_y = float(region->winy - top - bottom);
     const float dist_old = rv3d->dist;
     if (do_zoom) {
       /* The fit is to the shorter side, in pixels of the same size: the shown part's shorter side
        * may be shorter than the region's. */
-      dist_new *= float(std::min(region->winx, region->winy)) / std::min(shown, float(region->winy));
+      dist_new *= float(std::min(region->winx, region->winy)) / std::min(shown_x, shown_y);
     }
     /* Moving the view's centre by a window distance moves the scene with it: the framed centre
-     * goes from the region's middle to the shown part's. */
-    const float shift[2] = {float(leading - trailing) / 2.0f, 0.0f};
+     * goes from the region's middle to the shown part's (region pixels run upward). */
+    const float shift[2] = {float(leading - trailing) / 2.0f, float(bottom - top) / 2.0f};
     float centre[3], delta[3];
     negate_v3_v3(centre, rv3d->ofs);
     ED_view3d_win_to_delta(region, shift, ED_view3d_calc_zfac(rv3d, centre), delta, true);
