@@ -439,7 +439,7 @@ extension DocumentController: UIGestureRecognizerDelegate {
       return
     }
     if let command = data("command")?.value(type: Blender_NativeUI_TextValue.self)?.value {
-      runStandIn(command)
+      runStandIn(command, at: popupAnchor(point))
       return
     }
     guard let menu = data("menu")?.value(type: Blender_NativeUI_TextValue.self)?.value else {
@@ -466,7 +466,7 @@ extension DocumentController: UIGestureRecognizerDelegate {
    * show (ROUND5 9A.6): only what a button here already does. The commands are listed in
    * `release/ios/key_stand_ins.txt`, which `bl_native_shell_sources.py` checks against this.
    */
-  private func runStandIn(_ command: String) {
+  private func runStandIn(_ command: String, at anchor: CGRect) {
     switch command {
       case "search":
         model.searchOpen = true
@@ -476,6 +476,15 @@ extension DocumentController: UIGestureRecognizerDelegate {
         shell.panels.toggleInspector()
       case "interface":
         commands.setInterfaceHidden(!model.interfaceHidden)
+      case "context":
+        /* As a long press on the viewport shows it, see #contextMenuPress (ROUND5 9E.2). */
+        let menu = wm_apple_ios_context_menu()
+        guard !menu.children.isEmpty else {
+          model.messages.say("Nothing to show here")
+          WM_native_ui_log("menu", "stand-in context empty")
+          return
+        }
+        ShellMenuPresenter.shared.present(menu, at: anchor, in: metalView, kind: "context menu")
       default:
         model.messages.say("This key's command is not in the iPad interface", level: "warning")
         WM_native_ui_log("menu", "stand-in \(command) unknown")

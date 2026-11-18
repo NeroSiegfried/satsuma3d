@@ -577,17 +577,41 @@ def walk_branding(mode):
     a few at a time. Labels holding "Blender" that are not on the allow-list for their menu go into
     `branding["unlisted"]`. True once every menu has been read."""
     if not walk_state:
-        allowed = branding.setdefault("allowed", branding_allowed())
-        for route, menu in (("menubar", "menubar"), ("context", "context"),
-                            ("TOPBAR_MT_file_import", "TOPBAR_MT_file_import"),
-                            ("TOPBAR_MT_file_export", "TOPBAR_MT_file_export")):
-            walk_state[subscribe("menu", route=route)] = (route, menu, 1)
+        branding.setdefault("allowed", branding_allowed())
+        # ROUND5 9E.4: the menus this mode's keys open too, as the keys view lists them.
+        walk_state["keys"] = subscribe("keys")
         walk_state["seen_routes"] = set()
+        return False
+    if walk_state.get("keys") is not None:
+        top = tree(walk_state["keys"])
+        if top is None:
+            return False
+        lib.WM_native_ui_unsubscribe(walk_state["keys"])
+        walk_state["keys"] = None
+        key_menus = {}
+        for row in top.get("children", []):
+            call, _tab, answer = (row.get("value") or "").partition("\t")
+            if answer.startswith("menu ") and answer.endswith(" poll"):
+                key_menus[answer.split(" ")[1]] = \
+                    "call_menu_pie" if call.startswith("WM_OT_call_menu_pie") else "call_menu"
+            elif answer.startswith("document menu "):
+                key_menus[answer.split(" ")[2]] = "call_menu"
+        branding["key_menus"] = sorted(set(branding.get("key_menus", [])) | set(key_menus))
+        # Asked for as a key asks, through the popup hook, so the interface may draw them.
+        lib.WM_native_ui_test_install_hooks()
+        for name, operator in key_menus.items():
+            _call_menu(operator, name)
+        roots = [("menubar", "menubar"), ("context", "context"),
+                 ("TOPBAR_MT_file_import", "TOPBAR_MT_file_import"),
+                 ("TOPBAR_MT_file_export", "TOPBAR_MT_file_export")] + [(name, name) for name in key_menus]
+        for route, menu in roots:
+            walk_state["seen_routes"].add(route)
+            walk_state[subscribe("menu", route=route)] = (route, menu, 1)
         return False
     allowed = branding["allowed"]
     pending = 0
     for sub, entry in list(walk_state.items()):
-        if sub == "seen_routes" or entry is None:
+        if sub in ("seen_routes", "keys") or entry is None:
             continue
         route, menu, depth = entry
         top = tree(sub)
@@ -652,7 +676,10 @@ def tick_menus():
                 problems = sorted(set(branding["unlisted"]))
                 if not branding.get("help_read"):
                     problems.append("the Help menu was not read (no Manual)")
-                report["branding"] = {"menus_read": branding["menus"], "labels_with_blender": sorted(branding["seen"]),
+                if not branding.get("key_menus"):
+                    problems.append("no menu a key opens was read (ROUND5 9E.4)")
+                report["branding"] = {"menus_read": branding["menus"], "key_menus": branding.get("key_menus", []),
+                                      "labels_with_blender": sorted(branding["seen"]),
                                       "unlisted": problems}
                 finish("done" if not problems else "error")
                 return None
@@ -1099,6 +1126,22 @@ DOCUMENT_OPERATORS = ("WM_OT_read_homefile", "WM_OT_read_factory_settings", "WM_
 DOCUMENT_MENUS = ("TOPBAR_MT_file_new", "TOPBAR_MT_file_open_recent", "TOPBAR_MT_file_context_menu")
 
 
+# ROUND5 9E.3: operators that only carry what a key opens or changes; a line naming one of these by
+# its own name ("Call Asset Shelf Popover", "Context Enum Menu") says nothing a person knows.
+CARRIERS = ("wm.call_menu", "wm.call_menu_pie", "wm.call_panel", "wm.call_asset_shelf_popover",
+            "wm.context_menu_enum", "wm.context_pie_enum", "wm.context_toggle", "wm.context_toggle_enum",
+            "screen.space_type_set_or_cycle")
+
+
+def carrier_names():
+    names = {}
+    for path in CARRIERS:
+        module, name = path.split(".")
+        op = getattr(getattr(bpy.ops, module), name)
+        names[op.idname()] = op.get_rna_type().name
+    return names
+
+
 def is_document_command(call):
     name = call.partition("(")[0]
     return name in DOCUMENT_OPERATORS or (
@@ -1134,6 +1177,7 @@ def tick_keys():
         if step == 1:
             lib.WM_native_ui_test_install_hooks()
             state["stand_ins"] = stand_ins()
+            state["carriers"] = carrier_names()
             return 0.25
         if state["wait"] > 0:
             state["wait"] -= 1
@@ -1166,6 +1210,10 @@ def tick_keys():
                     state["problems"].append("%s: %s %s has no answer (%r)" % (mode, keymap, call, answer))
                 elif kind == "says" and not answer[len("says "):].strip():
                     state["problems"].append("%s: %s %s says nothing" % (mode, keymap, call))
+                elif kind == "says" and call.partition("(")[0] in state["carriers"] and \
+                        state["carriers"][call.partition("(")[0]] in answer:
+                    state["problems"].append("%s: %s %s says the operator's generic name: %r" %
+                                             (mode, keymap, call, answer))
                 elif kind == "stand-in" and answer[len("stand-in "):] not in state["stand_ins"]:
                     state["problems"].append("%s: %s %s stands in for %r, which the shell does not have" %
                                              (mode, keymap, call, answer[len("stand-in "):]))

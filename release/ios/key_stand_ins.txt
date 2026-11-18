@@ -12,3 +12,4 @@ search | opens Search, as the top bar's Search button does (F3, Space in some ke
 settings | opens Settings, as the More menu's Settings does (Ctrl+Comma)
 properties | shows or hides Properties, as the top bar's Properties button does (N)
 interface | hides or shows the interface around the viewport, as the More menu's Hide Interface does (Ctrl+Space)
+context | shows the viewport's context menu where the pointer is, as a long press on the viewport does (right-click in Sculpt and the paint modes, whose context menu is a panel)

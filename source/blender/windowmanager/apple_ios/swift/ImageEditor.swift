@@ -359,24 +359,39 @@ struct ImageEditorPanel: View {
       }
       .pickerStyle(.inline)
     } label: {
-      HStack(spacing: 4) {
-        if let icon = BlenderIcon.image(model.mode.icon) {
-          Image(uiImage: icon)
-            .renderingMode(.template)
-        }
-        Text(model.mode.title)
-          .lineLimit(1)
-        Image(systemName: "chevron.up.chevron.down")
-          .font(.caption2.weight(.semibold))
-          .foregroundStyle(.secondary)
+      /* The mode's whole name, or where it cannot fit, its icon alone: never "UV…" (ROUND5 9E.1).
+       * The image's name gives way first, see #header. */
+      ViewThatFits(in: .horizontal) {
+        modeLabel(named: true)
+        modeLabel(named: false)
       }
-      .font(.subheadline.weight(.medium))
     }
     .menuStyle(.button)
     .buttonStyle(.plain)
+    .layoutPriority(1)
     .accessibilityLabel("Editor")
     .accessibilityValue(model.mode.title)
     .accessibilityIdentifier("blender.image.mode")
+  }
+
+  private func modeLabel(named: Bool) -> some View {
+    HStack(spacing: 4) {
+      if let icon = BlenderIcon.image(model.mode.icon) {
+        Image(uiImage: icon)
+          .renderingMode(.template)
+      }
+      else if !named {
+        Text(model.mode == .uv ? "UV" : "Image").fixedSize()
+      }
+      if named {
+        Text(model.mode.title)
+          .fixedSize()
+      }
+      Image(systemName: "chevron.up.chevron.down")
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.secondary)
+    }
+    .font(.subheadline.weight(.medium))
   }
 
   /** The image shown, from all of them, the ones painted on marked with a brush. */

@@ -5320,23 +5320,72 @@ static const char *bridge_key_stand_in(const wmKeyMapItem *kmi, const wmOperator
   {
     return "properties";
   }
+  /* Right-click where the mode's context menu is a panel (Sculpt, the paint modes): what a long
+   * press on the viewport shows there (ROUND5 9E.2). */
+  if (idname == "WM_OT_call_panel" && kmi->ptr && RNA_struct_find_property(kmi->ptr, "name") &&
+      StringRef(RNA_string_get(kmi->ptr, "name")).endswith("_context_menu"))
+  {
+    return "context";
+  }
   return nullptr;
 }
 
-/** A command kept from Blender, by the name a person knows it by: a sidebar or toolbar by the
- * setting \a kmi toggles, as "Toolbar" (T), otherwise the operator's. */
+/**
+ * A command kept from Blender, by the name a person knows it by (ROUND5 9E.3), never a generic
+ * operator's ("Call Asset Shelf Popover", "Context Enum Menu"): a sidebar, toolbar or setting by
+ * the property \a kmi's key changes, as "Toolbar" (T) or "Stroke Method"; a panel or menu by its
+ * label; the asset shelf as "Asset Shelf"; an editor switch by the editor; otherwise the
+ * operator's own name, as "Batch Rename".
+ */
 static std::string bridge_key_command_name(bContext *C, const wmKeyMapItem *kmi, wmOperatorType *ot)
 {
-  if (C && kmi->ptr && RNA_struct_find_property(kmi->ptr, "data_path")) {
+  const StringRef idname = ot->idname;
+  if (kmi->ptr && RNA_struct_find_property(kmi->ptr, "data_path")) {
     const std::string path = RNA_string_get(kmi->ptr, "data_path");
-    PointerRNA context = RNA_pointer_create_discrete(nullptr, RNA_Context, C);
-    PointerRNA owner;
-    PropertyRNA *prop = nullptr;
-    if (!path.empty() && RNA_path_resolve_property(&context, path.c_str(), &owner, &prop) && prop) {
-      const char *name = RNA_property_ui_name(prop);
-      if (name && name[0]) {
-        return name;
+    if (C && !path.empty()) {
+      PointerRNA context = RNA_pointer_create_discrete(nullptr, RNA_Context, C);
+      PointerRNA owner;
+      PropertyRNA *prop = nullptr;
+      if (RNA_path_resolve_property(&context, path.c_str(), &owner, &prop) && prop) {
+        const char *name = RNA_property_ui_name(prop);
+        if (name && name[0]) {
+          return name;
+        }
       }
+    }
+    /* A path that does not resolve here (a key-map pointing at another mode's setting): its last
+     * name, as Blender shows a property's identifier, "stroke_method" as "Stroke Method". */
+    std::string name = path.substr(path.find_last_of('.') == std::string::npos ?
+                                       0 :
+                                       path.find_last_of('.') + 1);
+    bool word_start = true;
+    for (char &c : name) {
+      if (c == '_') {
+        c = ' ';
+        word_start = true;
+      }
+      else {
+        c = word_start ? char(toupper(c)) : c;
+        word_start = false;
+      }
+    }
+    if (!name.empty()) {
+      return name;
+    }
+  }
+  if (idname == "WM_OT_call_asset_shelf_popover") {
+    return IFACE_("Asset Shelf");
+  }
+  if (idname == "SCREEN_OT_space_type_set_or_cycle" && kmi->ptr &&
+      RNA_struct_find_property(kmi->ptr, "space_type"))
+  {
+    const char *editor = nullptr;
+    PropertyRNA *prop = RNA_struct_find_property(kmi->ptr, "space_type");
+    if (RNA_property_enum_name_gettexted(
+            C, kmi->ptr, prop, RNA_property_enum_get(kmi->ptr, prop), &editor) &&
+        editor)
+    {
+      return fmt::format("Switching this area to the {}", editor);
     }
   }
   return WM_operatortype_name(ot, kmi->ptr);
