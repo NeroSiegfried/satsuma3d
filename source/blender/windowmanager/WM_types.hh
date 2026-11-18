@@ -821,6 +821,9 @@ struct wmEvent {
 
   /** Trackpad gesture identity, including momentum. Zero when unavailable. */
   uint64_t trackpad_gesture_id;
+  /** The trackpad gesture began on the navigation gizmo (iPad, ROUND5 12A): it turns about the
+   * view's centre, never about what lies under its place. */
+  bool trackpad_from_gizmo;
 
   /* Custom data. */
 

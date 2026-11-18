@@ -668,6 +668,9 @@ struct GHOST_TEventTrackpadData {
   uint numFingers;
   /** Non-zero identity shared by a gesture and its momentum; zero when unavailable. */
   uint64_t gesture_id;
+  /** The gesture began on the navigation gizmo: it turns about the view's centre, not about what
+   * lies under its place (iPad, ROUND5 12A). */
+  char from_navigation_gizmo;
 };
 
 enum GHOST_TTouchEventSubTypes {

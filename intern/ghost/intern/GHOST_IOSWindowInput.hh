@@ -71,6 +71,8 @@ typedef struct UserInputEvent {
   CGFloat distance;
   bool pencil_used;
   uint64_t gesture_id = 0;
+  /** An orbit that began on the navigation gizmo (ROUND5 12A). */
+  bool from_gizmo = false;
 
   UserInputEvent(CGPoint *loc, CGPoint *tran, CGFloat *dist, bool pencil)
   {
@@ -201,6 +203,13 @@ typedef struct UserInputEvent {
   GHOST_TabletData tablet_data;
   bool pencil_button_active;
   bool pencil_navigation_pending;
+  /** The Pencil's drag from the navigation gizmo is the orbit (ROUND5 12A.4): where it was
+   * recognised, where it was last and when, for the spin after it lifts. */
+  bool pencil_gizmo_orbit;
+  CGPoint pencil_gizmo_start;
+  CGPoint pencil_gizmo_last;
+  CGPoint pencil_gizmo_velocity;
+  CFTimeInterval pencil_gizmo_time;
   CGPoint pencil_navigation_start;
   bool last_tap_with_pencil;
   bool finger_tool_enabled;
@@ -216,6 +225,12 @@ typedef struct UserInputEvent {
   CGPoint orbit_remainder;
   CFTimeInterval orbit_timestamp;
   uint64_t orbit_gesture_id;
+  /** The orbit under way began on the navigation gizmo (ROUND5 12A). */
+  bool orbit_from_gizmo;
+  /** The gizmo's drag: its translation last stepped, in the view's points, and where it turns. */
+  bool gizmo_orbit_active;
+  CGPoint gizmo_orbit_translation;
+  CGPoint gizmo_orbit_location;
   /* How many fingers a navigation drag had at its last update: it orbits or pans by their count,
    * and goes on from where it is when that changes. */
   NSUInteger navigation_touches;

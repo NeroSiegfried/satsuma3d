@@ -131,6 +131,17 @@ void GHOST_ios_window_hold_modifier(GHOST_WindowIOS *window, GHOST_TKey key, boo
 - (void)cancelPencilStroke;
 /** A tap on the navigation gizmo, which picks the axis under it. */
 - (void)handleNavigationTap:(UITapGestureRecognizer *)gesture;
+/**
+ * A drag that began on the navigation gizmo (ROUND5 12A): the app's one orbit, as a finger's on
+ * the view, turning about the view's centre. \a phase: 0 began, 1 moved, 2 ended (spins on with
+ * \a velocity), 3 cancelled. \a point: the gizmo's centre; \a translation: the drag's travel since
+ * it began; \a velocity: points a second; all in the view's points. Whether it was taken: the
+ * input gate may refuse it.
+ */
+- (BOOL)navigationGizmoDrag:(int)phase
+                         at:(CGPoint)point
+                translation:(CGPoint)translation
+                   velocity:(CGPoint)velocity;
 @end
 
 UIWindow<GHOST_IOSInputWindow> *GHOST_ios_window_native(GHOST_WindowIOS *window);

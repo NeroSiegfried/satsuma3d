@@ -55,6 +55,15 @@ UIMenu *_Nonnull wm_apple_ios_context_menu(void);
 /** A tap on the navigation gizmo, which picks the axis under it. */
 void wm_apple_ios_window_navigation_tap(void *_Nullable window,
                                         UITapGestureRecognizer *_Nonnull tap);
+/** A drag that began on the navigation gizmo, the app's one orbit (ROUND5 12A): \a phase 0 began,
+ * 1 moved, 2 ended (spins on at \a velocity), 3 cancelled; \a point the gizmo's centre and
+ * \a translation the travel since it began, in the window's points. False when the input gate
+ * refused it. */
+bool wm_apple_ios_window_navigation_drag(void *_Nullable window,
+                                         int phase,
+                                         CGPoint point,
+                                         CGPoint translation,
+                                         CGPoint velocity);
 /** End the Pencil's stroke, cancelling its tool, when a control takes the touch. */
 void wm_apple_ios_window_cancel_pencil_stroke(void *_Nullable window);
 /** One of Blender's icons by key (such as `tool.object.builtin.move`), or the symbol. */

@@ -570,6 +570,11 @@ static wmOperatorStatus view3d_navigation_invoke_generic(bContext *C,
   if (PropertyRNA *prop = RNA_struct_find_property(ptr, "use_cursor_init")) {
     use_cursor_init = RNA_property_boolean_get(ptr, prop);
   }
+  /* An orbit begun on the navigation gizmo turns about the view's centre (or the selection), as
+   * Blender's own gizmo does, never about the depth under the gizmo's corner (ROUND5 12A). */
+  if (event->trackpad_from_gizmo) {
+    use_cursor_init = false;
+  }
 
   vod->init_navigation(C, event, nav_type, dyn_ofs_override, use_cursor_init);
   ED_view3d_smooth_view_force_finish(C, vod->v3d, vod->region);

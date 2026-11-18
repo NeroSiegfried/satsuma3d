@@ -6154,6 +6154,7 @@ void wm_event_add_ghostevent(wmWindowManager *wm,
   event = *event_state;
   event.flag = (eWM_EventFlag)0;
   event.trackpad_gesture_id = 0;
+  event.trackpad_from_gizmo = false;
 
   /**
    * Always support accessing the last key press/release. This is set from
@@ -6275,6 +6276,7 @@ void wm_event_add_ghostevent(wmWindowManager *wm,
       event.val = KM_NOTHING;
 
       event.trackpad_gesture_id = pd->gesture_id;
+      event.trackpad_from_gizmo = pd->from_navigation_gizmo != 0;
 
       /* The direction is inverted from the device due to system preferences. */
       if (pd->isDirectionInverted) {

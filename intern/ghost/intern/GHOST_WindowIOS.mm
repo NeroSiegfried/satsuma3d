@@ -601,7 +601,8 @@ UIWindow *document_window = nil;
                                                                   event_info.translation.y,
                                                                   false,
                                                                   1,
-                                                                  event_info.gesture_id));
+                                                                  event_info.gesture_id,
+                                                                  event_info.from_gizmo));
           break;
         case UserInputEvent::EventTypes::PAN_GESTURE:
           system->pushEvent(std::make_unique<GHOST_EventTrackpad>(system->getMilliSeconds(),
@@ -865,6 +866,10 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
     event_info.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_UP);
     [self generateUserInputEvents:event_info];
   }
+  if (pencil_gizmo_orbit) {
+    pencil_gizmo_orbit = false;
+    [self navigationGizmoDrag:3 at:CGPointZero translation:CGPointZero velocity:CGPointZero];
+  }
   pencil_button_active = false;
   pencil_navigation_pending = false;
   current_pencil_touch = nil;
@@ -982,9 +987,11 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
        [event.allTouches anyObject].phase == UITouchPhaseBegan))
   {
     if (NSString *reason = [self blockedReason]) {
+      /* A touch's own place, not the pointer's last (ROUND5 12C.3). */
+      UITouch *touch = event.type == UIEventTypeTouches ? [event.allTouches anyObject] : nil;
       [self inputBehind:[@"event " stringByAppendingString:ios_event_kind(event)]
                  reason:reason
-                     at:[self pointerLocation]];
+                     at:touch ? [touch locationInView:self] : [self pointerLocation]];
     }
   }
   if (event.type == UIEventTypeTouches) {
@@ -1060,6 +1067,24 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
                 10.0)
             {
               pencil_navigation_pending = false;
+              /* A drag from the gizmo is the app's orbit, as a finger's is (ROUND5 12A.4), not a
+               * press on Blender's gizmo, whose orbit passes a tablet's events by. */
+              UIView *hotspot = touch.view;
+              const CGPoint centre = [hotspot
+                  convertPoint:CGPointMake(CGRectGetMidX(hotspot.bounds), CGRectGetMidY(hotspot.bounds))
+                        toView:window->getView()];
+              if ([self navigationGizmoDrag:0
+                                         at:centre
+                                translation:CGPointZero
+                                   velocity:CGPointZero])
+              {
+                pencil_gizmo_orbit = true;
+                pencil_gizmo_start = point;
+                pencil_gizmo_last = point;
+                pencil_gizmo_velocity = CGPointZero;
+                pencil_gizmo_time = touch.timestamp;
+                break;
+              }
               pencil_button_active = true;
               [self updateTabletDataFromPencilTouch:touch];
               CGPoint start = window->scalePointToWindow(pencil_navigation_start);
@@ -1068,6 +1093,22 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
               down.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_DOWN);
               [self generateUserInputEvents:down];
             }
+          }
+          if (touch == current_pencil_touch && pencil_gizmo_orbit) {
+            const CGPoint point = [touch preciseLocationInView:window->getView()];
+            const CFTimeInterval dt = touch.timestamp - pencil_gizmo_time;
+            if (dt > 0.0) {
+              pencil_gizmo_velocity = CGPointMake((point.x - pencil_gizmo_last.x) / dt,
+                                                  (point.y - pencil_gizmo_last.y) / dt);
+            }
+            pencil_gizmo_last = point;
+            pencil_gizmo_time = touch.timestamp;
+            [self navigationGizmoDrag:1
+                                   at:CGPointZero
+                          translation:CGPointMake(point.x - pencil_gizmo_start.x,
+                                                  point.y - pencil_gizmo_start.y)
+                             velocity:CGPointZero];
+            break;
           }
           if (touch == current_pencil_touch && pencil_button_active) {
             NSArray<UITouch *> *samples = [event coalescedTouchesForTouch:touch];
@@ -1080,6 +1121,19 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
           }
           break;
         case UITouchPhaseEnded:
+          if (touch == current_pencil_touch && pencil_gizmo_orbit) {
+            pencil_gizmo_orbit = false;
+            [self navigationGizmoDrag:2
+                                   at:CGPointZero
+                          translation:CGPointZero
+                             velocity:(touch.timestamp - pencil_gizmo_time < 0.05 ?
+                                           pencil_gizmo_velocity :
+                                           CGPointZero)];
+            pencil_navigation_pending = false;
+            current_pencil_touch = nil;
+            tablet_data = GHOST_TABLET_DATA_NONE;
+            break;
+          }
           if (touch == current_pencil_touch) {
             if (pencil_navigation_pending) {
               [self sendPencilButtonEvent:touch isDown:YES];
@@ -1201,9 +1255,36 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
     return;
   }
   behind_logged[kind] = [NSDate date];
-  UIView *hit = [self hitTest:point withEvent:nil];
+  /* Tested from the window in front, as UIKit delivers it (ROUND5 12C.3): a sheet or menu may be
+   * in a window of its own. What is hit belongs to what is presented when it is in another window
+   * in front of this one, or in a presented controller's view: the input is on the sheet, which
+   * takes it; otherwise it would land behind it. */
+  UIView *hit = nil;
+  NSArray<UIWindow *> *windows = [self.windowScene.windows
+      sortedArrayUsingComparator:^NSComparisonResult(UIWindow *a, UIWindow *b) {
+        return a.windowLevel > b.windowLevel ? NSOrderedAscending :
+               a.windowLevel < b.windowLevel ? NSOrderedDescending :
+                                               NSOrderedSame;
+      }];
+  for (UIWindow *front in windows.count ? windows : @[ self ]) {
+    if (front.hidden || front.alpha < 0.01) {
+      continue;
+    }
+    hit = [front hitTest:[self convertPoint:point toView:front] withEvent:nil];
+    if (hit) {
+      break;
+    }
+  }
+  bool on_sheet = hit && hit.window != self;
+  for (UIViewController *presented = self.rootViewController.presentedViewController;
+       presented && hit && !on_sheet;
+       presented = presented.presentedViewController)
+  {
+    on_sheet = [hit isDescendantOfView:presented.view];
+  }
   ios_log(@"input",
-          [NSString stringWithFormat:@"behind sheet: %@ at %d,%d, %@, hit %@",
+          [NSString stringWithFormat:@"%@ sheet: %@ at %d,%d, %@, hit %@",
+                                     on_sheet ? @"on" : @"behind",
                                      kind,
                                      int(point.x),
                                      int(point.y),
@@ -1935,12 +2016,114 @@ static UIBezierPath *pointer_move()
  * coming or going changes which, smoothly: the drag goes on from where it is, without a jump, as
  * the fingers' middle moves when their count changes.
  */
+/* -------------------------------------------------------------------- */
+/** \name The orbit
+ *
+ * The app has one orbit (ROUND5 12A, decision 74): a finger's drag on the view and a drag that
+ * begins on the navigation gizmo both begin, step and end it here, with the same gesture id, the
+ * same steps, the same spin after a flick and the same guards.
+ * \{ */
+
+/** A new orbit: its own gesture id, the last one's spin stopped. */
+- (void)orbitBegin:(bool)from_gizmo
+{
+  [self stopOrbitMomentum];
+  /* UIKit delivers gestures on the main thread. IDs are unique across windows, and remain
+   * attached to queued events even if the next drag has already begun. */
+  static uint64_t next_orbit_gesture_id = 0;
+  orbit_gesture_id = ++next_orbit_gesture_id;
+  orbit_from_gizmo = from_gizmo;
+}
+
+/** One step of the orbit by \a relative window pixels, at \a point. Not while a finger holds an
+ * object with Tweak. */
+- (void)orbitStep:(CGPoint)relative at:(CGPoint)point
+{
+  if (CGPointEqualToPoint(relative, CGPointMake(0.0f, 0.0f)) || [self fingerTweakHolds]) {
+    return;
+  }
+  UserInputEvent event_info(&point, nullptr, nullptr, false);
+  event_info.translation = CGPointMake(-relative.x, -relative.y);
+  event_info.add_event(UserInputEvent::EventTypes::ORBIT_GESTURE);
+  event_info.gesture_id = orbit_gesture_id;
+  event_info.from_gizmo = orbit_from_gizmo;
+  [self generateUserInputEvents:event_info];
+}
+
+/** The orbit ends at \a point; with \a spin it spins on at \a velocity (the view's points a
+ * second), as after a flick. */
+- (void)orbitEndAt:(CGPoint)point velocity:(CGPoint)velocity spin:(bool)spin
+{
+  if (!spin || pencil_button_active || [self fingerTweakHolds]) {
+    return;
+  }
+  const CGFloat speed = hypot(velocity.x, velocity.y);
+  if (speed >= 80.0) {
+    const CGFloat limit = MIN(1.0, 3000.0 / speed);
+    orbit_velocity = CGPointMake(velocity.x * limit, velocity.y * limit);
+    orbit_location = point;
+    orbit_remainder = CGPointZero;
+    orbit_timestamp = CACurrentMediaTime();
+    orbit_display_link = [CADisplayLink displayLinkWithTarget:self
+                                                     selector:@selector(updateOrbitMomentum:)];
+    [orbit_display_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+  }
+}
+
+- (BOOL)navigationGizmoDrag:(int)phase
+                         at:(CGPoint)point
+                translation:(CGPoint)translation
+                   velocity:(CGPoint)velocity
+{
+  if (!window) {
+    return NO;
+  }
+  CGPoint location = window->scalePointToWindow(point);
+  if (phase == 0) {
+    gizmo_orbit_active = false;
+    /* The input gate (ROUND5 9G.1), as every other input asks it. */
+    NSString *reason = [self blockedReason];
+    if (reason != nil) {
+      [self inputBehind:@"gizmo drag" reason:reason at:point];
+      return NO;
+    }
+    [self orbitBegin:true];
+    gizmo_orbit_active = true;
+    /* The first step is measured from where the drag was recognised: no jump at the start. */
+    gizmo_orbit_translation = translation;
+    gizmo_orbit_location = location;
+    return YES;
+  }
+  if (!gizmo_orbit_active) {
+    return NO;
+  }
+  if (phase == 1) {
+    if ([self blockedReason] != nil) {
+      gizmo_orbit_active = false;
+      return NO;
+    }
+    CGPoint relative = CGPointMake(translation.x - gizmo_orbit_translation.x,
+                                   translation.y - gizmo_orbit_translation.y);
+    gizmo_orbit_translation = translation;
+    relative = window->scalePointToWindow(relative);
+    [self orbitStep:relative at:gizmo_orbit_location];
+    return YES;
+  }
+  gizmo_orbit_active = false;
+  [self orbitEndAt:gizmo_orbit_location velocity:velocity spin:(phase == 2)];
+  return YES;
+}
+
+/**
+ * A drag that navigates the view: with `orbiting_fingers` it orbits, with more it pans. A finger
+ * coming or going changes which, smoothly: the drag goes on from where it is, without a jump, as
+ * the fingers' middle moves when their count changes.
+ */
 - (void)handleNavigationDrag:(GHOSTUIPanGestureRecognizer *)sender
              orbitingFingers:(NSUInteger)orbiting_fingers
 {
   CGPoint touch_point = [sender getScaledTouchPoint:window];
   CGPoint translation = [sender getScaledTranslation:window];
-  UserInputEvent event_info(&touch_point, nullptr, nullptr, false);
   const NSUInteger touches = sender.numberOfTouches;
 
   if (sender.state == UIGestureRecognizerStateBegan ||
@@ -1950,10 +2133,7 @@ static UIBezierPath *pointer_move()
     if (sender.state == UIGestureRecognizerStateBegan || touches != navigation_touches) {
       [self stopOrbitMomentum];
       if (orbits && (sender.state == UIGestureRecognizerStateBegan || !navigation_orbits)) {
-        /* UIKit delivers gestures on the main thread. IDs are unique across windows, and
-         * remain attached to queued events even if the next drag has already begun. */
-        static uint64_t next_orbit_gesture_id = 0;
-        orbit_gesture_id = ++next_orbit_gesture_id;
+        [self orbitBegin:false];
       }
       [sender setCachedTranslation:translation];
       if (sender.state == UIGestureRecognizerStateBegan) {
@@ -1968,19 +2148,16 @@ static UIBezierPath *pointer_move()
     /* Update cached translation */
     [sender setCachedTranslation:translation];
 
+    if (orbits) {
+      [self orbitStep:relative_translation at:touch_point];
+    }
     /* Not while a finger holds an object with Tweak. */
-    if (!CGPointEqualToPoint(relative_translation, CGPointMake(0.0f, 0.0f)) &&
-        ![self fingerTweakHolds])
+    else if (!CGPointEqualToPoint(relative_translation, CGPointMake(0.0f, 0.0f)) &&
+             ![self fingerTweakHolds])
     {
-      if (orbits) {
-        event_info.translation = CGPointMake(-relative_translation.x, -relative_translation.y);
-        event_info.add_event(UserInputEvent::EventTypes::ORBIT_GESTURE);
-      }
-      else {
-        UserInputEvent pan(&touch_point, &relative_translation, nullptr, false);
-        pan.add_event(UserInputEvent::EventTypes::PAN_GESTURE_TWO_FINGERS);
-        [self generateUserInputEvents:pan];
-      }
+      UserInputEvent pan(&touch_point, &relative_translation, nullptr, false);
+      pan.add_event(UserInputEvent::EventTypes::PAN_GESTURE_TWO_FINGERS);
+      [self generateUserInputEvents:pan];
     }
   }
   else if (sender.state == UIGestureRecognizerStateEnded ||
@@ -1993,29 +2170,13 @@ static UIBezierPath *pointer_move()
     navigation_orbits = false;
     navigation_from_orbit = false;
     /* Spinning on only from an orbit. */
-    if (sender.state == UIGestureRecognizerStateEnded && !pencil_button_active && was_orbiting &&
-        ![self fingerTweakHolds])
-    {
-      CGPoint velocity = [sender velocityInView:window->getView()];
-      const CGFloat speed = hypot(velocity.x, velocity.y);
-      if (speed >= 80.0) {
-        const CGFloat limit = MIN(1.0, 3000.0 / speed);
-        orbit_velocity = CGPointMake(velocity.x * limit, velocity.y * limit);
-        orbit_location = touch_point;
-        orbit_remainder = CGPointZero;
-        orbit_timestamp = CACurrentMediaTime();
-        orbit_display_link = [CADisplayLink displayLinkWithTarget:self
-                                                         selector:@selector(updateOrbitMomentum:)];
-        [orbit_display_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
-      }
-    }
-  }
-
-  if (event_info.num_events > 0) {
-    event_info.gesture_id = orbit_gesture_id;
-    [self generateUserInputEvents:event_info];
+    [self orbitEndAt:touch_point
+            velocity:[sender velocityInView:window->getView()]
+                spin:(sender.state == UIGestureRecognizerStateEnded && was_orbiting)];
   }
 }
+
+/** \} */
 
 - (void)stopOrbitMomentum
 {
@@ -2066,6 +2227,7 @@ static UIBezierPath *pointer_move()
   if (!CGPointEqualToPoint(pixels, CGPointZero)) {
     UserInputEvent event_info(&orbit_location, &pixels, nullptr, false);
     event_info.gesture_id = orbit_gesture_id;
+    event_info.from_gizmo = orbit_from_gizmo;
     event_info.add_event(UserInputEvent::EventTypes::ORBIT_GESTURE);
     [self generateUserInputEvents:event_info];
   }

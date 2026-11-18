@@ -231,6 +231,15 @@ extern "C" void wm_apple_ios_window_navigation_tap(void *window, UITapGestureRec
   }
 }
 
+extern "C" bool wm_apple_ios_window_navigation_drag(
+    void *window, const int phase, const CGPoint point, const CGPoint translation, const CGPoint velocity)
+{
+  return window && [GHOST_ios_window_native(ghost_window(window)) navigationGizmoDrag:phase
+                                                                                   at:point
+                                                                          translation:translation
+                                                                             velocity:velocity];
+}
+
 extern "C" void wm_apple_ios_window_cancel_pencil_stroke(void *window)
 {
   if (window) {

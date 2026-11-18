@@ -4,9 +4,11 @@
 
 /** \file
  * Blender's navigation gizmo in the document window, and its pie of views. Blender draws the
- * gizmo; a hotspot over it takes the touches. A tap picks the axis under it, as in Blender; a
- * hold, or a drag out of it, opens the pie, and releasing over a view chooses it. The Pencil's
- * touches on the hotspot go to Blender, which tells them apart by the hotspot's identifier.
+ * gizmo; a hotspot over it takes the touches. A tap picks the axis under it, as in Blender. A drag
+ * that begins on it turns the view: the app's one orbit, as a finger's on the view, about the
+ * view's centre (ROUND5 12A). Only a hold opens the pie, and sliding to a view and letting go
+ * chooses it (12B). The Pencil's touches on the hotspot go to the window, which tells them apart by
+ * the hotspot's identifier: a tap and a hold as a finger's, a drag the same orbit.
  */
 
 import SwiftUI
@@ -172,6 +174,52 @@ final class ViewGizmoState {
   @ObservationIgnored let openFeedback = UIImpactFeedbackGenerator(style: .soft)
 #endif
 
+  /** The one shown, for a script's `gizmo` steps, which call what the recognizers call. */
+  @ObservationIgnored static weak var current: ViewGizmoState?
+  /** A drag on the gizmo is under way: the orbit took it. */
+  @ObservationIgnored private(set) var dragging = false
+  @ObservationIgnored private var dragStart = CGPoint.zero
+
+  /** The hold's beginning: the only place the pie opens (ROUND5 12B, decision 74). */
+  func holdBegan(model: ShellModel) {
+    /* Consume the pending Pencil tap before it can become a Blender click. */
+    wm_apple_ios_window_cancel_pencil_stroke(model.window)
+    pieVisible = true
+#if !os(visionOS)
+    openFeedback.impactOccurred()
+    selectionFeedback.prepare()
+#endif
+  }
+
+  /** A drag that began on the gizmo is the app's orbit (ROUND5 12A): it turns about the view's
+   * centre from the gizmo's centre, \a translation in the window's points since the touch. */
+  func dragBegan(model: ShellModel, translation: CGPoint) {
+    guard let gizmo = model.navigationGizmoRect else { return }
+    dragging = wm_apple_ios_window_navigation_drag(model.window, 0, CGPoint(x: gizmo.midX, y: gizmo.midY),
+                                                   translation, .zero)
+    dragStart = translation
+    pressed = dragging
+  }
+
+  func dragMoved(model: ShellModel, translation: CGPoint) {
+    guard dragging else { return }
+    if !wm_apple_ios_window_navigation_drag(model.window, 1, .zero, translation, .zero) {
+      /* The input gate closed: something is presented. */
+      dragging = false
+      pressed = false
+    }
+  }
+
+  func dragEnded(model: ShellModel, translation: CGPoint, velocity: CGPoint, cancelled: Bool) {
+    guard dragging else { return }
+    dragging = false
+    pressed = false
+    _ = wm_apple_ios_window_navigation_drag(model.window, cancelled ? 3 : 2, .zero, translation, velocity)
+    /* One line a gesture, at its end (ROUND5 12C.1). */
+    WM_native_ui_log("gizmo", "drag \(Int(translation.x - dragStart.x)),\(Int(translation.y - dragStart.y)) pt" +
+                     (cancelled ? " (cancelled)" : ""))
+  }
+
   func hover(at point: CGPoint) {
     let button = geometry?.button(at: point)
     guard button != hovered else { return }
@@ -183,9 +231,14 @@ final class ViewGizmoState {
 
   /** Choose the view under the point, if any, and close the pie. */
   func release(at point: CGPoint?) {
+    var chosen: String?
     if let point, let button = geometry?.button(at: point) {
-      if button < pie.count { pie[button].run() }
+      if button < pie.count {
+        chosen = pie[button].title
+        pie[button].run()
+      }
     }
+    if pieVisible { WM_native_ui_log("gizmo", "menu: \(chosen ?? "closed")") }
     pieVisible = false
     hovered = nil
   }
@@ -201,6 +254,7 @@ final class ViewGizmoHotspot: UIControl {
     super.init(frame: frame)
     accessibilityIdentifier = "blender.viewport.navigation"
     accessibilityLabel = "View navigation"
+    accessibilityHint = "Drag to turn the view. Touch and hold for the views."
     backgroundColor = .clear
   }
 
@@ -238,7 +292,8 @@ struct ViewGizmoHotspotView: UIViewRepresentable {
     }
 
     @objc func pressEnded() {
-      state.pressed = false
+      /* A drag cancels the hotspot's touch as it begins: the ring stays lit while it lasts. */
+      if !state.dragging { state.pressed = false }
     }
 
     @objc func hover(_ gesture: UIHoverGestureRecognizer) {
@@ -247,14 +302,7 @@ struct ViewGizmoHotspotView: UIViewRepresentable {
 
     @objc func hold(_ gesture: UILongPressGestureRecognizer) {
       switch gesture.state {
-        case .began:
-          /* Consume the pending Pencil tap before it can become a Blender click. */
-          wm_apple_ios_window_cancel_pencil_stroke(model.window)
-          state.pieVisible = true
-#if !os(visionOS)
-          state.openFeedback.impactOccurred()
-          state.selectionFeedback.prepare()
-#endif
+        case .began: state.holdBegan(model: model)
         case .changed: state.hover(at: location(gesture))
         case .ended: state.release(at: location(gesture))
         case .cancelled, .failed: state.release(at: nil)
@@ -262,20 +310,24 @@ struct ViewGizmoHotspotView: UIViewRepresentable {
       }
     }
 
+    /** A drag turns the view (ROUND5 12A); it never opens the pie (12B). In the window's points,
+     * as the gizmo's centre is. */
     @objc func drag(_ gesture: UIPanGestureRecognizer) {
+      let translation = gesture.translation(in: nil)
       switch gesture.state {
-        case .began:
-          state.pieVisible = true
-          state.hover(at: location(gesture))
-        case .changed: state.hover(at: location(gesture))
-        case .ended: state.release(at: location(gesture))
-        case .cancelled, .failed: state.release(at: nil)
+        case .began: state.dragBegan(model: model, translation: translation)
+        case .changed: state.dragMoved(model: model, translation: translation)
+        case .ended:
+          state.dragEnded(model: model, translation: translation, velocity: gesture.velocity(in: nil), cancelled: false)
+        case .cancelled, .failed:
+          state.dragEnded(model: model, translation: translation, velocity: .zero, cancelled: true)
         default: break
       }
     }
 
     @objc func tap(_ gesture: UITapGestureRecognizer) {
       wm_apple_ios_window_navigation_tap(model.window, gesture)
+      WM_native_ui_log("gizmo", "tap")
     }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
@@ -371,6 +423,7 @@ struct ViewGizmoLayer: View {
       .onChange(of: proxy.size, initial: true) {
         state.geometry = geometry
         state.pie = pie
+        ViewGizmoState.current = state
       }
       .onChange(of: [locked, kept, camera]) {
         state.geometry = geometry
