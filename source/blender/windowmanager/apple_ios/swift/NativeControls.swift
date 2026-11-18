@@ -591,6 +591,13 @@ struct BlenderPropertySplit<Control: View>: View {
  */
 struct EqualCellGrid: Layout {
   let columns: Int
+  /** The cells' names may shrink by this much (#BlenderWidgetFace.textShrink), and a cell
+   * keeps \a fixed of its width whatever its name: what the grid needs at the least, which is
+   * its ideal size to #ViewThatFits. Without it the grid asked for its widest name at full size
+   * three times over and gave way to a column where a grid fits (the shading popover's six
+   * Colors, ROUND5 7E/E4, seen 2026-11-18). */
+  var shrink: CGFloat = 1
+  var fixed: CGFloat = 0
   var spacing: CGFloat = 1
   /** Between rows. A widget's face is 32 points in a 44-point hit row: -11 sets the faces 1 point
    * apart, joined as Blender's grid is, their hit rows sharing the gap. */
@@ -600,7 +607,8 @@ struct EqualCellGrid: Layout {
     if let width = proposal.width, width.isFinite {
       return max(0, (width - spacing * CGFloat(columns - 1)) / CGFloat(columns))
     }
-    return subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
+    let ideal = subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
+    return fixed + max(0, ideal - fixed) * shrink
   }
 
   private func rowHeight(_ cell: CGFloat, _ subviews: Subviews) -> CGFloat {
@@ -799,7 +807,8 @@ struct BlenderExpandedChoice: View {
     ViewThatFits(in: .horizontal) {
       HStack(spacing: 1) { buttons(icons: icons, vertical: false) }
         .fixedSize(horizontal: true, vertical: false)
-      EqualCellGrid(columns: columns) { cells(icons: icons, columns: columns) }
+      EqualCellGrid(columns: columns, shrink: icons ? 1 : BlenderWidgetFace.textShrink,
+                    fixed: 2 * BlenderWidgetFace.padding) { cells(icons: icons, columns: columns) }
       VStack(spacing: 1) { buttons(icons: icons, vertical: true) }
     }
     .disabled(!node.enabled)

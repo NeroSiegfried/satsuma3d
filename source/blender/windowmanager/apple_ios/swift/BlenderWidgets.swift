@@ -129,6 +129,11 @@ struct BlenderWidgetFace: View {
     glass ? (on == true ? .white : .primary) : (on == true ? .white : BlenderWidgetColors.text)
   }
 
+  /** Space either side of the content. */
+  static let padding: CGFloat = 8
+  /** How far a name in a widget that fills its space may shrink before it would be cut. */
+  static let textShrink: CGFloat = 0.75
+
   var body: some View {
     HStack(spacing: 4) {
       if let icon {
@@ -144,7 +149,7 @@ struct BlenderWidgetFace: View {
           Text(text)
             .font(.subheadline)
             .lineLimit(1)
-            .minimumScaleFactor(0.75)
+            .minimumScaleFactor(Self.textShrink)
         }
         else {
           Text(text)
@@ -163,7 +168,7 @@ struct BlenderWidgetFace: View {
       }
     }
     .foregroundStyle(foreground)
-    .padding(.horizontal, 8)
+    .padding(.horizontal, Self.padding)
     .frame(minWidth: minWidth, maxWidth: fills ? .infinity : nil, minHeight: 32)
     .background(WidgetShape(join: join, glass: glass, vertical: vertical, corners: corners).fill(fill))
     .overlay {
