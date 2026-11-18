@@ -146,6 +146,12 @@ struct wmNativeInterface {
   /** Show one of Blender's panels natively, such as Rename Active Item's. False for Blender's. */
   bool (*panel_popup)(bContext *C, const char *panel) = nullptr;
 
+  /**
+   * A factor of the DPI Blender's interface is drawn at, see #WM_window_dpi_set_userdef: the
+   * platform's own size for Blender's interface, which leaves Blender's Resolution Scale alone.
+   */
+  float (*interface_scale)() = nullptr;
+
   /** Open a web page in the platform's browser: Help's links, an add-on's documentation. */
   void (*web_url_open)(const char *url) = nullptr;
 

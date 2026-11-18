@@ -30,6 +30,10 @@
  *   `SPACE`), as a hardware keyboard sends it, with the pointer at the viewport's middle (ROUND5
  *   9A.9); logged when the key is not known;
  * - `menu close`: close a menu, choice or field a key or step opened, and Search;
+ * - `interface desktop|ipad`: Blender's own interface or the iPad's; `interface size <percent>`:
+ *   the size of Blender's own (ROUND5 9C); both put back as they were when the script ends;
+ *   `interface measure`: Blender's DPI, pixel size and Resolution Scale, written to the log and to
+ *   `tmp/interface-measure.txt`;
  * - `editor uv|image open|close`: the UV Editor or the Image Editor, as the editors menu opens it
  *   (ROUND5 9B.7); `editor uv desktop`: its Edit UVs in Desktop Interface;
  * - `wait <seconds>`;
@@ -84,6 +88,7 @@ enum ShellSnapshots {
         UserDefaults.standard.set(rail, forKey: "BlenderToolRailEdge")
         UserDefaults.standard.set(editorMode, forKey: ImageEditorModel.modeKey)
         if BlenderSettings.desktop != desktop { BlenderSettings.set("desktop", .bool(desktop)) }
+        SettingsModel.applyDesktopScale()
         if let restrictions, let limits = scene?.sizeRestrictions {
           limits.minimumSize = restrictions.0
           limits.maximumSize = restrictions.1
@@ -273,6 +278,22 @@ enum ShellSnapshots {
         }
         image.show(mode, words[1] == "open")
         try? await Task.sleep(for: .seconds(1))
+      case "interface":
+        if words.first == "desktop" || words.first == "ipad" {
+          BlenderSettings.set("desktop", .bool(words.first == "desktop"))
+        }
+        else if words.first == "measure" {
+          BlenderSettings.set("interface_measure", .bool(true))
+        }
+        else if words.first == "size", words.count >= 2, let percent = Double(words[1]) {
+          /* 67 is two thirds, as Window › Interface Size has it. */
+          BlenderSettings.set("desktop_scale", .float(percent == 67 ? 2.0 / 3.0 : percent / 100))
+        }
+        else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        try? await Task.sleep(for: .seconds(2))
       case "wait":
         try? await Task.sleep(for: .seconds(Double(words.first ?? "") ?? 0.5))
       case "shot":

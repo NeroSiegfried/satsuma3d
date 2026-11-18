@@ -63,6 +63,7 @@
 
 #include "WM_api.hh"
 #include "WM_keymap.hh"
+#include "WM_native_interface.hh"
 #include "WM_types.hh"
 #include "wm.hh"
 #include "wm_draw.hh"
@@ -749,6 +750,12 @@ void WM_window_dpi_set_userdef(const wmWindow *win)
     }
 
     CLAMP(U.ui_scale, 0.25f, 4.0f);
+  }
+
+  /* A platform's interface may give Blender's its own size (the iPad app's Desktop Interface
+   * size), which Blender's Resolution Scale still multiplies. */
+  if (const wmNativeInterface *native = WM_native_interface(); native && native->interface_scale) {
+    auto_dpi *= native->interface_scale();
   }
 
   /* Blender's UI drawing assumes DPI 72 as a good default following macOS

@@ -4301,6 +4301,7 @@ void wm_operatortypes_register()
 {
 #ifdef WITH_NATIVE_UI
   WM_operatortype_append(WM_OT_native_interface_toggle);
+  WM_operatortype_append(WM_OT_native_interface_scale);
   WM_operatortype_append(WM_OT_native_url_open);
 #endif
   WM_operatortype_append(WM_OT_window_close);

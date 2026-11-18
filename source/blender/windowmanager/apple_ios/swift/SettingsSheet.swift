@@ -75,6 +75,23 @@ final class SettingsModel: ObservableObject {
     BlenderSettings.set("navigation_style", .text(style))
   }
 
+  /** The size of Blender's own interface, as a factor (ROUND5 9C, decision 56): 1 is the size it
+   * has drawn at so far, two thirds Blender's size on a Mac. Only Blender's own interface. */
+  static let desktopScaleKey = "BlenderDesktopInterfaceScale"
+  static let desktopScaleDefault = 0.75
+  /** The sizes Settings' slider stops at: steps of 5 %, and 67 %, Blender's size on a Mac. */
+  static let desktopScaleStops: [Double] = [0.5, 0.55, 0.6, 0.65, 2.0 / 3.0, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95,
+                                            1.0, 1.05, 1.1, 1.15, 1.2, 1.25]
+
+  static var desktopScale: Double {
+    let stored = UserDefaults.standard.object(forKey: desktopScaleKey) as? Double ?? desktopScaleDefault
+    return min(1.25, max(0.5, stored))
+  }
+
+  static func applyDesktopScale() {
+    BlenderSettings.set("desktop_scale", .float(desktopScale))
+  }
+
   /** The navigation gizmo's corner: at the top or bottom as Settings has it, on the right, or the
    * left for the left hand. */
   static func applyNavigationCorner() {
@@ -428,6 +445,8 @@ private struct IPadSettingsPage: View {
       } header: {
         Text("Interface Style")
       }
+
+      DesktopInterfaceSection()
 
       Section {
         ChoiceRow(title: "Blender", detail: "The axes with their letters and the zoom, move, camera and "
@@ -854,3 +873,40 @@ public final class SwiftSettings: NSObject, UIAdaptivePresentationControllerDele
 }
 
 /** \} */
+
+/** Settings › Desktop Interface: the size of Blender's own interface, live (ROUND5 9C.4). */
+private struct DesktopInterfaceSection: View {
+  @AppStorage(SettingsModel.desktopScaleKey) private var scale = SettingsModel.desktopScaleDefault
+
+  /** Where the slider is: which of the stops. */
+  private var stop: Binding<Double> {
+    Binding(get: {
+      let stops = SettingsModel.desktopScaleStops
+      let nearest = stops.indices.min { abs(stops[$0] - scale) < abs(stops[$1] - scale) } ?? 0
+      return Double(nearest)
+    }, set: { index in
+      let stops = SettingsModel.desktopScaleStops
+      scale = stops[min(stops.count - 1, max(0, Int(index.rounded())))]
+    })
+  }
+
+  var body: some View {
+    Section {
+      HStack(spacing: 12) {
+        Text("Size")
+        Slider(value: stop, in: 0...Double(SettingsModel.desktopScaleStops.count - 1), step: 1)
+          .accessibilityLabel("Desktop Interface Size")
+          .accessibilityValue(Text(verbatim: "\(Int((scale * 100).rounded())) %"))
+        Text(verbatim: "\(Int((scale * 100).rounded())) %")
+          .monospacedDigit()
+          .foregroundStyle(.secondary)
+          .frame(minWidth: 48, alignment: .trailing)
+      }
+    } header: {
+      Text("Desktop Interface")
+    } footer: {
+      Text("67 % is the size of Blender on a Mac. Smaller is harder to tap with a finger; Apple Pencil and a trackpad are not affected.")
+    }
+    .onChange(of: scale) { _, _ in SettingsModel.applyDesktopScale() }
+  }
+}

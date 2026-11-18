@@ -78,7 +78,7 @@ void WM_native_ui_notice(int level, const char *text, const char *button = "");
 /**
  * A line of the session's log, a text file in the temporary folder that says what was run and
  * shown, for finding out afterwards what happened on a device. Written only while the platform's
- * interface shows, or with `PLATYPUS_SESSION_LOG` in the environment.
+ * interface shows, or with `PLATYPUS_SESSION_LOG` or a snapshot script in the environment.
  */
 void WM_native_ui_session_log(const char *kind, const char *text);
 /** Write what the session's log holds: at once with \a force, as the app goes to the background
@@ -94,6 +94,13 @@ void WM_native_ui_operator_finished(bContext *C, wmOperator *op);
 /* -------------------------------------------------------------------- */
 /** \name Input
  * \{ */
+
+/**
+ * What Blender's interface is drawn at, as a factor of its DPI, see
+ * #wmNativeInterface::interface_scale: the platform's own setting while Blender's own interface
+ * shows, 1 while the platform's shows (its viewport keeps its size).
+ */
+float WM_native_ui_interface_scale();
 
 /** Whether a stylus hovers over the viewport. */
 bool WM_native_ui_stylus_hover_active();
@@ -184,6 +191,8 @@ void WM_native_ui_navigation_redraw_request();
 
 /** Switch between the platform's interface and Blender's own, as on a desktop computer. */
 void WM_OT_native_interface_toggle(wmOperatorType *ot);
+/** The size of Blender's own interface, the platform's setting, see #WM_native_ui_interface_scale. */
+void WM_OT_native_interface_scale(wmOperatorType *ot);
 /** Open a web page in the platform's browser, see #wmNativeInterface::web_url_open. */
 void WM_OT_native_url_open(wmOperatorType *ot);
 

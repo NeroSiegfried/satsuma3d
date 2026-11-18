@@ -193,6 +193,7 @@ wmNativeInterface native_interface_create()
   native.panel_popup = bridge_panel_popup;
   native.props_dialog = props_dialog;
   native.web_url_open = wm_apple_ios_open_web_url;
+  native.interface_scale = WM_native_ui_interface_scale;
   return native;
 }
 

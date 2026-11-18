@@ -35,6 +35,7 @@
 #include "BKE_vfont.hh"
 #include "DNA_vfont_types.h"
 #include "BKE_wm_runtime.hh"
+#include "BLF_api.hh"
 #include "BLO_readfile.hh"
 #include "BLT_translation.hh"
 #include "ED_render.hh"
@@ -170,6 +171,8 @@ bool bridge_volume_command(bContext *C, StringRef setting, StringRef value);
 
 void bridge_interface_set(bContext *C, bool desktop);
 void bridge_desktop_uv_editing(bContext *C);
+void bridge_desktop_scale_set(bContext *C, float scale);
+void bridge_interface_measure();
 
 namespace {
 
@@ -210,6 +213,9 @@ bool bridge_layout_ready = false;
 bool bridge_gizmo_refresh_pending = true;
 /** Blender's own interface instead of the native one: normal screens, no native controls. */
 std::atomic<bool> bridge_desktop_ui{false};
+/** The size of Blender's own interface, as the app's own setting (ROUND5 9C, decision 56): a factor
+ * of what Blender would draw on the iPad, only while Blender's own interface shows. */
+std::atomic<float> bridge_desktop_scale{0.75f};
 /** Changed preferences are saved shortly after, as the iPad may end the app without warning. */
 bool bridge_preferences_save_pending = false;
 std::chrono::steady_clock::time_point bridge_preferences_save_at;
@@ -4310,8 +4316,21 @@ void bridge_settings_view_build(bContext * /*C*/,
       return views::protocol::CreateToggle(buffer, value);
     });
   };
-  /* Blender's own interface, as on a desktop computer. */
+  /* Blender's own interface, as on a desktop computer, and its size. */
   toggle("desktop", "Desktop Interface", bridge_desktop_ui.load());
+  builder.add(top, "desktop_scale", [&](ViewBuffer &buffer, NodeFields &fields) {
+    fields.label = IFACE_("Desktop Interface Size");
+    return views::protocol::CreateNumber(buffer,
+                                         bridge_desktop_scale.load(),
+                                         false,
+                                         views::protocol::NumberKind::Factor,
+                                         0.5,
+                                         1.25,
+                                         0.5,
+                                         1.25,
+                                         0.05,
+                                         2);
+  });
   toggle("hover_highlight", "Highlight What the Pencil Hovers Over", bridge_hover_highlight);
   builder.add(top, "keymap", [&](ViewBuffer &buffer, NodeFields &fields) {
     fields.label = IFACE_("Keymap");
@@ -4378,6 +4397,12 @@ views::CommandResult bridge_settings_view_command(bContext *C,
   }
   else if (target == "desktop_uv_editing" && on && on->value()) {
     bridge_desktop_uv_editing(C);
+  }
+  else if (target == "interface_measure" && on && on->value()) {
+    bridge_interface_measure();
+  }
+  else if (target == "desktop_scale" && command.value_as_FloatValue()) {
+    bridge_desktop_scale_set(C, float(command.value_as_FloatValue()->value()));
   }
   else if (target == "hover_highlight" && on) {
     bridge_hover_highlight = on->value();
@@ -4909,7 +4934,10 @@ static SessionLog &session_log()
 
 static bool session_log_enabled()
 {
-  static const bool asked_for = BLI_getenv("PLATYPUS_SESSION_LOG") != nullptr;
+  /* A snapshot script logs its steps in Blender's own interface too: without this, a script in the
+   * Desktop Interface left no line at all, and seemed never to start (2026-11-18). */
+  static const bool asked_for = BLI_getenv("PLATYPUS_SESSION_LOG") != nullptr ||
+                                BLI_getenv("PLATYPUS_SNAPSHOT_SCRIPT") != nullptr;
   return asked_for || !WM_native_ui_desktop_mode();
 }
 
@@ -5128,9 +5156,9 @@ static void bridge_reveal_after(bContext *C, wmOperator *op, const std::string &
 bool bridge_menu_popup(bContext *C, const char *menu);
 
 /** For the Mac bridge harness: install the after-command hook the iPad interface installs, so
- * what is shown after each command can be checked without a device, and its menu popups, so a
- * key's menu is asked for as a key asks for it (the `keys` scenario). Only where no native
- * interface is installed. */
+ * what is shown after each command can be checked without a device, its menu popups, so a key's
+ * menu is asked for as a key asks for it (the `keys` scenario), and the size of Blender's own
+ * interface (the `reveal` scenario). Only where no native interface is installed. */
 extern "C" void WM_native_ui_test_install_hooks()
 {
   static wmNativeInterface hooks;
@@ -5138,6 +5166,7 @@ extern "C" void WM_native_ui_test_install_hooks()
     hooks.operator_finished = WM_native_ui_operator_finished;
     hooks.state_changed = WM_native_ui_tag_changed;
     hooks.menu_popup = bridge_menu_popup;
+    hooks.interface_scale = WM_native_ui_interface_scale;
     WM_native_interface_set(&hooks);
   }
 }
@@ -5512,6 +5541,70 @@ static void bridge_interface_toggle_name_update()
   RNA_def_struct_ui_text(ot->srna, ot->name, ot->description);
 }
 
+/**
+ * Draw Blender's interface at its size now, see #WM_native_ui_interface_scale: what Preferences ›
+ * Interface › Resolution Scale does as it changes (`rna_userdef_gpu_update`), without marking the
+ * preferences changed, as Blender's own preferences are not.
+ */
+static void bridge_interface_resize(bContext *C)
+{
+  if (wmWindow *win = CTX_wm_window(C); win && win->runtime->ghostwin) {
+    WM_window_dpi_set_userdef(win);
+  }
+  /* Fonts are kept for each size: without this many would be loaded. */
+  BLF_cache_clear();
+  /* Everything drawn again, and the regions' sizes worked out again. */
+  WM_main_add_notifier(NC_WINDOW, nullptr);
+  WM_main_add_notifier(NC_SCREEN | NA_EDITED, nullptr);
+}
+
+/**
+ * The interface's size as Blender has it, in the session's log and in
+ * `<temp>/interface-measure.txt`, for a script to read off the device (ROUND5 9C.1): the
+ * preferences' `system.dpi`, `system.pixel_size` and `view.ui_scale`, and the app's own size.
+ */
+void bridge_interface_measure()
+{
+  const std::string line = fmt::format(
+      "dpi {} pixel_size {} ui_scale {:.3f} scale_factor {:.3f} desktop {} desktop_size {:.0f} %",
+      U.dpi,
+      U.pixelsize,
+      U.ui_scale,
+      U.scale_factor,
+      bridge_desktop_ui ? "on" : "off",
+      bridge_desktop_scale.load() * 100.0f);
+  WM_native_ui_session_log("interface", line.c_str());
+  char path[FILE_MAX];
+  BLI_path_join(path, sizeof(path), BKE_tempdir_base(), "interface-measure.txt");
+  if (FILE *file = BLI_fopen(path, "a")) {
+    fprintf(file, "%s\n", line.c_str());
+    fclose(file);
+  }
+}
+
+float WM_native_ui_interface_scale()
+{
+  /* The native interface's own viewport (gizmos, overlay text) keeps its size. */
+  return bridge_desktop_ui ? bridge_desktop_scale.load() : 1.0f;
+}
+
+/** Set the size of Blender's own interface, clamped to 50 to 125 %, see #bridge_desktop_scale. */
+void bridge_desktop_scale_set(bContext *C, const float scale)
+{
+  const float clamped = std::clamp(scale, 0.5f, 1.25f);
+  if (std::abs(clamped - bridge_desktop_scale.load()) < 1e-4f) {
+    return;
+  }
+  bridge_desktop_scale = clamped;
+  WM_native_ui_session_log("interface", fmt::format("desktop size {:.0f} %", clamped * 100.0f).c_str());
+  if (bridge_desktop_ui) {
+    bridge_interface_resize(C);
+  }
+  /* The settings view tells the interface, which keeps it, also when the Window menu changed it. */
+  WM_event_add_notifier(C, NC_WM | ND_DATACHANGED, nullptr);
+  views::view_type_dirty("settings");
+}
+
 /** Switch between the native interface and Blender's own, as on a Mac. */
 void bridge_interface_set(bContext *C, const bool desktop)
 {
@@ -5546,6 +5639,8 @@ void bridge_interface_set(bContext *C, const bool desktop)
   }
   /* The settings view tells the interface, also when Blender's own Window menu switched. */
   WM_event_add_notifier(C, NC_WM | ND_DATACHANGED, nullptr);
+  /* Blender's own interface has a size of its own (#WM_native_ui_interface_scale). */
+  bridge_interface_resize(C);
 }
 
 /**
@@ -5596,6 +5691,65 @@ static std::string bridge_interface_toggle_get_name(wmOperatorType * /*ot*/, Poi
 {
   return bridge_desktop_ui ? IFACE_("Return to iPad Interface") :
                           IFACE_("Switch to Desktop Interface");
+}
+
+/** Window › Interface Size: its sizes, the current one marked. 67 % is Blender's size on a Mac. */
+static const EnumPropertyItem bridge_interface_scale_items[] = {
+    {50, "50", ICON_NONE, "50 %", ""},
+    {60, "60", ICON_NONE, "60 %", ""},
+    {67, "67", ICON_NONE, "67 %", "The size of Blender on a Mac"},
+    {75, "75", ICON_NONE, "75 %", ""},
+    {85, "85", ICON_NONE, "85 %", ""},
+    {100, "100", ICON_NONE, "100 %", ""},
+    {125, "125", ICON_NONE, "125 %", ""},
+    {0, nullptr, 0, nullptr, nullptr},
+};
+
+/** A size as a factor: 67 % is two thirds, as a Mac's 144 of the iPad's 216 DPI. */
+static float bridge_interface_scale_factor(const int percent)
+{
+  return percent == 67 ? 2.0f / 3.0f : float(percent) / 100.0f;
+}
+
+static const EnumPropertyItem *bridge_interface_scale_itemf(bContext * /*C*/,
+                                                            PointerRNA * /*ptr*/,
+                                                            PropertyRNA * /*prop*/,
+                                                            bool *r_free)
+{
+  EnumPropertyItem *items = nullptr;
+  int count = 0;
+  for (const EnumPropertyItem *item = bridge_interface_scale_items; item->identifier; item++) {
+    EnumPropertyItem copy = *item;
+    if (std::abs(bridge_interface_scale_factor(item->value) - bridge_desktop_scale.load()) < 1e-3f) {
+      copy.icon = ICON_CHECKMARK;
+    }
+    RNA_enum_item_add(&items, &count, &copy);
+  }
+  RNA_enum_item_end(&items, &count);
+  *r_free = true;
+  return items;
+}
+
+static wmOperatorStatus bridge_interface_scale_exec(bContext *C, wmOperator *op)
+{
+  bridge_desktop_scale_set(C, bridge_interface_scale_factor(RNA_enum_get(op->ptr, "scale")));
+  return OPERATOR_FINISHED;
+}
+
+void WM_OT_native_interface_scale(wmOperatorType *ot)
+{
+  ot->name = "Interface Size";
+  ot->idname = "WM_OT_native_interface_scale";
+  ot->description =
+      "The size of Blender's own interface on the iPad; the iPad interface keeps its own. Apple "
+      "Pencil and a trackpad are not affected by it, a finger may find small sizes hard to tap";
+  ot->exec = bridge_interface_scale_exec;
+  ot->flag = OPTYPE_INTERNAL;
+  PropertyRNA *prop = RNA_def_enum(
+      ot->srna, "scale", bridge_interface_scale_items, 75, "Size", "The interface's size");
+  RNA_def_enum_funcs(prop, bridge_interface_scale_itemf);
+  RNA_def_property_flag(prop, PROP_SKIP_SAVE);
+  ot->prop = prop;
 }
 
 void WM_OT_native_interface_toggle(wmOperatorType *ot)

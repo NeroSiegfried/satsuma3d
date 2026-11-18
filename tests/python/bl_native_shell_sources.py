@@ -564,4 +564,12 @@ check('"desktop_uv_editing"' in image_editor and '"desktop_uv_editing"' in bridg
       "9B.6: Edit UVs in Desktop Interface reaches Blender's settings view")
 check('case "editor":' in snapshots_text, "9B.7: the snapshot step `editor uv|image open|close`")
 
+# ROUND5 9C (decision 56): the size of Blender's own interface is the app's own setting, sent at
+# start beside `desktop`, changed in Settings and kept when Blender's Window menu changes it.
+settings_text = (SWIFT / 'SettingsSheet.swift').read_text(encoding='utf-8')
+check('DesktopInterfaceSection()' in settings_text and 'Text("Desktop Interface")' in settings_text and
+      'SettingsModel.applyDesktopScale()' in window_text and 'desktopScaleChanged()' in window_text and
+      '"desktop_scale"' in bridge_text and 'case "interface":' in snapshots_text,
+      "9C: Settings › Desktop Interface › Size, sent at start, kept from Blender, and the `interface` step")
+
 print('PASS: native shell sources ' + json.dumps(checks))

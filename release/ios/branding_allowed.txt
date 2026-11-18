@@ -53,6 +53,8 @@ RevealCoordinator.swift | internal key: stored setting key (UserDefaults); renam
 SettingsSheet.swift | keymap name and style name: Blender's keymap preset, the Blender interface style and the Blender navigation gizmo style | Blender
 SettingsSheet.swift | style name: describes the Blender interface style | Blender's own panels and colors, as on the desktop.
 SettingsSheet.swift | keymap name: describes the Blender keymap | Blender's own shortcuts, as on a desktop computer.
+SettingsSheet.swift | style name: the Desktop Interface's size, compared with Blender's own on a Mac (ROUND5 9C.4, decision 56) | 67 % is the size of Blender on a Mac. Smaller is harder to tap with a finger; Apple Pencil and a trackpad are not affected.
+SettingsSheet.swift | internal key: stored setting key (UserDefaults), named as its neighbour BlenderDesktopInterface (ROUND5 9C.3) | BlenderDesktopInterfaceScale
 SettingsSheet.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderFingerDragsObjects
 SettingsSheet.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderFingerUsesTool
 SettingsSheet.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderHoverHighlight

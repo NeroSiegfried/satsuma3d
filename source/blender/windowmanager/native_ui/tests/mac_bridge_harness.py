@@ -870,6 +870,8 @@ def _reveal_uv_editor():
         subs["settings"] = subscribe("settings")
         state.update(phase="desktop", wait=2)
     elif phase == "desktop":
+        # ROUND5 9C: Blender's own interface at the app's size (75 % by default), the iPad's at its own.
+        state["dpi_ipad"] = bpy.context.preferences.system.dpi
         set_bool(subs["settings"], "desktop_uv_editing", True, 960)
         state.update(phase="landed", wait=4)
     elif phase == "landed":
@@ -881,8 +883,20 @@ def _reveal_uv_editor():
         if acks.get(960) != "ok" or not window.workspace.name.startswith("UV Editing") or desktop is not True:
             problems.append("Edit UVs in Desktop Interface did not land on UV Editing in the desktop "
                             "interface: %s" % report["desktop_uv_editing"])
+        dpi = bpy.context.preferences.system.dpi
+        report["desktop_dpi"] = {"ipad": state["dpi_ipad"], "desktop": dpi,
+                                 "ui_scale": bpy.context.preferences.view.ui_scale}
+        if abs(dpi - state["dpi_ipad"] * 0.75) > 1:
+            problems.append("Blender's own interface is not drawn at 75 %%: DPI %s in the iPad interface, %s in "
+                            "the desktop one" % (state["dpi_ipad"], dpi))
         set_bool(subs["settings"], "desktop", False, 961)
-        state.update(phase="done", wait=2)
+        state.update(phase="back", wait=3)
+    elif phase == "back":
+        dpi = bpy.context.preferences.system.dpi
+        report["desktop_dpi"]["back"] = dpi
+        if dpi != state["dpi_ipad"]:
+            problems.append("the iPad interface's DPI changed: %s, was %s" % (dpi, state["dpi_ipad"]))
+        state.update(phase="done")
     elif phase == "done":
         report.pop("cases", None)
         finish("done" if not problems else "error")

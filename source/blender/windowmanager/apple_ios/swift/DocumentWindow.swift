@@ -36,6 +36,8 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
   private let popupView = NativeViews.shared.subscribe("popup")
   private var popupShown: String?
   private var menuBarMode: String?
+  /** The size of Blender's own interface Blender last reported, see #desktopScaleChanged. */
+  private var desktopScaleSeen: Double?
   private var menuBarTime = Date.distantPast
   private var touchSettingsApplied = false
 
@@ -80,6 +82,8 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     }
     SettingsModel.applyNavigationCorner()
     SettingsModel.applyNavigationStyle()
+    /* Blender's own interface's size first, so it opens at it. */
+    SettingsModel.applyDesktopScale()
     if UserDefaults.standard.bool(forKey: "BlenderDesktopInterface") {
       /* Start in the interface the person left; Blender follows from its inbox. */
       BlenderSettings.set("desktop", .bool(true))
@@ -126,7 +130,20 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     SoakProbe.shared?.snapshotsPublished()
     pullMenuPopup()
     if desktop != model.desktop { desktopChanged() }
+    desktopScaleChanged()
     refreshMenuBar()
+  }
+
+  /** Blender's own Window menu changes its interface's size too (Interface Size): kept as Settings
+   * keeps it, except in a check launch, as #desktopChanged. The first value seen is only noted, as
+   * Blender may report its default before the stored size reaches it. */
+  private func desktopScaleChanged() {
+    guard let scale = BlenderSettings.desktopScale else { return }
+    defer { desktopScaleSeen = scale }
+    guard let seen = desktopScaleSeen, abs(seen - scale) > 1e-4,
+          ProcessInfo.processInfo.environment["PLATYPUS_SCRATCH_DOCUMENT"] == nil,
+          abs(SettingsModel.desktopScale - scale) > 1e-4 else { return }
+    UserDefaults.standard.set(scale, forKey: SettingsModel.desktopScaleKey)
   }
 
   /** Blender's own Window menu can switch to its desktop interface too. */

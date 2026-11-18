@@ -563,9 +563,12 @@ class TOPBAR_MT_window(Menu):
 
         layout = self.layout
 
-        # The iPad app switches between its own interface and this one.
+        # The iPad app switches between its own interface and this one, and sets this one's size,
+        # where its own Settings may not be reachable.
         if "native_interface_toggle" in dir(bpy.ops.wm):
             layout.operator("wm.native_interface_toggle", icon='WINDOW')
+            if "native_interface_scale" in dir(bpy.ops.wm):
+                layout.operator_menu_enum("wm.native_interface_scale", "scale", text="Interface Size")
             layout.separator()
 
         layout.operator("wm.window_new")

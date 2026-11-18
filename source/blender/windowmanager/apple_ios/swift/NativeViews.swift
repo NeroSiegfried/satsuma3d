@@ -472,6 +472,8 @@ enum BlenderSettings {
 
   /** Blender's own interface shows, as on a desktop computer. */
   static var desktop: Bool { node("desktop")?.toggle?.value ?? false }
+  /** The size of Blender's own interface as Blender has it, see `SettingsModel.desktopScale`. */
+  static var desktopScale: Double? { node("desktop_scale")?.number?.value }
   static var keymap: String? { node("keymap")?.choice?.value }
 }
 
