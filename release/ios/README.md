@@ -61,16 +61,19 @@ address, team, identity, profile). The script, logging each step to `<build dir>
 
 1. configures the Xcode project with those settings (`IOS_BUNDLE_VERSION` is the build number:
    raise it for each upload; a bundle id ending in `.dev` or an empty source address is refused);
-2. builds the `install` target unsigned (the one expected failure is `ValidateEmbeddedBinary`);
+2. builds the `install` target unsigned, without the thumbnail extension (`IOS_THUMBNAIL_EXTENSION=OFF`;
+   with it, the unsigned extension fails `ValidateEmbeddedBinary` and Xcode cancels the step that
+   compiles the icon), so any failure is a real one;
 3. stages the complete app with `cmake --install` (`bin/Blender.app`, not `bin/Release`);
 4. rebuilds NumPy's modules as dynamic libraries with `build_numpy_ios.sh` and proves them with
    `check_numpy_replacements.py` (see below);
 5. runs `prepare_testflight.py --without-plugins`: every library becomes a framework, each Python
    module gets its `.fwork` marker, each framework whose binary uses a required reason API gets
-   a privacy manifest, the thumbnail extension is left out (it needs an App ID of its own), and
+   a privacy manifest, any app extension is left out (decision 36), and
    the layout is checked (`check_prepared`);
 6. checks the prepared app: its identity in `Info.plist` (id, name, version, build, source
-   address and commit, iPad only, minimum OS), `required_reason_apis.py`, and
+   address and commit, iPad only, minimum OS), the icon and glyphs in `Assets.car`
+   (`check_icons`), `required_reason_apis.py`, and
    `tests/ios/test_testflight_packaging.py`;
 7. only with a team, a signing identity, an installed profile for `<team>.<bundle id>` that grants
    `entitlements.plist`, and a clean checkout: archives with `archive_testflight.py` and exports

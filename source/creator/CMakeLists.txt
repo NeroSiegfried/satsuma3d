@@ -534,7 +534,14 @@ else()
     target_include_directories(blender PRIVATE ${CMAKE_SOURCE_DIR}/intern/ghost)
 
     # The thumbnail extension, showing the preview stored in `.blend` files wherever iOS shows
-    # them: the document browser, the Files app, share sheets.
+    # them: the document browser, the Files app, share sheets. Tester builds leave it out
+    # (decision 36: it needs an App ID and profile of its own), and then nothing is embedded: an
+    # unsigned build's failing check of an embedded extension makes Xcode cancel the app's
+    # post-build steps, which compile its icon.
+    option(IOS_THUMBNAIL_EXTENSION "Build and embed the .blend thumbnail extension" ON)
+    mark_as_advanced(IOS_THUMBNAIL_EXTENSION)
+  endif()
+  if(WITH_APPLE_CROSSPLATFORM AND IOS_THUMBNAIL_EXTENSION)
     set(IOS_THUMBNAILER_SRC
       ${CMAKE_SOURCE_DIR}/source/blender/blendthumb/src/blendthumb.hh
       ${CMAKE_SOURCE_DIR}/source/blender/blendthumb/src/blendthumb_extract.cc
@@ -576,6 +583,8 @@ else()
       INSTALL_RPATH "@loader_path/../../Assets/lib"
     )
     set_target_properties(blender PROPERTIES XCODE_EMBED_APP_EXTENSIONS blender-thumbnailer)
+  endif()
+  if(WITH_APPLE_CROSSPLATFORM)
 
     # Additional libraries required by static python extensions compiled directly in source.
     # Otherwise will see Python linking issues during linking in Xcode about missing SSL etc.

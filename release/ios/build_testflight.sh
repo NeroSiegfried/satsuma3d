@@ -24,8 +24,8 @@
 # The settings file (default: `testflight.env` beside the checkout) is outside the repository
 # because it holds the team; see `testflight.env.example` for its keys. Every key is optional
 # except as stated there. The development build (`build_ios_device`, `app.platypus3d.dev`) is not
-# touched. The thumbnail extension is still compiled (Xcode embeds it) but left out of the tester
-# app (decision 36: it needs an App ID and profile of its own).
+# touched. The thumbnail extension is not built (`IOS_THUMBNAIL_EXTENSION=OFF`, decision 36: it
+# needs an App ID and profile of its own), and preparing leaves out any app extension.
 #
 # Needs Xcode with the iPhoneOS SDK and its Metal toolchain, Homebrew's cmake, ninja and
 # pkg-config, the libraries in `lib/ios_arm64` and `lib/macos_arm64`, and network access the first
@@ -119,16 +119,17 @@ main() {
     -DIOS_BUNDLE_VERSION="$BUILD_NUMBER" \
     -DIOS_SOURCE_URL="$SOURCE_URL" \
     -DWITH_INSTALL_COPYRIGHT=ON -DWITH_OPENAL=OFF \
+    -DIOS_THUMBNAIL_EXTENSION=OFF \
     > "$logs/configure.log" 2>&1 || fail_log configure
 
-  # 2. Build. `-parallelizeTargets`: without it Xcode orders `blender` before the extension it
-  # embeds and reports a dependency cycle. An unsigned build ends with one expected failure,
-  # `ValidateEmbeddedBinary` ("Embedded binary is not signed with the same certificate").
+  # 2. Build. Without the thumbnail extension nothing is embedded, so an unsigned build has no
+  # expected failure: any failure is one. (With it, the unsigned extension fails Xcode's
+  # `ValidateEmbeddedBinary`, and Xcode cancels the app's post-build steps, which compile its
+  # icon: the app is then built without one.)
   step build
-  xcodebuild -project "$BUILD_DIR/Blender.xcodeproj" -target install -configuration Release \
-    -parallelizeTargets CODE_SIGNING_ALLOWED=NO > "$logs/build.log" 2>&1 || true
-  if grep " error:" "$logs/build.log" | grep -vq "Embedded binary is not signed"; then
-    grep " error:" "$logs/build.log" | grep -v "Embedded binary is not signed" | sort -u | head -20
+  if ! xcodebuild -project "$BUILD_DIR/Blender.xcodeproj" -target install -configuration Release \
+       -parallelizeTargets CODE_SIGNING_ALLOWED=NO > "$logs/build.log" 2>&1; then
+    grep " error:" "$logs/build.log" | sort -u | head -20
     fail_log build
   fi
   local product="$BUILD_DIR/bin/Release/Blender.app"
@@ -194,12 +195,16 @@ for line in wrong:
 print(f'  identity: {bundle_id} {version} ({build}), source {source} at {commit[:11]}')
 sys.exit(1 if wrong else 0)
 PYTHON
+  (cd "$release" && "$python" -B -c 'import sys; from prepare_testflight import check_icons
+problems = check_icons(sys.argv[1]); [print("  " + p) for p in problems]; sys.exit(1 if problems else 0)' \
+     "$prepared") || fail "the prepared app's asset catalog is incomplete"
+  echo "  icon and interface glyphs compiled"
   "$python" -B "$release/required_reason_apis.py" "$prepared" > "$logs/privacy.log" 2>&1 \
     || fail_log privacy
   echo "  privacy manifests: every required reason API declared"
   "$python" -B -m unittest "$checkout/tests/ios/test_testflight_packaging.py" > "$logs/tests.log" 2>&1 \
     || fail_log tests
-  echo "  $(grep '^Ran ' "$logs/tests.log"), $(tail -1 "$logs/tests.log")"
+  echo "  $(grep '^Ran ' "$logs/tests.log"), $(grep -E '^(OK|FAILED)' "$logs/tests.log")"
   echo "  $(ls -d "$prepared"/Frameworks/*.framework | wc -l | tr -d ' ') frameworks," \
     "$(du -sm "$prepared" | awk '{print $1}') MB"
 

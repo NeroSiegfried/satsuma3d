@@ -10,6 +10,7 @@ must already be linked as MH_DYLIB, rather than desktop MH_BUNDLE modules.
 
 import argparse
 import hashlib
+import json
 import plistlib
 import re
 import shutil
@@ -129,6 +130,29 @@ def check_prepared(app):
         if not origin.is_file() or origin.read_text().strip() != str(marker.relative_to(app)):
             problems.append(f'{origin.relative_to(app)} does not name {marker.relative_to(app)}')
     problems += [f'leftover signature {path.relative_to(app)}' for path in app.rglob('_CodeSignature')]
+    return problems
+
+
+def check_icons(app):
+    """The ways \a app's compiled asset catalog lacks its icons; empty when it has them.
+
+    `Assets.car` is compiled by a post-build step of the app's target; when Xcode cancels that
+    step, the app is built without its icon and without the interface's glyphs, and nothing else
+    fails (ROUND5 8F.4 found this on the first clean tester build).
+    """
+    app = Path(app)
+    catalog = app / 'Assets.car'
+    if not catalog.is_file():
+        return ['no Assets.car: the app has no icon and no interface glyphs']
+    info = plistlib.loads((app / 'Info.plist').read_bytes())
+    icon = info.get('CFBundleIcons', {}).get('CFBundlePrimaryIcon', {}).get('CFBundleIconName')
+    names = {(entry.get('AssetType'), entry.get('Name'))
+             for entry in json.loads(run('xcrun', 'assetutil', '--info', str(catalog)))[1:]}
+    problems = []
+    if ('Icon Image', icon) not in names:
+        problems.append(f'Assets.car has no app icon named {icon}')
+    if not any(name and name.startswith('blender.') for _, name in names):
+        problems.append('Assets.car has no interface glyphs (blender.*)')
     return problems
 
 

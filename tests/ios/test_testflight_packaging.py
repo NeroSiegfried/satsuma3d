@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "release" / "ios"))
 
 from archive_testflight import APP_ENTITLEMENTS, signing_entitlements
 from check_numpy_replacements import check as check_replacements
-from prepare_testflight import check_artwork, check_prepared, dependencies, macho_type, prepare
+from prepare_testflight import check_artwork, check_icons, check_prepared, dependencies, macho_type, prepare
 from required_reason_apis import MANIFEST, manifest_for, scan
 
 
@@ -350,6 +350,7 @@ class IdentityTest(unittest.TestCase):
         for app in apps:
             with self.subTest(app=str(app)):
                 self.assertEqual(check_prepared(app), [])
+                self.assertEqual(check_icons(app), [])
                 self.assertEqual(scan(app)[1], [])
                 check_artwork(app)
                 numpy = sorted((app / 'Frameworks').glob('numpy.*.framework'))
