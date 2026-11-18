@@ -339,6 +339,7 @@ static NSURL *launcherScratchCreate()
                                 UIDocumentPickerDelegate>
 - (void)openDocumentAtURL:(NSURL *)url;
 - (void)documentCommand:(blender::wmDocumentCommand)command argument:(NSString *)argument;
+- (void)templatePickerDismissed;
 - (void)chooseTemplate:(void (^)(NSString *app_template))completion;
 - (void)newDocumentFrom:(UIViewController *)presenter;
 @end
@@ -856,8 +857,9 @@ static NSURL *launcher_pending_url = nil;
   [super setDocument:document];
   if (document == nil) {
     _opening = NO;
-    /* Back in the launcher: the next launch starts there too. */
-    if (closed) {
+    /* Back in the launcher: the next launch starts there too. Not after a check launch, whose
+     * scratch document was never the one to continue in. */
+    if (closed && !_scratch) {
       [NSUserDefaults.standardUserDefaults removeObjectForKey:launcher_open_document_key];
     }
     GHOST_ios_document_window_set_visible(false, true);
@@ -935,10 +937,13 @@ static NSString *launcherTemplateForAppTemplate(NSString *app_template)
   switch (command) {
     case wmDocumentCommand::New: {
       /* As the menu bar's New… does: the current document saves and closes as the new opens. */
+      if (_creating || _opening) {
+        /* Never silently: one is being made or opened already. */
+        WM_native_ui_log("document", "new: not now, a document is already being made or opened");
+        break;
+      }
       if (NSString *identifier = launcherTemplateForAppTemplate(argument)) {
-        if (!_creating && !_opening) {
-          [self createDocumentFromTemplate:identifier presenter:presenter];
-        }
+        [self createDocumentFromTemplate:identifier presenter:presenter];
       }
       else {
         [self newDocumentFrom:presenter];
@@ -999,6 +1004,14 @@ static NSString *launcherTemplateForAppTemplate(NSString *app_template)
       }
       break;
   }
+}
+
+/** The template chooser went away without a choice, as its Cancel does. */
+- (void)templatePickerDismissed
+{
+  _creating = NO;
+  [_creatingTemplate release];
+  _creatingTemplate = nil;
 }
 
 - (void)documentPicker:(UIDocumentPickerViewController *)controller
@@ -1166,7 +1179,11 @@ void wm_apple_ios_launcher_show_documents(id sender)
                                                                   importIfNeeded:NO
                                                                       completion:nil];
   }
-  [NSUserDefaults.standardUserDefaults removeObjectForKey:launcher_open_document_key];
+  /* A check launch leaves the person's document to continue in as it was (seen 2026-11-18: Quit
+   * in a check launch dropped it). */
+  if (NSProcessInfo.processInfo.environment[@"PLATYPUS_SCRATCH_DOCUMENT"] == nil) {
+    [NSUserDefaults.standardUserDefaults removeObjectForKey:launcher_open_document_key];
+  }
 }
 
 UIViewController *wm_apple_ios_top_presenter()
@@ -1291,6 +1308,9 @@ void wm_apple_ios_document_check_step(NSString *step, void (^done)(NSString *ans
     UIViewController *top = wm_apple_ios_top_presenter();
     if (top.presentingViewController) {
       [top.presentingViewController dismissViewControllerAnimated:NO completion:nil];
+      if ([NSStringFromClass(top.class) containsString:@"TemplatePicker"]) {
+        [launcher_controller templatePickerDismissed];
+      }
       say([@"dismissed " stringByAppendingString:NSStringFromClass(top.class)]);
     }
     else {

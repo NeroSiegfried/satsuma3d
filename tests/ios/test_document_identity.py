@@ -232,6 +232,15 @@ class DocumentIdentityTest(unittest.TestCase):
         self.assertIn('WM_native_ui_is_document_command(ot->idname)', run)
         self.assertIn('if (CTX_wm_manager(C) != wm) {', run)
 
+    def test_check_launches_leave_the_persons_document(self):
+        # A check launch's Quit or Back must not drop the bookmark the next ordinary launch
+        # continues in (seen 2026-11-18).
+        launcher = (WM / 'apple_ios/wm_apple_ios_launcher.mm').read_text(encoding='utf-8')
+        for match in re.finditer(r'removeObjectForKey:launcher_open_document_key', launcher):
+            before = launcher[max(0, match.start() - 400):match.start()]
+            self.assertTrue('!_scratch' in before or 'PLATYPUS_SCRATCH_DOCUMENT"] == nil' in before,
+                            "A check launch can drop the person's open document (offset %d)" % match.start())
+
     def test_exec_calls_are_known(self):
         names = '|'.join(ROUTED)
         found = set()
