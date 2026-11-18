@@ -668,6 +668,14 @@ check('CADisplayLink' not in viewport_container and 'private func coverChanged()
       'asyncAfter(deadline: .now() + Self.slideDuration' in viewport_container,
       "10C: the cover reaches Blender once, after the editor slides in and before it slides out")
 
+# ROUND5 10D (decision 60): a resize under way, or while the scene is not in front, never reaches
+# Blender; the size is applied once, at the end or on coming back.
+viewport_container = window_text[window_text.index('final class ViewportContainer'):window_text.index('struct ViewportView')]
+check('if holding && frame.size != appliedSize' in viewport_container and '!= .foregroundActive' in viewport_container
+      and 'viewport.resizing = true' in window_text and 'self?.viewport.resizing = false' in window_text and
+      'self.viewport.sceneActivated()' in window_text,
+      "10D: the drawable is held through a window resize and while the scene is not in front")
+
 # ROUND5 10A (decision 60): every change of the viewport's size is logged with its cause, at the
 # one place the shell sets the drawable and where the bridge sees a 3D View's region change.
 setters = [name for name, text in code.items() if re.search(r'drawableSize\s*=[^=]', text)]

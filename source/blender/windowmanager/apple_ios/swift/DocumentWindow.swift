@@ -25,6 +25,7 @@ import UIKit.UIGestureRecognizerSubclass
 public final class DocumentController: UIHostingController<DocumentWindow> {
   private let model: ShellModel
   private let metalView: MTKView
+  private let viewport: ViewportContainer
   private let shell: ShellPanels
   private let commands: ShellCommands
   private let pencilMenu: PencilMenu?
@@ -60,6 +61,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     pencilSource = wm_apple_ios_pencil_menu_source(window, metalView)
     self.model = model
     self.metalView = metalView
+    self.viewport = viewport
     self.shell = shell
     self.commands = commands
     super.init(rootView: DocumentWindow(model: model, viewport: viewport, shell: shell, commands: commands,
@@ -339,11 +341,13 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
   override public func viewWillTransition(to size: CGSize, with coordinator: any UIViewControllerTransitionCoordinator) {
     super.viewWillTransition(to: size, with: coordinator)
     LayoutChecker.shared.resizing = true
+    viewport.resizing = true
     /* With the scene's state: the system resizes a window it is photographing as it leaves the
      * front (ROUND5 10A). */
     WM_native_ui_log("window", "resize begin \(Int(size.width))x\(Int(size.height)) \(sceneState)")
     coordinator.animate(alongsideTransition: nil) { [weak self] _ in
       LayoutChecker.shared.resizing = false
+      self?.viewport.resizing = false
       WM_native_ui_log("window", "resize end \(Int(size.width))x\(Int(size.height)) \(self?.sceneState ?? "")")
       self?.noteWindow()
     }
@@ -362,6 +366,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
         MainActor.assumeIsolated {
           guard let self, let scene = note.object as? UIScene, scene === self.view.window?.windowScene else { return }
           WM_native_ui_log("scene", line)
+          if line == "active" { self.viewport.sceneActivated() }
         }
       }
     }
@@ -699,12 +704,45 @@ final class ViewportContainer: UIView {
   @available(*, unavailable)
   required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+  /** Set from a window resize's start to its end (`viewWillTransition`): the drawable takes its new
+   * size once, at the end (ROUND5 10D). */
+  var resizing = false {
+    didSet {
+      if resizing != oldValue { setNeedsLayout() }
+    }
+  }
+  /** The Metal view's size last given to it, which its drawable follows. */
+  private var appliedSize = CGSize.zero
+
+  /** Whether a new size waits: while the window is being resized, and while the scene is not in
+   * front, where the system resizes the window to photograph it as the app leaves (decision 60). */
+  private var holding: Bool {
+    guard appliedSize != .zero else { return false }
+    return resizing || (window?.windowScene?.activationState ?? .foregroundActive) != .foregroundActive
+  }
+
+  /** The scene came to the front: the size it has now, if it differs from the last applied. */
+  func sceneActivated() {
+    setNeedsLayout()
+  }
+
   override func layoutSubviews() {
     super.layoutSubviews()
     /* Full size always: resizing the drawable as a panel slides would drop frames. Blender is
      * told how much is covered and centers the view on the rest. */
     let frame = bounds
+    if holding && frame.size != appliedSize {
+      /* The last picture, scaled by the layer to the new frame: the view's own size, which its
+       * drawable follows (GHOST's `autoResizeDrawable`), stays until the resize has ended. */
+      metalView.bounds = CGRect(origin: .zero, size: appliedSize)
+      metalView.center = CGPoint(x: frame.midX, y: frame.midY)
+      metalView.transform = CGAffineTransform(scaleX: frame.width / appliedSize.width,
+                                              y: frame.height / appliedSize.height)
+      return
+    }
+    metalView.transform = .identity
     metalView.frame = frame
+    appliedSize = frame.size
     let scale = max(1, window?.traitCollection.displayScale ?? traitCollection.displayScale)
     metalView.contentScaleFactor = scale
     metalView.layer.contentsScale = scale
