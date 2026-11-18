@@ -657,6 +657,10 @@ check('WM_native_ui_viewport_insets_set(' in window_text[window_text.index('fina
       (SWIFT.parents[2] / 'editors/space_view3d/view3d_navigate_view_all.cc').read_text(encoding='utf-8'),
       "10B: the sidebars reach Blender as insets, read by the visible rectangle and by framing")
 
+check('CheckDocumentBanner.install(in: view)' in window_text and 'PLATYPUS_SCRATCH_DOCUMENT"] != nil' in
+      window_text[window_text.index('enum CheckDocumentBanner'):] and 'CheckDocumentBanner.label' in snapshots_text,
+      "10E.5: a check launch says on screen that its document is a throwaway copy, left out of the shots")
+
 # ROUND5 10A (decision 60): every change of the viewport's size is logged with its cause, at the
 # one place the shell sets the drawable and where the bridge sees a 3D View's region change.
 setters = [name for name, text in code.items() if re.search(r'drawableSize\s*=[^=]', text)]

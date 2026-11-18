@@ -193,6 +193,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     /* Every touch on the window, the viewport's and the controls', marks the session's log as in
      * use (ROUND5 10E); keys, the Pencil's hover and scrolling are marked as Blender takes them. */
     view.addGestureRecognizer(PresenceRecognizer())
+    CheckDocumentBanner.install(in: view)
   }
 
   override public func viewSafeAreaInsetsDidChange() {
@@ -216,6 +217,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
       model.toolRowChanged = { [weak self] in self?.updateTopBarBottom() }
     }
     updateTopBarBottom()
+    CheckDocumentBanner.place(in: view, below: model.topBarBottom)
     if !touchSettingsApplied, view.window != nil {
       /* The iPad's saved Pencil and touch choice; a phone has no Pencil, so its finger starts
        * with the tool. */
@@ -408,6 +410,44 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
 
   @objc public func newDocument(_ sender: Any?) {
     wm_apple_ios_new_document(self)
+  }
+}
+
+/**
+ * A check launch (`PLATYPUS_SCRATCH_DOCUMENT`) works in a throwaway copy, which someone picking up
+ * the iPad must not take for their work (2026-11-18: the owner worked in one). A line that cannot
+ * be missed stays over the viewport's top edge in both interfaces (ROUND5 10E.5). It is a UIKit
+ * label over the window, outside SwiftUI's layout, so the layout and its checks are unchanged, and
+ * the snapshot script's shots leave it out (`ShellSnapshots.shot`).
+ */
+enum CheckDocumentBanner {
+  static let text = "Check document: a throwaway copy. Nothing here is kept."
+  private(set) static weak var label: UILabel?
+
+  static func install(in view: UIView) {
+    guard ProcessInfo.processInfo.environment["PLATYPUS_SCRATCH_DOCUMENT"] != nil, label == nil else { return }
+    let banner = UILabel()
+    banner.text = text
+    banner.font = .systemFont(ofSize: 15, weight: .semibold)
+    banner.textColor = .black
+    banner.textAlignment = .center
+    banner.backgroundColor = .systemYellow
+    banner.layer.cornerRadius = 15
+    banner.layer.masksToBounds = true
+    banner.isUserInteractionEnabled = false
+    banner.accessibilityIdentifier = "blender.check-document"
+    view.addSubview(banner)
+    label = banner
+  }
+
+  /** Centred below the header, or below the safe area where there is none. */
+  static func place(in view: UIView, below header: CGFloat) {
+    guard let label else { return }
+    let size = label.sizeThatFits(CGSize(width: view.bounds.width - 32, height: 30))
+    let width = min(view.bounds.width - 32, size.width + 32)
+    let top = max(header, view.safeAreaInsets.top) + 8
+    label.frame = CGRect(x: (view.bounds.width - width) / 2, y: top, width: width, height: 30)
+    view.bringSubviewToFront(label)
   }
 }
 

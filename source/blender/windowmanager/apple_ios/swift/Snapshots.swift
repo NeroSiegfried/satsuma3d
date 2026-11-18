@@ -367,6 +367,10 @@ enum ShellSnapshots {
     guard let main = windows.first else { return }
     let bounds = main.bounds
     let renderer = UIGraphicsImageRenderer(bounds: bounds)
+    /* Without the check document's banner, which a person sees: the shots show the interface. */
+    let banner = CheckDocumentBanner.label
+    banner?.isHidden = true
+    defer { banner?.isHidden = false }
     let image = renderer.image { _ in
       for window in windows {
         window.drawHierarchy(in: window.convert(window.bounds, to: main), afterScreenUpdates: true)
