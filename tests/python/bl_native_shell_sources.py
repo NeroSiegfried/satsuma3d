@@ -572,4 +572,17 @@ check('DesktopInterfaceSection()' in settings_text and 'Text("Desktop Interface"
       '"desktop_scale"' in bridge_text and 'case "interface":' in snapshots_text,
       "9C: Settings › Desktop Interface › Size, sent at start, kept from Blender, and the `interface` step")
 
+# ROUND5 10A (decision 60): every change of the viewport's size is logged with its cause, at the
+# one place the shell sets the drawable and where the bridge sees a 3D View's region change.
+setters = [name for name, text in code.items() if re.search(r'drawableSize\s*=[^=]', text)]
+check(setters == ['DocumentWindow.swift'], "10A: only the viewport's container sets the drawable (%s)" % setters)
+container = window_text[window_text.index('final class ViewportContainer'):]
+check('noteDrawable(size, from: metalView.drawableSize)' in container and '"drawable \\(' in container,
+      "10A: each change of the drawable writes a `viewport drawable` line")
+check('bridge_viewport_regions_note(C);' in bridge_text and '"region {}x{} <- {}x{} ({})"' in bridge_text,
+      "10A: each change of a 3D View region's size writes a `viewport region` line")
+check('case "sidebar":' in snapshots_text and 'case "mark":' in snapshots_text and
+      'case "editor" where words.first == "nodes":' in snapshots_text,
+      "10A: the snapshot steps `sidebar properties|outliner open|close`, `editor nodes`, `mark`")
+
 print('PASS: native shell sources ' + json.dumps(checks))

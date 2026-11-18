@@ -35,7 +35,11 @@
  *   `interface measure`: Blender's DPI, pixel size and Resolution Scale, written to the log and to
  *   `tmp/interface-measure.txt`;
  * - `editor uv|image open|close`: the UV Editor or the Image Editor, as the editors menu opens it
- *   (ROUND5 9B.7); `editor uv desktop`: its Edit UVs in Desktop Interface;
+ *   (ROUND5 9B.7); `editor uv desktop`: its Edit UVs in Desktop Interface; `editor nodes
+ *   open|close`: the Shader Editor docked along the bottom (ROUND5 10A);
+ * - `sidebar properties|outliner open|close`: Properties or the Outliner, as the header's buttons
+ *   show and hide them (ROUND5 10A);
+ * - `mark <text>`: a line in the log, to count what a group of steps wrote (ROUND5 10A);
  * - `document <step>`: the document checks of ROUND5 9D.5, in the scratch document only and on
  *   files in its folder: `copy <name>`, `open <name>`, `stat <name>`, `list`, `save`, `reopen`,
  *   `back`, `marker`, `check`, `python <code>`, see `wm_apple_ios_document_check_step`;
@@ -274,6 +278,28 @@ enum ShellSnapshots {
         ShellModel.current?.searchOpen = false
         scene?.windows.first?.rootViewController?.presentedViewController?.dismiss(animated: false)
         try? await Task.sleep(for: .milliseconds(600))
+      case "editor" where words.first == "nodes":
+        guard words.count >= 2, let nodes = SwiftScenePanels.current?.nodes, ["open", "close"].contains(words[1]) else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        /* As the editors menu's Shader Editor does. */
+        if words[1] == "open" { nodes.setKind(.shader) }
+        nodes.setShown(words[1] == "open")
+        WM_native_ui_log("snapshot", step)
+        try? await Task.sleep(for: .seconds(1))
+      case "sidebar":
+        guard words.count >= 2, let panels = SwiftScenePanels.current, ["open", "close"].contains(words[1]),
+              ["properties", "outliner"].contains(words[0]) else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        if words[0] == "properties" { panels.setInspectorShown(words[1] == "open") }
+        else { panels.setHierarchyShown(words[1] == "open") }
+        WM_native_ui_log("snapshot", step)
+        try? await Task.sleep(for: .seconds(1))
+      case "mark":
+        WM_native_ui_log("snapshot", step)
       case "editor":
         guard words.count >= 2, let mode = ImageEditorModel.Mode(rawValue: words[0]),
               let image = SwiftScenePanels.current?.image, ["open", "close", "desktop"].contains(words[1]),
@@ -288,6 +314,7 @@ enum ShellSnapshots {
           break
         }
         image.show(mode, words[1] == "open")
+        WM_native_ui_log("snapshot", step)
         try? await Task.sleep(for: .seconds(1))
       case "interface":
         if words.first == "desktop" || words.first == "ipad" {

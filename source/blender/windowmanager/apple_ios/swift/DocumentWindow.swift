@@ -103,6 +103,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     NotificationCenter.default.addObserver(self, selector: #selector(templatePresentation(_:)),
                                            name: Notification.Name("BlenderTemplatePresentation"),
                                            object: nil)
+    observeScene()
     shell.pullViews()
     NativeViews.shared.checkViews()
     ShellSnapshots.start()
@@ -328,11 +329,31 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
   override public func viewWillTransition(to size: CGSize, with coordinator: any UIViewControllerTransitionCoordinator) {
     super.viewWillTransition(to: size, with: coordinator)
     LayoutChecker.shared.resizing = true
-    WM_native_ui_log("window", "resize begin \(Int(size.width))x\(Int(size.height))")
+    /* With the scene's state: the system resizes a window it is photographing as it leaves the
+     * front (ROUND5 10A). */
+    WM_native_ui_log("window", "resize begin \(Int(size.width))x\(Int(size.height)) \(sceneState)")
     coordinator.animate(alongsideTransition: nil) { [weak self] _ in
       LayoutChecker.shared.resizing = false
-      WM_native_ui_log("window", "resize end \(Int(size.width))x\(Int(size.height))")
+      WM_native_ui_log("window", "resize end \(Int(size.width))x\(Int(size.height)) \(self?.sceneState ?? "")")
       self?.noteWindow()
+    }
+  }
+
+  private var sceneState: String { (view.window?.windowScene?.activationState ?? .unattached).name }
+
+  /** The scene's comings and goings, as `scene` lines, so a resize can be read against them. */
+  private func observeScene() {
+    let names: [(Notification.Name, String)] = [
+      (UIScene.willDeactivateNotification, "inactive"), (UIScene.didEnterBackgroundNotification, "background"),
+      (UIScene.willEnterForegroundNotification, "foreground"), (UIScene.didActivateNotification, "active"),
+    ]
+    for (name, line) in names {
+      NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+        MainActor.assumeIsolated {
+          guard let self, let scene = note.object as? UIScene, scene === self.view.window?.windowScene else { return }
+          WM_native_ui_log("scene", line)
+        }
+      }
     }
   }
 
@@ -607,7 +628,38 @@ final class ViewportContainer: UIView {
     WM_native_ui_viewport_cover_set(Float((shownCover * scale).rounded()))
     WM_native_ui_viewport_trailing_cover_set(Float((shownTrailingCover * scale).rounded()))
     if metalView.drawableSize != size {
+      noteDrawable(size, from: metalView.drawableSize)
       metalView.drawableSize = size
+    }
+  }
+
+  /** The window's size when the drawable last changed, to tell a window's resize from the
+   * interface's. */
+  private var drawableWindowSize = CGSize.zero
+
+  /** Every change of the drawable's size, with its cause, as a `viewport drawable` line (ROUND5
+   * 10A): `window` when the window's size changed with it, `layout` when only the interface
+   * around the viewport did, `first` for the first size; and the scene's state unless it is in
+   * front. */
+  private func noteDrawable(_ size: CGSize, from old: CGSize) {
+    let windowSize = window?.bounds.size ?? .zero
+    defer { drawableWindowSize = windowSize }
+    let cause = old.width <= 1 || old.height <= 1 ? "first" : windowSize != drawableWindowSize ? "window" : "layout"
+    let state = window?.windowScene?.activationState ?? .unattached
+    WM_native_ui_log("viewport", "drawable \(Int(size.width))x\(Int(size.height)) <- " +
+                     "\(Int(old.width))x\(Int(old.height)) (\(cause)\(state == .foregroundActive ? "" : ", " + state.name))")
+  }
+}
+
+extension UIScene.ActivationState {
+  /** As the session log writes it. */
+  var name: String {
+    switch self {
+      case .foregroundActive: "active"
+      case .foregroundInactive: "inactive"
+      case .background: "background"
+      case .unattached: "unattached"
+      @unknown default: "unknown"
     }
   }
 }

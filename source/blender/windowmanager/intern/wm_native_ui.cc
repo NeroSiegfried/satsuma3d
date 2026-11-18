@@ -6374,11 +6374,77 @@ bool WM_native_ui_engine_busy(bContext *C)
   return bridge_modal_operator_running(C);
 }
 
+/**
+ * Every change of a 3D View's region size, with its cause, as a `viewport region` line in the
+ * session's log (ROUND5 10A): `window` when Blender's window changed size with it, `cover` when a
+ * docked editor's cover changed, `layout` for anything else (Blender's own regions, a split). The
+ * sizes are read once per pass of the loop, so a change is logged on the pass after it.
+ */
+static void bridge_viewport_regions_note(bContext *C)
+{
+  struct Seen {
+    int2 window = int2(0);
+    float cover = 0.0f;
+    float trailing = 0.0f;
+  };
+  /* Per 3D View, the region's size as last seen. */
+  static Map<const ScrArea *, int2> sizes;
+  /* What the window and the covers were when a region last changed. */
+  static Seen seen;
+  wmWindowManager *wm = CTX_wm_manager(C);
+  if (wm == nullptr) {
+    return;
+  }
+  Map<const ScrArea *, int2> now;
+  for (wmWindow &win : wm->windows) {
+    bScreen *screen = WM_window_get_active_screen(&win);
+    if (screen == nullptr) {
+      continue;
+    }
+    const int2 window(WM_window_native_pixel_x(&win), WM_window_native_pixel_y(&win));
+    for (ScrArea &area : screen->areabase) {
+      if (area.spacetype != SPACE_VIEW3D) {
+        continue;
+      }
+      const ARegion *region = BKE_area_find_region_type(&area, RGN_TYPE_WINDOW);
+      if (region == nullptr || region->winx <= 1 || region->winy <= 1) {
+        continue;
+      }
+      const int2 size(region->winx, region->winy);
+      now.add(&area, size);
+      const int2 *old = sizes.lookup_ptr(&area);
+      if (old == nullptr || *old == size) {
+        /* A view seen for the first time (a new screen, a workspace) is no change of size. */
+        continue;
+      }
+      const float cover = WM_native_ui_viewport_cover();
+      const float trailing = WM_native_ui_viewport_trailing_cover();
+      const char *cause = window != seen.window ? "window" :
+                          (cover != seen.cover || trailing != seen.trailing) ? "cover" :
+                                                                                "layout";
+      WM_native_ui_session_log("viewport",
+                               fmt::format("region {}x{} <- {}x{} ({})",
+                                           size.x,
+                                           size.y,
+                                           (*old).x,
+                                           (*old).y,
+                                           cause)
+                                   .c_str());
+      seen = {window, cover, trailing};
+    }
+    if (seen.window == int2(0)) {
+      seen = {window, WM_native_ui_viewport_cover(), WM_native_ui_viewport_trailing_cover()};
+    }
+  }
+  sizes = std::move(now);
+}
+
 void WM_native_ui_flush_commands(bContext *C)
 {
   if (C == nullptr) {
     return;
   }
+  bridge_viewport_regions_note(C);
 
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
   WM_apple_ios_dialog_flush(C);
