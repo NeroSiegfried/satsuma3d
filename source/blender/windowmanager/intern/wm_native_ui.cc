@@ -35,6 +35,7 @@
 #include "BKE_vfont.hh"
 #include "DNA_vfont_types.h"
 #include "BKE_wm_runtime.hh"
+#include "BLO_readfile.hh"
 #include "BLT_translation.hh"
 #include "ED_render.hh"
 
@@ -168,6 +169,7 @@ void bridge_volume_build(bContext *C);
 bool bridge_volume_command(bContext *C, StringRef setting, StringRef value);
 
 void bridge_interface_set(bContext *C, bool desktop);
+void bridge_desktop_uv_editing(bContext *C);
 
 namespace {
 
@@ -4374,6 +4376,9 @@ views::CommandResult bridge_settings_view_command(bContext *C,
   if (target == "desktop" && on) {
     bridge_interface_set(C, on->value());
   }
+  else if (target == "desktop_uv_editing" && on && on->value()) {
+    bridge_desktop_uv_editing(C);
+  }
   else if (target == "hover_highlight" && on) {
     bridge_hover_highlight = on->value();
   }
@@ -5541,6 +5546,44 @@ void bridge_interface_set(bContext *C, const bool desktop)
   }
   /* The settings view tells the interface, also when Blender's own Window menu switched. */
   WM_event_add_notifier(C, NC_WM | ND_DATACHANGED, nullptr);
+}
+
+/**
+ * The UV Editor's Edit UVs in Desktop Interface (ROUND5 9B.6, decision 55): Blender's own interface
+ * on the document's UV Editing workspace, where UVs are selected and moved by hand. Where the
+ * document has none, it is added from the startup file, as the desktop's + › General › UV Editing
+ * adds it (`WORKSPACE_OT_append_activate`). This changes the document's workspaces, as the
+ * desktop's tabs do. Return to iPad Interface comes back as from any workspace.
+ */
+void bridge_desktop_uv_editing(bContext *C)
+{
+  bridge_interface_set(C, true);
+  wmWindow *win = CTX_wm_window(C);
+  if (win == nullptr) {
+    return;
+  }
+  Main *bmain = CTX_data_main(C);
+  const char *name = "UV Editing";
+  if (WorkSpace *workspace = reinterpret_cast<WorkSpace *>(
+          BKE_libblock_find_name(bmain, ID_WS, name, nullptr)))
+  {
+    /* Changing workspace changes the context: as Blender's tabs do it, once this command ends. */
+    WM_event_add_notifier(C, NC_SCREEN | ND_WORKSPACE_SET, workspace);
+    WM_native_ui_session_log("interface", "desktop, UV Editing");
+    return;
+  }
+  PointerRNA properties = WM_operator_properties_create("WORKSPACE_OT_append_activate");
+  RNA_string_set(&properties, "idname", name);
+  RNA_string_set(&properties, "filepath", BLO_EMBEDDED_STARTUP_BLEND);
+  const wmOperatorStatus status = WM_operator_name_call(
+      C, "WORKSPACE_OT_append_activate", wm::OpCallContext::ExecDefault, &properties, nullptr);
+  WM_operator_properties_free(&properties);
+  if (status & OPERATOR_FINISHED) {
+    WM_native_ui_session_log("interface", "desktop, UV Editing added from the startup file");
+  }
+  else {
+    WM_native_ui_notice(RPT_WARNING, "The UV Editing workspace could not be added");
+  }
 }
 
 static wmOperatorStatus bridge_interface_toggle_exec(bContext *C, wmOperator * /*op*/)

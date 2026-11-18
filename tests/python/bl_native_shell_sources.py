@@ -552,4 +552,16 @@ check('case "key":' in snapshots_text and 'case "menu":' in snapshots_text and
       'wm_apple_ios_window_press_key(' in snapshots_text,
       "9A.9: the snapshot steps `key <NAME> [shift] [ctrl] [alt]` and `menu close`")
 
+# ROUND5 9B (decision 53): the UV Editor and the Image Editor are one panel in two modes, each in
+# the editors menu; the UV Editor has no "No Image" page and always draws the UVs.
+image_editor = (SWIFT / 'ImageEditor.swift').read_text(encoding='utf-8')
+check('case uv, image' in image_editor and 'model.mode == .image && model.snapshot != nil && model.image == nil'
+      in image_editor and 'var drawsUVs: Bool { mode == .uv || showUVs }' in image_editor,
+      "9B.2: the UV Editor shows the unit square instead of a No Image page, and always its UVs")
+check('ForEach(ImageEditorModel.Mode.allCases)' in (SWIFT / 'TopBar.swift').read_text(encoding='utf-8'),
+      "9B.1: the editors menu lists the UV Editor and the Image Editor")
+check('"desktop_uv_editing"' in image_editor and '"desktop_uv_editing"' in bridge_text,
+      "9B.6: Edit UVs in Desktop Interface reaches Blender's settings view")
+check('case "editor":' in snapshots_text, "9B.7: the snapshot step `editor uv|image open|close`")
+
 print('PASS: native shell sources ' + json.dumps(checks))

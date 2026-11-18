@@ -14,7 +14,9 @@ First match wins. `show` is one of:
 - ``operation``: the last operation's settings;
 - ``properties:<TAB>``: Properties on that tab (``focus`` names what to bring into view);
 - ``properties_if_open:<TAB>``: that tab, only while Properties already shows; with the settings;
-- ``editor:<name>``: ``geometry_nodes``, ``shader``, ``image`` or ``timeline``;
+- ``editor:<name>``: ``geometry_nodes``, ``shader``, ``image``, ``uv`` or ``timeline``, with the
+  operation's settings (``uv``: the UV Editor, where an unwrap's layout shows; in a narrow window
+  a message offers it instead);
 - ``render``: the render sheet, which opens by itself;
 - ``message``: a short message, ``text``, with an optional ``button`` (``Label\\ttarget``);
 - ``none``: nothing, and ``why`` says why.
@@ -145,10 +147,12 @@ RULES = (
     Rule(r"mesh\.primitive_.*|curve\.primitive_.*|surface\.primitive_.*|mball\.primitive_.*|"
          r"object\.text_add|object\.quick_.*", "operation"),
 
-    # UVs and images.
+    # UVs and images. What makes or lays out a UV map shows the layout in the UV Editor, with the
+    # operation's settings (ROUND5 9B.4, decision 54); the other UV commands keep their settings.
     Rule(r"uv\.(unwrap|smart_project|cube_project|cylinder_project|sphere_project|project_from_view|"
-         r"lightmap_pack|reset|follow_active_quads|pack_islands|average_islands_scale|minimize_stretch|"
-         r"align.*|stitch|weld|seams_from_islands|mark_seam|copy|paste|randomize_uv_transform|.*)",
+         r"lightmap_pack|reset|follow_active_quads|pack_islands|average_islands_scale|minimize_stretch)",
+         "editor:uv"),
+    Rule(r"uv\.(align.*|stitch|weld|seams_from_islands|mark_seam|copy|paste|randomize_uv_transform|.*)",
          "operation"),
     Rule(r"object\.bake.*|image\..*|paint\.add_texture_paint_slot|paint\.add_simple_uvs|"
          r"paint\.(texture_paint_.*|project_image|image_from_view)", "editor:image"),

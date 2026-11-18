@@ -436,7 +436,8 @@ struct DocumentToolbar: ToolbarContent {
   }
 
   /** The node editors, each opening the node editor on its tree, docked along the bottom, and the
-   * Image Editor beside the viewport. */
+   * UV Editor and the Image Editor beside the viewport: one panel in two modes, as in Blender, each
+   * ticked while the panel shows it (ROUND5 9B.1). */
   @ViewBuilder
   private var nodeEditorToggles: some View {
     Section {
@@ -454,8 +455,11 @@ struct DocumentToolbar: ToolbarContent {
           }
         }
       }
-      sidebarToggle("Image Editor", icon: BlenderIcon.image("IMAGE"), isOn: model.imageShown) {
-        shell.panels.image.setShown($0)
+      let image = shell.panels.image
+      ForEach(ImageEditorModel.Mode.allCases) { mode in
+        sidebarToggle(mode.title, icon: BlenderIcon.image(mode.icon), isOn: model.imageShown && image.mode == mode) {
+          image.show(mode, $0)
+        }
       }
     }
   }

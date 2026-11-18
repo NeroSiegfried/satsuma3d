@@ -30,6 +30,8 @@
  *   `SPACE`), as a hardware keyboard sends it, with the pointer at the viewport's middle (ROUND5
  *   9A.9); logged when the key is not known;
  * - `menu close`: close a menu, choice or field a key or step opened, and Search;
+ * - `editor uv|image open|close`: the UV Editor or the Image Editor, as the editors menu opens it
+ *   (ROUND5 9B.7); `editor uv desktop`: its Edit UVs in Desktop Interface;
  * - `wait <seconds>`;
  * - `shot <name>`: every window of the scene, drawn into `tmp/shots/<name>.png`.
  *
@@ -71,11 +73,17 @@ enum ShellSnapshots {
     /* The person's own style, put back when the script ends: a script must not change settings. */
     let style = UserDefaults.standard.string(forKey: ShellStyle.key)
     let rail = UserDefaults.standard.string(forKey: "BlenderToolRailEdge")
+    let editorMode = UserDefaults.standard.string(forKey: ImageEditorModel.modeKey)
+    /* The interface the run started in (a launch argument may set it for the run), put back when it
+     * ends, as `editor uv desktop` leaves it. */
+    let desktop = UserDefaults.standard.bool(forKey: "BlenderDesktopInterface")
     let restrictions = scene?.sizeRestrictions.map { ($0.minimumSize, $0.maximumSize) }
     Task { @MainActor in
       defer {
         UserDefaults.standard.set(style, forKey: ShellStyle.key)
         UserDefaults.standard.set(rail, forKey: "BlenderToolRailEdge")
+        UserDefaults.standard.set(editorMode, forKey: ImageEditorModel.modeKey)
+        if BlenderSettings.desktop != desktop { BlenderSettings.set("desktop", .bool(desktop)) }
         if let restrictions, let limits = scene?.sizeRestrictions {
           limits.minimumSize = restrictions.0
           limits.maximumSize = restrictions.1
@@ -94,7 +102,8 @@ enum ShellSnapshots {
       WM_native_ui_log("snapshot", "script in \(scratch ? "scratch document" : "a person's document") \((path as NSString).lastPathComponent)")
       for step in steps {
         let verb = step.split(separator: " ").first.map(String.init) ?? ""
-        if !scratch && ["send", "tool", "op", "panel", "key"].contains(verb) {
+        /* `editor uv desktop` changes the document's workspaces, as the desktop's tabs do. */
+        if !scratch && (["send", "tool", "op", "panel", "key"].contains(verb) || step.hasPrefix("editor uv desktop")) {
           WM_native_ui_log("snapshot", "refused outside the scratch document: \(step)")
           continue
         }
@@ -249,6 +258,21 @@ enum ShellSnapshots {
         ShellModel.current?.searchOpen = false
         scene?.windows.first?.rootViewController?.presentedViewController?.dismiss(animated: false)
         try? await Task.sleep(for: .milliseconds(600))
+      case "editor":
+        guard words.count >= 2, let mode = ImageEditorModel.Mode(rawValue: words[0]),
+              let image = SwiftScenePanels.current?.image, ["open", "close", "desktop"].contains(words[1]),
+              words[1] != "desktop" || mode == .uv else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        if words[1] == "desktop" {
+          /* As the UV Editor's ⋯ menu does: Blender's own interface, on its UV Editing workspace. */
+          BlenderSettings.set("desktop_uv_editing", .bool(true))
+          try? await Task.sleep(for: .seconds(2))
+          break
+        }
+        image.show(mode, words[1] == "open")
+        try? await Task.sleep(for: .seconds(1))
       case "wait":
         try? await Task.sleep(for: .seconds(Double(words.first ?? "") ?? 0.5))
       case "shot":

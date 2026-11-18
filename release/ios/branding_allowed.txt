@@ -34,6 +34,7 @@ FCurveEditor.swift | internal key: stored setting key (UserDefaults); renaming i
 FCurveEditor.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderCurvesOnlySelected
 FaceControl.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderShowFaceControl
 ImageEditor.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderImageChannels
+ImageEditor.swift | internal key: stored setting key (UserDefaults), named as the editor's other settings (ROUND5 9B.1) | BlenderImageEditorMode
 ImageEditor.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderImageUVs
 ImageEditor.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderPencilPressureSensitivity
 ItemCard.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderItemCardShown
@@ -63,6 +64,7 @@ SettingsSheet.swift | internal key: stored setting key (UserDefaults); renaming 
 SettingsSheet.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderShowQuickActions
 SettingsSheet.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderShowTouches
 SettingsSheet.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderSidebarDials
+Snapshots.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderDesktopInterface
 Snapshots.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderToolRailEdge
 SqueezePalette.swift | internal key: stored setting key (UserDefaults); renaming it would lose the person's setting (D3) | BlenderPaletteRecentColors
 SqueezePalette.swift | internal key: notification name | BlenderPencilRoll

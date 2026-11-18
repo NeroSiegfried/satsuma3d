@@ -128,7 +128,15 @@ Image *shown_image(bContext *C, const DictionaryValue *state)
       return reinterpret_cast<Image *>(id);
     }
   }
-  return slot ? slot : static_cast<Image *>(bmain->images.first);
+  if (slot) {
+    return slot;
+  }
+  /* The UV Editor shows an image only when one is chosen, as Blender's does: otherwise the unit
+   * square, not whatever image comes first (a Render Result without pixels hid the UVs). */
+  if (state && state->lookup_str("mode").value_or("") == "uv") {
+    return nullptr;
+  }
+  return static_cast<Image *>(bmain->images.first);
 }
 
 const char *source_name(const Image &ima)
@@ -275,6 +283,13 @@ std::shared_ptr<DictionaryValue> read_images(bContext *C, const DictionaryValue 
   Object *ob = CTX_data_active_object(C);
   result.append_int("painting", ob && (ob->mode & OB_MODE_TEXTURE_PAINT));
   result.append_int("editing", ob && ob->type == OB_MESH && (ob->mode & OB_MODE_EDIT));
+  /* What the UV Editor draws: the active mesh's UVs (#native_image_uvs), or why there are none. */
+  const char *uv_state = "no_mesh";
+  if (ob && ob->type == OB_MESH) {
+    uv_state = reinterpret_cast<const Mesh *>(ob->data)->active_uv_map_name().is_empty() ? "no_map" :
+                                                                                          "mesh";
+  }
+  result.append_str("uv_state", uv_state);
   if (shown) {
     auto image = result.append_dict("image");
     image->append_str("name", shown->id.name + 2);

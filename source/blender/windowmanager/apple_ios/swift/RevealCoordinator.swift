@@ -111,7 +111,17 @@ final class RevealCoordinator {
         open(properties: target)
         done = "properties " + target
       case "editor":
-        guard level == .all else { return }
+        /* The operation's settings too, as for Properties: Unwrap's Method and Margin stand in the
+         * strip while the layout shows above (ROUND5 9B.4). */
+        requestOperation(idname)
+        done = "operation"
+        guard level == .all, let panels = SwiftScenePanels.current else { return }
+        if target == "uv" && model.compact && !panels.image.shown {
+          /* A narrow window keeps the viewport, as for Properties: the UV Editor on request. */
+          model.messages.say("The UVs are in the UV Editor", button: "Show", target: "editor:uv")
+          done = "message offering the UV Editor"
+          return
+        }
         open(editor: target)
         done = "editor " + target
       case "message":
@@ -155,7 +165,12 @@ final class RevealCoordinator {
       case "shader":
         panels.nodes.setKind(.shader)
         panels.nodes.setShown(true)
+      case "uv":
+        /* As the UV Editor, unless the panel already shows: never switched away from what the
+         * person opened, an image among them (decision 54). */
+        if !panels.image.shown { panels.image.show(.uv, true) }
       case "image":
+        if !panels.image.shown { panels.image.mode = .image }
         panels.image.setShown(true)
       case "timeline":
         ShellPanels.current?.timeline.setVisible(true)

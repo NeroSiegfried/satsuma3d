@@ -41,6 +41,11 @@ lib.WM_native_ui_buffer_data.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.
 lib.WM_native_ui_buffer_free.argtypes = [ctypes.c_void_p]
 flush = getattr(lib, "_ZN7blender27WM_native_ui_flush_commandsEPNS_8bContextE")
 flush.argtypes = [ctypes.c_void_p]
+image_update = getattr(lib, "_ZN7blender25WM_native_ui_image_updateEPNS_8bContextE")
+image_update.argtypes = [ctypes.c_void_p]
+lib.WM_native_ui_image_take_uvs.restype = ctypes.c_bool
+lib.WM_native_ui_image_take_uvs.argtypes = [ctypes.POINTER(ctypes.POINTER(ctypes.c_float)), ctypes.POINTER(ctypes.c_int)]
+lib.free.argtypes = [ctypes.c_void_p]
 
 
 def text_param(builder, key, value):
@@ -99,6 +104,30 @@ def invoke(subscription, target, command_id, op=None):
     v = builder.EndVector()
     Commands.Start(builder)
     Commands.AddCommands(builder, v)
+    builder.Finish(Commands.End(builder))
+    data = bytes(builder.Output())
+    lib.WM_native_ui_send(data, len(data))
+
+
+def set_bool(subscription, target, value, command_id):
+    builder = flatbuffers.Builder(256)
+    t = builder.CreateString(target)
+    BoolValue.Start(builder)
+    BoolValue.AddValue(builder, value)
+    bv = BoolValue.End(builder)
+    Command.Start(builder)
+    Command.AddId(builder, command_id)
+    Command.AddSubscription(builder, subscription)
+    Command.AddTarget(builder, t)
+    Command.AddOp(builder, Op.Op.Set)
+    Command.AddValueType(builder, Value.Value.BoolValue)
+    Command.AddValue(builder, bv)
+    c = Command.End(builder)
+    Commands.StartCommandsVector(builder, 1)
+    builder.PrependUOffsetTRelative(c)
+    vec = builder.EndVector()
+    Commands.Start(builder)
+    Commands.AddCommands(builder, vec)
     builder.Finish(Commands.End(builder))
     data = bytes(builder.Output())
     lib.WM_native_ui_send(data, len(data))
@@ -724,7 +753,38 @@ def _reveal_cases():
         ("subdivide", lambda: (objects("Cube"), bpy.ops.object.mode_set(mode='EDIT'),
                                bpy.ops.mesh.select_all(action='SELECT'),
                                bpy.ops.mesh.subdivide('EXEC_DEFAULT', True))),
+        # ROUND5 9B.4: an unwrap shows its layout in the UV Editor; another UV command its settings.
+        ("uv_unwrap", lambda: (objects("Cube"), bpy.ops.object.mode_set(mode='EDIT'),
+                               bpy.ops.mesh.select_all(action='SELECT'),
+                               bpy.ops.uv.unwrap('EXEC_DEFAULT', True, method='CONFORMAL'))),
+        ("uv_smart_project", lambda: bpy.ops.uv.smart_project('EXEC_DEFAULT', True)),
     ]
+
+
+# What each reveal case must show, where it is checked.
+REVEAL_EXPECTED = {"uv_unwrap": "editor:uv", "uv_smart_project": "editor:uv"}
+
+
+def _take_uvs():
+    """The UV edges the bridge published since the last look, or None (`WM_native_ui_image_take_uvs`)."""
+    segments = ctypes.POINTER(ctypes.c_float)()
+    count = ctypes.c_int()
+    if not lib.WM_native_ui_image_take_uvs(ctypes.byref(segments), ctypes.byref(count)):
+        return None
+    values = [round(segments[i], 5) for i in range(count.value)] if segments else []
+    if segments:
+        lib.free(segments)
+    return values
+
+
+def _publish_uvs():
+    """Blender's loop publishes the image editor's picture and UVs on the iPad (`engine_step`); here
+    the harness calls it, then takes what was published, keeping the last."""
+    image_update(bpy.context.as_pointer())
+    taken = _take_uvs()
+    if taken is not None:
+        report["uv_publish"]["last"] = taken
+    return report["uv_publish"].get("last")
 
 
 def tick_reveal():
@@ -750,18 +810,82 @@ def tick_reveal():
             report["steps"].append({"name": cases[index][0],
                                     **{k: answer.get(k) for k in ("operator", "show", "text", "level", "why")}})
             report["case"] = index + 1
-        if report["case"] >= len(cases):
-            del report["cases"]
-            finish("done")
-            return None
-        if step > 80:
+        if step > 160:
             del report["cases"]
             finish("timeout")
             return None
+        if report["case"] >= len(cases):
+            return _reveal_uv_editor()
     except Exception:
         report.pop("cases", None)
         report["error"] = traceback.format_exc()
         finish("error")
+        return None
+    return 0.25
+
+
+def _reveal_uv_editor():
+    """ROUND5 9B.3, 9B.5, 9B.6: with the image editor shown and no image chosen, the bridge publishes
+    the mesh's UVs; they follow an unwrap and come back on undo; Edit UVs in Desktop Interface lands
+    on the UV Editing workspace, added from the startup file where the document has none."""
+    state = report.setdefault("uv_publish", {"phase": "show", "wait": 0})
+    problems = report.setdefault("problems", [])
+    if state["wait"] > 0:
+        state["wait"] -= 1
+        return 0.25
+    phase = state["phase"]
+    if phase == "show":
+        for name, expected in REVEAL_EXPECTED.items():
+            seen = next((s.get("show") for s in report["steps"] if s["name"] == name), None)
+            if seen != expected:
+                problems.append("%s shows %r, not %r" % (name, seen, expected))
+        subs["image"] = subscribe("image")
+        enter("edit_mesh")
+        state.update(phase="before", wait=3)
+    elif phase == "before":
+        state["before"] = _publish_uvs()
+        if not state["before"]:
+            problems.append("no UVs published with the image editor shown and no image chosen")
+        bpy.ops.uv.unwrap('EXEC_DEFAULT', True, method='ANGLE_BASED')
+        state.update(phase="after", wait=3)
+    elif phase == "after":
+        state["after"] = _publish_uvs()
+        if state["after"] == state["before"]:
+            problems.append("the published UVs did not follow uv.unwrap")
+        window, area, region = _view3d()
+        with bpy.context.temp_override(window=window, area=area, region=region):
+            bpy.ops.ed.undo()
+        state.update(phase="undone", wait=4)
+    elif phase == "undone":
+        state["undone"] = _publish_uvs()
+        if state["undone"] != state["before"]:
+            problems.append("the published UVs did not come back after ed.undo")
+        report["uv_counts"] = {k: len(state.get(k) or []) for k in ("before", "after", "undone")}
+        for key in ("before", "after", "undone", "last"):
+            state.pop(key, None)
+        # Edit UVs in Desktop Interface, on a document without the UV Editing workspace.
+        workspace = bpy.data.workspaces.get("UV Editing")
+        if workspace is not None and workspace != bpy.context.window.workspace:
+            bpy.data.batch_remove([workspace])
+        subs["settings"] = subscribe("settings")
+        state.update(phase="desktop", wait=2)
+    elif phase == "desktop":
+        set_bool(subs["settings"], "desktop_uv_editing", True, 960)
+        state.update(phase="landed", wait=4)
+    elif phase == "landed":
+        window = bpy.context.window_manager.windows[0]
+        top = tree(subs["settings"]) or {}
+        desktop = next((n.get("value") for n in top.get("children", []) if n["key"] == "desktop"), None)
+        report["desktop_uv_editing"] = {"ack": acks.get(960), "workspace": window.workspace.name,
+                                        "desktop": desktop, "mode": bpy.context.mode}
+        if acks.get(960) != "ok" or not window.workspace.name.startswith("UV Editing") or desktop is not True:
+            problems.append("Edit UVs in Desktop Interface did not land on UV Editing in the desktop "
+                            "interface: %s" % report["desktop_uv_editing"])
+        set_bool(subs["settings"], "desktop", False, 961)
+        state.update(phase="done", wait=2)
+    elif phase == "done":
+        report.pop("cases", None)
+        finish("done" if not problems else "error")
         return None
     return 0.25
 

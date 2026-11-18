@@ -8,6 +8,11 @@
  * the images, the one shown and its pixels as they change, so a texture fills in while it is
  * painted on the model; the UVs show over it. The image shown follows the texture being painted,
  * as Blender's follows the active paint slot, until another is chosen. See `image_native.cc`.
+ *
+ * As in Blender, the same editor is also the UV Editor (ROUND5 9B, decision 53): one panel, two
+ * modes, each listed under its own name. The UV Editor always shows the active mesh's UVs, on the
+ * unit square and its grid when no image is chosen. UVs are shown here; they are edited by hand in
+ * Blender's own interface, which its ⋯ menu opens on the UV Editing workspace (decision 55).
  */
 
 import SwiftUI
@@ -47,6 +52,17 @@ final class ImageEditorModel {
     }
   }
 
+  /** The editor's two names, as Blender's: the UV Editor and the Image Editor. */
+  enum Mode: String, CaseIterable, Identifiable {
+    case uv, image
+    var id: String { rawValue }
+    var title: String { self == .uv ? "UV Editor" : "Image Editor" }
+    /** Blender's icon for the editor. */
+    var icon: String { self == .uv ? "UV" : "IMAGE" }
+  }
+
+  static let modeKey = "BlenderImageEditorMode"
+
   private(set) var shown = false
   private(set) var snapshot: JSON?
   /** The picture as Blender sent it, in the channels shown. */
@@ -66,9 +82,26 @@ final class ImageEditorModel {
   @ObservationIgnored private var rgba: Data?
   @ObservationIgnored private var pixelSize = (width: 0, height: 0)
 
+  /** Which of its two names the editor goes by, kept with its other settings. */
+  var mode = Mode(rawValue: UserDefaults.standard.string(forKey: ImageEditorModel.modeKey) ?? "") ?? .image {
+    didSet {
+      UserDefaults.standard.set(mode.rawValue, forKey: Self.modeKey)
+      /* The unit square or the image, framed anew; Blender picks the image by the mode. */
+      if mode != oldValue {
+        fitRequest += 1
+        sendState()
+      }
+    }
+  }
+
   var showUVs = UserDefaults.standard.object(forKey: "BlenderImageUVs") as? Bool ?? true {
     didSet { UserDefaults.standard.set(showUVs, forKey: "BlenderImageUVs") }
   }
+  /** The UV Editor always shows the UVs; the Image Editor as its menu's UVs switch says. */
+  var drawsUVs: Bool { mode == .uv || showUVs }
+  /** In the UV Editor without an image, or with one that has no pixels (an empty Render Result),
+   * the unit square takes the image's place. */
+  var showsUnitSquare: Bool { mode == .uv && (image == nil || imageSize.width <= 0 || imageSize.height <= 0) }
   var channels = Channels(rawValue: UserDefaults.standard.string(forKey: "BlenderImageChannels") ?? "") ?? .colorAlpha {
     didSet {
       UserDefaults.standard.set(channels.rawValue, forKey: "BlenderImageChannels")
@@ -85,19 +118,50 @@ final class ImageEditorModel {
   /** The object is in Texture Paint, so the image shown follows what it paints on. */
   var painting: Bool { snapshot?.bool("painting") == true }
 
+  /** Open the panel as \a mode, as the editors menu does, or close it. */
+  func show(_ mode: Mode, _ on: Bool) {
+    if on {
+      self.mode = mode
+      setShown(true)
+    }
+    else {
+      setShown(false)
+    }
+  }
+
+  /** Why the UV Editor has nothing to draw, in one line, or nil: Blender's `uv_state`. */
+  var uvAbsence: String? {
+    guard mode == .uv, let state = snapshot?.string("uv_state") else { return nil }
+    switch state {
+      case "no_map": return "This object has no UV map"
+      case "no_mesh": return "Select a mesh to see its UVs"
+      default: return nil
+    }
+  }
+
   func setShown(_ shown: Bool) {
     guard shown != self.shown else { return }
     self.shown = shown
     if shown { fitRequest += 1 }
     canvas.setShown(shown)
+    if shown { sendState() }
     shownChanged(shown)
   }
 
   /** Shows another image, until the texture painted on changes. */
   func choose(_ name: String) {
     /* Told apart from the last choice, of this or an earlier document. */
-    let pick = Int(Date().timeIntervalSince1970 * 1000)
-    canvas.setState(["image": name, "pick": pick])
+    choice = ["image": name, "pick": Int(Date().timeIntervalSince1970 * 1000)]
+    sendState()
+  }
+
+  /** The last image chosen, sent with the mode, as Blender keeps the whole state the editor sent. */
+  @ObservationIgnored private var choice: [String: Any] = [:]
+
+  private func sendState() {
+    var state = choice
+    state["mode"] = mode.rawValue
+    canvas.setState(state)
   }
 
   /** Blender's images, from its `image` view while the editor shows; its picture comes apart. */
@@ -211,7 +275,8 @@ struct ImageEditorPanel: View {
 
   var body: some View {
     ZStack {
-      if model.snapshot != nil && model.image == nil {
+      /* The UV Editor never hides the UVs behind a page: the unit square takes the image's place. */
+      if model.mode == .image && model.snapshot != nil && model.image == nil {
         ContentUnavailableView {
           Label("No Image", systemImage: "photo")
         } description: {
@@ -227,10 +292,22 @@ struct ImageEditorPanel: View {
         ImageCanvas(model: model, zoom: $zoom, obscured: obscured)
           .ignoresSafeArea()
           .overlay(alignment: .bottomLeading) { info.padding(.bottom, obscured.bottom) }
+        if let absence = model.uvAbsence {
+          /* Nothing to draw, and why, in one line. */
+          Text(absence)
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(Color(uiColor: ImageCanvasView.uvBackdropColor).opacity(0.85)))
+            .padding(.top, obscured.top)
+            .allowsHitTesting(false)
+            .accessibilityIdentifier("blender.image.uv_absence")
+        }
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(ImageCanvasView.backdrop.ignoresSafeArea())
+    .background((model.mode == .uv ? ImageCanvasView.uvBackdrop : ImageCanvasView.backdrop).ignoresSafeArea())
     /* Below the window's bar, as the viewport's own controls are. */
     .overlay(alignment: .top) { header.padding(.top, max(0, obscured.top - 52)) }
     .background(NodeKeyCapture(model: model))
@@ -250,19 +327,56 @@ struct ImageEditorPanel: View {
    * viewport's quick actions float over the scene. Its brush is the rails' and sliders'. */
   private var header: some View {
     HStack(spacing: 4) {
-      imagePicker
+      modePicker
         .padding(.leading, 14)
+        .padding(.trailing, 6)
+      imagePicker
         .padding(.trailing, 6)
       moreMenu
       Button { creating = true } label: {
         Label("New Image", systemImage: "plus")
       }
       .editorHeaderButton()
-      EditorCloseButton(label: "Close Image Editor") { model.setShown(false) }
+      EditorCloseButton(label: "Close \(model.mode.title)") { model.setShown(false) }
     }
     .padding(4)
     .panelGlass(in: Capsule())
     .padding(.horizontal, 12)
+  }
+
+  /** Which editor it is, named and switched from the same place, as Blender's editor type menu. */
+  private var modePicker: some View {
+    Menu {
+      Picker("Editor", selection: Binding(get: { model.mode }, set: { model.mode = $0 })) {
+        ForEach(ImageEditorModel.Mode.allCases) { mode in
+          Label {
+            Text(mode.title)
+          } icon: {
+            if let icon = BlenderIcon.image(mode.icon) { Image(uiImage: icon) }
+          }
+          .tag(mode)
+        }
+      }
+      .pickerStyle(.inline)
+    } label: {
+      HStack(spacing: 4) {
+        if let icon = BlenderIcon.image(model.mode.icon) {
+          Image(uiImage: icon)
+            .renderingMode(.template)
+        }
+        Text(model.mode.title)
+          .lineLimit(1)
+        Image(systemName: "chevron.up.chevron.down")
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.secondary)
+      }
+      .font(.subheadline.weight(.medium))
+    }
+    .menuStyle(.button)
+    .buttonStyle(.plain)
+    .accessibilityLabel("Editor")
+    .accessibilityValue(model.mode.title)
+    .accessibilityIdentifier("blender.image.mode")
   }
 
   /** The image shown, from all of them, the ones painted on marked with a brush. */
@@ -314,8 +428,11 @@ struct ImageEditorPanel: View {
   private var moreMenu: some View {
     Menu {
       Section {
-        Toggle(isOn: Binding(get: { model.showUVs }, set: { model.showUVs = $0 })) {
-          Label("UVs", systemImage: "square.grid.3x3")
+        /* The UV Editor always shows them. */
+        if model.mode == .image {
+          Toggle(isOn: Binding(get: { model.showUVs }, set: { model.showUVs = $0 })) {
+            Label("UVs", systemImage: "square.grid.3x3")
+          }
         }
         Picker(selection: Binding(get: { model.channels }, set: { model.channels = $0 })) {
           ForEach(ImageEditorModel.Channels.allCases) { channels in
@@ -344,6 +461,16 @@ struct ImageEditorPanel: View {
           .disabled(image == nil || image?.string("source") == "GENERATED" || image?.bool("dirty") == true)
         Button("Share…", systemImage: "square.and.arrow.up") { share() }
           .disabled(image == nil)
+      }
+      if model.mode == .uv {
+        Section {
+          /* Selecting and moving UVs by hand is Blender's own UV Editor's (ROUND5 9B.6, decision
+           * 55): its UV Editing workspace, added from the startup file where this one has none. */
+          Button("Edit UVs in Desktop Interface", systemImage: "macwindow") {
+            BlenderSettings.set("desktop_uv_editing", .bool(true))
+          }
+          .accessibilityIdentifier("blender.image.edit_uvs_desktop")
+        }
       }
     } label: {
       Label("More", systemImage: "ellipsis")
@@ -525,8 +652,13 @@ private struct ImageCanvas: UIViewRepresentable {
     view.zoomChanged = { value in
       DispatchQueue.main.async { if abs(value - zoom) > 0.001 { zoom = value } }
     }
-    view.show(picture: model.picture, size: model.imageSize, checker: model.channels == .colorAlpha)
-    view.show(uvs: model.showUVs ? model.uvs : [])
+    /* The UV Editor without an image: the unit square, its grid and the UVs on it. */
+    let square = model.showsUnitSquare
+    view.backgroundColor = model.mode == .uv ? ImageCanvasView.uvBackdropColor : ImageCanvasView.backdropColor
+    view.show(picture: square ? nil : model.picture, size: square ? ImageCanvasView.unitSquare : model.imageSize,
+              checker: model.channels == .colorAlpha)
+    view.show(grid: square)
+    view.show(uvs: model.drawsUVs ? model.uvs : [])
     view.fit(request: model.fitRequest)
     view.actualSize(request: model.actualSizeRequest)
     view.obscured = UIEdgeInsets(top: obscured.top, left: obscured.leading, bottom: obscured.bottom,
@@ -544,6 +676,10 @@ final class ImageCanvasView: UIView, UIScrollViewDelegate {
   /** The zoomed view, as large as the image in points at a zoom of 1. */
   private let content = UIView()
   private let picture = CALayer()
+  /** The unit square's grid and its outline, as the UV Editor draws them without an image. */
+  private let gridLayer = CAShapeLayer()
+  private let squareLayer = CAShapeLayer()
+  private var gridShown = false
   private let uvLayer = CAShapeLayer()
   /** Behind the image, unzoomed. */
   private let checker = UIView()
@@ -603,6 +739,15 @@ final class ImageCanvasView: UIView, UIScrollViewDelegate {
     picture.minificationFilter = .trilinear
     picture.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
     content.layer.addSublayer(picture)
+
+    for (layer, color) in [(gridLayer, Self.gridColor), (squareLayer, Self.gridEmphasisColor)] {
+      layer.fillColor = nil
+      layer.strokeColor = color.cgColor
+      layer.isHidden = true
+      layer.actions = ["path": NSNull(), "lineWidth": NSNull(), "bounds": NSNull(), "position": NSNull(),
+                       "hidden": NSNull()]
+      content.layer.addSublayer(layer)
+    }
 
     uvLayer.fillColor = nil
     uvLayer.strokeColor = UIColor(white: 1, alpha: 0.7).cgColor
@@ -686,8 +831,18 @@ final class ImageCanvasView: UIView, UIScrollViewDelegate {
   required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
   /** Behind the image, dark as the viewport's backdrop is whatever the interface's appearance. */
-  private static let backdropColor = UIColor(white: 0.16, alpha: 1)
+  static let backdropColor = UIColor(white: 0.16, alpha: 1)
   static var backdrop: Color { Color(uiColor: backdropColor) }
+
+  /** The UV Editor's colours, from Blender's default theme (`space_image` in
+   * `userdef_default_theme.c`) as its overlay draws the grid: the editor's `back`, and its `grid`
+   * shaded 10 and 20 lighter for the lines and the unit square's outline. */
+  static let uvBackdropColor = UIColor(red: 0x30 / 255, green: 0x30 / 255, blue: 0x30 / 255, alpha: 1)
+  static var uvBackdrop: Color { Color(uiColor: uvBackdropColor) }
+  private static let gridColor = UIColor(red: 0x3a / 255, green: 0x3a / 255, blue: 0x3a / 255, alpha: 1)
+  private static let gridEmphasisColor = UIColor(red: 0x44 / 255, green: 0x44 / 255, blue: 0x44 / 255, alpha: 1)
+  /** The unit square's size in the canvas, at a zoom of 1, where no image gives one. */
+  static let unitSquare = CGSize(width: 1024, height: 1024)
 
   /** What covers the view's edges, which fitting and centering keep the image clear of. */
   var obscured = UIEdgeInsets.zero {
@@ -718,12 +873,43 @@ final class ImageCanvasView: UIView, UIScrollViewDelegate {
     scroll.zoomScale = 1
     content.frame = CGRect(origin: .zero, size: size)
     picture.frame = content.bounds
+    gridLayer.frame = content.bounds
+    squareLayer.frame = content.bounds
     uvLayer.frame = content.bounds
     scroll.contentSize = size
     scroll.zoomScale = scale
     updateZoomLimits()
+    rebuildGridPath()
     rebuildUVPath()
     setNeedsLayout()
+  }
+
+  /** The unit square and its grid, in eighths, as the UV Editor shows them without an image. */
+  func show(grid shown: Bool) {
+    guard shown != gridShown else { return }
+    gridShown = shown
+    rebuildGridPath()
+  }
+
+  private func rebuildGridPath() {
+    let w = imageSize.width, h = imageSize.height
+    let lines = CGMutablePath()
+    let outline = CGMutablePath()
+    if gridShown, w > 0, h > 0 {
+      for step in 1..<8 {
+        let x = w * CGFloat(step) / 8, y = h * CGFloat(step) / 8
+        lines.move(to: CGPoint(x: x, y: 0))
+        lines.addLine(to: CGPoint(x: x, y: h))
+        lines.move(to: CGPoint(x: 0, y: y))
+        lines.addLine(to: CGPoint(x: w, y: y))
+      }
+      outline.addRect(CGRect(x: 0, y: 0, width: w, height: h))
+    }
+    gridLayer.path = lines
+    squareLayer.path = outline
+    gridLayer.isHidden = !gridShown
+    squareLayer.isHidden = !gridShown
+    updateLineWidth()
   }
 
   func show(uvs next: [Float]) {
@@ -849,6 +1035,8 @@ final class ImageCanvasView: UIView, UIScrollViewDelegate {
   /** One point wide on screen, at any zoom. */
   private func updateLineWidth() {
     let scale = max(scroll.zoomScale, 0.0001)
+    gridLayer.lineWidth = 1 / scale
+    squareLayer.lineWidth = 1 / scale
     uvLayer.lineWidth = 1 / scale
     uvLayer.shadowRadius = 0.5 / scale
   }
