@@ -6180,7 +6180,24 @@ bool WM_native_ui_view3d_frame_insets(const wmWindow *win,
   const int above_region = WM_window_native_pixel_y(win) - region->winrct.ymax - 1;
   const int top = std::max(0, int(bridge_top_bar.load()) - above_region);
   const int bottom = std::max(0, int(bridge_bottom_tray.load()) - region->winrct.ymin);
-  if (top + bottom == 0 || region->winy - top - bottom < region->winy / 5) {
+  const bool used = top + bottom > 0 && region->winy - top - bottom >= region->winy / 5;
+  /* What framing kept clear of, and from what, as a `viewport frame` line (ROUND5 9G.4). */
+  const std::string line = fmt::format(
+      "frame insets {} {} {} {} of {}x{}: top bar {} bottom tray {} window {} region {}..{}{}",
+      *r_leading,
+      *r_trailing,
+      top,
+      bottom,
+      region->winx,
+      region->winy,
+      int(bridge_top_bar.load()),
+      int(bridge_bottom_tray.load()),
+      WM_window_native_pixel_y(win),
+      region->winrct.ymin,
+      region->winrct.ymax,
+      used ? "" : " (not used)");
+  WM_native_ui_log("viewport", line.c_str());
+  if (!used) {
     return sides;
   }
   *r_top = top;
