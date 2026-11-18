@@ -26,7 +26,8 @@ STAND_INS = argv[4] if len(argv) > 4 else None
 
 import flatbuffers  # noqa: E402
 from Blender.NativeUI import (  # noqa: E402
-    BoolValue, Button, ButtonStyle, Choice, Command, Commands, Content, Data, Group, MenuButton, Node, Number, Op, Param,
+    BoolValue, Button, ButtonStyle, Choice, Command, Commands, Content, Data, FloatsValue, Group, MenuButton, Node, Number,
+    Op, Param,
     Reference,
     Subscribe, TextValue, Toggle, Updates, Value,
 )
@@ -46,6 +47,7 @@ image_update.argtypes = [ctypes.c_void_p]
 lib.WM_native_ui_image_take_uvs.restype = ctypes.c_bool
 lib.WM_native_ui_image_take_uvs.argtypes = [ctypes.POINTER(ctypes.POINTER(ctypes.c_float)), ctypes.POINTER(ctypes.c_int)]
 lib.free.argtypes = [ctypes.c_void_p]
+lib.WM_native_ui_viewport_insets_set.argtypes = [ctypes.c_float, ctypes.c_float]
 
 
 def text_param(builder, key, value):
@@ -217,6 +219,10 @@ def decode_node(raw):
             tv = TextValue.TextValue()
             tv.Init(data.Value().Bytes, data.Value().Pos)
             entry.update(value=s(tv.Value()))
+        elif data.ValueType() == Value.Value.FloatsValue:
+            fv = FloatsValue.FloatsValue()
+            fv.Init(data.Value().Bytes, data.Value().Pos)
+            entry.update(value=[fv.Value(i) for i in range(fv.ValueLength())])
     elif node.ContentType() == Content.Content.Number:
         table = node.Content()
         number = Number.Number()
@@ -1330,6 +1336,97 @@ def tick_extensions():
     return 0.3
 
 
-bpy.app.timers.register({"material": tick_material, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror,
+def _gizmo_x():
+    top = tree(subs["toolbar"]) or {}
+    node = next((n for n in top.get("children", []) if n["key"] == "navigation_gizmo"), None)
+    return node["value"][0] if node and isinstance(node.get("value"), list) else None
+
+
+def _frame_selected():
+    """Frame Selected as the iPad's button runs it, at once (exec: no smooth view); what it chose."""
+    window, area, region = _view3d()
+    with bpy.context.temp_override(window=window, area=area, region=region):
+        bpy.ops.view3d.view_selected()
+    rv3d = region.data
+    return {"distance": rv3d.view_distance, "location": list(rv3d.view_location)}
+
+
+def _shown_centre():
+    """Where the cube's centre is drawn, in region pixels, from the view's current matrices."""
+    from bpy_extras.view3d_utils import location_3d_to_region_2d
+    _window, _area, region = _view3d()
+    point = location_3d_to_region_2d(region, region.data, bpy.data.objects["Cube"].matrix_world.translation)
+    return [round(point.x, 1), round(point.y, 1)] if point else None
+
+
+def tick_insets():
+    """ROUND5 10B: the sidebars lie over the 3D View. With insets set, the region keeps its size, its
+    visible part (where the navigation gizmo stands) and Frame Selected move into what is left
+    showing; set back to none, all is as before."""
+    global step
+    try:
+        pump()
+        step += 1
+        _window, _area, region = _view3d()
+        size = [region.width, region.height]
+        if step == 1:
+            # The iPad interface, as the app registers it: without it Blender's own is all there is.
+            lib.WM_native_ui_test_install_hooks()
+            subs["toolbar"] = subscribe("toolbar")
+            enter("object")
+            for ob in bpy.context.view_layer.objects:
+                ob.select_set(ob.name == "Cube")
+            bpy.context.view_layer.objects.active = bpy.data.objects["Cube"]
+        elif step == 4:
+            report["before"] = {"size": size, "gizmo_x": _gizmo_x(), "frame": _frame_selected()}
+        elif step == 7:
+            report["before"]["centre"] = _shown_centre()
+            report["insets"] = [int(size[0] * 0.3), int(size[0] * 0.25)]
+            lib.WM_native_ui_viewport_insets_set(ctypes.c_float(report["insets"][0]), ctypes.c_float(report["insets"][1]))
+        elif step == 10:
+            report["with"] = {"size": size, "gizmo_x": _gizmo_x(), "frame": _frame_selected()}
+        elif step == 13:
+            report["with"]["centre"] = _shown_centre()
+            lib.WM_native_ui_viewport_insets_set(ctypes.c_float(0), ctypes.c_float(0))
+        elif step == 16:
+            report["after"] = {"size": size, "gizmo_x": _gizmo_x(), "frame": _frame_selected()}
+        elif step == 19:
+            report["after"]["centre"] = _shown_centre()
+            before, inset, after = report["before"], report["with"], report["after"]
+            leading, trailing = report["insets"]
+            width, height = before["size"]
+            shown = width - leading - trailing
+            expected_x = (leading + width - trailing) / 2.0
+            ratio = min(width, height) / min(shown, height)
+            problems = []
+            if inset["size"] != before["size"] or after["size"] != before["size"]:
+                problems.append("the region's size changed: %s, %s, %s" % (before["size"], inset["size"], after["size"]))
+            if None in (before["gizmo_x"], inset["gizmo_x"]) or abs((before["gizmo_x"] - inset["gizmo_x"]) - trailing) > 2:
+                problems.append("the gizmo did not keep clear of the trailing inset: %s -> %s" %
+                                (before["gizmo_x"], inset["gizmo_x"]))
+            if after["gizmo_x"] != before["gizmo_x"]:
+                problems.append("the gizmo did not come back: %s -> %s" % (before["gizmo_x"], after["gizmo_x"]))
+            if not before["centre"] or abs(before["centre"][0] - width / 2.0) > 2:
+                problems.append("without insets the cube is not framed in the middle: %s" % before["centre"])
+            if not inset["centre"] or abs(inset["centre"][0] - expected_x) > 3:
+                problems.append("with insets the cube is not in the middle of what shows: %s, expected x %.1f" %
+                                (inset["centre"], expected_x))
+            if abs(inset["frame"]["distance"] / before["frame"]["distance"] - ratio) > 0.01:
+                problems.append("the distance did not fit what shows: %.3f, expected ratio %.3f" %
+                                (inset["frame"]["distance"] / before["frame"]["distance"], ratio))
+            if abs(after["frame"]["distance"] - before["frame"]["distance"]) > 1e-4 or not after["centre"] or \
+                    abs(after["centre"][0] - width / 2.0) > 2:
+                problems.append("without insets again the framing is not as before")
+            report.update(expected_x=expected_x, expected_ratio=ratio, problems=problems)
+            finish("done" if not problems else "error")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
+bpy.app.timers.register({"material": tick_material, "insets": tick_insets, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror,
                          "extensions": tick_extensions, "keys": tick_keys}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

@@ -181,6 +181,12 @@ void WM_native_ui_keymap_item_skipped(bContext *C, const wmKeyMapItem *kmi);
 /** Window pixels a panel covers at the bottom and right, which the 3D views leave out. */
 float WM_native_ui_viewport_cover();
 float WM_native_ui_viewport_trailing_cover();
+/** See #WM_native_ui_viewport_insets_set: from the window's left, and from the 3D View's right. */
+float WM_native_ui_viewport_leading_inset();
+float WM_native_ui_viewport_trailing_inset();
+/** The sidebars' insets as they apply to \a region, in its own pixels: only a 3D View's main
+ * region, in the iPad interface, while a fifth of it at least is left showing. False when none. */
+bool WM_native_ui_view3d_insets(const ARegion *region, int *r_leading, int *r_trailing);
 /** The lowest and highest region pixels the navigation gizmo may use, clear of the interface. */
 int WM_native_ui_bottom_tray_ymin(const wmWindow *win, const ARegion *region);
 int WM_native_ui_top_bar_ymax(const wmWindow *win, const ARegion *region);

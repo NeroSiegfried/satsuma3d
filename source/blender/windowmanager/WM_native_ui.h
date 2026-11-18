@@ -137,6 +137,9 @@ void WM_native_ui_bottom_tray_set(float fraction);
 void WM_native_ui_viewport_cover_set(float pixels);
 /** How many pixels of the window's right a panel covers, such as the Image Editor. */
 void WM_native_ui_viewport_trailing_cover_set(float pixels);
+/** How many pixels of the window's left and right the sidebars lying over the viewport cover
+ * (ROUND5 10B). The 3D View keeps its size; its overlays and its framing keep clear of them. */
+void WM_native_ui_viewport_insets_set(float leading, float trailing);
 
 /** \} */
 

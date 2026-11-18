@@ -589,6 +589,19 @@ final class ViewportContainer: UIView {
       if trailingCover != oldValue { animateCover() }
     }
   }
+  /** What the sidebars lying over the viewport cover at its sides (ROUND5 10B), from the window's
+   * left and from the viewport's right: Blender keeps its size and only keeps what it draws at its
+   * edges, and what it frames, clear of them. */
+  var leadingInset: CGFloat = 0 {
+    didSet {
+      if leadingInset != oldValue { setNeedsLayout() }
+    }
+  }
+  var trailingInset: CGFloat = 0 {
+    didSet {
+      if trailingInset != oldValue { setNeedsLayout() }
+    }
+  }
   /** The covers as the viewport is shaped now, eased toward the set ones alongside the panel. */
   private var shownCover: CGFloat = 0
   private var shownTrailingCover: CGFloat = 0
@@ -654,6 +667,7 @@ final class ViewportContainer: UIView {
     let size = CGSize(width: max(1, frame.width * scale), height: max(1, frame.height * scale))
     WM_native_ui_viewport_cover_set(Float((shownCover * scale).rounded()))
     WM_native_ui_viewport_trailing_cover_set(Float((shownTrailingCover * scale).rounded()))
+    WM_native_ui_viewport_insets_set(Float((leadingInset * scale).rounded()), Float((trailingInset * scale).rounded()))
     /* Logged against the size last logged, not the drawable's own: GHOST's view resizes its
      * drawable by itself as its frame changes (`autoResizeDrawable`). */
     if size != loggedDrawable {
@@ -702,6 +716,8 @@ struct ViewportView: UIViewRepresentable {
   let container: ViewportContainer
   var bottomCover: CGFloat = 0
   var trailingCover: CGFloat = 0
+  var leadingInset: CGFloat = 0
+  var trailingInset: CGFloat = 0
   var live = false
 
   func makeUIView(context: Context) -> ViewportContainer { container }
@@ -709,6 +725,8 @@ struct ViewportView: UIViewRepresentable {
     view.live = live
     view.bottomCover = bottomCover
     view.trailingCover = trailingCover
+    view.leadingInset = leadingInset
+    view.trailingInset = trailingInset
   }
 }
 
@@ -742,8 +760,8 @@ public struct DocumentWindow: View {
    * controls, so they stay as the interface hides. */
   private var editorsShown: Bool { !model.desktop }
 
-  /** The Outliner is the sidebar, which slides in and pushes the viewport over, and
-   * Properties the inspector on the other side. A phone shows both as sheets. On Apple Vision Pro
+  /** The Outliner is the sidebar, which slides in over the viewport, and Properties the inspector
+   * on the other side. A phone shows both as sheets. On Apple Vision Pro
    * they are windows of their own. */
   public var body: some View {
     window
@@ -794,8 +812,9 @@ public struct DocumentWindow: View {
   }
 
 #if !os(visionOS)
-  /** The Outliner and Properties slide in from the window's sides and push the viewport over, in
-   * one animation with it. Only one fits beside the viewport in a narrow window. */
+  /** The Outliner and Properties slide in from the window's sides over the viewport, which keeps
+   * its size, and push its controls over, in one animation with them (ROUND5 10B). Only one fits
+   * beside the viewport in a narrow window. */
   private var columns: some View {
     /* The toolbar spans the window and stays put as the columns slide in
      * below it. */
@@ -821,6 +840,11 @@ public struct DocumentWindow: View {
     let hierarchy = model.hierarchyShown && controlsShown
     let inspector = model.inspectorShown && controlsShown
     return ZStack(alignment: .bottom) {
+      /* The viewport fills the window behind the columns, and the sidebars lie over it, as
+       * Blender's own do with Region Overlap (ROUND5 10B, decision 58): showing or hiding one
+       * changes nothing in Blender's 3D view, which is only told what they cover. The controls
+       * drawn over the view stay in the middle column. */
+      viewportView(leading: hierarchy ? Self.hierarchyWidth : 0, trailing: inspector ? Self.inspectorWidth : 0)
       HStack(spacing: 0) {
         if hierarchy {
           HierarchyPanel(store: shell.panels.hierarchy) { shell.panels.setHierarchyShown(false) }
@@ -831,7 +855,7 @@ public struct DocumentWindow: View {
             .transition(.move(edge: .leading))
             .accessibilityIdentifier("blender.hierarchy.panel")
         }
-        layers(bottom: false)
+        layers(bottom: false, viewport: false)
         if inspector {
           PropertiesPanel(model: shell.panels.properties) { shell.panels.setInspectorShown(false) }
             .environment(\.panelInWindow, true)
@@ -886,12 +910,13 @@ public struct DocumentWindow: View {
    * toolbar. */
   private var layers: some View { layers(bottom: true) }
 
-  /** \a bottom: the editors along the bottom in the viewport's column too, as on a phone. */
-  private func layers(bottom: Bool) -> some View {
+  /** \a bottom: the editors along the bottom in the viewport's column too, as on a phone. \a viewport:
+   * the viewport itself in the column, which a wide window draws behind the columns instead. */
+  private func layers(bottom: Bool, viewport: Bool = true) -> some View {
     ZStack {
       /* Under the bars, but beside the sidebar and inspector, which are the side safe areas: the
-       * viewport and its controls move with the columns as they slide. */
-      viewportLayers(bottom: bottom)
+       * controls move with the columns as they slide. */
+      viewportLayers(bottom: bottom, viewport: viewport)
         .ignoresSafeArea(edges: .vertical)
       CompileIndicator(progress: shell.compile)
     }
@@ -951,22 +976,33 @@ public struct DocumentWindow: View {
     return max(0.15, least)...min(0.85, 1 - least)
   }
 
-  private func viewportLayers(bottom: Bool) -> some View {
+  /** The viewport, edge to edge, under a phone's toolbar column too; above the Image Editor, what is
+   * docked below covers it no more. \a leading and \a trailing: what the sidebars lying over it
+   * cover, in a wide window. */
+  private func viewportView(leading: CGFloat = 0, trailing: CGFloat = 0) -> some View {
     let beside = imageLength > 0
     let across = imageSplitAcross
-    let split = across ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
     /* The Image Editor lies over the 3D viewport, which keeps its size and is told what is
      * covered: resizing its drawable as the divider moves would drop frames. */
     let covered = beside ? imageLength + ImageSplitHandle.width : 0
+    return ViewportView(container: viewport, bottomCover: beside && across ? covered : viewportCover,
+                        trailingCover: beside && !across ? covered : 0,
+                        leadingInset: leading, trailingInset: trailing,
+                        live: model.nodesCoverDragging || imageSplitDrag != nil)
+      .ignoresSafeArea()
+      .onDrop(of: [.data, .image], delegate: FileDrop(model: model) { shell.assets.store.dragged != nil })
+  }
+
+  private func viewportLayers(bottom: Bool, viewport drawsViewport: Bool = true) -> some View {
+    let beside = imageLength > 0
+    let across = imageSplitAcross
+    let split = across ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
+    let covered = beside ? imageLength + ImageSplitHandle.width : 0
     return ZStack {
       ZStack {
-        /* Edge to edge, under a phone's toolbar column too; above the Image Editor, what is
-         * docked below covers it no more. */
-        ViewportView(container: viewport, bottomCover: beside && across ? covered : viewportCover,
-                     trailingCover: beside && !across ? covered : 0,
-                     live: model.nodesCoverDragging || imageSplitDrag != nil)
-          .ignoresSafeArea()
-          .onDrop(of: [.data, .image], delegate: FileDrop(model: model) { shell.assets.store.dragged != nil })
+        if drawsViewport {
+          viewportView()
+        }
         if !model.viewportReady {
           ProgressView()
             .controlSize(.large)

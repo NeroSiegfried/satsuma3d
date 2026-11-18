@@ -646,6 +646,17 @@ check('bridge_reveal_json = "{\\"number\\":0}"' in bridge_text and 'guard let se
       (SWIFT / 'RevealCoordinator.swift').read_text(encoding='utf-8'),
       "The first command of a session reveals: Blender publishes reveal 0 before any command")
 
+# ROUND5 10B (decision 58): in a wide window the viewport lies behind the columns, the sidebars
+# over it; Blender is told what they cover as insets, never by a smaller drawable.
+columns_text = window_text[window_text.index('private var columnLayout'):window_text.index('static let hierarchyWidth')]
+check(columns_text.index('viewportView(leading:') < columns_text.index('HStack(spacing: 0)') and
+      'layers(bottom: false, viewport: false)' in columns_text,
+      "10B: the viewport fills the window behind the columns, not inside them")
+check('WM_native_ui_viewport_insets_set(' in window_text[window_text.index('final class ViewportContainer'):] and 'WM_native_ui_view3d_insets(region' in
+      (SWIFT.parents[2] / 'editors/screen/area.cc').read_text(encoding='utf-8') and 'WM_native_ui_view3d_insets(region' in
+      (SWIFT.parents[2] / 'editors/space_view3d/view3d_navigate_view_all.cc').read_text(encoding='utf-8'),
+      "10B: the sidebars reach Blender as insets, read by the visible rectangle and by framing")
+
 # ROUND5 10A (decision 60): every change of the viewport's size is logged with its cause, at the
 # one place the shell sets the drawable and where the bridge sees a 3D View's region change.
 setters = [name for name, text in code.items() if re.search(r'drawableSize\s*=[^=]', text)]

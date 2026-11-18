@@ -4362,6 +4362,15 @@ static void region_visible_rect_calc(ARegion *region, rcti *rect)
       }
     }
   }
+#ifdef WITH_NATIVE_UI
+  /* The native interface's sidebars lie over a 3D View as Blender's own regions do with Region
+   * Overlap: what it draws at its edges keeps clear of them (ROUND5 10B). */
+  int leading, trailing;
+  if (WM_native_ui_view3d_insets(region, &leading, &trailing)) {
+    rect->xmin = std::min(std::max(rect->xmin, region->winrct.xmin + leading), rect->xmax);
+    rect->xmax = std::max(std::min(rect->xmax, region->winrct.xmax - trailing), rect->xmin);
+  }
+#endif
   BLI_rcti_translate(rect, -region->winrct.xmin, -region->winrct.ymin);
 }
 

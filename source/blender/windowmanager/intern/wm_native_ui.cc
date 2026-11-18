@@ -244,6 +244,11 @@ std::atomic<float> bridge_viewport_cover{0.0f};
 /** Window pixels a native panel covers at the right, such as the Image Editor beside the 3D view. */
 std::atomic<float> bridge_viewport_trailing_cover{0.0f};
 std::atomic<bool> bridge_viewport_cover_changed{false};
+/** Window pixels the sidebars lying over the viewport cover at its sides (ROUND5 10B): the 3D View
+ * keeps its size and only keeps what it draws at its edges, and what it frames, clear of them. */
+std::atomic<float> bridge_viewport_leading_inset{0.0f};
+std::atomic<float> bridge_viewport_trailing_inset{0.0f};
+std::atomic<bool> bridge_viewport_insets_changed{false};
 struct BridgePencilHoverRequest {
   bool active = false;
   int x = 0, y = 0;
@@ -6107,6 +6112,48 @@ float WM_native_ui_viewport_trailing_cover()
   return bridge_viewport_trailing_cover.load();
 }
 
+extern "C" void WM_native_ui_viewport_insets_set(const float leading, const float trailing)
+{
+  const bool changed = bridge_viewport_leading_inset.exchange(leading) != leading;
+  if (bridge_viewport_trailing_inset.exchange(trailing) != trailing || changed) {
+    bridge_viewport_insets_changed.store(true);
+    GHOST_mailbox_published();
+  }
+}
+
+float WM_native_ui_viewport_leading_inset()
+{
+  return bridge_viewport_leading_inset.load();
+}
+
+float WM_native_ui_viewport_trailing_inset()
+{
+  return bridge_viewport_trailing_inset.load();
+}
+
+bool WM_native_ui_view3d_insets(const ARegion *region, int *r_leading, int *r_trailing)
+{
+  *r_leading = 0;
+  *r_trailing = 0;
+  if (region == nullptr || region->regiontype != RGN_TYPE_WINDOW || WM_native_ui_desktop_mode()) {
+    return false;
+  }
+  const SpaceType *space = BKE_spacetype_from_id(SPACE_VIEW3D);
+  if (space == nullptr || region->runtime->type != BKE_regiontype_from_id(space, RGN_TYPE_WINDOW)) {
+    return false;
+  }
+  /* The leading inset is from the window's left, the trailing one from the 3D View's right, as
+   * the Image Editor beside the view narrows its area and the sidebar lies beside that. */
+  const int leading = std::max(0, int(bridge_viewport_leading_inset.load()) - region->winrct.xmin);
+  const int trailing = std::max(0, int(bridge_viewport_trailing_inset.load()));
+  if (leading + trailing == 0 || region->winx - leading - trailing < region->winx / 5) {
+    return false;
+  }
+  *r_leading = leading;
+  *r_trailing = trailing;
+  return true;
+}
+
 bool WM_native_ui_navigation_top()
 {
   return bridge_navigation_top.load();
@@ -6475,6 +6522,25 @@ void WM_native_ui_flush_commands(bContext *C)
         if (area.spacetype == SPACE_VIEW3D) {
           area.flag |= AREA_FLAG_REGION_SIZE_UPDATE;
           ED_area_tag_redraw(&area);
+        }
+      }
+    }
+    bridge_navigation_redraw_pending.store(true);
+  }
+  if (bridge_viewport_insets_changed.exchange(false)) {
+    /* A sidebar showed or hid over the 3D views: their size stays, only what they draw at their
+     * edges moves, so the overlays alone are drawn again (ROUND5 10B); the render keeps going. */
+    for (wmWindow &win : CTX_wm_manager(C)->windows) {
+      bScreen *screen = WM_window_get_active_screen(&win);
+      for (ScrArea &area : screen->areabase) {
+        if (area.spacetype != SPACE_VIEW3D) {
+          continue;
+        }
+        for (ARegion &region : area.regionbase) {
+          if (region.regiontype == RGN_TYPE_WINDOW) {
+            region.runtime->visible_rect = rcti{};
+            ED_region_tag_redraw_editor_overlays(&region);
+          }
         }
       }
     }

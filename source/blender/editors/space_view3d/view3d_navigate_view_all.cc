@@ -36,6 +36,10 @@
 #include "view3d_intern.hh"
 #include "view3d_navigate.hh" /* own include */
 
+#ifdef WITH_NATIVE_UI
+#  include "WM_native_ui.hh"
+#endif
+
 namespace blender {
 
 /* -------------------------------------------------------------------- */
@@ -139,6 +143,31 @@ static void view3d_from_minmax(bContext *C,
 
   mid_v3_v3v3(ofs_new, min, max);
   negate_v3(ofs_new);
+
+#ifdef WITH_NATIVE_UI
+  /* The native interface's sidebars lie over the view (ROUND5 10B): fit what is framed in the part
+   * they leave showing, and centre it there. Without sidebars nothing changes. */
+  int leading, trailing;
+  if (rv3d->persp != RV3D_CAMOB && WM_native_ui_view3d_insets(region, &leading, &trailing)) {
+    const float shown = float(region->winx - leading - trailing);
+    const float dist_old = rv3d->dist;
+    if (do_zoom) {
+      /* The fit is to the shorter side, in pixels of the same size: the shown part's shorter side
+       * may be shorter than the region's. */
+      dist_new *= float(std::min(region->winx, region->winy)) / std::min(shown, float(region->winy));
+    }
+    /* Moving the view's centre by a window distance moves the scene with it: the framed centre
+     * goes from the region's middle to the shown part's. */
+    const float shift[2] = {float(leading - trailing) / 2.0f, 0.0f};
+    float centre[3], delta[3];
+    negate_v3_v3(centre, rv3d->ofs);
+    ED_view3d_win_to_delta(region, shift, ED_view3d_calc_zfac(rv3d, centre), delta, true);
+    if (dist_old > 0.0f) {
+      mul_v3_fl(delta, (do_zoom ? dist_new : dist_old) / dist_old);
+    }
+    add_v3_v3(ofs_new, delta);
+  }
+#endif
 
   V3D_SmoothParams sview = {nullptr};
   sview.ofs = ofs_new;
