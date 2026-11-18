@@ -4,6 +4,7 @@
 
 """Exercise distribution packaging with real iOS Mach-O dependencies."""
 
+import json
 import plistlib
 import subprocess
 import sys
@@ -309,13 +310,18 @@ class IdentityTest(unittest.TestCase):
 
     def test_icon_is_the_apps(self):
         cmake = (self.ROOT / 'source/creator/CMakeLists.txt').read_text()
-        self.assertIn('release/ios/platypus.icon CACHE PATH', cmake)
-        self.assertIn('set(IOS_APP_ICON_NAME platypus CACHE STRING', cmake)
+        self.assertIn('release/ios/satsuma.icon CACHE PATH', cmake)
+        self.assertIn('set(IOS_APP_ICON_NAME satsuma CACHE STRING', cmake)
         self.assertNotIn('blender_logo_mono.svg\n    )', cmake)
-        icon = self.ROOT / 'release/ios/platypus.icon'
-        self.assertTrue((icon / 'icon.json').is_file())
+        self.assertFalse((self.ROOT / 'release/ios/platypus.icon').exists())
+        icon = self.ROOT / 'release/ios/satsuma.icon'
+        document = json.loads((icon / 'icon.json').read_text())
         for layer in (icon / 'Assets').iterdir():
             self.assertNotIn('Blender', layer.name)
+        # Every layer the document names is in it, and every file in it is a layer: the icon
+        # compiler leaves a missing layer out without failing.
+        named = {layer['image-name'] for group in document['groups'] for layer in group['layers']}
+        self.assertEqual(named, {layer.name for layer in (icon / 'Assets').iterdir()})
 
     def test_privacy_manifest(self):
         """ROUND5 8D: the app's manifest tracks nothing, collects nothing, and names only Apple's reasons."""

@@ -397,10 +397,11 @@ else()
       set(IOS_APP_ICON ${CMAKE_SOURCE_DIR}/release/visionos/AppIcon.xcassets)
       set(IOS_APP_ICON_NAME AppIcon)
     else()
-      # The app's icon, an Icon Composer document; not Blender's (ROUND5 8B, decision 34).
-      set(IOS_APP_ICON ${CMAKE_SOURCE_DIR}/release/ios/platypus.icon CACHE PATH
+      # The app's icon, an Icon Composer document; not Blender's (ROUND5 8B, decision 34): the
+      # Satsuma 3D slice on cream (owner's choice, 2026-11-18).
+      set(IOS_APP_ICON ${CMAKE_SOURCE_DIR}/release/ios/satsuma.icon CACHE PATH
         "The iPad app's icon: an Icon Composer `.icon` document")
-      set(IOS_APP_ICON_NAME platypus CACHE STRING
+      set(IOS_APP_ICON_NAME satsuma CACHE STRING
         "The name the icon is compiled under (CFBundleIconName)")
     endif()
 

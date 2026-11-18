@@ -1,0 +1,57 @@
+{
+  "fill" : {
+    "linear-gradient" : [
+      "srgb:1.00000,0.97255,0.91765,1.00000",
+      "srgb:0.96471,0.87451,0.71373,1.00000"
+    ],
+    "orientation" : {
+      "start" : {
+        "x" : 0.5,
+        "y" : 0
+      },
+      "stop" : {
+        "x" : 0.5,
+        "y" : 1
+      }
+    }
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "Segments.svg",
+          "name" : "Segments"
+        }
+      ],
+      "shadow" : {
+        "kind" : "none",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      },
+      "specular" : false
+    },
+    {
+      "layers" : [
+        {
+          "image-name" : "Peel.svg",
+          "name" : "Peel"
+        }
+      ],
+      "shadow" : {
+        "kind" : "none",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      },
+      "specular" : false
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : "shared"
+  }
+}
