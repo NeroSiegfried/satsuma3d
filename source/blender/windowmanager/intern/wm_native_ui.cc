@@ -6107,13 +6107,27 @@ float WM_native_ui_viewport_trailing_cover()
   return bridge_viewport_trailing_cover.load();
 }
 
-extern "C" void WM_native_ui_viewport_insets_set(const float leading, const float trailing)
+/* Where a sidebar's slide ends (ROUND5 14B): framing reads these, never a value on the way. */
+static std::atomic<float> bridge_viewport_final_leading_inset{0.0f};
+static std::atomic<float> bridge_viewport_final_trailing_inset{0.0f};
+
+extern "C" void WM_native_ui_viewport_insets_step(const float leading,
+                                                  const float trailing,
+                                                  const float final_leading,
+                                                  const float final_trailing)
 {
+  bridge_viewport_final_leading_inset.store(final_leading);
+  bridge_viewport_final_trailing_inset.store(final_trailing);
   const bool changed = bridge_viewport_leading_inset.exchange(leading) != leading;
   if (bridge_viewport_trailing_inset.exchange(trailing) != trailing || changed) {
     bridge_viewport_insets_changed.store(true);
     GHOST_mailbox_published();
   }
+}
+
+extern "C" void WM_native_ui_viewport_insets_set(const float leading, const float trailing)
+{
+  WM_native_ui_viewport_insets_step(leading, trailing, leading, trailing);
 }
 
 float WM_native_ui_viewport_leading_inset()
@@ -6249,7 +6263,11 @@ int WM_native_ui_navigation_part_at(const void *ghost_window, const int x, const
 
 /** \} */
 
-bool WM_native_ui_view3d_insets(const ARegion *region, int *r_leading, int *r_trailing)
+static bool bridge_view3d_insets(const ARegion *region,
+                                 const float leading_inset,
+                                 const float trailing_inset,
+                                 int *r_leading,
+                                 int *r_trailing)
 {
   *r_leading = 0;
   *r_trailing = 0;
@@ -6262,14 +6280,23 @@ bool WM_native_ui_view3d_insets(const ARegion *region, int *r_leading, int *r_tr
   }
   /* The leading inset is from the window's left, the trailing one from the 3D View's right, as
    * the Image Editor beside the view narrows its area and the sidebar lies beside that. */
-  const int leading = std::max(0, int(bridge_viewport_leading_inset.load()) - region->winrct.xmin);
-  const int trailing = std::max(0, int(bridge_viewport_trailing_inset.load()));
+  const int leading = std::max(0, int(leading_inset) - region->winrct.xmin);
+  const int trailing = std::max(0, int(trailing_inset));
   if (leading + trailing == 0 || region->winx - leading - trailing < region->winx / 5) {
     return false;
   }
   *r_leading = leading;
   *r_trailing = trailing;
   return true;
+}
+
+bool WM_native_ui_view3d_insets(const ARegion *region, int *r_leading, int *r_trailing)
+{
+  return bridge_view3d_insets(region,
+                              bridge_viewport_leading_inset.load(),
+                              bridge_viewport_trailing_inset.load(),
+                              r_leading,
+                              r_trailing);
 }
 
 bool WM_native_ui_view3d_frame_insets(const wmWindow *win,
@@ -6281,7 +6308,13 @@ bool WM_native_ui_view3d_frame_insets(const wmWindow *win,
 {
   *r_top = 0;
   *r_bottom = 0;
-  WM_native_ui_view3d_insets(region, r_leading, r_trailing);
+  /* The sidebars' insets as they are once a slide has ended (ROUND5 14B.4): framing during a
+   * slide lands where it would after it. */
+  bridge_view3d_insets(region,
+                       bridge_viewport_final_leading_inset.load(),
+                       bridge_viewport_final_trailing_inset.load(),
+                       r_leading,
+                       r_trailing);
   if (win == nullptr || region == nullptr || region->regiontype != RGN_TYPE_WINDOW ||
       WM_native_ui_desktop_mode())
   {

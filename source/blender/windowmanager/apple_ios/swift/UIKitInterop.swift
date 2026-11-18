@@ -770,6 +770,32 @@ final class LayoutChecker {
     report(key, line)
   }
 
+  /* -------------------------------------------------------------------- */
+  /* The second bar's lower edge (ROUND5 14A.4) */
+
+  /** The tool settings row (`tool settings`) and the sidebars' title strips that continue it: each
+   * strip's lower edge must be the row's, within half a point, or a `layout` line is written. */
+  private var barEdges: [String: CGRect] = [:]
+
+  func setBarEdge(_ zone: String, _ frame: CGRect?) {
+    let next = frame.flatMap { $0.width >= 1 && $0.height >= 1 ? $0 : nil }
+    guard barEdges[zone] != next else { return }
+    barEdges[zone] = next
+    schedule()
+  }
+
+  private func checkBarEdges(_ now: Date) {
+    guard let row = barEdges["tool settings"] else { return }
+    for (zone, frame) in barEdges where zone != "tool settings" {
+      guard abs(frame.maxY - row.maxY) > 0.5 || abs(frame.minY - row.minY) > 0.5 else { continue }
+      let key = "\(zone) ≠ tool settings"
+      if let last = logged[key], now.timeIntervalSince(last) < 60 { continue }
+      logged[key] = now
+      report(key, "\(conditions) \(key): \(Int(frame.minY))..\(Int(frame.maxY)) against " +
+             "\(Int(row.minY))..\(Int(row.maxY))")
+    }
+  }
+
   func set(_ zone: String, _ frame: CGRect?) {
     let next = frame.flatMap { $0.width >= 1 && $0.height >= 1 ? $0 : nil }
     guard frames[zone] != next else { return }
@@ -841,6 +867,7 @@ final class LayoutChecker {
         report(key, "\(conditions) \(key) \(Int(overlap.width))x\(Int(overlap.height)) at \(Int(overlap.minX)),\(Int(overlap.minY))")
       }
     }
+    checkBarEdges(now)
     guard !bounds.isNull, !bounds.isEmpty else { return }
     let window = bounds.insetBy(dx: -1, dy: -1)
     for zone in zones {

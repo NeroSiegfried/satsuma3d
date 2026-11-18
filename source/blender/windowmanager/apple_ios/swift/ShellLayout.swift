@@ -630,3 +630,50 @@ enum ShellLayout {
 
   /** \} */
 }
+
+/* -------------------------------------------------------------------- */
+/** \name A sidebar's slide (ROUND5 14B.1)
+ *
+ * One curve for a sidebar sliding in or out: SwiftUI animates the panel and the controls over the
+ * view with it, and the viewport eases what it tells Blender over it, so what Blender draws at the
+ * view's edges (the navigation gizmo, its buttons, the view's text) moves with the panel.
+ * \{ */
+
+enum SidebarSlide {
+  /** SwiftUI's spring: its response, seconds, and damping fraction. */
+  static let response: Double = 0.3
+  static let damping: Double = 0.9
+  /** By when the spring has settled to well under a pixel. */
+  static let duration: TimeInterval = 0.45
+
+  static var animation: Animation? {
+    UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: response, dampingFraction: damping)
+  }
+
+  /** How far the slide has come, 0 to 1, \a time seconds after it began: the same spring's step
+   * response (unit mass, stiffness (2π / response)², damping 4π · fraction / response). */
+  static func progress(_ time: TimeInterval) -> Double {
+    guard time < duration else { return 1 }
+    let omega = 2 * Double.pi / response
+    let decay = damping * omega
+    let damped = omega * (1 - damping * damping).squareRoot()
+    return 1 - exp(-decay * time) * (cos(damped * time) + decay / damped * sin(damped * time))
+  }
+}
+
+extension ShellLayout {
+  /** The second bar's band beside a sidebar (ROUND5 14A, decision 85): the tool settings row's
+   * height, where the row shows as a bar (Blender's style, not compact, not Blender's own
+   * interface); nil where a sidebar's title keeps its own height. */
+  static func secondBar(rowHeight: CGFloat, glass: Bool, compact: Bool, desktop: Bool) -> CGFloat? {
+    guard !glass, !compact, !desktop, rowHeight > 0 else { return nil }
+    return rowHeight
+  }
+}
+
+extension EnvironmentValues {
+  /** The second bar's height, which a sidebar's title strip in a wide window continues (14A). */
+  @Entry var secondBarHeight: CGFloat? = nil
+}
+
+/** \} */

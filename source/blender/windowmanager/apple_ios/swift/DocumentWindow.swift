@@ -644,13 +644,64 @@ final class ViewportContainer: UIView {
    * edges, and what it frames, clear of them. */
   var leadingInset: CGFloat = 0 {
     didSet {
-      if leadingInset != oldValue { setNeedsLayout() }
+      if leadingInset != oldValue { insetsChanged() }
     }
   }
   var trailingInset: CGFloat = 0 {
     didSet {
-      if trailingInset != oldValue { setNeedsLayout() }
+      if trailingInset != oldValue { insetsChanged() }
     }
+  }
+  /** The insets Blender is told now: eased from the old to the set ones over a sidebar's slide
+   * (ROUND5 14B, decision 86), so what it draws at the view's edges moves with the panel. Each step
+   * redraws Blender's overlays only (Stage 10B). */
+  private var shownLeadingInset: CGFloat = 0
+  private var shownTrailingInset: CGFloat = 0
+  private var slideLink: CADisplayLink?
+  private var slideStart: CFTimeInterval = 0
+  private var slideFrom = (leading: CGFloat(0), trailing: CGFloat(0))
+  private var slideSteps = 0
+
+  private func insetsChanged() {
+    slideLink?.invalidate()
+    slideLink = nil
+    guard window != nil, appliedSize != .zero, !UIAccessibility.isReduceMotionEnabled else {
+      /* One step: before the first layout, and with Reduce Motion, as the panel appears at once. */
+      noteSlide(from: (shownLeadingInset, shownTrailingInset), steps: 1, seconds: 0)
+      shownLeadingInset = leadingInset
+      shownTrailingInset = trailingInset
+      setNeedsLayout()
+      return
+    }
+    slideFrom = (shownLeadingInset, shownTrailingInset)
+    slideStart = CACurrentMediaTime()
+    slideSteps = 0
+    let link = CADisplayLink(target: self, selector: #selector(slideStep(_:)))
+    link.add(to: .main, forMode: .common)
+    slideLink = link
+  }
+
+  @objc private func slideStep(_ link: CADisplayLink) {
+    let time = CACurrentMediaTime() - slideStart
+    let progress = CGFloat(SidebarSlide.progress(time))
+    shownLeadingInset = slideFrom.leading + (leadingInset - slideFrom.leading) * progress
+    shownTrailingInset = slideFrom.trailing + (trailingInset - slideFrom.trailing) * progress
+    slideSteps += 1
+    setNeedsLayout()
+    if time >= SidebarSlide.duration {
+      link.invalidate()
+      slideLink = nil
+      noteSlide(from: slideFrom, steps: slideSteps, seconds: time)
+    }
+  }
+
+  /** One line a slide (ROUND5 14B.6), in window pixels. */
+  private func noteSlide(from: (leading: CGFloat, trailing: CGFloat), steps: Int, seconds: TimeInterval) {
+    let scale = max(1, window?.traitCollection.displayScale ?? traitCollection.displayScale)
+    func px(_ value: CGFloat) -> Int { Int((value * scale).rounded()) }
+    WM_native_ui_log("panel", "slide: insets \(px(from.leading)),\(px(from.trailing)) → " +
+                     "\(px(leadingInset)),\(px(trailingInset)) in \(steps) steps, " +
+                     String(format: "%.2f s", seconds))
   }
   /** The covers Blender has, which follow the set ones once per transition (ROUND5 10C). */
   private var shownCover: CGFloat = 0
@@ -749,7 +800,11 @@ final class ViewportContainer: UIView {
     let size = CGSize(width: max(1, frame.width * scale), height: max(1, frame.height * scale))
     WM_native_ui_viewport_cover_set(Float((shownCover * scale).rounded()))
     WM_native_ui_viewport_trailing_cover_set(Float((shownTrailingCover * scale).rounded()))
-    WM_native_ui_viewport_insets_set(Float((leadingInset * scale).rounded()), Float((trailingInset * scale).rounded()))
+    /* Where the slide is now, and where it ends, which framing uses (ROUND5 14B.4). */
+    WM_native_ui_viewport_insets_step(Float((shownLeadingInset * scale).rounded()),
+                                      Float((shownTrailingInset * scale).rounded()),
+                                      Float((leadingInset * scale).rounded()),
+                                      Float((trailingInset * scale).rounded()))
     /* Logged against the size last logged, not the drawable's own: GHOST's view resizes its
      * drawable by itself as its frame changes (`autoResizeDrawable`). */
     if size != loggedDrawable {
@@ -921,6 +976,9 @@ public struct DocumentWindow: View {
     let docked = viewportCover
     let hierarchy = model.hierarchyShown && controlsShown
     let inspector = model.inspectorShown && controlsShown
+    /* A sidebar's title strip continues the tool settings row where it is a bar (ROUND5 14A). */
+    let bar = ShellLayout.secondBar(rowHeight: model.toolRowHeight, glass: interfaceStyle == ShellStyle.glass.rawValue,
+                                    compact: model.compact, desktop: model.desktop)
     return ZStack(alignment: .bottom) {
       /* The viewport fills the window behind the columns, and the sidebars lie over it, as
        * Blender's own do with Region Overlap (ROUND5 10B, decision 58): showing or hiding one
@@ -931,6 +989,7 @@ public struct DocumentWindow: View {
         if hierarchy {
           HierarchyPanel(store: shell.panels.hierarchy) { shell.panels.setHierarchyShown(false) }
             .environment(\.panelInWindow, true)
+            .environment(\.secondBarHeight, bar)
             .frame(width: Self.hierarchyWidth)
             .background(Color(uiColor: .secondarySystemBackground).ignoresSafeArea(edges: .vertical))
             .padding(.bottom, docked)
@@ -941,6 +1000,7 @@ public struct DocumentWindow: View {
         if inspector {
           PropertiesPanel(model: shell.panels.properties) { shell.panels.setInspectorShown(false) }
             .environment(\.panelInWindow, true)
+            .environment(\.secondBarHeight, bar)
             .frame(width: Self.inspectorWidth)
             /* Blender's editor grey and light text in its style, as the tool settings row
              * (ROUND5 7B); the system's grouped background in glass. */
@@ -1128,7 +1188,10 @@ public struct DocumentWindow: View {
               GeometryReader { proxy in
                 ToolSettingsRow(model: model, shell: shell)
                   .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { model.toolRowHeight = $0 }
-                  .onDisappear { model.toolRowHeight = 0 }
+                  .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                    LayoutChecker.shared.setBarEdge("tool settings", $0)
+                  }
+                  .onDisappear { model.toolRowHeight = 0; LayoutChecker.shared.setBarEdge("tool settings", nil) }
                   .padding(.leading, glass ? model.sideInsets.left + 14 : 0)
                   .padding(.trailing, glass ? model.sideInsets.right + 14 : 0)
                   .frame(width: proxy.size.width, alignment: .leading)

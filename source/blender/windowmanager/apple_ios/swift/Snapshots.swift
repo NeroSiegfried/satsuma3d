@@ -410,10 +410,23 @@ enum ShellSnapshots {
           WM_native_ui_log("snapshot", "unknown step: \(step)")
           break
         }
+        /* ROUND5 14B: `sidebar <name> <open|close> sample` notes where Blender has the navigation
+         * gizmo before the slide, a fifth of a second into it, and after it. */
+        let sample = words.count >= 3 && words[2] == "sample"
+        func gizmoX() -> String { ShellModel.current?.navigationGizmo.first.map { String(Int($0)) } ?? "none" }
+        let before = gizmoX()
         if words[0] == "properties" { panels.setInspectorShown(words[1] == "open", by: "script") }
         else { panels.setHierarchyShown(words[1] == "open", by: "script") }
         WM_native_ui_log("snapshot", step)
-        try? await Task.sleep(for: .seconds(1))
+        if sample {
+          try? await Task.sleep(for: .milliseconds(200))
+          let middle = gizmoX()
+          try? await Task.sleep(for: .milliseconds(800))
+          WM_native_ui_log("snapshot", "gizmo slide x: \(before) -> \(middle) -> \(gizmoX()) px")
+        }
+        else {
+          try? await Task.sleep(for: .seconds(1))
+        }
       case "mark":
         WM_native_ui_log("snapshot", step)
       case "editor":

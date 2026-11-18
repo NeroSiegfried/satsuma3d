@@ -25,7 +25,7 @@ final class ShellPanels {
     Self.current = self
     panels.panelsDidChange = { [weak self] in
       guard let self else { return }
-      withAnimation(SwiftTimeline.animation) {
+      withAnimation(SidebarSlide.animation) {
         self.model.inspectorShown = self.panels.inspectorShown
         self.model.hierarchyShown = self.panels.hierarchyShown
       }

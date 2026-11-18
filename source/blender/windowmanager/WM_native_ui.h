@@ -144,6 +144,12 @@ void WM_native_ui_viewport_trailing_cover_set(float pixels);
 /** How many pixels of the window's left and right the sidebars lying over the viewport cover
  * (ROUND5 10B). The 3D View keeps its size; its overlays and its framing keep clear of them. */
 void WM_native_ui_viewport_insets_set(float leading, float trailing);
+/** One step of a sidebar's slide (ROUND5 14B): the insets Blender draws with now, and those the
+ * slide ends at, which framing uses. #WM_native_ui_viewport_insets_set is a step that has ended. */
+void WM_native_ui_viewport_insets_step(float leading,
+                                       float trailing,
+                                       float final_leading,
+                                       float final_trailing);
 
 /** \} */
 

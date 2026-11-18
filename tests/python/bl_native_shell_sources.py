@@ -794,7 +794,7 @@ columns_text = window_text[window_text.index('private var columnLayout'):window_
 check(columns_text.index('viewportView(leading:') < columns_text.index('HStack(spacing: 0)') and
       'layers(bottom: false, viewport: false)' in columns_text,
       "10B: the viewport fills the window behind the columns, not inside them")
-check('WM_native_ui_viewport_insets_set(' in window_text[window_text.index('final class ViewportContainer'):] and 'WM_native_ui_view3d_insets(region' in
+check('WM_native_ui_viewport_insets_step(' in window_text[window_text.index('final class ViewportContainer'):] and 'WM_native_ui_view3d_insets(region' in
       (SWIFT.parents[2] / 'editors/screen/area.cc').read_text(encoding='utf-8') and 'WM_native_ui_view3d_frame_insets(' in
       (SWIFT.parents[2] / 'editors/space_view3d/view3d_navigate_view_all.cc').read_text(encoding='utf-8'),
       "10B: the sidebars reach Blender as insets, read by the visible rectangle and by framing")
@@ -804,7 +804,7 @@ frame_text = (SWIFT.parents[1] / 'intern/wm_native_ui.cc').read_text(encoding='u
 frame_text = frame_text[frame_text.index('bool WM_native_ui_view3d_frame_insets('):]
 frame_text = frame_text[:frame_text.index('\n}\n')]
 check('bridge_top_bar' in frame_text and 'bridge_bottom_tray' in frame_text and
-      'WM_native_ui_view3d_insets(region' in frame_text,
+      'bridge_view3d_insets(region' in frame_text,
       "9G.4: framing keeps clear of the sidebars, the top bar and the controls along the bottom")
 history_text = (SWIFT.parents[1] / 'intern/wm_files.cc').read_text(encoding='utf-8')
 history_text = history_text[history_text.index('static void wm_history_file_update()\n{'):]
@@ -821,9 +821,16 @@ check('CheckDocumentBanner.install(in: view)' in window_text and 'PLATYPUS_SCRAT
 # ROUND5 10C (decision 59): an editor that takes a share of the window resizes the 3D view once per
 # transition, never on the frames of its slide.
 viewport_container = window_text[window_text.index('final class ViewportContainer'):window_text.index('struct ViewportView')]
-check('CADisplayLink' not in viewport_container and 'private func coverChanged()' in viewport_container and
-      'asyncAfter(deadline: .now() + Self.slideDuration' in viewport_container,
+cover_changed = viewport_container[viewport_container.index('private func coverChanged()'):]
+cover_changed = cover_changed[:cover_changed.index('\n  }\n')]
+check('CADisplayLink' not in cover_changed and 'shownCover' in cover_changed and
+      'asyncAfter(deadline: .now() + Self.slideDuration' in cover_changed,
       "10C: the cover reaches Blender once, after the editor slides in and before it slides out")
+# ROUND5 14B (decision 86): a sidebar's insets, which redraw overlays only, are eased over the slide
+# by the same curve SwiftUI slides the panel with; framing reads where the slide ends.
+check('SidebarSlide.progress(' in viewport_container and 'WM_native_ui_viewport_insets_step(' in viewport_container and
+      'withAnimation(SidebarSlide.animation)' in (SWIFT / 'ShellPanels.swift').read_text(encoding='utf-8'),
+      "14B: a sidebar's insets ease over its slide, on the panel's own curve")
 
 # ROUND5 10D (decision 60): a resize under way, or while the scene is not in front, never reaches
 # Blender; the size is applied once, at the end or on coming back.

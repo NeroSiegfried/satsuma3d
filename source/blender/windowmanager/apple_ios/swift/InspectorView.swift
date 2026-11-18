@@ -16,11 +16,30 @@ extension EnvironmentValues {
 
 struct PanelHeader<Trailing: View>: View {
   @Environment(\.panelInWindow) private var inWindow
+  /** Beside the second bar in a wide window (ROUND5 14A, decision 85): its height, which the title
+   * strip takes, with the bar's surface and lower edge. */
+  @Environment(\.secondBarHeight) private var bar
   let title: String
+  /** The panel's name for the layout checker, which a title that changes with the tab is not. */
+  var zone = "properties"
   let close: () -> Void
   @ViewBuilder var trailing: Trailing
 
   var body: some View {
+    if let bar {
+      row
+        .padding(.top, -5)
+        .frame(height: bar)
+        .frame(maxWidth: .infinity)
+        .secondBarSurface()
+        .sidebarTitleEdge(zone)
+    }
+    else {
+      row
+    }
+  }
+
+  private var row: some View {
     HStack(spacing: 0) {
       Text(title)
         .font(.headline)
@@ -45,6 +64,42 @@ struct PanelHeader<Trailing: View>: View {
     .padding(.leading, 16)
     .padding(.trailing, 5)
     .padding(.top, 5)
+  }
+}
+
+/** A sidebar's title strip as the second bar continued, when \a shown (ROUND5 14A). */
+struct SecondBarStrip: ViewModifier {
+  let shown: Bool
+  let zone: String
+
+  func body(content: Content) -> some View {
+    if shown {
+      content.frame(maxWidth: .infinity).secondBarSurface().sidebarTitleEdge(zone)
+    }
+    else {
+      content
+    }
+  }
+}
+
+extension View {
+  /** The second bar's surface (ROUND5 14A.2): Blender's tool header grey with its edge below, as
+   * the tool settings row draws it, for a sidebar's title strip that continues the row. */
+  func secondBarSurface() -> some View {
+    background {
+      Rectangle().fill(ShellStyle.region)
+        .overlay(alignment: .bottom) { Rectangle().fill(ShellStyle.outline).frame(height: 1) }
+    }
+    .environment(\.colorScheme, .dark)
+  }
+
+  /** Report a sidebar's title strip to the layout checker, which holds its lower edge to the second
+   * bar's (ROUND5 14A.4). */
+  func sidebarTitleEdge(_ name: String) -> some View {
+    onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+      LayoutChecker.shared.setBarEdge("sidebar title " + name, $0)
+    }
+    .onDisappear { LayoutChecker.shared.setBarEdge("sidebar title " + name, nil) }
   }
 }
 

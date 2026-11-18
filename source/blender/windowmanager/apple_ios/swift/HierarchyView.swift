@@ -149,6 +149,8 @@ struct HierarchyPanel: View {
   @State private var naming = false
   @State private var collectionName = "Collection"
   @Environment(\.panelInWindow) private var inWindow
+  /** Beside the second bar in a wide window: its height, which the title strip takes (14A). */
+  @Environment(\.secondBarHeight) private var bar
 
   /** Its title with Select and Add, a search field, the outline, and in Select mode the actions on
    * the selection along the bottom, as the system's lists have them. Plain SwiftUI, so the panel
@@ -238,7 +240,9 @@ struct HierarchyPanel: View {
       }
     }
     .padding(.horizontal, 12)
-    .padding(.vertical, 8)
+    .padding(.vertical, bar == nil ? 8 : 0)
+    .frame(height: bar)
+    .modifier(SecondBarStrip(shown: bar != nil, zone: "outliner"))
   }
 
   private var deleteTitle: String {
