@@ -132,7 +132,12 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
   /** Blender's own Window menu can switch to its desktop interface too. */
   private func desktopChanged() {
     let desktop = model.desktop
-    UserDefaults.standard.set(desktop, forKey: "BlenderDesktopInterface")
+    /* A check launch (`PLATYPUS_SCRATCH_DOCUMENT`) works in a copy of the General template, which
+     * opens in the iPad interface: storing that turned a person's Desktop Interface off
+     * (2026-11-18). A check stores none of the person's settings, see #ShellSnapshots. */
+    if ProcessInfo.processInfo.environment["PLATYPUS_SCRATCH_DOCUMENT"] == nil {
+      UserDefaults.standard.set(desktop, forKey: "BlenderDesktopInterface")
+    }
     pencilMenu?.cancel()
     if desktop { commands.setInterfaceHidden(false) }
     /* No native controls, radial menu or bottom tray over Blender's own interface. */

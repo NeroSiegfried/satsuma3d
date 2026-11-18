@@ -511,6 +511,11 @@ check('EqualCellGrid(columns: columns, shrink: icons ? 1 : BlenderWidgetFace.tex
       '.minimumScaleFactor(Self.textShrink)' in code['BlenderWidgets.swift'],
       "E4: an expanded choice that does not fit one row wraps into two joined rows (decision 43), "
       "the grid measured with its names as far shrunk as they may be (seen as a column on 2026-11-18)")
+window_source = (SWIFT / 'DocumentWindow.swift').read_text(encoding='utf-8')
+stored = window_source[window_source.index('private func desktopChanged()'):]
+stored = stored[:stored.index('forKey: "BlenderDesktopInterface")')]
+check('environment["PLATYPUS_SCRATCH_DOCUMENT"] == nil' in stored,
+      "A check launch does not store the interface its scratch document opens in (2026-11-18)")
 check('BlenderNumberText.format(' in controls,
       "E5: numbers are printed by BlenderNumberText (no sign on a zero), tested by tests/ios/test_number_text.py")
 check('static func entry(tab: String, shading: String, path: [String])' in code['RevealCoordinator.swift'] and
