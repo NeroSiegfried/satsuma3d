@@ -505,8 +505,12 @@ check('LinearGradient' not in marks and 'if !glass { ShellStyle.region }' in mar
       "E3: in Blender's style a bar's more-arrow stands on a strip of the bar's colour, not over the content")
 controls = code['NativeControls.swift']
 expanded = controls[controls.index('struct BlenderExpandedChoice'):controls.index('struct NativeButton:')]
-check('EqualCellGrid(columns: columns)' in expanded and 'firstRow: true' in controls,
-      "E4: an expanded choice that does not fit one row wraps into two joined rows (decision 43)")
+grid = controls[controls.index('struct EqualCellGrid'):controls.index('func sizeThatFits', controls.index('struct EqualCellGrid'))]
+check('EqualCellGrid(columns: columns, shrink: icons ? 1 : BlenderWidgetFace.textShrink' in expanded and
+      'firstRow: true' in controls and 'fixed + max(0, ideal - fixed) * shrink' in grid and
+      '.minimumScaleFactor(Self.textShrink)' in code['BlenderWidgets.swift'],
+      "E4: an expanded choice that does not fit one row wraps into two joined rows (decision 43), "
+      "the grid measured with its names as far shrunk as they may be (seen as a column on 2026-11-18)")
 check('BlenderNumberText.format(' in controls,
       "E5: numbers are printed by BlenderNumberText (no sign on a zero), tested by tests/ios/test_number_text.py")
 check('static func entry(tab: String, shading: String, path: [String])' in code['RevealCoordinator.swift'] and
