@@ -14,6 +14,7 @@
 import MetalKit
 import SwiftUI
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 
 /* -------------------------------------------------------------------- */
 /** \name Controller
@@ -186,6 +187,13 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
 
   override public var prefersHomeIndicatorAutoHidden: Bool { true }
   override public var prefersStatusBarHidden: Bool { model.interfaceHidden }
+
+  override public func viewDidLoad() {
+    super.viewDidLoad()
+    /* Every touch on the window, the viewport's and the controls', marks the session's log as in
+     * use (ROUND5 10E); keys, the Pencil's hover and scrolling are marked as Blender takes them. */
+    view.addGestureRecognizer(PresenceRecognizer())
+  }
 
   override public func viewSafeAreaInsetsDidChange() {
     super.viewSafeAreaInsetsDidChange()
@@ -401,6 +409,25 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
   @objc public func newDocument(_ sender: Any?) {
     wm_apple_ios_new_document(self)
   }
+}
+
+/** Notes that someone is at the device, as an `active` line in the session's log at most once a
+ * minute (ROUND5 10E). It never recognizes, and delays or cancels no touch. */
+final class PresenceRecognizer: UIGestureRecognizer {
+  init() {
+    super.init(target: nil, action: nil)
+    cancelsTouchesInView = false
+    delaysTouchesBegan = false
+    delaysTouchesEnded = false
+  }
+
+  override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+    WM_native_ui_session_log_active()
+    state = .failed
+  }
+
+  override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+  override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
 }
 
 /* Holding a finger on the viewport opens Blender's context menu there. */

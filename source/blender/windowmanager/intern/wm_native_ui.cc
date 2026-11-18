@@ -4937,11 +4937,9 @@ static SessionLog &session_log()
 
 static bool session_log_enabled()
 {
-  /* A snapshot script logs its steps in Blender's own interface too: without this, a script in the
-   * Desktop Interface left no line at all, and seemed never to start (2026-11-18). */
-  static const bool asked_for = BLI_getenv("PLATYPUS_SESSION_LOG") != nullptr ||
-                                BLI_getenv("PLATYPUS_SNAPSHOT_SCRIPT") != nullptr;
-  return asked_for || !WM_native_ui_desktop_mode();
+  /* In both interfaces (ROUND5 10E, decision 70): a log that stopped in Blender's own interface
+   * hid that the app was in use, and a script there seemed never to start (2026-11-18). */
+  return true;
 }
 
 /** Close the run of repeats on the last line. */
@@ -5026,6 +5024,20 @@ void WM_native_ui_session_log_flush(const bool force)
   if (force || BLI_time_now_seconds() - log.last_write > 10.0) {
     session_log_write(log);
   }
+}
+
+extern "C" void WM_native_ui_session_log_active()
+{
+  /* Input arrived: a key, a touch, the Pencil, a scroll, a click. Looking around a scene runs no
+   * command, so without this someone only looking reads as away (ROUND5 10E). At most once a
+   * minute, from any thread. */
+  static std::atomic<double> last{-1000.0};
+  const double now = BLI_time_now_seconds();
+  double seen = last.load();
+  if (now - seen < 60.0 || !last.compare_exchange_strong(seen, now)) {
+    return;
+  }
+  WM_native_ui_session_log("active", "input");
 }
 
 extern "C" bool WM_native_ui_session_log_file(char *path, const size_t path_size)

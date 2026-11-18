@@ -77,8 +77,7 @@ bool WM_native_ui_desktop_mode();
 void WM_native_ui_notice(int level, const char *text, const char *button = "");
 /**
  * A line of the session's log, a text file in the temporary folder that says what was run and
- * shown, for finding out afterwards what happened on a device. Written only while the platform's
- * interface shows, or with `PLATYPUS_SESSION_LOG` or a snapshot script in the environment.
+ * shown, for finding out afterwards what happened on a device. Written in both interfaces.
  */
 void WM_native_ui_session_log(const char *kind, const char *text);
 /** Write what the session's log holds: at once with \a force, as the app goes to the background

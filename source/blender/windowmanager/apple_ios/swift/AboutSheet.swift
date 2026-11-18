@@ -92,12 +92,13 @@ enum LicenceFiles {
  * \{ */
 
 enum SessionLogShare {
-  /** What the log holds, said truthfully from its writers (`WM_native_ui_session_log`): the
-   * commands run with their settings, the messages shown, window sizes and layout checks. Their
-   * settings and messages can name files and objects. */
+  /** What the log holds, said truthfully from its writers (`WM_native_ui_session_log`), in both
+   * interfaces; `bl_native_shell_sources.py` holds each kind of line to a phrase here. Settings,
+   * messages and documents can name files and objects. */
   static let description = "The session log lists the commands you ran with their settings, the messages the app "
-    + "showed, and window sizes and layout checks. It can include the names of your files and objects. It stays "
-    + "on this iPad unless you share it."
+    + "showed, when documents opened and saved, which interface showed, window and viewport sizes, layout checks, "
+    + "the steps of developer checks, and a mark at most once a minute while the app is in use. It can include "
+    + "the names of your files and objects. It stays on this iPad unless you share it."
 
   /** Write the log out and share a copy of it from \a presenter, or say why there is none. */
   @MainActor

@@ -610,6 +610,36 @@ for offender in positional:
     print('%s: a row reads a live list by the position it was made with' % offender)
 check(not positional, "9F: no ForEach row reads a live list by a captured position (%d)" % len(positional))
 
+# ROUND5 10E (decision 70): the session log is written in both interfaces, marks use with an
+# `active` line, and About says truthfully what it holds: every kind of line a writer uses has
+# its phrase in About's description.
+LOG_KINDS = {
+    'op': 'the commands you ran with their settings', 'modal': 'the commands you ran with their settings',
+    'key': 'the commands you ran with their settings', 'menu': 'the commands you ran with their settings',
+    'popup': 'the commands you ran with their settings', 'reveal': 'the commands you ran with their settings',
+    'info': 'the messages the app', 'warning': 'the messages the app', 'error': 'the messages the app',
+    'document': 'when documents opened and saved', 'save': 'when documents opened and saved',
+    'interface': 'which interface showed',
+    'window': 'window and viewport sizes', 'viewport': 'window and viewport sizes', 'scene': 'window and viewport sizes',
+    'layout': 'layout checks', 'selftest': 'layout checks',
+    'snapshot': 'the steps of developer checks',
+    'active': 'a mark at most once a minute while the app is in use',
+}
+writers = ''.join(path.read_text(encoding='utf-8', errors='replace')
+                  for path in (SWIFT.parents[3]).rglob('*') if path.suffix in ('.cc', '.mm', '.swift'))
+kinds = set(re.findall(r'WM_native_ui_(?:session_)?log\(\s*"(\w+)"', writers))
+kinds |= set(re.findall(r'\?\s*"(warning)"\s*:\s*"(info)"', writers)[0]) if '"warning" : "info"' in writers else set()
+about_description = ' '.join(re.findall(r'"([^"]*)"', about_text[about_text.index('static let description'):
+                                                                  about_text.index('/** Write the log out')]))
+unlisted = sorted(kinds - set(LOG_KINDS))
+check(not unlisted, "10E: every kind of session-log line has a phrase in About (%s)" % unlisted)
+missing = sorted(kind for kind in kinds if kind in LOG_KINDS and LOG_KINDS[kind] not in about_description)
+check(not missing, "10E: About's description says what each kind of line holds (%s)" % missing)
+check('active' in kinds and 'PresenceRecognizer()' in window_text,
+      "10E: input writes an `active` line (touches in Swift, keys and pointers in Blender)")
+check(re.search(r'static bool session_log_enabled\(\)\s*\{[^}]*return true;', bridge_text) is not None,
+      "10E: the session log is written in both interfaces")
+
 # ROUND5 10A (decision 60): every change of the viewport's size is logged with its cause, at the
 # one place the shell sets the drawable and where the bridge sees a 3D View's region change.
 setters = [name for name, text in code.items() if re.search(r'drawableSize\s*=[^=]', text)]

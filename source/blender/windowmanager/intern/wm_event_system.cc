@@ -77,6 +77,7 @@
 #include "WM_native_interface.hh"
 #include "WM_native_ui.hh"
 #ifdef WITH_NATIVE_UI
+#  include "WM_native_ui.h"
 #  include "WM_native_ui.hh"
 #endif
 #include "WM_toolsystem.hh"
@@ -6123,6 +6124,18 @@ void wm_event_add_ghostevent(wmWindowManager *wm,
   if (UNLIKELY(G.f & G_FLAG_EVENT_SIMULATE)) {
     return;
   }
+#ifdef WITH_NATIVE_UI
+  /* Someone is at the device: marked in the session's log (ROUND5 10E). */
+  if (ELEM(type,
+           GHOST_kEventCursorMove,
+           GHOST_kEventButtonDown,
+           GHOST_kEventWheel,
+           GHOST_kEventTrackpad,
+           GHOST_kEventKeyDown))
+  {
+    WM_native_ui_session_log_active();
+  }
+#endif
 
   /**
    * Having both, \a event and \a event_state, can be highly confusing to work with,
