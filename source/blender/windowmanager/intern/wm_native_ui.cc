@@ -256,7 +256,10 @@ BridgePencilHoverRequest bridge_hover_request;
 std::string bridge_json_escape(const std::string &value);
 /** What shows after the last command, see `bridge_reveal_after`. */
 static int bridge_reveal_number = 0;
-static std::string bridge_reveal_json;
+/* Published from the start, before any command: the shell takes the first number it sees for one
+ * decided before its window opened and does not act on it, so without this the first command of a
+ * session revealed nothing (ROUND5 10A, 2026-11-18). */
+static std::string bridge_reveal_json = "{\"number\":0}";
 std::string bridge_json_number(double value);
 
 wmOperator *bridge_constraint_operator(wmWindow *win)

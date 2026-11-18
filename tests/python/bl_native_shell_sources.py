@@ -640,6 +640,12 @@ check('active' in kinds and 'PresenceRecognizer()' in window_text,
 check(re.search(r'static bool session_log_enabled\(\)\s*\{[^}]*return true;', bridge_text) is not None,
       "10E: the session log is written in both interfaces")
 
+# Found by 10A's measurement: the shell skips the first reveal it sees, so Blender publishes one
+# (number 0) before any command; otherwise the first command of a session revealed nothing.
+check('bridge_reveal_json = "{\\"number\\":0}"' in bridge_text and 'guard let seen = last else' in
+      (SWIFT / 'RevealCoordinator.swift').read_text(encoding='utf-8'),
+      "The first command of a session reveals: Blender publishes reveal 0 before any command")
+
 # ROUND5 10A (decision 60): every change of the viewport's size is logged with its cause, at the
 # one place the shell sets the drawable and where the bridge sees a 3D View's region change.
 setters = [name for name, text in code.items() if re.search(r'drawableSize\s*=[^=]', text)]
