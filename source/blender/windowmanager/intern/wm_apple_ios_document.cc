@@ -13,6 +13,7 @@
 
 #  include <cstring>
 #  include <ctime>
+#  include <fmt/format.h>
 #  include <optional>
 #  include <string>
 
@@ -33,6 +34,7 @@
 #  include "BLI_math_vector.hh"
 #  include "BLI_path_utils.hh"
 #  include "BLI_string.h"
+#  include "BLI_string_ref.hh"
 #  include "DEG_depsgraph_query.hh"
 #  include "DNA_image_types.h"
 #  include "DNA_object_types.h"
@@ -51,6 +53,8 @@
 #  include "RNA_access.hh"
 #  include "WM_api.hh"
 #  include "WM_apple_ios.hh"
+#  include "WM_native_interface.hh"
+#  include "WM_native_ui.hh"
 #  include "WM_types.hh"
 #  include "wm_event_system.hh"
 
@@ -309,11 +313,30 @@ static bool wm_document_operator(bContext *C, const char *idname, PointerRNA *pr
   return status & OPERATOR_FINISHED;
 }
 
+/**
+ * What the open document loaded, by #WM_file_read_count once its open finished, and the file it
+ * opened (ROUND5 9D.1, decision 62). Blender may load another file afterwards, in many ways: a
+ * script, an add-on, a command the front door does not know. The document then refuses to write,
+ * as writing would replace it with that other file. Compared by the count rather than by path:
+ * a document opens from its own path, from iCloud through a coordinated read or from its newer
+ * auto-save, and each of these loads one file the same way.
+ */
+static uint64_t document_read = UINT64_MAX;
+static std::string document_path;
+
+bool WM_apple_ios_document_is_loaded()
+{
+  return document_read != UINT64_MAX && document_read == WM_file_read_count();
+}
+
 bool WM_apple_ios_document_open(bContext *C,
                                 const char *filepath,
                                 const bool template_document,
                                 bool *r_recovered)
 {
+  /* A document that failed to open has loaded nothing of its own. */
+  document_read = UINT64_MAX;
+  document_path.clear();
   PointerRNA props = WM_operator_properties_create("WM_OT_open_mainfile");
   RNA_string_set(&props, "filepath", filepath);
   RNA_boolean_set(&props, "display_file_selector", false);
@@ -324,6 +347,17 @@ bool WM_apple_ios_document_open(bContext *C,
   WM_operator_properties_free(&props);
   /* Opening continues from the auto-save when it is newer, see #wm_apple_ios_autosave_newer. */
   *r_recovered = success && CTX_data_main(C)->recovered;
+  if (success) {
+    document_read = WM_file_read_count();
+    document_path = filepath;
+  }
+  WM_native_ui_session_log(
+      "document",
+      fmt::format("{} {}{}",
+                  success ? "opened" : "could not open",
+                  BLI_path_basename(filepath),
+                  *r_recovered ? " (from its newer auto-save)" : "")
+          .c_str());
   return success;
 }
 
@@ -373,8 +407,19 @@ static bool wm_document_write(bContext *C, const char *filepath, const bool prev
 bool WM_apple_ios_document_write(bContext *C,
                                  const char *filepath,
                                  const bool preview,
-                                 const bool when_idle)
+                                 const bool when_idle,
+                                 bool *r_refused)
 {
+  *r_refused = false;
+  /* The backstop (ROUND5 9D.1, decision 62): Blender has loaded another file since the document
+   * opened. Writing would replace the document with it, so nothing is written; the document says
+   * so and offers to save a copy of what is loaded. */
+  if (!WM_apple_ios_document_is_loaded()) {
+    *r_refused = true;
+    WM_native_ui_session_log("document",
+                             "write refused: the loaded file is not this document");
+    return false;
+  }
   /* Saving along the way waits for a stroke or other modal operator to finish, as Blender's
    * auto-save does: its data is not in a state to write until then. */
   if (when_idle) {
@@ -405,6 +450,110 @@ bool WM_apple_ios_document_write(bContext *C,
     wm->autosave_scheduled = false;
   }
   return true;
+}
+
+bool WM_apple_ios_document_copy_write(bContext *C, const char *filepath)
+{
+  const bool success = wm_document_write(C, filepath, true);
+  WM_native_ui_session_log(
+      "document",
+      fmt::format("{} {}", success ? "copy written" : "copy could not be written",
+                  BLI_path_basename(filepath))
+          .c_str());
+  return success;
+}
+
+static const char *document_command_name(const wmDocumentCommand command)
+{
+  switch (command) {
+    case wmDocumentCommand::New:
+      return "new";
+    case wmDocumentCommand::Open:
+      return "open";
+    case wmDocumentCommand::Revert:
+      return "revert";
+    case wmDocumentCommand::Save:
+      return "save";
+    case wmDocumentCommand::SaveAs:
+      return "save as";
+    case wmDocumentCommand::Quit:
+      return "quit";
+  }
+  return "?";
+}
+
+bool WM_apple_ios_document_command(bContext * /*C*/,
+                                   const wmDocumentCommand command,
+                                   const char *argument)
+{
+  if (G.background) {
+    return false;
+  }
+  const std::string value = argument ? argument : "";
+  WM_native_ui_session_log("document",
+                           fmt::format("route {}{}{}",
+                                       document_command_name(command),
+                                       value.empty() ? "" : " ",
+                                       command == wmDocumentCommand::Open ?
+                                           BLI_path_basename(value.c_str()) :
+                                           value.c_str())
+                               .c_str());
+  if (command == wmDocumentCommand::Revert && !document_path.empty()) {
+    /* What was saved, not the work since: opening the document would continue from its newer
+     * auto-save, see #wm_apple_ios_autosave_newer. */
+    wm_apple_ios_autosave_remove(document_path.c_str());
+  }
+  WM_apple_ios_launcher_document_command(command, value);
+  return true;
+}
+
+std::string WM_apple_ios_document_check_step(bContext *C, const std::string &step)
+{
+  std::string answer;
+  if (BLI_getenv("PLATYPUS_SCRATCH_DOCUMENT") == nullptr) {
+    answer = "refused: not a check launch";
+  }
+#  ifdef WITH_PYTHON
+  else {
+    const char *imports[] = {"bpy", nullptr};
+    const char *loaded = BLI_path_basename(BKE_main_blendfile_path(CTX_data_main(C)));
+    if (step == "marker") {
+      /* In the file, as any edit is, and marked edited so the document saves it. */
+      const bool set = BPY_run_string_exec(
+          C, imports, "bpy.context.scene['satsuma_document_marker'] = 'ROUND5 9D'");
+      WM_file_tag_modified();
+      answer = fmt::format("marker {} in {}", set ? "set" : "not set", loaded);
+    }
+    else if (step == "check") {
+      intptr_t present = 0;
+      const bool asked = BPY_run_string_as_intptr(
+          C,
+          imports,
+          "int(any(scene.get('satsuma_document_marker') == 'ROUND5 9D' for scene in bpy.data.scenes))",
+          nullptr,
+          &present);
+      answer = fmt::format("marker {} in {} ({} the document's own file)",
+                           !asked ? "unknown" : present ? "present" : "missing",
+                           loaded[0] ? loaded : "an unsaved file",
+                           WM_apple_ios_document_is_loaded() ? "is" : "is not");
+    }
+    else if (StringRef(step).startswith("python ")) {
+      const std::string code = step.substr(7);
+      const bool ran = BPY_run_string_exec(C, imports, code.c_str());
+      answer = fmt::format("python {}: {}", ran ? "ran" : "failed", code);
+    }
+    else {
+      answer = "unknown step: " + step;
+    }
+  }
+#  else
+  else {
+    UNUSED_VARS(C, step);
+    answer = "needs Python";
+  }
+#  endif
+  WM_native_ui_session_log("document", answer.c_str());
+  return answer;
 }
 
 std::string WM_apple_ios_document_template_write(bContext *C,

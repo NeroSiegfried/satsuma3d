@@ -20,6 +20,8 @@
 
 #include "BLI_vector.hh"
 
+#include "WM_document_command.hh"
+
 #include "WM_types.hh"
 
 namespace blender {
@@ -181,6 +183,12 @@ struct wmNativeInterface {
    * once per press, never for releases, repeats or mouse buttons.
    */
   void (*keymap_item_skipped)(bContext *C, const wmKeyMapItem *kmi) = nullptr;
+
+  /**
+   * The document window's route for a file command, see #wmDocumentCommand: the one front door,
+   * also called by the commands' operators. True when the platform took the command.
+   */
+  bool (*document_command)(bContext *C, wmDocumentCommand command, const char *argument) = nullptr;
 };
 
 /** The registered native interface, or null for Blender's own. */

@@ -16,6 +16,8 @@ struct bContext;
 struct wmWindow;
 struct Report;
 struct ReportList;
+/** See `WM_document_command.hh`. */
+enum class wmDocumentCommand : int8_t;
 
 /* Engine-thread API. UIKit exchanges only owned values and request identifiers. */
 /**
@@ -81,8 +83,32 @@ bool WM_apple_ios_document_open(bContext *C,
  * Write the open file to `filepath`, for iOS to move into place as the saved document. Without
  * `preview` the file stores no preview image, which needs the GPU.
  */
-/** `when_idle`: give up rather than write while a stroke or other modal operator runs. */
-bool WM_apple_ios_document_write(bContext *C, const char *filepath, bool preview, bool when_idle);
+/** `when_idle`: give up rather than write while a stroke or other modal operator runs.
+ * `r_refused`: nothing was written because Blender has another file loaded than the one the
+ * document opened (ROUND5 9D, decision 62): writing it would replace the document with that file.
+ * The document says so and offers to save a copy. */
+bool WM_apple_ios_document_write(
+    bContext *C, const char *filepath, bool preview, bool when_idle, bool *r_refused);
+/** Whether what Blender has loaded is the file the document opened, see #WM_file_read_count. */
+bool WM_apple_ios_document_is_loaded();
+/** Write what Blender has loaded to `filepath` as a copy, for Save a Copy: the document and its
+ * auto-save are left as they are. */
+bool WM_apple_ios_document_copy_write(bContext *C, const char *filepath);
+/**
+ * The front door (ROUND5 9D, decision 61): a file command run in a document window, from a key, a
+ * menu, Search or a button, in either interface, takes the document's route instead of loading or
+ * writing Blender's file, see #wmDocumentCommand. Logged as `document route <command>`. Called
+ * from the commands' operators on iOS and through #wmNativeInterface::document_command.
+ */
+bool WM_apple_ios_document_command(bContext *C, wmDocumentCommand command, const char *argument);
+/** The launcher's side of #WM_apple_ios_document_command, on UIKit's thread. */
+void WM_apple_ios_launcher_document_command(wmDocumentCommand command, const std::string &argument);
+/**
+ * A check launch's own steps (`document …`, see `Snapshots.swift`), in the check's scratch
+ * document only: `marker` (set a marker in the scene and mark the file edited), `check` (whether
+ * the marker is in what Blender has loaded) and `python <code>`. The answer is logged and returned.
+ */
+std::string WM_apple_ios_document_check_step(bContext *C, const std::string &step);
 /** Save a portable template copy and PNG preview without marking the document saved. */
 std::string WM_apple_ios_document_template_write(bContext *C,
                                                  const char *filepath,

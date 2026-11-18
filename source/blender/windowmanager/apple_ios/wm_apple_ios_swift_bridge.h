@@ -61,6 +61,12 @@ unsigned int GHOST_ios_held_modifiers(void);
 UIDocument *_Nullable wm_apple_ios_open_document(void);
 /** Choose a template and create a new document, presented from `presenter`. */
 void wm_apple_ios_new_document(UIViewController *_Nonnull presenter);
+/** Save As (ROUND5 9D.2): the document saved and a copy exported, or Save a Copy of what is
+ * loaded when it is not the document's, see `wm_apple_ios_blend_document.mm`. */
+void wm_apple_ios_save_document_as(UIViewController *_Nullable presenter);
+/** A check launch's `document …` snapshot step (ROUND5 9D.5). */
+void wm_apple_ios_document_check(NSString *_Nonnull step,
+                                 void (^_Nonnull done)(NSString *_Nonnull answer));
 void wm_apple_ios_save_template(NSString *_Nonnull title,
                                 NSDictionary *_Nonnull presentation,
                                 void (^_Nonnull completion)(NSString *_Nullable error));

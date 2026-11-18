@@ -42,6 +42,7 @@
 
 #include "BLI_fileops.h"
 #include "BLI_listbase.h"
+#include "BLI_map.hh"
 #include "BLI_math_vector.h"
 #include "BLI_path_utils.hh"
 #include "BLI_string.h"
@@ -3800,6 +3801,8 @@ static std::string bridge_key_answer_text(bContext *C, const WMNativeKeyAnswer &
       return "stand-in " + answer.command;
     case Kind::Says:
       return "says " + answer.text;
+    case Kind::Document:
+      return "document " + answer.command + (answer.menu.empty() ? "" : " " + answer.menu);
   }
   return "unknown";
 }
@@ -5339,6 +5342,48 @@ static std::string bridge_key_command_name(bContext *C, const wmKeyMapItem *kmi,
   return WM_operatortype_name(ot, kmi->ptr);
 }
 
+/**
+ * The file command an operator is in a document window (ROUND5 9D.2, decision 61): its invoke
+ * takes the document's route, see #wmDocumentCommand and `tests/ios/test_document_identity.py`.
+ * Null for anything else.
+ */
+static const char *bridge_document_command(const StringRef idname)
+{
+  static const Map<StringRef, const char *> commands = {
+      {"WM_OT_read_homefile", "new"},
+      {"WM_OT_read_factory_settings", "new"},
+      {"WM_OT_open_mainfile", "open"},
+      {"WM_OT_recover_last_session", "open"},
+      {"WM_OT_recover_auto_save", "open"},
+      {"WM_OT_revert_mainfile", "revert"},
+      {"WM_OT_save_mainfile", "save"},
+      {"WM_OT_save_as_mainfile", "save_as"},
+      {"WM_OT_quit_blender", "quit"},
+  };
+  return commands.lookup_default(idname, nullptr);
+}
+
+bool WM_native_ui_is_document_command(const char *idname)
+{
+  return idname && bridge_document_command(idname) != nullptr;
+}
+
+/** The file menus a key opens, by the command a document window does instead: File › New and
+ * Open Recent take the route at once; the File context menu (F4) shows, its commands routed. */
+static const char *bridge_document_menu_command(const StringRef menu)
+{
+  if (menu == "TOPBAR_MT_file_new") {
+    return "new";
+  }
+  if (menu == "TOPBAR_MT_file_open_recent") {
+    return "open";
+  }
+  if (menu == "TOPBAR_MT_file_context_menu") {
+    return "menu";
+  }
+  return nullptr;
+}
+
 WMNativeKeyAnswer WM_native_ui_keymap_item_answer(bContext *C, const wmKeyMapItem *kmi)
 {
   using Kind = WMNativeKeyAnswer::Kind;
@@ -5352,6 +5397,25 @@ WMNativeKeyAnswer WM_native_ui_keymap_item_answer(bContext *C, const wmKeyMapIte
   }
   const StringRef idname = ot->idname;
   bool hidden = false;
+  if (const char *command = bridge_document_command(idname)) {
+    answer.kind = Kind::Document;
+    answer.command = command;
+    return answer;
+  }
+  if (idname == "WM_OT_call_menu" && kmi->ptr && RNA_struct_find_property(kmi->ptr, "name")) {
+    const std::string menu = RNA_string_get(kmi->ptr, "name");
+    if (const char *command = bridge_document_menu_command(menu)) {
+      answer.kind = Kind::Document;
+      answer.command = command;
+      if (answer.command == "menu") {
+        answer.menu = menu;
+      }
+      else {
+        answer.kept = true;
+      }
+      return answer;
+    }
+  }
   if (ELEM(idname, "WM_OT_call_menu", "WM_OT_call_menu_pie")) {
     answer.kind = Kind::Menu;
     if (kmi->ptr && RNA_struct_find_property(kmi->ptr, "name")) {
@@ -5444,6 +5508,17 @@ void WM_native_ui_keymap_item_skipped(bContext *C, const wmKeyMapItem *kmi)
 {
   const WMNativeKeyAnswer answer = WM_native_ui_keymap_item_answer(C, kmi);
   const std::string key = WM_keymap_item_to_string(kmi, false).value_or(std::string("?"));
+  if (answer.kind == WMNativeKeyAnswer::Kind::Document) {
+    /* File › New's and Open Recent's keys: the document's route (ROUND5 9D.4). */
+    WM_native_ui_session_log(
+        "key", (key + " document " + answer.command + " " + kmi->idname).c_str());
+    const wmNativeInterface *native = WM_native_interface();
+    if (native && native->document_command) {
+      native->document_command(
+          C, answer.command == "new" ? wmDocumentCommand::New : wmDocumentCommand::Open, "");
+    }
+    return;
+  }
   if (answer.kind == WMNativeKeyAnswer::Kind::StandIn) {
     WM_native_ui_session_log(
         "key", (key + " stand-in " + answer.command + " " + kmi->idname).c_str());

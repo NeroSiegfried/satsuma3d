@@ -194,6 +194,8 @@ wmNativeInterface native_interface_create()
   native.props_dialog = props_dialog;
   native.web_url_open = wm_apple_ios_open_web_url;
   native.interface_scale = WM_native_ui_interface_scale;
+  /* The document's front door (ROUND5 9D.2): keys that open File › New and Open Recent. */
+  native.document_command = WM_apple_ios_document_command;
   return native;
 }
 

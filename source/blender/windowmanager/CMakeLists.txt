@@ -73,6 +73,7 @@ set(SRC
 
   WM_api.hh
   WM_apple_ios.hh
+  WM_document_command.hh
   WM_keymap.hh
   WM_native_interface.hh
   WM_native_ui.h

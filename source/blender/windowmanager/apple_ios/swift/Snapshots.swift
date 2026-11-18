@@ -36,11 +36,15 @@
  *   `tmp/interface-measure.txt`;
  * - `editor uv|image open|close`: the UV Editor or the Image Editor, as the editors menu opens it
  *   (ROUND5 9B.7); `editor uv desktop`: its Edit UVs in Desktop Interface;
+ * - `document <step>`: the document checks of ROUND5 9D.5, in the scratch document only and on
+ *   files in its folder: `copy <name>`, `open <name>`, `stat <name>`, `list`, `save`, `reopen`,
+ *   `back`, `marker`, `check`, `python <code>`, see `wm_apple_ios_document_check_step`;
  * - `wait <seconds>`;
  * - `shot <name>`: every window of the scene, drawn into `tmp/shots/<name>.png`.
  *
  * Launch with `PLATYPUS_SCRATCH_DOCUMENT=1` too: the app then opens a fresh copy of the General
- * template instead of the last document, and `send` and `tool` steps run only there.
+ * template instead of the last document, and steps that edit run only there. `$SCRATCH` in a step
+ * is the scratch document's folder, such as `op WM_OT_open_mainfile filepath=$SCRATCH/Second.blend`.
  *
  * The viewport may come out black: the chrome is what is checked.
  */
@@ -104,11 +108,18 @@ enum ShellSnapshots {
        * and a script must never change someone's work. */
       let path = wm_apple_ios_document_url()?.path ?? ""
       let scratch = path.contains("/platypus-scratch/")
+      let folder = (path as NSString).deletingLastPathComponent
       WM_native_ui_log("snapshot", "script in \(scratch ? "scratch document" : "a person's document") \((path as NSString).lastPathComponent)")
-      for step in steps {
+      for written in steps {
+        let step = scratch ? written.replacingOccurrences(of: "$SCRATCH", with: folder) : written
         let verb = step.split(separator: " ").first.map(String.init) ?? ""
+        /* Asked again before each step: a step may open another document (ROUND5 9D.5), and a
+         * check works only in its own folder. Back in the documents, no document is open. */
+        let now = wm_apple_ios_document_url()?.path
+        let inScratch = scratch && (now == nil || now!.contains("/platypus-scratch/"))
         /* `editor uv desktop` changes the document's workspaces, as the desktop's tabs do. */
-        if !scratch && (["send", "tool", "op", "panel", "key"].contains(verb) || step.hasPrefix("editor uv desktop")) {
+        if !inScratch && (["send", "tool", "op", "panel", "key", "document"].contains(verb) ||
+                          step.hasPrefix("editor uv desktop")) {
           WM_native_ui_log("snapshot", "refused outside the scratch document: \(step)")
           continue
         }
@@ -294,6 +305,12 @@ enum ShellSnapshots {
           break
         }
         try? await Task.sleep(for: .seconds(2))
+      case "document":
+        let rest = String(step.dropFirst("document ".count))
+        let _: String = await withCheckedContinuation { done in
+          wm_apple_ios_document_check(rest) { answer in done.resume(returning: answer) }
+        }
+        try? await Task.sleep(for: .seconds(1))
       case "wait":
         try? await Task.sleep(for: .seconds(Double(words.first ?? "") ?? 0.5))
       case "shot":

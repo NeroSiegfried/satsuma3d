@@ -676,9 +676,21 @@ void wm_file_read_report(Main *bmain, wmWindow *win)
  * \note In the case of #WM_file_read the file may fail to load.
  * Change here shouldn't cause user-visible changes in that case.
  */
+/** How many times a file's data has replaced the session's, see #WM_file_read_count. */
+static uint64_t wm_file_read_counter = 0;
+
+uint64_t WM_file_read_count()
+{
+  return wm_file_read_counter;
+}
+
 static void wm_file_read_pre(bool use_data, bool /*use_userdef*/)
 {
   if (use_data) {
+    /* Every read of a main file passes here, just before its data replaces the session's: opening,
+     * reverting, recovering, the start-up file and factory settings, from any caller. Undo does
+     * not. */
+    wm_file_read_counter++;
     BLI_timer_on_file_load();
   }
 
@@ -3021,6 +3033,24 @@ static wmOperatorStatus wm_homefile_read_invoke(bContext *C,
                                                 wmOperator *op,
                                                 const wmEvent * /*event*/)
 {
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* File › New in a document window: a new document, the launcher's (ROUND5 9D.2). */
+  {
+    /* File › New's items name their template, "" for General; without one the person
+     * chooses. */
+    char app_template[sizeof(U.app_template)] = "";
+    PropertyRNA *prop = RNA_struct_find_property(op->ptr, "app_template");
+    if (prop && RNA_property_is_set(op->ptr, prop)) {
+      RNA_property_string_get(op->ptr, prop, app_template);
+      if (app_template[0] == '\0') {
+        STRNCPY(app_template, "General");
+      }
+    }
+    if (WM_apple_ios_document_command(C, wmDocumentCommand::New, app_template)) {
+      return OPERATOR_CANCELLED;
+    }
+  }
+#endif
   if (wm_operator_close_file_dialog_if_needed(C, op, wm_homefile_read_after_dialog_callback)) {
     return OPERATOR_INTERFACE;
   }
@@ -3093,6 +3123,12 @@ static wmOperatorStatus wm_read_factory_settings_invoke(bContext *C,
                                                         wmOperator *op,
                                                         const wmEvent * /*event*/)
 {
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* A new document from General, as File › New › General does (ROUND5 9D.2). */
+  if (WM_apple_ios_document_command(C, wmDocumentCommand::New, "General")) {
+    return OPERATOR_CANCELLED;
+  }
+#endif
   const bool unsaved = wm_file_or_session_data_has_unsaved_changes(CTX_data_main(C),
                                                                    CTX_wm_manager(C));
   std::string title;
@@ -3335,6 +3371,21 @@ static wmOperatorStatus wm_open_mainfile_invoke(bContext *C,
                                                 wmOperator *op,
                                                 const wmEvent * /*event*/)
 {
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* Open, Open Recent and a dropped .blend file in a document window: the file opens as its own
+   * document, the current one saving and closing first (ROUND5 9D.2). Without a path, the
+   * system's picker. */
+  {
+    char filepath[FILE_MAX] = "";
+    if (RNA_struct_property_is_set(op->ptr, "filepath")) {
+      RNA_string_get(op->ptr, "filepath", filepath);
+      BLI_path_canonicalize_native(filepath, sizeof(filepath));
+    }
+    if (WM_apple_ios_document_command(C, wmDocumentCommand::Open, filepath)) {
+      return OPERATOR_CANCELLED;
+    }
+  }
+#endif
   return wm_open_mainfile_dispatch(C, op);
 }
 
@@ -3492,6 +3543,12 @@ static wmOperatorStatus wm_revert_mainfile_invoke(bContext *C,
                                                   wmOperator *op,
                                                   const wmEvent * /*event*/)
 {
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* The document again, from its own file, through the document (ROUND5 9D.2). */
+  if (WM_apple_ios_document_command(C, wmDocumentCommand::Revert, "")) {
+    return OPERATOR_CANCELLED;
+  }
+#endif
   std::string message = IFACE_("Any unsaved changes will be lost.");
   if (ED_image_should_save_modified(CTX_data_main(C))) {
     message += "\n";
@@ -3599,6 +3656,16 @@ static wmOperatorStatus wm_recover_last_session_invoke(bContext *C,
                                                        wmOperator *op,
                                                        const wmEvent * /*event*/)
 {
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* The last session's file opens as its own document (ROUND5 9D.2). */
+  {
+    char filepath[FILE_MAX];
+    BLI_path_join(filepath, sizeof(filepath), BKE_tempdir_base(), BLENDER_QUIT_FILE);
+    if (WM_apple_ios_document_command(C, wmDocumentCommand::Open, filepath)) {
+      return OPERATOR_CANCELLED;
+    }
+  }
+#endif
   /* Keep the current setting instead of using the preferences since a file selector
    * doesn't give us the option to change the setting. */
   const bool use_scripts_autoexec_check = wm_open_init_use_scripts(op, false);
@@ -3663,6 +3730,18 @@ static wmOperatorStatus wm_recover_auto_save_invoke(bContext *C,
                                                     const wmEvent * /*event*/)
 {
   char filepath[FILE_MAX];
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* An auto-save opens as its own document (ROUND5 9D.2); a document continues from its own newer
+   * auto-save as it opens, see #wm_apple_ios_autosave_newer. Without a path, the system's
+   * picker. */
+  filepath[0] = '\0';
+  if (RNA_struct_property_is_set(op->ptr, "filepath")) {
+    RNA_string_get(op->ptr, "filepath", filepath);
+  }
+  if (WM_apple_ios_document_command(C, wmDocumentCommand::Open, filepath)) {
+    return OPERATOR_CANCELLED;
+  }
+#endif
 
   wm_autosave_location(filepath);
   RNA_string_set(op->ptr, "filepath", filepath);
@@ -3817,6 +3896,11 @@ static wmOperatorStatus wm_save_as_mainfile_invoke(bContext *C,
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
   if (wm_save_space_ask(C, op)) {
     return OPERATOR_INTERFACE;
+  }
+  /* Save As and Save Copy in a document window: the document saved and a copy exported where the
+   * person picks, the window staying on its document (ROUND5 9D.2, decision 63). */
+  if (WM_apple_ios_document_command(C, wmDocumentCommand::SaveAs, "")) {
+    return OPERATOR_CANCELLED;
   }
 #endif
 
@@ -4045,8 +4129,20 @@ static wmOperatorStatus wm_save_mainfile_invoke(bContext *C,
   }
 
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* Save in a document window: the document saves now, through the document, as a save along
+   * the way writes: no second write beside it, no `.blend1` (ROUND5 9D.2, decision 63). */
+  if (RNA_boolean_get(op->ptr, "incremental")) {
+    WM_native_ui_session_log("document", "save incremental: not available");
+    WM_native_ui_notice(RPT_INFO,
+                        "Save Incremental is not available for a document. Use Save As to keep "
+                        "a copy.");
+    return OPERATOR_CANCELLED;
+  }
   if (wm_save_space_ask(C, op)) {
     return OPERATOR_INTERFACE;
+  }
+  if (WM_apple_ios_document_command(C, wmDocumentCommand::Save, "")) {
+    return OPERATOR_CANCELLED;
   }
 #endif
 

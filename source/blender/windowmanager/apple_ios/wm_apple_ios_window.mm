@@ -231,6 +231,16 @@ extern "C" void wm_apple_ios_new_document(UIViewController *presenter)
   wm_apple_ios_launcher_new_document(presenter);
 }
 
+extern "C" void wm_apple_ios_save_document_as(UIViewController *presenter)
+{
+  wm_apple_ios_document_save_as(presenter);
+}
+
+extern "C" void wm_apple_ios_document_check(NSString *step, void (^done)(NSString *answer))
+{
+  wm_apple_ios_document_check_step(step, done);
+}
+
 extern "C" void wm_apple_ios_save_template(NSString *title,
                                            NSDictionary *presentation,
                                            void (^completion)(NSString *error))

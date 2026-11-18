@@ -5,6 +5,7 @@
 
 #include "BKE_blender_version.h"
 #include "GHOST_IOSRuntime.hh"
+#include "WM_native_ui.h"
 #import "wm_apple_ios_launcher.hh"
 
 #include <algorithm>
@@ -21,7 +22,10 @@ bool WM_apple_ios_document_open(bContext *C,
                                 const char *filepath,
                                 bool template_document,
                                 bool *r_recovered);
-bool WM_apple_ios_document_write(bContext *C, const char *filepath, bool preview, bool when_idle);
+bool WM_apple_ios_document_write(
+    bContext *C, const char *filepath, bool preview, bool when_idle, bool *r_refused);
+bool WM_apple_ios_document_is_loaded();
+bool WM_apple_ios_document_copy_write(bContext *C, const char *filepath);
 std::string WM_apple_ios_document_template_write(bContext *C,
                                                  const char *filepath,
                                                  const char *preview,
@@ -73,6 +77,19 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work)
   BOOL _previewStale;
   /** Blender opened the document's newer auto-save, work the document has yet to save. */
   BOOL _recovered;
+  /**
+   * A write was refused: Blender has another file loaded than this document (ROUND5 9D.1). The
+   * document's file is as it was saved, and nothing of it is left to save: what is loaded is not
+   * the document's. Until it is reopened.
+   */
+  BOOL _refused;
+  /** The refusal was said, once until the document is reopened. */
+  BOOL _refusalShown;
+}
+
+- (BOOL)refused
+{
+  return _refused;
 }
 
 - (void)saveChangesWithCompletionHandler:(void (^)(BOOL success))completionHandler
@@ -228,13 +245,28 @@ static const CFTimeInterval document_save_interval = 60.0;
   /* Rendering the preview needs Blender's window on screen, and the app in front. */
   const bool preview = !along_the_way && !GHOST_ios_app_in_background() &&
                        GHOST_ios_document_window_visible();
-  if (engine_wait([path, preview, along_the_way](blender::bContext *C) {
-        return blender::WM_apple_ios_document_write(C, path.c_str(), preview, along_the_way);
+  auto refused = std::make_shared<std::atomic<bool>>(false);
+  if (engine_wait([path, preview, along_the_way, refused](blender::bContext *C) {
+        bool r_refused = false;
+        const bool written = blender::WM_apple_ios_document_write(
+            C, path.c_str(), preview, along_the_way, &r_refused);
+        refused->store(r_refused);
+        return written;
       }))
   {
     _lastWrite = CACurrentMediaTime();
     _previewStale = !preview;
+    WM_native_ui_log("document",
+                     [NSString stringWithFormat:@"written %@%@",
+                                                along_the_way ? @"along the way" : @"in full",
+                                                preview ? @" with its preview" : @""]
+                         .UTF8String);
     return YES;
+  }
+  if (refused->load()) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [self writeRefused];
+    });
   }
   if (outError) {
     *outError = [NSError errorWithDomain:NSCocoaErrorDomain
@@ -246,7 +278,81 @@ static const CFTimeInterval document_save_interval = 60.0;
 
 - (BOOL)hasUnsavedChanges
 {
+  /* Refused: nothing loaded is the document's to save, see #_refused. */
+  if (_refused) {
+    return NO;
+  }
   return _blenderModified || _previewStale || [super hasUnsavedChanges];
+}
+
+/**
+ * The backstop said (ROUND5 9D.1, decision 62): what is loaded exists nowhere on disk, so it is
+ * never dropped without a word. Save a Copy writes it where the person picks; Reopen Document goes
+ * back to the document as it was last saved.
+ */
+- (void)writeRefused
+{
+  _refused = YES;
+  _blenderModified = NO;
+  _previewStale = NO;
+  [self updateChangeCount:UIDocumentChangeCleared];
+  if (_refusalShown) {
+    return;
+  }
+  _refusalShown = YES;
+  NSString *name = self.fileURL.lastPathComponent ?: @"the document";
+  UIAlertController *alert = [UIAlertController
+      alertControllerWithTitle:@"Document Not Saved"
+                       message:[NSString
+                                   stringWithFormat:
+                                       @"Another file was loaded into this window (by a script, an "
+                                       @"add-on or a command), so saving would have replaced "
+                                       @"“%@” with it. Nothing was written. Save a copy of what "
+                                       @"is shown, or reopen the document as it was last saved.",
+                                       name]
+                preferredStyle:UIAlertControllerStyleAlert];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Save a Copy…"
+                                            style:UIAlertActionStyleDefault
+                                          handler:^(UIAlertAction *) {
+                                            wm_apple_ios_document_save_as(nil);
+                                          }]];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Reopen Document"
+                                            style:UIAlertActionStyleDefault
+                                          handler:^(UIAlertAction *) {
+                                            [self reopen:NO];
+                                          }]];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Not Now"
+                                            style:UIAlertActionStyleCancel
+                                          handler:nil]];
+  WM_native_ui_log("document", "refusal shown: Save a Copy, Reopen Document, Not Now");
+  [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)reopen:(BOOL)revert
+{
+  /* Blender loads the document's file again, through the document, as when it opened. */
+  WM_native_ui_log("document", revert ? "revert" : "reopen");
+  [self revertToContentsOfURL:self.fileURL
+            completionHandler:^(BOOL success) {
+              if (success) {
+                _refused = NO;
+                _refusalShown = NO;
+                _blenderModified = NO;
+              }
+              WM_native_ui_log("document",
+                               success ? "reopened" : "could not be reopened");
+            }];
+}
+
+- (void)saveNow
+{
+  if (!self.hasUnsavedChanges) {
+    WM_native_ui_log("document", "save: nothing changed since it was saved");
+    return;
+  }
+  [self saveChangesWithCompletionHandler:^(BOOL success) {
+    WM_native_ui_log("document", success ? "saved" : "save failed");
+  }];
 }
 
 - (void)setBlenderModified:(BOOL)modified
@@ -258,6 +364,7 @@ static const CFTimeInterval document_save_interval = 60.0;
   const BOOL edited = modified && !_blenderModified;
   _blenderModified = modified;
   if (edited) {
+    WM_native_ui_log("document", "edited");
     /* Marks the document edited, as any edit of a document does. */
     [self updateChangeCount:UIDocumentChangeDone];
     [self saveAlongTheWay];
@@ -265,6 +372,79 @@ static const CFTimeInterval document_save_interval = 60.0;
 }
 
 @end
+
+/** Present the system's exporter for a copy of \a url, where the person picks. */
+static void presentExporter(NSURL *url, UIViewController *presenter)
+{
+  UIDocumentPickerViewController *picker = [[[UIDocumentPickerViewController alloc]
+      initForExportingURLs:@[ url ]
+                    asCopy:YES] autorelease];
+  WM_native_ui_log("document", "save as: the exporter shown");
+  [presenter ?: wm_apple_ios_top_presenter() presentViewController:picker
+                                                          animated:YES
+                                                        completion:nil];
+}
+
+void wm_apple_ios_document_save_as(UIViewController *presenter)
+{
+  WMIOSBlendDocument *document = (WMIOSBlendDocument *)wm_apple_ios_launcher_document();
+  if (![document isKindOfClass:WMIOSBlendDocument.class]) {
+    return;
+  }
+  [presenter retain];
+  NSString *name = document.fileURL.lastPathComponent ?: @"Untitled.blend";
+  NSURL *documentURL = [[document.fileURL copy] autorelease];
+  [document retain];
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    /* What is loaded is the document's: save it, then export the file, as Files apps do. Not the
+     * document's (refused, ROUND5 9D.1): what is loaded exists nowhere on disk, so write it as a
+     * copy and export that, leaving the document as it is. */
+    const bool own = engine_wait(
+        [](blender::bContext *) { return blender::WM_apple_ios_document_is_loaded(); });
+    if (own) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [document saveToURL:documentURL
+              forSaveOperation:UIDocumentSaveForOverwriting
+             completionHandler:^(BOOL) {
+               presentExporter(documentURL, presenter);
+               [presenter release];
+               [document release];
+             }];
+      });
+      return;
+    }
+    NSString *folder = [NSTemporaryDirectory()
+        stringByAppendingPathComponent:[@"save-copy-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+    [NSFileManager.defaultManager createDirectoryAtPath:folder
+                            withIntermediateDirectories:YES
+                                             attributes:nil
+                                                  error:nil];
+    NSURL *copy = [NSURL fileURLWithPath:[folder stringByAppendingPathComponent:name]];
+    const std::string path = copy.path.UTF8String;
+    const bool written = engine_wait([path](blender::bContext *C) {
+      return blender::WM_apple_ios_document_copy_write(C, path.c_str());
+    });
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (written) {
+        presentExporter(copy, presenter);
+      }
+      else {
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"Could Not Save a Copy"
+                             message:@"Check available storage and try again."
+                      preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:nil]];
+        [presenter ?: wm_apple_ios_top_presenter() presentViewController:alert
+                                                                animated:YES
+                                                              completion:nil];
+      }
+      [presenter release];
+      [document release];
+    });
+  });
+}
 
 static NSURL *personalTemplatesURL()
 {

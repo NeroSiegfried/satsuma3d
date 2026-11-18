@@ -65,6 +65,9 @@
 #include "WM_keymap.hh"
 #include "WM_native_interface.hh"
 #include "WM_types.hh"
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+#  include "WM_apple_ios.hh"
+#endif
 #include "wm.hh"
 #include "wm_draw.hh"
 #include "wm_event_system.hh"
@@ -428,6 +431,13 @@ static void wm_confirm_quit(bContext *C)
 
 void wm_quit_with_optional_confirmation_prompt(bContext *C, wmWindow *win)
 {
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* Closing the last window or a request to quit: an iPad app is never quit from inside. The
+   * document saves and closes, and the documents show (ROUND5 9D.2, decision 63). */
+  if (WM_apple_ios_document_command(C, wmDocumentCommand::Quit, "")) {
+    return;
+  }
+#endif
   wmWindow *win_ctx = CTX_wm_window(C);
 
   /* The popup will be displayed in the context window which may not be set

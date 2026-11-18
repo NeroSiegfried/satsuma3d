@@ -44,12 +44,10 @@ final class ShellCommands {
 
   func saveDocumentAs() {
     guard let document = wm_apple_ios_open_document() else { return }
-    /* Save a copy wherever the person picks, as Files apps do for Save As. */
+    /* Save a copy wherever the person picks, as Files apps do for Save As: one function with
+     * Blender's Save As and the refused write's Save a Copy (ROUND5 9D.2). */
     let save = { [weak self] in
-      document.save(to: document.fileURL, for: .forOverwriting) { [weak self] _ in
-        let picker = UIDocumentPickerViewController(forExporting: [document.fileURL], asCopy: true)
-        self?.presenter?.present(picker, animated: true)
-      }
+      wm_apple_ios_save_document_as(self?.presenter)
     }
     /* Free space first (ROUND5 8I.5, decision 45): when it is low, the person chooses. */
     let space = SaveSpace.warning(forSavingAt: document.fileURL.path)

@@ -1084,11 +1084,25 @@ def tick_material():
 # menu, a choice, a dialog, the rename field, a stand-in or a line that says so. Fails when (a) a
 # key's menu passes its poll and, asked for as a key asks (`wm.call_menu`, the popup hook), comes
 # back empty; (b) an item has no answer, or says nothing; (c) a stand-in names a command the shell
-# does not have (`release/ios/key_stand_ins.txt`). Then one item runs through the popup's own route:
+# does not have (`release/ios/key_stand_ins.txt`); (d) a file command (New, Open, Open Recent,
+# Revert, Recover, Save, Save As, Quit, and the keys of File › New, Open Recent and the File context
+# menu) answers anything but `document` (ROUND5 9D.4): in a document window they take the document's
+# route, never load or write Blender's file. Then one item runs through the popup's own route:
 # U's UV Mapping › Unwrap Angle Based, and the mesh's UVs must change.
 KEY_MODES = ("object", "edit_mesh", "sculpt", "weight_paint", "vertex_paint", "texture_paint", "edit_curve",
              "edit_armature", "pose")
-ANSWERS = ("runs", "menu ", "choice", "dialog", "rename", "stand-in ", "says ")
+ANSWERS = ("runs", "menu ", "choice", "dialog", "rename", "stand-in ", "says ", "document ")
+# ROUND5 9D.4: the file commands, which must answer `document`.
+DOCUMENT_OPERATORS = ("WM_OT_read_homefile", "WM_OT_read_factory_settings", "WM_OT_open_mainfile",
+                      "WM_OT_recover_last_session", "WM_OT_recover_auto_save", "WM_OT_revert_mainfile",
+                      "WM_OT_save_mainfile", "WM_OT_save_as_mainfile", "WM_OT_quit_blender")
+DOCUMENT_MENUS = ("TOPBAR_MT_file_new", "TOPBAR_MT_file_open_recent", "TOPBAR_MT_file_context_menu")
+
+
+def is_document_command(call):
+    name = call.partition("(")[0]
+    return name in DOCUMENT_OPERATORS or (
+        name == "WM_OT_call_menu" and any('name="%s"' % menu in call for menu in DOCUMENT_MENUS))
 keys_state = {"mode": 0, "phase": "enter", "wait": 0, "table": [], "problems": [], "menus": {}, "counts": {}}
 
 
@@ -1145,6 +1159,9 @@ def tick_keys():
                 state["table"].append("%s | %s | %s | %s | %s" % (mode, keymap, row.get("label") or "", call, answer))
                 kind = next((a.strip() for a in ANSWERS if answer == a or answer.startswith(a)), None)
                 counts[kind or "none"] = counts.get(kind or "none", 0) + 1
+                if is_document_command(call) and kind != "document":
+                    state["problems"].append("%s: %s %s is a file command and answers %r, not document" %
+                                             (mode, keymap, call, answer))
                 if kind is None:
                     state["problems"].append("%s: %s %s has no answer (%r)" % (mode, keymap, call, answer))
                 elif kind == "says" and not answer[len("says "):].strip():
@@ -1157,6 +1174,9 @@ def tick_keys():
                     if poll == "poll" and name not in state["menus"]:
                         operator = "call_menu_pie" if call.startswith("WM_OT_call_menu_pie") else "call_menu"
                         state["menus"][name] = operator
+                elif kind == "document" and answer.startswith("document menu "):
+                    # F4: the File context menu shows, its file commands taking the document's route.
+                    state["menus"].setdefault(answer.split(" ")[2], "call_menu")
             # Asked for as a key asks: through the popup hook, which lets the interface draw it.
             for name, operator in state["menus"].items():
                 _call_menu(operator, name)

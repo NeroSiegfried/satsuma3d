@@ -133,6 +133,14 @@ struct WMNativeKeyAnswer {
     StandIn,
     /** Kept from Blender: the interface says so, #text. */
     Says,
+    /**
+     * A file command (ROUND5 9D.4): the document's own route, see #wmDocumentCommand, named by
+     * #command (`new`, `open`, `revert`, `save`, `save_as`, `quit`). An operator runs and its
+     * invoke takes the route; File › New's and Open Recent's menus are kept from Blender (#kept)
+     * and the route is taken at once; the File context menu (F4) shows, #menu, every file command
+     * in it taking the route (`menu`).
+     */
+    Document,
   };
   Kind kind = Kind::Runs;
   /** A stand-in's command, one of `release/ios/key_stand_ins.txt`. */
@@ -141,10 +149,12 @@ struct WMNativeKeyAnswer {
   std::string text;
   /** The menu a #Kind::Menu item opens. */
   std::string menu;
+  /** A #Kind::Document item kept from Blender, the route taken instead. */
+  bool kept = false;
 
   bool hidden() const
   {
-    return kind == Kind::StandIn || kind == Kind::Says;
+    return kind == Kind::StandIn || kind == Kind::Says || (kind == Kind::Document && kept);
   }
 };
 
@@ -154,6 +164,9 @@ struct WMNativeKeyAnswer {
  * key runs.
  */
 WMNativeKeyAnswer WM_native_ui_keymap_item_answer(bContext *C, const wmKeyMapItem *kmi);
+/** Whether \a idname is a file command, which a document window takes its own route for
+ * (ROUND5 9D): run it through its invoke, never its exec, so the route is taken. */
+bool WM_native_ui_is_document_command(const char *idname);
 /** Whether a key or mouse button skips \a kmi, see #wmNativeInterface::keymap_item_hidden. */
 bool WM_native_ui_keymap_item_hidden(const wmKeyMapItem *kmi);
 /** A key press matched only items kept from Blender, \a kmi first: do or say what it answers,

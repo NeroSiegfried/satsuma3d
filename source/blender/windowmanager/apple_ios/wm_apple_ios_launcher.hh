@@ -17,6 +17,8 @@ bool wm_apple_ios_launcher_can_show_documents();
 void wm_apple_ios_launcher_show_documents(id sender);
 /** Choose a template and create an independent document without replacing unsaved work. */
 void wm_apple_ios_launcher_new_document(UIViewController *presenter);
+/** A check launch's `document …` step, see `Snapshots.swift`; `done` gets what it logged. */
+void wm_apple_ios_document_check_step(NSString *step, void (^done)(NSString *answer));
 
 /* The document window, which GHOST shows over the launcher. */
 #include "GHOST_IOSNativeInterface.hh"

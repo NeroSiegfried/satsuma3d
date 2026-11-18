@@ -90,6 +90,13 @@ void wm_homefile_read_post(bContext *C, const wmFileReadPost_Params *params_file
 
 void wm_file_read_report(Main *bmain, wmWindow *win);
 
+/**
+ * How many times a file's data has replaced the session's data, counted where every main-file
+ * read passes (the start-up file, factory settings, opening, reverting, recovering), not by undo.
+ * What a document loaded is known by this count: a later read is another file's (ROUND5 9D).
+ */
+uint64_t WM_file_read_count();
+
 void wm_close_file_dialog(bContext *C, wmGenericCallback *post_action);
 /**
  * \return True if the dialog was created, the calling operator should return #OPERATOR_INTERFACE

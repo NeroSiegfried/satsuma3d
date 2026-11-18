@@ -102,6 +102,9 @@
 #include "UI_resources.hh"
 
 #include "WM_api.hh"
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+#  include "WM_apple_ios.hh"
+#endif
 #ifdef WITH_NATIVE_UI
 #  include "WM_native_ui.hh"
 #endif
@@ -2486,6 +2489,14 @@ static void WM_OT_window_fullscreen_toggle(wmOperatorType *ot)
 
 static wmOperatorStatus wm_exit_blender_exec(bContext *C, wmOperator * /*op*/)
 {
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* An iPad app is never quit from inside: the document saves and closes, and the documents show,
+   * as their back button does (ROUND5 9D.2, decision 63). Exiting would skip the document's last
+   * save. From a script too, as nothing else can catch an exit. */
+  if (WM_apple_ios_document_command(C, wmDocumentCommand::Quit, "")) {
+    return OPERATOR_CANCELLED;
+  }
+#endif
   wm_exit_schedule_delayed(C);
   return OPERATOR_FINISHED;
 }
@@ -2494,6 +2505,12 @@ static wmOperatorStatus wm_exit_blender_invoke(bContext *C,
                                                wmOperator * /*op*/,
                                                const wmEvent * /*event*/)
 {
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* Ctrl/Cmd+Q and File › Quit: back to the documents, see #wm_exit_blender_exec. */
+  if (WM_apple_ios_document_command(C, wmDocumentCommand::Quit, "")) {
+    return OPERATOR_CANCELLED;
+  }
+#endif
   if (U.uiflag & USER_SAVE_PROMPT) {
     wm_quit_with_optional_confirmation_prompt(C, CTX_wm_window(C));
   }

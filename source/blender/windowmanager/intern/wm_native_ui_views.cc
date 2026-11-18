@@ -816,16 +816,25 @@ bool operator_run(bContext *C,
     }
   }
   if (valid) {
-    /* Navigation is invoked, so it animates; anything else runs as a button runs it. Why it
-     * failed, as it reports it, answers the command. */
+    /* Navigation is invoked, so it animates; a file command is invoked, so it takes the
+     * document's route (ROUND5 9D.2); anything else runs as a button runs it. Why it failed, as
+     * it reports it, answers the command. */
+    wmWindowManager *wm = CTX_wm_manager(C);
     ReportList *reports = CTX_wm_reports(C);
     const Report *before = reports ? BKE_reports_last_displayable(reports) : nullptr;
     WM_operator_name_call_ptr(C,
                               ot,
-                              operator_navigates(idname) ? OpCallContext::InvokeRegionWin :
-                                                           OpCallContext::ExecRegionWin,
+                              operator_navigates(idname) ||
+                                      WM_native_ui_is_document_command(ot->idname) ?
+                                  OpCallContext::InvokeRegionWin :
+                                  OpCallContext::ExecRegionWin,
                               &ptr,
                               nullptr);
+    /* A file read replaces the window manager and its reports with it (seen 2026-11-18: a
+     * crash locking the freed list's mutex). */
+    if (CTX_wm_manager(C) != wm) {
+      reports = nullptr;
+    }
     const Report *report = reports ? BKE_reports_last_displayable(reports) : nullptr;
     if (report && report != before && report->type >= RPT_ERROR) {
       r_error = report->message;

@@ -5,7 +5,12 @@
 #import "wm_apple_ios_blend_document.hh"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
+#include "GHOST_IOSRuntime.hh"
 #include "WM_apple_ios.hh"
+#include "WM_document_command.hh"
+#include "WM_native_ui.h"
+
+#include <string>
 
 /* The views drawing Suzanne and the logo are Swift, in the app itself, see
  * `Launcher.swift`. They are found by name, as this library is built without Swift. */
@@ -253,7 +258,10 @@ static void launcherScratchRemove()
                                  inDomains:NSUserDomainMask]
                        .firstObject;
   NSURL *blender = [support URLByAppendingPathComponent:@"Blender" isDirectory:YES];
-  NSString *prefix = [launcher_scratch_name stringByAppendingString:@"_"];
+  /* Every file a check makes is named after it (`PlatypusCheck New 1.blend`, see
+   * #wm_apple_ios_document_check_step), so its auto-saves start with the name too: never another
+   * file's. */
+  NSString *prefix = launcher_scratch_name;
   for (NSURL *version in [files contentsOfDirectoryAtURL:blender
                               includingPropertiesForKeys:nil
                                                  options:0
@@ -287,9 +295,13 @@ static void launcherCheckOutputRemove()
 /** Whether \a url is the check's own copy (or anything else in its folder). */
 static BOOL launcherIsScratch(NSURL *url)
 {
+  /* By its folder, which exists: symbolic links (`/var` and `/private/var`) resolve only in paths
+   * that exist, and a file the check is about to make does not yet. */
   NSString *folder = launcherScratchFolder().URLByStandardizingPath.URLByResolvingSymlinksInPath.path;
-  NSString *path = url.URLByStandardizingPath.URLByResolvingSymlinksInPath.path;
-  return path && [path hasPrefix:[folder stringByAppendingString:@"/"]];
+  NSString *parent = url.URLByStandardizingPath.URLByDeletingLastPathComponent
+                         .URLByResolvingSymlinksInPath.path;
+  return parent && folder && ([parent isEqualToString:folder] ||
+                              [parent hasPrefix:[folder stringByAppendingString:@"/"]]);
 }
 
 /** A new copy of the General template, replacing any earlier one, or nil. */
@@ -323,8 +335,10 @@ static NSURL *launcherScratchCreate()
  * behind it. It owns the open document; Blender's window shows only while one is open.
  */
 @interface WMIOSLauncherController
-    : UIDocumentViewController <UIDocumentBrowserViewControllerDelegate>
+    : UIDocumentViewController <UIDocumentBrowserViewControllerDelegate,
+                                UIDocumentPickerDelegate>
 - (void)openDocumentAtURL:(NSURL *)url;
+- (void)documentCommand:(blender::wmDocumentCommand)command argument:(NSString *)argument;
 - (void)chooseTemplate:(void (^)(NSString *app_template))completion;
 - (void)newDocumentFrom:(UIViewController *)presenter;
 @end
@@ -690,6 +704,34 @@ static NSURL *launcher_pending_url = nil;
       [self creationFailed:presenter];
       return;
     }
+    if (_scratch) {
+      /* A check launch makes its new documents in its own folder, never where the browser would
+       * place them (ROUND5 9D.5): the person's folders are not touched. */
+      NSFileManager *files = NSFileManager.defaultManager;
+      NSURL *destination = nil;
+      for (NSInteger number = 1; number < 1000; number++) {
+        destination = [launcherScratchFolder()
+            URLByAppendingPathComponent:[NSString stringWithFormat:@"%@ New %ld.blend",
+                                                                   launcher_scratch_name,
+                                                                   (long)number]];
+        if (![files fileExistsAtPath:destination.path]) {
+          break;
+        }
+      }
+      const BOOL moved = [files moveItemAtURL:source toURL:destination error:nil];
+      [files removeItemAtURL:source.URLByDeletingLastPathComponent error:nil];
+      if (!moved) {
+        [self creationFailed:presenter];
+        return;
+      }
+      WM_native_ui_log(
+          "document",
+          [@"new in the scratch folder: " stringByAppendingString:destination.lastPathComponent]
+              .UTF8String);
+      [self recordCreatedTemplateAtURL:destination];
+      [self openDocumentAtURL:destination];
+      return;
+    }
     [self backUpCreation:source];
     [self.launchOptions.browserViewController
         importDocumentAtURL:source
@@ -740,6 +782,14 @@ static NSURL *launcher_pending_url = nil;
   [previous closeWithCompletionHandler:^(BOOL success) {
     if (success) {
       self.document = document;
+    }
+    else if ([previous isKindOfClass:WMIOSBlendDocument.class] &&
+             ((WMIOSBlendDocument *)previous).refused)
+    {
+      /* Its write was refused, which its own alert says (ROUND5 9D.1): stay, so the person
+       * chooses. Asked again, the document closes, as nothing of it is left to save. */
+      self->_opening = NO;
+      GHOST_ios_document_window_set_visible(true, true);
     }
     else {
       self->_opening = NO;
@@ -852,6 +902,117 @@ static NSURL *launcher_pending_url = nil;
   }
 }
 
+/* The front door (ROUND5 9D.2, decision 61). */
+
+/** Blender's app templates by the launcher's, for File › New's items. */
+static NSString *launcherTemplateForAppTemplate(NSString *app_template)
+{
+  /* No template asked for (a key, the menu bar's New…): the person chooses. */
+  if (app_template.length == 0) {
+    return nil;
+  }
+  NSDictionary *known = @{
+    @"General" : @"general",
+    @"Sculpting" : @"sculpt",
+    @"2D_Animation" : @"animation-2d",
+  };
+  NSString *identifier = known[app_template ?: @""];
+  for (NSDictionary *entry in launcherTemplates()) {
+    if ([entry[@"id"] isEqual:identifier]) {
+      return identifier;
+    }
+  }
+  return nil;
+}
+
+- (void)documentCommand:(blender::wmDocumentCommand)command argument:(NSString *)argument
+{
+  using blender::wmDocumentCommand;
+  UIViewController *presenter = wm_apple_ios_top_presenter();
+  WMIOSBlendDocument *document = [self.document isKindOfClass:WMIOSBlendDocument.class] ?
+                                     (WMIOSBlendDocument *)self.document :
+                                     nil;
+  switch (command) {
+    case wmDocumentCommand::New: {
+      /* As the menu bar's New… does: the current document saves and closes as the new opens. */
+      if (NSString *identifier = launcherTemplateForAppTemplate(argument)) {
+        if (!_creating && !_opening) {
+          [self createDocumentFromTemplate:identifier presenter:presenter];
+        }
+      }
+      else {
+        [self newDocumentFrom:presenter];
+      }
+      break;
+    }
+    case wmDocumentCommand::Open: {
+      if (argument.length == 0) {
+        /* The system's picker; the chosen file opens as its own document. */
+        UTType *blend = [UTType typeWithFilenameExtension:@"blend" conformingToType:UTTypeData];
+        UIDocumentPickerViewController *picker = [[[UIDocumentPickerViewController alloc]
+            initForOpeningContentTypes:@[ blend ]
+                                asCopy:NO] autorelease];
+        picker.delegate = self;
+        picker.allowsMultipleSelection = NO;
+        WM_native_ui_log("document", "open: the picker shown");
+        [presenter presentViewController:picker animated:YES completion:nil];
+        break;
+      }
+      NSURL *url = [NSURL fileURLWithPath:argument];
+      if (_scratch && !launcherIsScratch(url)) {
+        /* A check launch opens nothing outside its own folder (ROUND5 9D.5). */
+        WM_native_ui_log("document",
+                         [@"open not carried out outside the scratch folder: "
+                             stringByAppendingString:url.lastPathComponent]
+                             .UTF8String);
+        break;
+      }
+      if (![NSFileManager.defaultManager fileExistsAtPath:url.path]) {
+        WM_native_ui_log("document", "open: no such file");
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"Could Not Open File"
+                             message:[NSString stringWithFormat:@"“%@” could not be found.",
+                                                                url.lastPathComponent]
+                      preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:nil]];
+        [presenter presentViewController:alert animated:YES completion:nil];
+        break;
+      }
+      [self openDocumentAtURL:url];
+      break;
+    }
+    case wmDocumentCommand::Revert:
+      [document reopen:YES];
+      break;
+    case wmDocumentCommand::Save:
+      [document saveNow];
+      break;
+    case wmDocumentCommand::SaveAs:
+      wm_apple_ios_document_save_as(presenter);
+      break;
+    case wmDocumentCommand::Quit:
+      /* As ‹ does: the document saves and closes, the documents show. The app stays. */
+      if (wm_apple_ios_launcher_can_show_documents()) {
+        wm_apple_ios_launcher_show_documents(nil);
+      }
+      break;
+  }
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+    didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
+{
+  if (NSURL *url = urls.firstObject) {
+    if (_scratch && !launcherIsScratch(url)) {
+      WM_native_ui_log("document", "open not carried out outside the scratch folder");
+      return;
+    }
+    [self openDocumentAtURL:url];
+  }
+}
+
 /* Document browser. */
 
 - (void)documentBrowser:(UIDocumentBrowserViewController *)browser
@@ -957,7 +1118,12 @@ void wm_apple_ios_launcher_show_documents(id sender)
   UIDocument *document = launcher_controller.document;
   if ([document isKindOfClass:WMIOSBlendDocument.class] && document.hasUnsavedChanges) {
     /* Save first, while Blender's window is still shown for the preview. */
-    [(WMIOSBlendDocument *)document saveChangesWithCompletionHandler:^(BOOL) {
+    [(WMIOSBlendDocument *)document saveChangesWithCompletionHandler:^(BOOL success) {
+      /* Refused (ROUND5 9D.1): its alert offers to save a copy; stay until the person chooses.
+       * Asked again, the document closes, as nothing of it is left to save. */
+      if (!success && ((WMIOSBlendDocument *)document).refused) {
+        return;
+      }
       wm_apple_ios_launcher_show_documents(sender);
     }];
     return;
@@ -1003,9 +1169,171 @@ void wm_apple_ios_launcher_show_documents(id sender)
   [NSUserDefaults.standardUserDefaults removeObjectForKey:launcher_open_document_key];
 }
 
+UIViewController *wm_apple_ios_top_presenter()
+{
+  /* The shown window a person's tap would reach: the document's when it is open, the launcher's
+   * otherwise. */
+  UIWindowScene *scene = launcher_controller.view.window.windowScene;
+  UIWindow *shown = nil;
+  for (UIWindow *window in scene.windows) {
+    if (!window.hidden && (shown == nil || window.isKeyWindow)) {
+      shown = window;
+    }
+  }
+  UIViewController *top = shown.rootViewController ?: launcher_controller;
+  while (top.presentedViewController && !top.presentedViewController.isBeingDismissed) {
+    top = top.presentedViewController;
+  }
+  return top;
+}
+
+/**
+ * A check launch's `document …` steps (`Snapshots.swift`, ROUND5 9D.5), only in a check launch
+ * and only on files in its scratch folder: `copy <name>` (a fresh copy of the General template),
+ * `open <name>`, `stat <name>` (size, date and a hash), `list`, `save` (marked edited and saved
+ * now), `reopen` (as the refusal's Reopen Document), `back`; `marker`, `check` and
+ * `python <code>` run in Blender, see #WM_apple_ios_document_check_step.
+ */
+void wm_apple_ios_document_check_step(NSString *step, void (^done)(NSString *answer))
+{
+  void (^finish)(NSString *) = [[done copy] autorelease];
+  void (^say)(NSString *) = ^(NSString *answer) {
+    WM_native_ui_log("document", answer.UTF8String);
+    finish(answer);
+  };
+  if (NSProcessInfo.processInfo.environment[@"PLATYPUS_SCRATCH_DOCUMENT"] == nil) {
+    say(@"check step refused: not a check launch");
+    return;
+  }
+  NSArray<NSString *> *words = [step componentsSeparatedByString:@" "];
+  NSString *verb = words.firstObject ?: @"";
+  NSString *rest = words.count > 1 ? [step substringFromIndex:verb.length + 1] : @"";
+  const BOOL names_file = [@[ @"copy", @"open", @"stat" ] containsObject:verb];
+  NSFileManager *files = NSFileManager.defaultManager;
+  NSURL *file = names_file && rest.length ?
+                    [launcherScratchFolder() URLByAppendingPathComponent:rest] :
+                    nil;
+  WMIOSBlendDocument *document = [launcher_controller.document
+                                     isKindOfClass:WMIOSBlendDocument.class] ?
+                                     (WMIOSBlendDocument *)launcher_controller.document :
+                                     nil;
+  /* Named after the check, so cleaning up finds them and their auto-saves, see
+   * #launcherScratchRemove. */
+  if (names_file && (!file || !launcherIsScratch(file) || ![rest hasPrefix:launcher_scratch_name])) {
+    say([@"check step refused outside the scratch folder: " stringByAppendingString:step]);
+    return;
+  }
+  if ([verb isEqual:@"copy"]) {
+    NSURL *seed = nil;
+    for (NSDictionary *item in wm_apple_ios_document_templates()) {
+      if ([item[@"id"] isEqual:@"general"]) {
+        seed = item[@"url"];
+      }
+    }
+    [files removeItemAtURL:file error:nil];
+    const BOOL copied = seed && [files copyItemAtURL:seed toURL:file error:nil];
+    say([NSString stringWithFormat:@"copy %@: %@", rest, copied ? @"made" : @"failed"]);
+  }
+  else if ([verb isEqual:@"open"]) {
+    [launcher_controller openDocumentAtURL:file];
+    say([@"open " stringByAppendingString:rest]);
+  }
+  else if ([verb isEqual:@"stat"]) {
+    NSDictionary *attributes = [files attributesOfItemAtPath:file.path error:nil];
+    NSData *data = attributes ? [NSData dataWithContentsOfURL:file] : nil;
+    if (!data) {
+      say([NSString stringWithFormat:@"stat %@: no such file", rest]);
+      return;
+    }
+    /* FNV-1a over the bytes: enough to see whether a file was written again. */
+    uint64_t hash = 14695981039346656037ull;
+    const uint8_t *bytes = (const uint8_t *)data.bytes;
+    for (NSUInteger i = 0; i < data.length; i++) {
+      hash = (hash ^ bytes[i]) * 1099511628211ull;
+    }
+    NSDate *date = attributes[NSFileModificationDate];
+    say([NSString stringWithFormat:@"stat %@: %lu bytes, modified %.3f, hash %016llx",
+                                   rest,
+                                   (unsigned long)data.length,
+                                   date.timeIntervalSince1970,
+                                   (unsigned long long)hash]);
+  }
+  else if ([verb isEqual:@"list"]) {
+    NSArray *names = [[files contentsOfDirectoryAtPath:launcherScratchFolder().path error:nil]
+        sortedArrayUsingSelector:@selector(compare:)];
+    say([@"scratch folder: " stringByAppendingString:[names componentsJoinedByString:@", "]]);
+  }
+  else if ([verb isEqual:@"save"]) {
+    if (!document) {
+      say(@"save: no document open");
+      return;
+    }
+    [document updateChangeCount:UIDocumentChangeDone];
+    [document saveChangesWithCompletionHandler:^(BOOL success) {
+      say([NSString stringWithFormat:@"save of %@: %@",
+                                     document.fileURL.lastPathComponent,
+                                     success          ? @"written" :
+                                     document.refused ? @"refused" :
+                                                        @"failed"]);
+    }];
+  }
+  else if ([verb isEqual:@"reopen"]) {
+    /* As the refusal's Reopen Document: its alert goes, the document's file loads again. */
+    UIViewController *top = wm_apple_ios_top_presenter();
+    if ([top isKindOfClass:UIAlertController.class]) {
+      [top dismissViewControllerAnimated:NO completion:nil];
+    }
+    [document reopen:NO];
+    say([@"reopen " stringByAppendingString:document.fileURL.lastPathComponent ?: @"nothing"]);
+  }
+  else if ([verb isEqual:@"dismiss"]) {
+    /* What a route presented (a picker, the exporter, an alert), as Cancel would. */
+    UIViewController *top = wm_apple_ios_top_presenter();
+    if (top.presentingViewController) {
+      [top.presentingViewController dismissViewControllerAnimated:NO completion:nil];
+      say([@"dismissed " stringByAppendingString:NSStringFromClass(top.class)]);
+    }
+    else {
+      say(@"dismiss: nothing presented");
+    }
+  }
+  else if ([verb isEqual:@"back"]) {
+    wm_apple_ios_launcher_show_documents(nil);
+    say(@"back to the documents");
+  }
+  else if ([verb isEqual:@"marker"] || [verb isEqual:@"check"] || [verb isEqual:@"python"]) {
+    const std::string text = step.UTF8String;
+    /* Owned until it is called: the lambda does not retain it. */
+    void (^reply)(NSString *) = [finish copy];
+    GHOST_ios_engine_perform([text, reply](blender::bContext *C) {
+      const std::string answer = C ? blender::WM_apple_ios_document_check_step(C, text) :
+                                     std::string("no engine");
+      NSString *result = [[NSString alloc] initWithUTF8String:answer.c_str()];
+      dispatch_async(dispatch_get_main_queue(), ^{
+        reply(result);
+        [reply release];
+        [result release];
+      });
+    });
+  }
+  else {
+    say([@"unknown check step: " stringByAppendingString:step]);
+  }
+}
+
 /** \} */
 
 namespace blender {
+
+void WM_apple_ios_launcher_document_command(const wmDocumentCommand command,
+                                            const std::string &argument)
+{
+  NSString *value = [NSString stringWithUTF8String:argument.c_str()] ?: @"";
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [(WMIOSLauncherController *)WM_apple_ios_launcher_controller() documentCommand:command
+                                                                         argument:value];
+  });
+}
 
 void *WM_apple_ios_launcher_controller()
 {

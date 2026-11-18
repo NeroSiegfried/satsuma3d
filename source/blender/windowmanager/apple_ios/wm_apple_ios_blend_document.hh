@@ -18,7 +18,24 @@
  * foreground, never while being edited: writing the file and its preview would interrupt work.
  */
 - (void)saveChangesWithCompletionHandler:(void (^)(BOOL success))completionHandler;
+/** Save now, as a save along the way writes, when anything changed since the last save. */
+- (void)saveNow;
+/** Blender loads the document's file again, as when it opened; `revert` only names it so in the
+ * log (Revert has removed the auto-save first, see #WM_apple_ios_document_command). */
+- (void)reopen:(BOOL)revert;
+/** A write was refused, see #WM_apple_ios_document_write: Blender has another file loaded. */
+@property(nonatomic, readonly) BOOL refused;
 @end
+
+/**
+ * Save As (ROUND5 9D.2, decision 63): the document saved, then a copy exported where the person
+ * picks, the window staying on its document. Save a Copy when a write was refused: what is loaded,
+ * written as a copy and exported. From the shell's menu, Blender's Save As in either interface and
+ * the refusal's alert. \a presenter may be nil: the topmost view then presents.
+ */
+void wm_apple_ios_document_save_as(UIViewController *presenter);
+/** The view controller a sheet or alert is presented from: the topmost of the shown window. */
+UIViewController *wm_apple_ios_top_presenter();
 
 /**
  * Copy a validated document seed ("" aliases General) to a temporary location,
