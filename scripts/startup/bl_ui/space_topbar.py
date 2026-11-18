@@ -11,6 +11,24 @@ from bpy.app.translations import (
 )
 
 
+# Whether this is the iPad app, asked once: listing `bpy.ops.wm` on every draw of the top bar costs
+# a walk of every operator, and `hasattr` cannot tell, as any name answers there (ROUND5 9G.5).
+_IPAD_APP_OPERATORS = None
+
+
+def _ipad_app_operators():
+    """The iPad app's own window-manager operators, empty in any other build."""
+    global _IPAD_APP_OPERATORS
+    if _IPAD_APP_OPERATORS is None:
+        _IPAD_APP_OPERATORS = frozenset(
+            name for name in dir(bpy.ops.wm) if name in {"native_interface_toggle", "native_interface_scale"})
+    return _IPAD_APP_OPERATORS
+
+
+def _ipad_app():
+    return "native_interface_toggle" in _ipad_app_operators()
+
+
 class TOPBAR_HT_upper_bar(Header):
     bl_space_type = 'TOPBAR'
 
@@ -113,7 +131,7 @@ class TOPBAR_MT_editor_menus(Menu):
         # Allow calling this menu directly (this might not be a header area).
         if getattr(context.area, "show_menus", False):
             # The iPad app's menu carries its own mark: Blender's logo marks Blender files there.
-            icon = 'SATSUMA_GLYPH' if "native_interface_toggle" in dir(bpy.ops.wm) else 'BLENDER'
+            icon = 'SATSUMA_GLYPH' if _ipad_app() else 'BLENDER'
             layout.menu("TOPBAR_MT_blender", text="", icon=icon)
         else:
             layout.menu("TOPBAR_MT_blender", text="Blender")
@@ -134,7 +152,7 @@ class TOPBAR_MT_blender(Menu):
         layout = self.layout
 
         # The iPad app has no splash: its own About takes the place of both (it names the app).
-        if "native_interface_toggle" not in dir(bpy.ops.wm):
+        if not _ipad_app():
             layout.operator("wm.splash")
         layout.operator("wm.splash_about")
 
@@ -569,9 +587,9 @@ class TOPBAR_MT_window(Menu):
 
         # The iPad app switches between its own interface and this one, and sets this one's size,
         # where its own Settings may not be reachable.
-        if "native_interface_toggle" in dir(bpy.ops.wm):
+        if _ipad_app():
             layout.operator("wm.native_interface_toggle", icon='WINDOW')
-            if "native_interface_scale" in dir(bpy.ops.wm):
+            if "native_interface_scale" in _ipad_app_operators():
                 layout.operator_menu_enum("wm.native_interface_scale", "scale", text="Interface Size")
             layout.separator()
 

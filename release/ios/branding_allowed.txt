@@ -108,6 +108,6 @@ artwork ICON_BLENDER source/blender/makesrna/intern/rna_main.cc | file type: the
 artwork ICON_BLENDER source/blender/makesrna/intern/rna_space.cc | file type: the file browser's filter for the items inside Blender files | RNA_def_property_ui_icon(prop, ICON_BLENDER, 0);
 artwork ICON_BLENDER_LOGO_LARGE source/blender/windowmanager/intern/wm_splash_screen.cc | not on the iPad: Blender's About popup, which the iPad replaces by its own About (wm_splash_native_about) | ImBuf *ibuf = ui::svg_icon_bitmap(ICON_BLENDER_LOGO_LARGE, size, show_color);
 artwork ICON_BLENDER source/blender/windowmanager/intern/wm_window_csd_draw.cc | not on the iPad: window decorations Blender draws on Linux (Wayland) | ICON_BLENDER,
-artwork ICON_BLENDER scripts/startup/bl_ui/space_topbar.py | not on the iPad: desktop Blender's application menu; the iPad's carries ICON_SATSUMA_GLYPH | icon = 'SATSUMA_GLYPH' if "native_interface_toggle" in dir(bpy.ops.wm) else 'BLENDER'
+artwork ICON_BLENDER scripts/startup/bl_ui/space_topbar.py | not on the iPad: desktop Blender's application menu; the iPad's carries ICON_SATSUMA_GLYPH | icon = 'SATSUMA_GLYPH' if _ipad_app() else 'BLENDER'
 artwork ICON_BLENDER scripts/startup/bl_ui/space_userpref.py | credit: Preferences › Add-ons marks the add-ons made by Blender ("Official") | 'OFFICIAL': 'BLENDER',
 artwork ICON_BLENDER scripts/addons_core/bl_pkg/bl_extension_ui.py | credit: Preferences › Add-ons marks the add-ons that come with Blender ("Core") | 'BLENDER',  # `ADDON_TYPE_LEGACY_CORE`.
