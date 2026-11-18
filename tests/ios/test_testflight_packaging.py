@@ -361,6 +361,16 @@ class BuildScriptTest(unittest.TestCase):
             return subprocess.run(['bash', str(self.SCRIPT), str(path)], capture_output=True, text=True,
                                   timeout=60)
 
+    def test_encryption_left_to_app_store_connect(self):
+        """Decision 92 (gate G10): the tester build drops `ITSAppUsesNonExemptEncryption`, so App
+        Store Connect asks at upload; its check fails if the key is there. The development build's
+        template keeps it."""
+        text = self.SCRIPT.read_text()
+        self.assertIn("Delete :ITSAppUsesNonExemptEncryption' \"$prepared/Info.plist\"", text)
+        self.assertIn("if 'ITSAppUsesNonExemptEncryption' in info:", text)
+        template = plistlib.loads((self.SCRIPT.parent / 'Blender.app/Info.plist').read_bytes())
+        self.assertIs(template.get('ITSAppUsesNonExemptEncryption'), False)
+
     def test_refuses_the_development_identity_and_a_missing_source(self):
         result = self.run_with('BUNDLE_ID=app.example.dev\n')
         self.assertEqual(result.returncode, 1)
@@ -481,6 +491,10 @@ class IdentityTest(unittest.TestCase):
                 numpy = sorted((app / 'Frameworks').glob('numpy.*.framework'))
                 self.assertEqual(len(numpy), 19)
                 self.assertEqual(len(list(app.rglob('*.fwork'))), len(numpy))
+                if 'build_ios_testflight' in app.parts:
+                    # Decision 92: the tester build lets App Store Connect ask about encryption.
+                    info = plistlib.loads((app / 'Info.plist').read_bytes())
+                    self.assertNotIn('ITSAppUsesNonExemptEncryption', info)
 
 
 if __name__ == '__main__':

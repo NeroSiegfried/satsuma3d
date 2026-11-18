@@ -186,6 +186,11 @@ main() {
      --without-plugins) > "$logs/prepare.log" 2>&1 \
     || fail_log prepare
   tail -1 "$logs/prepare.log"
+  # Encryption (gate G10, decision 92): the app carries OpenSSL (Python's `ssl` and `hashlib`), so
+  # the tester build does not claim `ITSAppUsesNonExemptEncryption` false. Without the key, App
+  # Store Connect asks at upload and the owner answers there. The development build keeps the
+  # template's key. To be settled again before any public release.
+  /usr/libexec/PlistBuddy -c 'Delete :ITSAppUsesNonExemptEncryption' "$prepared/Info.plist" 2>/dev/null || true
 
   # 7. Checks.
   step checks
@@ -200,10 +205,12 @@ expected = {
     'CFBundleShortVersionString': version, 'CFBundleVersion': build,
     'SatsumaSourceURL': source, 'SatsumaSourceCommit': commit,
     'MinimumOSVersion': minimum, 'UIDeviceFamily': [2],
-    'CFBundleSupportedPlatforms': ['iPhoneOS'], 'ITSAppUsesNonExemptEncryption': False,
+    'CFBundleSupportedPlatforms': ['iPhoneOS'],
 }
 wrong = [f'{key} is {info.get(key)!r}, expected {value!r}' for key, value in expected.items()
          if info.get(key) != value]
+if 'ITSAppUsesNonExemptEncryption' in info:
+    wrong.append('ITSAppUsesNonExemptEncryption is present: App Store Connect must ask (decision 92)')
 if (Path(app) / 'PlugIns').exists():
     wrong.append('the app carries PlugIns (decision 36)')
 for line in wrong:
