@@ -23,6 +23,8 @@
 
 #  include "RNA_access.hh"
 
+#  include "ED_screen.hh"
+
 #  include "GHOST_IOSNativeInterface.hh"
 #  include "wm_apple_ios_alerts.hh"
 
@@ -237,6 +239,9 @@ GHOST_IOSNativeInterface ghost_interface_create()
   native.finger_tweak_active = WM_apple_ios_finger_tweak_active;
   native.finger_tweak_touch = WM_apple_ios_finger_tweak_touch;
   native.finger_tweak_holding = WM_apple_ios_finger_tweak_holding;
+  native.navigation_part_at = WM_native_ui_navigation_part_at;
+  static_assert(int(NavigationGizmoPart::CameraLock) == GHOST_kIOSNavigationCameraLock &&
+                int(NavigationGizmoPart::Axes) == GHOST_kIOSNavigationAxes);
   native.launcher_controller = WM_apple_ios_launcher_controller;
   native.window_controller = WM_apple_ios_window_controller;
   native.document_window_changed = WM_apple_ios_document_window_changed;

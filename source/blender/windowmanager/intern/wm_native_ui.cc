@@ -97,6 +97,7 @@
 #include "RNA_enum_types.hh"
 #include "RNA_prototypes.hh"
 #include "UI_resources.hh"
+#include "UI_view2d.hh"
 
 #ifdef WITH_PYTHON
 #  include "BPY_extern_run.hh"
@@ -124,6 +125,7 @@
 #endif
 
 #include <algorithm>
+#include <cfloat>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -3217,53 +3219,37 @@ void bridge_toolbar_view_build(bContext *C,
   if (has_view3d) {
     const wmWindow *win = CTX_wm_window(C);
     ARegion *region = CTX_wm_region(C);
-    rcti visible = *ED_region_visible_rect(region);
-    visible.ymin = std::max(visible.ymin, WM_native_ui_bottom_tray_ymin(win, region));
-    visible.ymax = std::min(visible.ymax, WM_native_ui_top_bar_ymax(win, region));
-    const float width = WM_window_native_pixel_x(win);
     const float height = WM_window_native_pixel_y(win);
-    const float radius = U.gizmo_size_navigate_v3d * 0.5f * U.scale_factor;
-    const float inset = radius + 10.0f * U.scale_factor;
-    if (width > 0 && height > 0) {
-      /* As `view3d_gizmo_navigate.cc` places it, over the part of the window a panel leaves
-       * showing, in whichever corner Settings has it: its center and radius in window pixels from
-       * the top left, which the shell divides by its scale. */
-      const float x = bridge_navigation_left ? visible.xmin + inset : visible.xmax - inset;
-      const float y = bridge_navigation_top ? visible.ymax - inset : visible.ymin + inset;
-      const double gizmo[3] = {region->winrct.xmin + x, height - (region->winrct.ymin + y), radius};
-      data("navigation_gizmo", Span<double>(gizmo, 3));
-
-      /* All the gizmo takes, its zoom, move, camera and projection buttons too where they show,
-       * which the native controls keep clear of: as `view3d_gizmo_navigate.cc` stacks them, a
-       * column at the view's edge leading away from the gizmo's corner, at most four. */
-      float x0 = x - radius, x1 = x + radius, y0 = y - radius, y1 = y + radius;
-      if (!bridge_navigation_minimal && (U.uiflag & USER_SHOW_GIZMO_NAVIGATE)) {
-        const float mini = (28.0f + 2.0f) * U.scale_factor;
-        float from_axis = mini * 0.75f;
-        switch (eUserpref_MiniAxisType(U.mini_axis_type)) {
-          case USER_MINI_AXIS_TYPE_GIZMO:
-            from_axis = inset * 2.2f;
-            break;
-          case USER_MINI_AXIS_TYPE_MINIMAL:
-            from_axis = (U.widget_unit * 2.0f) + (U.rvisize * U.scale_factor * 1.6f);
-            break;
-          case USER_MINI_AXIS_TYPE_NONE:
-            break;
-        }
-        const float column = bridge_navigation_left ? visible.xmin + mini * 0.75f :
-                                                      visible.xmax - mini * 0.75f;
-        const float first = bridge_navigation_top ? visible.ymax - from_axis : visible.ymin + from_axis;
-        const float last = first + (bridge_navigation_top ? -3.0f : 3.0f) * mini;
-        x0 = std::min(x0, column - mini * 0.5f);
-        x1 = std::max(x1, column + mini * 0.5f);
-        y0 = std::min({y0, first - mini * 0.5f, last - mini * 0.5f});
-        y1 = std::max({y1, first + mini * 0.5f, last + mini * 0.5f});
+    /* The navigation gizmo's parts where `view3d_gizmo_navigate.cc` placed them, the one source
+     * for where they are (ROUND5 12D, decision 79), in window pixels from the top left, which the
+     * shell divides by its scale. None before the view is first drawn, or while the gizmo is
+     * hidden: the shell then keeps clear of nothing and puts no hotspot over it. */
+    NavigationGizmoPlace parts[NAVIGATION_GIZMO_PARTS_MAX];
+    const int count = height > 0 ? ED_view3d_navigate_gizmo_parts(CTX_wm_area(C), region, parts) :
+                                   0;
+    Vector<double> places;
+    double footprint[4] = {DBL_MAX, DBL_MAX, -DBL_MAX, -DBL_MAX};
+    for (int i = 0; i < count; i++) {
+      const double x = region->winrct.xmin + parts[i].center[0];
+      const double y = height - (region->winrct.ymin + parts[i].center[1]);
+      const double r = parts[i].radius;
+      if (parts[i].part == NavigationGizmoPart::Axes) {
+        /* Its centre and radius, for the hotspot over it. */
+        const double gizmo[3] = {x, y, r};
+        data("navigation_gizmo", Span<double>(gizmo, 3));
       }
-      /* Its left, top, right and bottom in window pixels from the top left. */
-      const double footprint[4] = {region->winrct.xmin + x0,
-                                   height - (region->winrct.ymin + y1),
-                                   region->winrct.xmin + x1,
-                                   height - (region->winrct.ymin + y0)};
+      places.extend({double(parts[i].part), x, y, r});
+      /* All the gizmo takes, its buttons too where they show, which the native controls keep
+       * clear of: left, top, right and bottom. */
+      footprint[0] = std::min(footprint[0], x - r);
+      footprint[1] = std::min(footprint[1], y - r);
+      footprint[2] = std::max(footprint[2], x + r);
+      footprint[3] = std::max(footprint[3], y + r);
+    }
+    if (count > 0) {
+      /* Each part, as what it does (#NavigationGizmoPart), its centre and its radius: for the
+       * checks, which hold the footprint to them and press the buttons. */
+      data("navigation_parts", places.as_span());
       data("navigation_footprint", Span<double>(footprint, 4));
     }
   }
@@ -6140,6 +6126,129 @@ float WM_native_ui_viewport_trailing_inset()
   return bridge_viewport_trailing_inset.load();
 }
 
+/** The area of \a win's screen that holds \a region, or null. */
+static ScrArea *bridge_area_of_region(const wmWindow *win, const ARegion *region)
+{
+  const bScreen *screen = win ? WM_window_get_active_screen(win) : nullptr;
+  if (screen == nullptr || region == nullptr) {
+    return nullptr;
+  }
+  ED_screen_areas_iter (win, screen, area) {
+    if (BLI_findindex(&area->regionbase, region) != -1) {
+      return area;
+    }
+  }
+  return nullptr;
+}
+
+/* -------------------------------------------------------------------- */
+/** \name The Navigation Gizmos' Parts (ROUND5 12D, decisions 78 and 79)
+ *
+ * Where each navigation gizmo's parts were placed when its region was last drawn, in GHOST's
+ * client pixels of each window, for the window to ask on the main thread which part a touch began
+ * on: a finger or the Pencil on a button is given to Blender as a pointer. Written on Blender's
+ * loop after each draw, read under the lock.
+ * \{ */
+
+struct BridgeNavigationTarget {
+  const void *ghost_window;
+  NavigationGizmoPart part;
+  float x;
+  float y;
+  float radius;
+
+  bool operator==(const BridgeNavigationTarget &other) const
+  {
+    return ghost_window == other.ghost_window && part == other.part && x == other.x &&
+           y == other.y && radius == other.radius;
+  }
+};
+
+static std::mutex bridge_navigation_targets_mutex;
+/* A standard vector: it outlives Blender's allocator, freed as the process ends. */
+static std::vector<BridgeNavigationTarget> bridge_navigation_targets;
+
+/** The navigation gizmo's parts in \a region of \a area, whichever editor it is. */
+static int bridge_navigation_parts(const ScrArea *area,
+                                   const ARegion *region,
+                                   NavigationGizmoPlace r_parts[])
+{
+  if (area == nullptr) {
+    return 0;
+  }
+  if (area->spacetype == SPACE_VIEW3D) {
+    return ED_view3d_navigate_gizmo_parts(area, region, r_parts);
+  }
+  return ui::UI_view2d_navigate_gizmo_parts(area, region, r_parts);
+}
+
+void WM_native_ui_navigation_parts_update(bContext *C)
+{
+  wmWindowManager *wm = CTX_wm_manager(C);
+  if (wm == nullptr) {
+    return;
+  }
+  std::vector<BridgeNavigationTarget> targets;
+  for (wmWindow &win : wm->windows) {
+    const bScreen *screen = WM_window_get_active_screen(&win);
+    if (screen == nullptr || win.runtime->ghostwin == nullptr) {
+      continue;
+    }
+    ED_screen_areas_iter (&win, screen, area) {
+      for (const ARegion &region : area->regionbase) {
+        if (region.regiontype != RGN_TYPE_WINDOW || region.winx <= 1 || region.winy <= 1) {
+          continue;
+        }
+        NavigationGizmoPlace parts[NAVIGATION_GIZMO_PARTS_MAX];
+        const int count = bridge_navigation_parts(area, &region, parts);
+        for (int i = 0; i < count; i++) {
+          /* To GHOST's client pixels, as its touches come, the way the event system turns them
+           * back. */
+          int xy[2] = {int(roundf(region.winrct.xmin + parts[i].center[0])),
+                       int(roundf(region.winrct.ymin + parts[i].center[1]))};
+          int edge[2] = {int(roundf(region.winrct.xmin + parts[i].center[0] + parts[i].radius)),
+                         xy[1]};
+          wm_cursor_position_to_ghost_client_coords(&win, &xy[0], &xy[1]);
+          wm_cursor_position_to_ghost_client_coords(&win, &edge[0], &edge[1]);
+          targets.push_back({win.runtime->ghostwin,
+                          parts[i].part,
+                          float(xy[0]),
+                          float(xy[1]),
+                          float(std::max(1, edge[0] - xy[0]))});
+        }
+      }
+    }
+  }
+  bool changed = false;
+  {
+    std::lock_guard lock(bridge_navigation_targets_mutex);
+    changed = targets != bridge_navigation_targets;
+    if (changed) {
+      bridge_navigation_targets = std::move(targets);
+    }
+  }
+  if (changed) {
+    /* The toolbar says where the gizmo is, which the shell keeps clear of. */
+    views::view_type_dirty("toolbar");
+  }
+}
+
+int WM_native_ui_navigation_part_at(const void *ghost_window, const int x, const int y)
+{
+  std::lock_guard lock(bridge_navigation_targets_mutex);
+  for (const BridgeNavigationTarget &target : bridge_navigation_targets) {
+    if (target.ghost_window == ghost_window &&
+        (x - target.x) * (x - target.x) + (y - target.y) * (y - target.y) <=
+            target.radius * target.radius)
+    {
+      return int(target.part);
+    }
+  }
+  return int(NavigationGizmoPart::None);
+}
+
+/** \} */
+
 bool WM_native_ui_view3d_insets(const ARegion *region, int *r_leading, int *r_trailing)
 {
   *r_leading = 0;
@@ -6182,6 +6291,33 @@ bool WM_native_ui_view3d_frame_insets(const wmWindow *win,
   if (space == nullptr || region->runtime->type != BKE_regiontype_from_id(space, RGN_TYPE_WINDOW)) {
     return false;
   }
+  /* The navigation gizmo's column of buttons, where it was placed (ROUND5 12D.5, decision 79): its
+   * width joins the inset on its side, so nothing framed lies under a button. */
+  int column = 0;
+  {
+    NavigationGizmoPlace parts[NAVIGATION_GIZMO_PARTS_MAX];
+    const int count = ED_view3d_navigate_gizmo_parts(
+        bridge_area_of_region(win, region), region, parts);
+    float xmin = FLT_MAX, xmax = -FLT_MAX;
+    for (int i = 0; i < count; i++) {
+      if (parts[i].part != NavigationGizmoPart::Axes) {
+        xmin = std::min(xmin, parts[i].center[0] - parts[i].radius);
+        xmax = std::max(xmax, parts[i].center[0] + parts[i].radius);
+      }
+    }
+    if (xmin < xmax) {
+      const bool trailing = (xmin + xmax) * 0.5f > region->winx * 0.5f;
+      const int leading_new = trailing ? *r_leading : std::max(*r_leading, int(ceilf(xmax)));
+      const int trailing_new = trailing ? std::max(*r_trailing, region->winx - int(floorf(xmin))) :
+                                          *r_trailing;
+      /* As the sidebars' insets: while a fifth of the view at least is left showing. */
+      if (region->winx - leading_new - trailing_new >= region->winx / 5) {
+        column = (leading_new - *r_leading) + (trailing_new - *r_trailing);
+        *r_leading = leading_new;
+        *r_trailing = trailing_new;
+      }
+    }
+  }
   /* The top bar (header and tool settings row), as the navigation gizmo keeps clear of it, and
    * the band the controls along the bottom stand in (ROUND5 9G.5: the Actions button, the tool
    * button or the bottom rail, the action bar, the keyboard's bar), in window pixels from the
@@ -6194,14 +6330,15 @@ bool WM_native_ui_view3d_frame_insets(const wmWindow *win,
   const bool used = top + bottom > 0 && region->winy - top - bottom >= region->winy / 5;
   /* What framing kept clear of, and from what, as a `viewport frame` line (ROUND5 9G.4). */
   const std::string line = fmt::format(
-      "frame insets {} {} {} {} of {}x{}: top bar {} bottom controls {} bottom tray {} window {} "
-      "region {}..{}{}",
+      "frame insets {} {} {} {} of {}x{}: gizmo column {} top bar {} bottom controls {} bottom "
+      "tray {} window {} region {}..{}{}",
       *r_leading,
       *r_trailing,
       used ? top : 0,
       used ? bottom : 0,
       region->winx,
       region->winy,
+      column,
       int(bridge_top_bar.load()),
       int(bridge_bottom_controls.load()),
       int(bridge_bottom_tray.load()),

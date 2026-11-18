@@ -36,6 +36,7 @@ struct GPUSelectBuffer;
 struct ID;
 struct Main;
 struct MetaElem;
+struct NavigationGizmoPlace;
 struct Nurb;
 struct Object;
 struct RV3DMatrixStore;
@@ -911,6 +912,17 @@ float ED_view3d_radius_to_dist(const View3D *v3d,
                                char persp,
                                bool use_aspect,
                                float radius);
+
+/**
+ * The navigation gizmo's parts in \a region of \a area (a 3D View's main region): the axes and the
+ * zoom, move, camera, projection and camera lock buttons that show, where
+ * `view3d_gizmo_navigate.cc` placed them when the region was last drawn. None when the gizmo is
+ * hidden or not yet placed. The one source for where they are (ROUND5 12D, decision 79). At most
+ * #NAVIGATION_GIZMO_PARTS_MAX; returns how many.
+ */
+int ED_view3d_navigate_gizmo_parts(const ScrArea *area,
+                                   const ARegion *region,
+                                   NavigationGizmoPlace r_parts[]);
 
 #ifdef WITH_NATIVE_UI
 /**

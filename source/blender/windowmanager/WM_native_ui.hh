@@ -207,6 +207,17 @@ bool WM_native_ui_navigation_top();
  * buttons beside it) rather than Blender's own, as on the desktop. */
 bool WM_native_ui_navigation_minimal();
 bool WM_native_ui_navigation_left();
+/**
+ * Note where every navigation gizmo's parts were placed in the windows' last draw (ROUND5 12D),
+ * for #WM_native_ui_navigation_part_at. On Blender's loop, after drawing.
+ */
+void WM_native_ui_navigation_parts_update(bContext *C);
+/**
+ * Which part of a navigation gizmo (a #NavigationGizmoPart) is at \a x, \a y in the GHOST window's
+ * client pixels, as of its last draw, or none (0). Safe from any thread: the window asks it on the
+ * main thread as a touch begins.
+ */
+int WM_native_ui_navigation_part_at(const void *ghost_window, int x, int y);
 /** Whether a pointer hovers over the navigation gizmo, which then grows its axes. */
 bool WM_native_ui_navigation_hover_active();
 /** Redraw the navigation gizmo while its axes animate. */

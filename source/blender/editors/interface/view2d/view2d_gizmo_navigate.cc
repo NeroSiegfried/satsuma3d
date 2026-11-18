@@ -9,6 +9,7 @@
 #include "BLI_utildefines.h"
 
 #include "BKE_context.hh"
+#include "BKE_screen.hh"
 
 #include "ED_gizmo_library.hh"
 #include "ED_screen.hh"
@@ -21,6 +22,8 @@
 
 #include "WM_api.hh"
 #include "WM_types.hh"
+
+#include "DNA_space_types.h"
 
 #include "UI_view2d.hh"
 
@@ -62,6 +65,8 @@ struct NavigateWidgetGroup {
   struct {
     rcti rect_visible;
   } state;
+  /** The buttons have been placed once: before that their places mean nothing. */
+  bool placed;
 };
 
 }  // namespace
@@ -231,6 +236,7 @@ static void WIDGETGROUP_navigate_draw_prepare(const bContext *C, wmGizmoGroup *g
   }
 
   navgroup->state.rect_visible = *rect_visible;
+  navgroup->placed = true;
 
   const float icon_size = GIZMO_SIZE;
   const float icon_offset_mini = icon_size * GIZMO_MINI_OFFSET_FAC * UI_SCALE_FAC;
@@ -257,6 +263,80 @@ static void WIDGETGROUP_navigate_draw_prepare(const bContext *C, wmGizmoGroup *g
   gz->matrix_basis[3][0] = roundf(co[0]);
   gz->matrix_basis[3][1] = roundf(co[1] - (icon_offset_mini * icon_mini_slot++));
   WM_gizmo_set_flag(gz, WM_GIZMO_HIDDEN, false);
+}
+
+int UI_view2d_navigate_gizmo_parts(const ScrArea *area,
+                                   const ARegion *region,
+                                   NavigationGizmoPlace r_parts[])
+{
+  if (area == nullptr || region == nullptr || region->regiontype != RGN_TYPE_WINDOW ||
+      region->runtime->gizmo_map == nullptr)
+  {
+    return 0;
+  }
+  const char *idname = nullptr;
+  switch (area->spacetype) {
+    case SPACE_IMAGE:
+      idname = "IMAGE_GGT_navigate";
+      break;
+    case SPACE_CLIP:
+      idname = "CLIP_GGT_navigate";
+      break;
+    case SPACE_SEQ:
+      idname = "SEQUENCER_GGT_navigate";
+      break;
+    default:
+      return 0;
+  }
+  /* As the group's poll has it: nothing shows while the gizmos are off. */
+  if ((U.uiflag & USER_SHOW_GIZMO_NAVIGATE) == 0) {
+    return 0;
+  }
+  switch (area->spacetype) {
+    case SPACE_SEQ:
+      if (static_cast<const SpaceSeq *>(area->spacedata.first)->gizmo_flag &
+          (SEQ_GIZMO_HIDE | SEQ_GIZMO_HIDE_NAVIGATE))
+      {
+        return 0;
+      }
+      break;
+    case SPACE_IMAGE:
+      if (static_cast<const SpaceImage *>(area->spacedata.first)->gizmo_flag &
+          (SI_GIZMO_HIDE | SI_GIZMO_HIDE_NAVIGATE))
+      {
+        return 0;
+      }
+      break;
+    case SPACE_CLIP:
+      if (static_cast<const SpaceClip *>(area->spacedata.first)->gizmo_flag &
+          (SCLIP_GIZMO_HIDE | SCLIP_GIZMO_HIDE_NAVIGATE))
+      {
+        return 0;
+      }
+      break;
+  }
+  wmGizmoGroup *gzgroup = WM_gizmomap_group_find(region->runtime->gizmo_map, idname);
+  const NavigateWidgetGroup *navgroup = gzgroup ? static_cast<const NavigateWidgetGroup *>(
+                                                      gzgroup->customdata) :
+                                                  nullptr;
+  if (navgroup == nullptr || !navgroup->placed) {
+    return 0;
+  }
+  int count = 0;
+  for (int i = 0; i < GZ_INDEX_TOTAL; i++) {
+    const wmGizmo *gz = navgroup->gz_array[i];
+    if (gz->flag & WM_GIZMO_HIDDEN) {
+      continue;
+    }
+    r_parts[count].part = i == GZ_INDEX_ZOOM ? NavigationGizmoPart::Zoom :
+                                               NavigationGizmoPart::Move;
+    r_parts[count].center[0] = gz->matrix_basis[3][0];
+    r_parts[count].center[1] = gz->matrix_basis[3][1];
+    /* The radius it is drawn and picked at (#WM_GIZMOGROUPTYPE_SCALE: the interface's scale). */
+    r_parts[count].radius = gz->scale_basis * UI_SCALE_FAC;
+    count++;
+  }
+  return count;
 }
 
 void VIEW2D_GGT_navigate_impl(wmGizmoGroupType *gzgt, const char *idname)

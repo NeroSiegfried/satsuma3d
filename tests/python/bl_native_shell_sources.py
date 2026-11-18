@@ -763,6 +763,25 @@ check(ghost_text.count('orbit_gesture_id = ++') == 1 and '[self orbitBegin:true]
       '[self orbitBegin:false]' in ghost_text,
       "12A: one orbit in the window: the view's drag and the gizmo's begin it in one place")
 
+# ROUND5 12D (decisions 78, 79): where the navigation gizmo's parts are is told once, by the code
+# that places them; the footprint the shell keeps clear of and framing read that, and nothing works
+# the stacking out a second time. A finger or the Pencil that begins on a button is Blender's pointer
+# alone: routed before Tweak, the tool or navigation, and no recognizer takes it.
+toolbar_gizmo = bridge_text[bridge_text.index('/* The navigation gizmo\'s parts where'):]
+toolbar_gizmo = toolbar_gizmo[:toolbar_gizmo.index('data("navigation_footprint"')]
+check('ED_view3d_navigate_gizmo_parts(' in toolbar_gizmo and 'gizmo_size_navigate_v3d' not in toolbar_gizmo and
+      '28.0f' not in bridge_text and 'mini_axis_type' not in toolbar_gizmo,
+      "12D: the gizmo's footprint is the union of the places its group exported, not a second stacking")
+framing_12d = bridge_text[bridge_text.index('bool WM_native_ui_view3d_frame_insets('):]
+check('ED_view3d_navigate_gizmo_parts(' in framing_12d[:framing_12d.index('\n}\n')],
+      "12D: framing keeps clear of the gizmo's buttons, from the places its group exported")
+send_event = ghost_text[ghost_text.index('- (void)sendEvent:(UIEvent *)event'):]
+send_event = send_event[:send_event.index('\n}\n')]
+check(0 < send_event.find('handleNavigationButtonTouch:') < send_event.find('sendFingerTweakTouch:') and
+      'if (touch == navigation_button_touch) {\n    return NO;' in ghost_text and
+      'native->navigation_part_at(' in ghost_text,
+      "12D: a touch on a gizmo's button is routed as a pointer before anything else, and no recognizer takes it")
+
 # Found by 10A's measurement: the shell skips the first reveal it sees, so Blender publishes one
 # (number 0) before any command; otherwise the first command of a session revealed nothing.
 check('bridge_reveal_json = "{\\"number\\":0}"' in bridge_text and 'guard let seen = last else' in

@@ -33,6 +33,18 @@ enum GHOST_IOSTouchPhase {
   GHOST_kIOSTouchCancelled,
 };
 
+/** A part of a navigation gizmo, see #GHOST_IOSNativeInterface::navigation_part_at. The same
+ * values as Blender's `NavigationGizmoPart`. */
+enum GHOST_IOSNavigationPart {
+  GHOST_kIOSNavigationNone = 0,
+  GHOST_kIOSNavigationAxes,
+  GHOST_kIOSNavigationZoom,
+  GHOST_kIOSNavigationMove,
+  GHOST_kIOSNavigationCamera,
+  GHOST_kIOSNavigationProjection,
+  GHOST_kIOSNavigationCameraLock,
+};
+
 struct GHOST_IOSNativeInterface {
   /** One pass of Blender's main loop, with the interface's queued commands. */
   void (*engine_step)(blender::bContext *C) = nullptr;
@@ -68,6 +80,13 @@ struct GHOST_IOSNativeInterface {
    * landed that Blender has yet to look under, which may.
    */
   int (*finger_tweak_holding)(bool *r_landing) = nullptr;
+
+  /**
+   * Which part of a navigation gizmo lies at \a x, \a y, in \a window's client pixels (the
+   * window as a `GHOST_IWindow *`), as Blender last drew it: a #GHOST_IOSNavigationPart. A finger
+   * or the Pencil that begins on one is given to Blender as a pointer (ROUND5 12D).
+   */
+  int (*navigation_part_at)(const void *window, int x, int y) = nullptr;
 
   /** `UIViewController *`: the first window's content, before a document opens. */
   void *(*launcher_controller)() = nullptr;
@@ -142,6 +161,13 @@ void GHOST_ios_window_hold_modifier(GHOST_WindowIOS *window, GHOST_TKey key, boo
                          at:(CGPoint)point
                 translation:(CGPoint)translation
                    velocity:(CGPoint)velocity;
+/**
+ * A touch on one of a navigation gizmo's parts that Blender's own gizmo answers (ROUND5 12D,
+ * decision 78): given to Blender as a pointer's press, moves and release, as a mouse's on the
+ * desktop. \a phase: 0 began, 1 moved, 2 ended, 3 cancelled; \a point in the view's points.
+ * Whether it was taken: at its beginning, only on a part, and the input gate may refuse it.
+ */
+- (BOOL)navigationButtonTouch:(int)phase at:(CGPoint)point;
 @end
 
 UIWindow<GHOST_IOSInputWindow> *GHOST_ios_window_native(GHOST_WindowIOS *window);

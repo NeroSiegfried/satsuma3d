@@ -240,6 +240,14 @@ extern "C" bool wm_apple_ios_window_navigation_drag(
                                                                              velocity:velocity];
 }
 
+extern "C" bool wm_apple_ios_window_navigation_button(void *window,
+                                                      const int phase,
+                                                      const CGPoint point)
+{
+  return window && [GHOST_ios_window_native(ghost_window(window)) navigationButtonTouch:phase
+                                                                                     at:point];
+}
+
 extern "C" void wm_apple_ios_window_cancel_pencil_stroke(void *window)
 {
   if (window) {

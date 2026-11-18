@@ -91,6 +91,8 @@ struct NavigateWidgetGroup {
     /** The corner the native iPad interface has it in. */
     int corner;
   } state;
+  /** The parts have been placed once: before that their places mean nothing. */
+  bool placed;
 };
 
 }  // namespace
@@ -172,6 +174,7 @@ static bool WIDGETGROUP_navigate_poll(const bContext *C, wmGizmoGroupType * /*gz
 static void WIDGETGROUP_navigate_setup(const bContext *C, wmGizmoGroup *gzgroup)
 {
   NavigateWidgetGroup *navgroup = MEM_new<NavigateWidgetGroup>(__func__);
+  navgroup->placed = false;
 
   wmOperatorType *ot_view_axis = WM_operatortype_find("VIEW3D_OT_view_axis", true);
   wmOperatorType *ot_view_camera = WM_operatortype_find("VIEW3D_OT_view_camera", true);
@@ -338,6 +341,7 @@ static void WIDGETGROUP_navigate_draw_prepare(const bContext *C, wmGizmoGroup *g
     return;
   }
 
+  navgroup->placed = true;
   navgroup->state.rect_visible = *rect_visible;
   navgroup->state.corner = corner;
   navgroup->state.rv3d.is_persp = rv3d->is_persp;
@@ -461,6 +465,71 @@ static void WIDGETGROUP_navigate_draw_prepare(const bContext *C, wmGizmoGroup *g
       WM_gizmo_set_flag(gz, WM_GIZMO_HIDDEN, false);
     }
   }
+}
+
+/** What each gizmo of the group does, by its index. */
+static NavigationGizmoPart navigate_part(const int index)
+{
+  switch (index) {
+    case GZ_INDEX_MOVE:
+      return NavigationGizmoPart::Move;
+    case GZ_INDEX_ROTATE:
+      return NavigationGizmoPart::Axes;
+    case GZ_INDEX_ZOOM:
+      return NavigationGizmoPart::Zoom;
+    case GZ_INDEX_PERSP:
+    case GZ_INDEX_ORTHO:
+      return NavigationGizmoPart::Projection;
+    case GZ_INDEX_CAMERA_OFF:
+    case GZ_INDEX_CAMERA_ON:
+      return NavigationGizmoPart::Camera;
+    case GZ_INDEX_CAMERA_LOCK:
+    case GZ_INDEX_CAMERA_UNLOCK:
+      return NavigationGizmoPart::CameraLock;
+    default:
+      return NavigationGizmoPart::None;
+  }
+}
+
+int ED_view3d_navigate_gizmo_parts(const ScrArea *area,
+                                   const ARegion *region,
+                                   NavigationGizmoPlace r_parts[])
+{
+  if (area == nullptr || area->spacetype != SPACE_VIEW3D || region == nullptr ||
+      region->regiontype != RGN_TYPE_WINDOW || region->runtime->gizmo_map == nullptr)
+  {
+    return 0;
+  }
+  /* As the group's poll has it: nothing shows while the gizmos are off. */
+  const View3D *v3d = static_cast<const View3D *>(area->spacedata.first);
+  if ((((U.uiflag & USER_SHOW_GIZMO_NAVIGATE) == 0) &&
+       (U.mini_axis_type != USER_MINI_AXIS_TYPE_GIZMO)) ||
+      (v3d->gizmo_flag & (V3D_GIZMO_HIDE | V3D_GIZMO_HIDE_NAVIGATE)))
+  {
+    return 0;
+  }
+  wmGizmoGroup *gzgroup = WM_gizmomap_group_find(region->runtime->gizmo_map,
+                                                 "VIEW3D_GGT_navigate");
+  const NavigateWidgetGroup *navgroup = gzgroup ? static_cast<const NavigateWidgetGroup *>(
+                                                      gzgroup->customdata) :
+                                                  nullptr;
+  if (navgroup == nullptr || !navgroup->placed) {
+    return 0;
+  }
+  int count = 0;
+  for (int i = 0; i < GZ_INDEX_TOTAL && count < NAVIGATION_GIZMO_PARTS_MAX; i++) {
+    const wmGizmo *gz = navgroup->gz_array[i];
+    if (gz->flag & WM_GIZMO_HIDDEN) {
+      continue;
+    }
+    /* The radius it is drawn and picked at (#WM_GIZMOGROUPTYPE_SCALE: the interface's scale). */
+    r_parts[count].part = navigate_part(i);
+    r_parts[count].center[0] = gz->matrix_basis[3][0];
+    r_parts[count].center[1] = gz->matrix_basis[3][1];
+    r_parts[count].radius = gz->scale_basis * UI_SCALE_FAC;
+    count++;
+  }
+  return count;
 }
 
 void VIEW3D_GGT_navigate(wmGizmoGroupType *gzgt)

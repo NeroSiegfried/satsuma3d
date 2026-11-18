@@ -1395,10 +1395,48 @@ def tick_extensions():
     return 0.3
 
 
-def _gizmo_x():
+def _toolbar_floats(key):
     top = tree(subs["toolbar"]) or {}
-    node = next((n for n in top.get("children", []) if n["key"] == "navigation_gizmo"), None)
-    return node["value"][0] if node and isinstance(node.get("value"), list) else None
+    node = next((n for n in top.get("children", []) if n["key"] == key), None)
+    return node["value"] if node and isinstance(node.get("value"), list) else None
+
+
+def _gizmo_x():
+    gizmo = _toolbar_floats("navigation_gizmo")
+    return gizmo[0] if gizmo else None
+
+
+def _parts():
+    """ROUND5 12D: the navigation gizmo's parts as Blender placed them and the toolbar sends them:
+    [kind, x, y, radius] in window pixels from the top left (kind 1 the axes, 2 zoom, 3 move, 4 camera,
+    5 projection, 6 camera lock)."""
+    values = _toolbar_floats("navigation_parts") or []
+    return [values[i:i + 4] for i in range(0, len(values) - 3, 4)]
+
+
+def _column():
+    """The gizmo's column of buttons across the region, (left, right) in region pixels, or None."""
+    region = _region()
+    buttons = [p for p in _parts() if p[0] != 1]
+    if not buttons:
+        return None
+    return (min(p[1] - p[3] for p in buttons) - region.x, max(p[1] + p[3] for p in buttons) - region.x)
+
+
+def _clear_insets(insets, width, column):
+    """ROUND5 12D.5: framing adds the gizmo's column to the inset on its side, as
+    `WM_native_ui_view3d_frame_insets` does, while a fifth of the view is left showing."""
+    import math
+    leading, trailing = insets[0], insets[1]
+    if column:
+        left, right = column
+        if (left + right) / 2.0 > width / 2.0:
+            new = (leading, max(trailing, width - math.floor(left)))
+        else:
+            new = (max(leading, math.ceil(right)), trailing)
+        if width - new[0] - new[1] >= width // 5:
+            leading, trailing = new
+    return (leading, trailing) + tuple(insets[2:])
 
 
 def _frame_selected():
@@ -1444,13 +1482,14 @@ def tick_insets():
             # The iPad interface, as the app registers it: without it Blender's own is all there is.
             lib.WM_native_ui_test_install_hooks()
             subs["toolbar"] = subscribe("toolbar")
+            subs["settings"] = subscribe("settings")
             enter("object")
             report["default_view"] = list(_view3d()[2].data.view_rotation)
             for ob in bpy.context.view_layer.objects:
                 ob.select_set(ob.name == "Cube")
             bpy.context.view_layer.objects.active = bpy.data.objects["Cube"]
         elif step == 4:
-            report["before"] = {"size": size, "gizmo_x": _gizmo_x(), "frame": _frame_selected()}
+            report["before"] = {"size": size, "gizmo_x": _gizmo_x(), "column": _column(), "frame": _frame_selected()}
         elif step == 7:
             report["before"]["centre"] = _shown_centre()
             report["insets"] = [int(size[0] * 0.3), int(size[0] * 0.25)]
@@ -1461,24 +1500,29 @@ def tick_insets():
             lib.WM_native_ui_top_bar_set(ctypes.c_float(report["bars"][0] + _region_top_gap()))
             lib.WM_native_ui_bottom_tray_set(ctypes.c_float(report["bars"][1] + _region().y))
         elif step == 10:
-            report["with"] = {"size": size, "gizmo_x": _gizmo_x(), "frame": _frame_selected()}
+            report["with"] = {"size": size, "gizmo_x": _gizmo_x(), "column": _column(), "frame": _frame_selected()}
         elif step == 13:
             report["with"]["centre"] = _shown_centre()
             lib.WM_native_ui_viewport_insets_set(ctypes.c_float(0), ctypes.c_float(0))
             lib.WM_native_ui_top_bar_set(ctypes.c_float(0))
             lib.WM_native_ui_bottom_tray_set(ctypes.c_float(0))
         elif step == 16:
-            report["after"] = {"size": size, "gizmo_x": _gizmo_x(), "frame": _frame_selected()}
+            report["after"] = {"size": size, "gizmo_x": _gizmo_x(), "column": _column(), "parts": _parts(),
+                               "frame": _frame_selected()}
         elif step == 19:
             report["after"]["centre"] = _shown_centre()
             before, inset, after = report["before"], report["with"], report["after"]
             leading, trailing = report["insets"]
             top, bottom = report["bars"]
             width, height = before["size"]
-            shown = width - leading - trailing
+            # Framing keeps clear of the gizmo's column of buttons too (ROUND5 12D.5).
+            before_leading, before_trailing = _clear_insets((0, 0), width, before["column"])
+            clear_leading, clear_trailing = _clear_insets((leading, trailing), width, inset["column"])
+            shown = width - clear_leading - clear_trailing
             shown_y = height - top - bottom
-            expected_x = (leading + width - trailing) / 2.0
+            expected_x = (clear_leading + width - clear_trailing) / 2.0
             expected_y = (bottom + height - top) / 2.0
+            expected_x0 = (before_leading + width - before_trailing) / 2.0
             ratio = min(width, height) / min(shown, shown_y)
             problems = []
             if inset["size"] != before["size"] or after["size"] != before["size"]:
@@ -1488,20 +1532,24 @@ def tick_insets():
                                 (before["gizmo_x"], inset["gizmo_x"]))
             if after["gizmo_x"] != before["gizmo_x"]:
                 problems.append("the gizmo did not come back: %s -> %s" % (before["gizmo_x"], after["gizmo_x"]))
-            if not before["centre"] or abs(before["centre"][0] - width / 2.0) > 2:
-                problems.append("without insets the cube is not framed in the middle: %s" % before["centre"])
+            if not before["centre"] or abs(before["centre"][0] - expected_x0) > 2:
+                problems.append("without insets the cube is not framed in the middle of what shows: %s, expected %.1f" %
+                                (before["centre"], expected_x0))
             if not inset["centre"] or abs(inset["centre"][0] - expected_x) > 3 or \
                     abs(inset["centre"][1] - expected_y) > 3:
                 problems.append("with insets the cube is not in the middle of what shows: %s, expected %.1f, %.1f" %
                                 (inset["centre"], expected_x, expected_y))
             # How far is the corner fit's business (ROUND5 9G.5): the cases below.
             if abs(after["frame"]["distance"] - before["frame"]["distance"]) > 1e-4 or not after["centre"] or \
-                    abs(after["centre"][0] - width / 2.0) > 2:
+                    abs(after["centre"][0] - expected_x0) > 2:
                 problems.append("without insets again the framing is not as before")
             report.update(expected_x=expected_x, expected_y=expected_y, expected_ratio=ratio, problems=problems)
             _fit_setup()
-        elif step >= 20:
+        elif step >= 20 and "fit_failed" not in report:
             if _fit_tick(step - 20):
+                report["footprint_from"] = step + 1
+        elif step >= 20:
+            if _footprint_tick(step - report["footprint_from"]):
                 finish("done" if not report["problems"] else "error")
                 return None
     except Exception:
@@ -1618,13 +1666,15 @@ def _fit_tick(index):
         rv3d.view_location = (3.0, -2.0, 1.0)
         return False
     if phase == 2:
+        case["column"] = _column()
         case["frame"] = _frame_selected()
         return False
     if phase < FIT_TICKS - 1:
         return False
     if rv3d.is_perspective != (case["persp"] == "PERSP"):
         report["problems"].append("the view did not take %s before framing" % case["persp"])
-    leading, trailing, top, bottom = insets
+    # The gizmo's column of buttons joins the inset on its side (ROUND5 12D.5).
+    leading, trailing, top, bottom = _clear_insets(insets, size[0], case["column"])
     shown = (size[0] - leading - trailing, size[1] - top - bottom)
     points = [location_3d_to_region_2d(region, rv3d, c) for c in _fit_box(ob)]
     result = dict(case, distance=round(rv3d.view_distance, 4), region=size, clear=[leading, bottom, size[0] - trailing,
@@ -1656,6 +1706,73 @@ def _fit_tick(index):
             result["problems"].append("not Blender's own distance: %.4f, expected %.4f" % (rv3d.view_distance, expected))
     report["fit"].append(result)
     return False
+
+
+# ROUND5 12D (decision 79): where the navigation gizmo's parts are is told once, by the code that
+# places them. In both styles and all four corners: the footprint the shell keeps clear of is the
+# union of the parts, the hotspot's circle is the axes', the parts stand in the chosen corner, and the
+# minimal style shows the axes alone.
+FOOTPRINT_TICKS = 5
+CORNERS = ("bottom_right", "bottom_left", "top_right", "top_left")
+
+
+def _footprint_tick(index):
+    cases = [(style, corner) for style in ("blender", "minimal") for corner in CORNERS]
+    case_index, phase = divmod(index, FOOTPRINT_TICKS)
+    command = 9000 + index
+    if case_index >= len(cases):
+        if phase == 0:
+            set_text(subs["settings"], "navigation_style", "blender", command)
+            set_text(subs["settings"], "navigation_corner", "bottom_right", command + 500)
+        if phase < FOOTPRINT_TICKS - 1:
+            return False
+        return True
+    style, corner = cases[case_index]
+    if phase == 0:
+        set_text(subs["settings"], "navigation_style", style, command)
+        set_text(subs["settings"], "navigation_corner", corner, command + 500)
+        return False
+    if phase < FOOTPRINT_TICKS - 1:
+        return False
+    region = _region()
+    parts = _parts()
+    footprint = _toolbar_floats("navigation_footprint")
+    gizmo = _toolbar_floats("navigation_gizmo")
+    result = {"style": style, "corner": corner, "parts": parts, "footprint": footprint, "gizmo": gizmo,
+              "problems": []}
+    kinds = sorted(int(p[0]) for p in parts)
+    if style == "minimal" and kinds != [1]:
+        result["problems"].append("the minimal gizmo shows parts other than the axes: %s" % kinds)
+    if style == "blender" and not {1, 2, 3, 4}.issubset(kinds):
+        result["problems"].append("Blender's gizmo lacks its axes, zoom, move or camera: %s" % kinds)
+    if not parts or not footprint:
+        result["problems"].append("no parts or no footprint sent")
+    else:
+        union = [min(p[1] - p[3] for p in parts), min(p[2] - p[3] for p in parts),
+                 max(p[1] + p[3] for p in parts), max(p[2] + p[3] for p in parts)]
+        if any(abs(a - b) > 0.5 for a, b in zip(union, footprint)):
+            result["problems"].append("the footprint %s is not the union of the parts %s" % (footprint, union))
+        axes = next((p for p in parts if p[0] == 1), None)
+        if not axes or not gizmo or any(abs(a - b) > 0.5 for a, b in zip(axes[1:], gizmo)):
+            result["problems"].append("the hotspot's circle %s is not the axes' %s" % (gizmo, axes))
+        # In the chosen corner: window pixels from the top left, the region from its own corner.
+        top_px = _toolbar_window_height() - (region.y + region.height)
+        middle = (region.x + region.width / 2.0, top_px + region.height / 2.0)
+        for p in parts:
+            right, below = p[1] > middle[0], p[2] > middle[1]
+            if right != corner.endswith("right") or below != corner.startswith("bottom"):
+                result["problems"].append("part %d at %.0f,%.0f is not in the %s corner" % (p[0], p[1], p[2], corner))
+                break
+    report.setdefault("footprints", []).append(result)
+    report["problems"] += ["footprint %s %s: %s" % (style, corner, "; ".join(result["problems"]))
+                           for _ in [0] if result["problems"]]
+    return False
+
+
+def _toolbar_window_height():
+    """The window's height in pixels: where its highest region ends."""
+    window = _view3d()[0]
+    return max(r.y + r.height for area in window.screen.areas for r in area.regions)
 
 
 bpy.app.timers.register({"material": tick_material, "insets": tick_insets, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror,

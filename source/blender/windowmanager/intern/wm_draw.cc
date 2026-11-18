@@ -63,6 +63,9 @@
 #include "WM_toolsystem.hh"
 #include "WM_types.hh"
 #include "wm.hh"
+#ifdef WITH_NATIVE_UI
+#  include "WM_native_ui.hh"
+#endif
 #include "wm_draw.hh"
 #include "wm_event_system.hh"
 #include "wm_surface.hh"
@@ -1699,6 +1702,11 @@ void wm_draw_update(bContext *C)
   GPU_context_main_unlock();
 
   CTX_rna_disallow_write_set_p(C, nullptr);
+
+#ifdef WITH_NATIVE_UI
+  /* Where the navigation gizmos were just placed, for touches that begin on them (ROUND5 12D). */
+  WM_native_ui_navigation_parts_update(C);
+#endif
 }
 
 void wm_draw_region_clear(wmWindow *win, ARegion * /*region*/)

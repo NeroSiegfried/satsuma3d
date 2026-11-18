@@ -64,6 +64,11 @@ bool wm_apple_ios_window_navigation_drag(void *_Nullable window,
                                          CGPoint point,
                                          CGPoint translation,
                                          CGPoint velocity);
+/** A touch on one of the navigation gizmo's buttons (ROUND5 12D), given to Blender as a pointer:
+ * \a phase 0 began, 1 moved, 2 ended, 3 cancelled, at \a point in the window's points, as the
+ * window sends a finger's that begins there. False when no part is there or the input gate
+ * refused it. */
+bool wm_apple_ios_window_navigation_button(void *_Nullable window, int phase, CGPoint point);
 /** End the Pencil's stroke, cancelling its tool, when a control takes the touch. */
 void wm_apple_ios_window_cancel_pencil_stroke(void *_Nullable window);
 /** One of Blender's icons by key (such as `tool.object.builtin.move`), or the symbol. */

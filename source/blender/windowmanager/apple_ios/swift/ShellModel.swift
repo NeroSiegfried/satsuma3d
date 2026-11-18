@@ -258,6 +258,10 @@ final class ShellModel {
   /** All the navigation gizmo takes with its buttons, in window pixels from the top left: left,
    * top, right and bottom. */
   var navigationFootprint: [Double] { floats("navigation_footprint") }
+  /** Each part of the navigation gizmo, where Blender placed it (ROUND5 12D): what it is (Blender's
+   * `NavigationGizmoPart`: 1 the axes, 2 zoom, 3 move, 4 camera, 5 projection, 6 camera lock), its
+   * centre and its radius, in window pixels from the top left, four numbers a part. */
+  var navigationParts: [Double] { floats("navigation_parts") }
   /** Window points per pixel Blender draws: the window's display scale. */
   var pointScale: CGFloat = 2
 

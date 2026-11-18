@@ -22,6 +22,7 @@ namespace blender {
 struct View2D;
 
 struct ARegion;
+struct NavigationGizmoPlace;
 struct Scene;
 struct ScrArea;
 struct bContext;
@@ -504,6 +505,15 @@ void view2d_smooth_view(const bContext *C, ARegion *region, const rctf *cur, int
  * Caller defines the name for gizmo group.
  */
 void VIEW2D_GGT_navigate_impl(wmGizmoGroupType *gzgt, const char *idname);
+
+/**
+ * The navigation gizmo's buttons in \a region of \a area (an Image Editor, a Movie Clip Editor or
+ * the Sequencer), where it placed them when the region was last drawn: none when it is hidden or
+ * not yet placed. At most #NAVIGATION_GIZMO_PARTS_MAX; returns how many.
+ */
+int UI_view2d_navigate_gizmo_parts(const ScrArea *area,
+                                   const ARegion *region,
+                                   NavigationGizmoPlace r_parts[]);
 
 /** \} */
 

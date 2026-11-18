@@ -51,6 +51,31 @@ struct Block;
 enum class ButtonSectionsAlign : int8_t;
 }  // namespace ui
 
+/** What a part of a navigation gizmo does: the 3D View's axes and buttons, a 2D view's buttons. */
+enum class NavigationGizmoPart : int8_t {
+  None = 0,
+  Axes,
+  Zoom,
+  Move,
+  Camera,
+  Projection,
+  CameraLock,
+};
+
+/**
+ * A part of a navigation gizmo where its group placed it when the region was last drawn: the
+ * circle it takes in the region's pixels. Read by the touch interface (ROUND5 12D, decision 79),
+ * which keeps clear of the parts and gives a touch that begins on one to Blender as a pointer.
+ */
+struct NavigationGizmoPlace {
+  NavigationGizmoPart part;
+  float center[2];
+  float radius;
+};
+
+/** The most parts a navigation gizmo shows at once. */
+#define NAVIGATION_GIZMO_PARTS_MAX 8
+
 /* regions */
 /** Only exported for WM. */
 void ED_region_do_listen(wmRegionListenerParams *params);

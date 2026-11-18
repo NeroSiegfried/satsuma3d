@@ -695,6 +695,10 @@ UIWindow *document_window = nil;
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
        shouldReceiveTouch:(UITouch *)touch
 {
+  /* A touch on a navigation gizmo's button is Blender's pointer alone (ROUND5 12D). */
+  if (touch == navigation_button_touch) {
+    return NO;
+  }
   if (finger_tool_enabled &&
       (gestureRecognizer == pan_gesture_recognizer || gestureRecognizer == tap_gesture_recognizer))
   {
@@ -998,7 +1002,8 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
     NSUInteger fingers = 0;
     for (UITouch *touch in event.allTouches) {
       if (touch.type == UITouchTypeDirect && touch.phase != UITouchPhaseEnded &&
-          touch.phase != UITouchPhaseCancelled && [self touchBeganInBlenderViewport:touch])
+          touch.phase != UITouchPhaseCancelled && touch != navigation_button_touch &&
+          [self touchBeganInBlenderViewport:touch])
       {
         fingers++;
       }
@@ -1023,6 +1028,13 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
       }
       if (touch.type == UITouchTypeIndirectPointer) {
         [self handlePointerTouch:touch event:event];
+        continue;
+      }
+      /* On a navigation gizmo's button: a pointer's press, moves and release, before any tool,
+       * Tweak or navigation can take it (ROUND5 12D). */
+      if ((touch.type == UITouchTypeDirect || touch.type == UITouchTypePencil) &&
+          [self handleNavigationButtonTouch:touch event:event])
+      {
         continue;
       }
       if (touch.type == UITouchTypeDirect && [self sendFingerTweakTouch:touch
@@ -1666,7 +1678,149 @@ static GHOST_TButton pointer_button(int index)
   }
   pointer_buttons = 0;
   pointer_touch = nil;
+  navigation_button_touch = nil;
+  navigation_button_active = false;
 }
+
+/* -------------------------------------------------------------------- */
+/** \name A navigation gizmo's buttons (ROUND5 12D, decision 78)
+ *
+ * A finger or the Pencil that begins on one of a navigation gizmo's buttons is given to Blender
+ * as a pointer's press, moves and release, for as long as the touch lasts, as a mouse's on the
+ * desktop: Blender's own button then zooms, pans or toggles, about the view's centre. No tablet
+ * data, no orbit, no pan, no pinch for that touch. Blender says which part is where
+ * (#GHOST_IOSNativeInterface::navigation_part_at). The 3D View's axes keep the shell's hotspot in
+ * the iPad interface, whose touches never begin on this view; where there is none, as in
+ * Blender's own interface, the axes are answered the same way.
+ * \{ */
+
+static NSString *ios_navigation_part_name(const int part)
+{
+  switch (part) {
+    case GHOST_kIOSNavigationAxes:
+      return @"axes";
+    case GHOST_kIOSNavigationZoom:
+      return @"zoom";
+    case GHOST_kIOSNavigationMove:
+      return @"move";
+    case GHOST_kIOSNavigationCamera:
+      return @"camera";
+    case GHOST_kIOSNavigationProjection:
+      return @"projection";
+    case GHOST_kIOSNavigationCameraLock:
+      return @"camera lock";
+    default:
+      return @"none";
+  }
+}
+
+- (BOOL)navigationButtonTouch:(int)phase at:(CGPoint)point
+{
+  if (!window || !system) {
+    return NO;
+  }
+  if (phase == 0) {
+    navigation_button_active = false;
+    const CGPoint pixels = window->scalePointToWindow(point);
+    const GHOST_IOSNativeInterface *native = GHOST_ios_native_interface();
+    const int part = native && native->navigation_part_at ?
+                         native->navigation_part_at(static_cast<GHOST_IWindow *>(window),
+                                                    int(pixels.x),
+                                                    int(pixels.y)) :
+                         int(GHOST_kIOSNavigationNone);
+    if (part == GHOST_kIOSNavigationNone) {
+      return NO;
+    }
+    /* The input gate (ROUND5 9G.1), as every other input asks it. */
+    if (NSString *reason = [self blockedReason]) {
+      [self inputBehind:@"gizmo button"
+                 reason:reason
+                     at:[window->getView() convertPoint:point toView:self]];
+      return NO;
+    }
+    [self stopOrbitMomentum];
+    ios_pencil_hover(false, 0, 0);
+    navigation_button_active = true;
+    navigation_button_part = part;
+    navigation_button_start = point;
+    navigation_button_last = point;
+    [self sendPointerMove:point];
+    [self sendPointerButtons:UIEventButtonMaskPrimary];
+    return YES;
+  }
+  if (!navigation_button_active) {
+    return NO;
+  }
+  if (phase == 1 || phase == 2) {
+    navigation_button_last = point;
+    [self sendPointerMove:point];
+  }
+  if (phase == 1) {
+    return YES;
+  }
+  /* One line a gesture, at its end (ROUND5 12C.1, 12D.6). */
+  const CGFloat dx = navigation_button_last.x - navigation_button_start.x;
+  const CGFloat dy = navigation_button_last.y - navigation_button_start.y;
+  NSString *gesture = hypot(dx, dy) < 10.0 ?
+                          @"tap" :
+                          [NSString stringWithFormat:@"drag %d,%d pt", int(dx), int(dy)];
+  ios_log(@"gizmo",
+          [NSString stringWithFormat:@"%@ %@%@",
+                                     ios_navigation_part_name(navigation_button_part),
+                                     gesture,
+                                     phase == 3 ? @" (cancelled)" : @""]);
+  if (phase == 3) {
+    [self releasePointerButtons];
+  }
+  else {
+    [self sendPointerButtons:0];
+  }
+  navigation_button_active = false;
+  /* Blender's highlight stays under no finger. */
+  [self parkPointer];
+  return YES;
+}
+
+/** A finger or the Pencil on a navigation gizmo's button: true when it is that touch, which
+ * nothing else then takes. */
+- (BOOL)handleNavigationButtonTouch:(UITouch *)touch event:(UIEvent *)event
+{
+  if (touch.phase == UITouchPhaseBegan) {
+    if (navigation_button_touch != nil || touch.view != window->getView() ||
+        ![self touchBeganInBlenderViewport:touch] ||
+        ![self navigationButtonTouch:0 at:[touch preciseLocationInView:window->getView()]])
+    {
+      return NO;
+    }
+    navigation_button_touch = touch;
+    return YES;
+  }
+  if (touch != navigation_button_touch) {
+    return NO;
+  }
+  switch (touch.phase) {
+    case UITouchPhaseMoved: {
+      NSArray<UITouch *> *samples = [event coalescedTouchesForTouch:touch];
+      for (UITouch *sample in samples.count ? samples : @[ touch ]) {
+        [self navigationButtonTouch:1 at:[sample preciseLocationInView:window->getView()]];
+      }
+      break;
+    }
+    case UITouchPhaseEnded:
+      navigation_button_touch = nil;
+      [self navigationButtonTouch:2 at:[touch preciseLocationInView:window->getView()]];
+      break;
+    case UITouchPhaseCancelled:
+      navigation_button_touch = nil;
+      [self navigationButtonTouch:3 at:[touch preciseLocationInView:window->getView()]];
+      break;
+    default:
+      break;
+  }
+  return YES;
+}
+
+/** \} */
 
 - (void)handleTrackpadScroll:(UIPanGestureRecognizer *)sender
 {

@@ -308,6 +308,45 @@ enum ShellSnapshots {
       case "gizmo":
         /* ROUND5 12A/12B: what the gizmo's recognizers call, not the recognizers. `gizmo drag <dx>
          * <dy>`: a drag from the gizmo of that many points; `gizmo hold`; `gizmo release`. */
+        /* ROUND5 12D: `gizmo <zoom|move|camera|projection|lock> tap` and `… drag <dx> <dy>`: what
+         * the window sends for a finger that begins on that button, through its entry. */
+        let buttons = ["axes": 1.0, "zoom": 2.0, "move": 3.0, "camera": 4.0, "projection": 5.0, "lock": 6.0]
+        if let name = words.first, let kind = buttons[name], let model = ShellModel.current {
+          /* `words` holds at most three: the drag's numbers are split again here. */
+          let words = Array(step.split(separator: " ").map(String.init).dropFirst())
+          let parts = model.navigationParts
+          let scale = Double(model.pointScale)
+          guard let index = stride(from: 0, to: parts.count - 3, by: 4).first(where: { parts[$0] == kind }),
+                scale > 0 else {
+            WM_native_ui_log("snapshot", "gizmo \(name): not shown")
+            break
+          }
+          let start = CGPoint(x: parts[index + 1] / scale, y: parts[index + 2] / scale)
+          var end = start
+          if words.count >= 4, words[1] == "drag", let dx = Double(words[2]), let dy = Double(words[3]) {
+            end = CGPoint(x: start.x + dx, y: start.y + dy)
+          }
+          else if words.count < 2 || words[1] != "tap" {
+            WM_native_ui_log("snapshot", "unknown step: \(step)")
+            break
+          }
+          if !wm_apple_ios_window_navigation_button(model.window, 0, start) {
+            WM_native_ui_log("snapshot", "gizmo \(name): not taken")
+            break
+          }
+          let moves = end == start ? 0 : 20
+          for i in stride(from: 1, through: moves, by: 1) {
+            try? await Task.sleep(for: .milliseconds(16))
+            let t = Double(i) / Double(moves)
+            _ = wm_apple_ios_window_navigation_button(
+              model.window, 1, CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t))
+          }
+          try? await Task.sleep(for: .milliseconds(50))
+          _ = wm_apple_ios_window_navigation_button(model.window, 2, end)
+          WM_native_ui_log("snapshot", step)
+          try? await Task.sleep(for: .seconds(1))
+          break
+        }
         guard let model = ShellModel.current, let gizmo = ViewGizmoState.current else {
           WM_native_ui_log("snapshot", "gizmo: no gizmo shown")
           break

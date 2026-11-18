@@ -9,6 +9,10 @@
  * view's centre (ROUND5 12A). Only a hold opens the pie, and sliding to a view and letting go
  * chooses it (12B). The Pencil's touches on the hotspot go to the window, which tells them apart by
  * the hotspot's identifier: a tap and a hold as a finger's, a drag the same orbit.
+ *
+ * The zoom, move, camera, projection and camera lock buttons beside it have no hotspot: the window
+ * asks Blender which part a touch begins on and gives a finger or the Pencil there to Blender as a
+ * pointer, so its own buttons zoom, pan and toggle as a mouse makes them on the desktop (12D).
  */
 
 import SwiftUI

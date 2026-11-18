@@ -231,6 +231,14 @@ typedef struct UserInputEvent {
   bool gizmo_orbit_active;
   CGPoint gizmo_orbit_translation;
   CGPoint gizmo_orbit_location;
+  /* A finger or the Pencil that began on a navigation gizmo's button, given to Blender as a pointer
+   * (ROUND5 12D): the touch, which part it began on, and where it began and is, in the view's
+   * points. A script's step drives the same state without a touch. */
+  UITouch *navigation_button_touch;
+  bool navigation_button_active;
+  int navigation_button_part;
+  CGPoint navigation_button_start;
+  CGPoint navigation_button_last;
   /* How many fingers a navigation drag had at its last update: it orbits or pans by their count,
    * and goes on from where it is when that changes. */
   NSUInteger navigation_touches;
