@@ -572,6 +572,44 @@ check('DesktopInterfaceSection()' in settings_text and 'Text("Desktop Interface"
       '"desktop_scale"' in bridge_text and 'case "interface":' in snapshots_text,
       "9C: Settings › Desktop Interface › Size, sent at start, kept from Blender, and the `interface` step")
 
+# ROUND5 9F (report 34): a `ForEach` row keeps the position it was made with; reading the list it
+# came from by that position, when the list is computed from live state, traps once the list
+# gets shorter (switching to Texture Paint crashed in QuickActionsRow.actionItems). A row built
+# by position may subscript only a snapshot: a local `let`, a stored property or a parameter.
+POSITIONAL = re.compile(r'\b(?:ForEach|List)\((?:Array\((?P<src>.+?)\.enumerated\(\)\)|(?P<isrc>[\w.]+)\.indices)\s*,')
+
+
+def positional_rows(text):
+    """Each position-built list in \a text: (line, the names its row subscripts by position and
+    that are not snapshots)."""
+    for match in POSITIONAL.finditer(text):
+        brace = text.index('{', match.end())
+        body = text[brace:balanced(text, brace, '{', '}')]
+        params = re.match(r'\{\s*([\w, ]+?)\s+in\b', body)
+        position = params.group(1).split(',')[0].strip() if params else '_'
+        if position == '_':
+            continue
+        before = text[:match.start()]
+        enclosing = before[max(before.rfind('func '), before.rfind('var body'), 0):]
+        unsafe = []
+        for sub in re.finditer(r'\$?(\w+)(?:\.\w+)*\[([^\]]*)\]', body):
+            if not re.search(r'\b%s\b' % re.escape(position), sub.group(2)):
+                continue
+            base = sub.group(1)
+            local = re.search(r'\blet\s+%s\b\s*[:=]' % base, enclosing) or \
+                re.search(r'\bfunc\s+\w+\([^)]*\b%s\s*:' % base, enclosing)
+            stored = re.search(r'(?m)^\s*(?:@State\s+)?(?:private\s+)?(?:let|var)\s+%s\s*:[^{\n]*$' % base, text)
+            if not (local or stored):
+                unsafe.append(sub.group(0))
+        yield text.count('\n', 0, match.start()) + 1, unsafe
+
+
+positional = ['%s:%d %s' % (path.name, line, ', '.join(unsafe)) for path in sources()
+              for line, unsafe in positional_rows(path.read_text(encoding='utf-8')) if unsafe]
+for offender in positional:
+    print('%s: a row reads a live list by the position it was made with' % offender)
+check(not positional, "9F: no ForEach row reads a live list by a captured position (%d)" % len(positional))
+
 # ROUND5 10A (decision 60): every change of the viewport's size is logged with its cause, at the
 # one place the shell sets the drawable and where the bridge sees a 3D View's region change.
 setters = [name for name, text in code.items() if re.search(r'drawableSize\s*=[^=]', text)]

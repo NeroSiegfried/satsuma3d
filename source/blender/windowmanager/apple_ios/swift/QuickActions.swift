@@ -661,15 +661,22 @@ struct QuickActionsRow: View {
 
   /** The actions: icons, a hold naming each, deleting in red; titles between hairlines where there is no icon. */
   private var actionItems: some View {
-    HStack(spacing: 0) {
-      ForEach(Array(actions.enumerated()), id: \.element.id) { index, action in
-        /* Hairlines part titles, as an edit menu's; icons stand apart by themselves. */
-        if index > 0 && (action.image == nil || actions[index - 1].image == nil) {
+    /* Each row carries what it needs and reads no list: `actions` is computed from the model, and
+     * a row SwiftUI updates before it rebuilds the list must not read it by a position it was made
+     * with (switching to Texture Paint, which has fewer actions, trapped there: ROUND5 9F). */
+    let list = actions
+    let rows = list.indices.map { index in
+      /* Hairlines part titles, as an edit menu's; icons stand apart by themselves. */
+      (action: list[index], hairline: index > 0 && (list[index].image == nil || list[index - 1].image == nil))
+    }
+    return HStack(spacing: 0) {
+      ForEach(rows, id: \.action.id) { row in
+        if row.hairline {
           Rectangle()
             .fill(Color.primary.opacity(0.2))
             .frame(width: 1, height: 22)
         }
-        QuickActionBarItem(action: action, model: model) { text, x in
+        QuickActionBarItem(action: row.action, model: model) { text, x in
           heldName = text.map { ($0, x, false) }
         }
       }
