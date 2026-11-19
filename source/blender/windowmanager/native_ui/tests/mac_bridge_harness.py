@@ -2194,8 +2194,127 @@ def tick_fingers():
     return 0.3
 
 
+# ROUND6 TOUCH-3 (C2, A12): undo and redo while an operation waits. The two-finger tap reached the
+# key map, where a waiting move passed it to `ed.undo`; the gate is now one, the shell's: Undo and
+# Redo (buttons, taps, the palette) are refused with a word while a modal operator exists, and run
+# when none does. For each of a set of operations that wait, `ED_OT_undo` through the operators view
+# (as the shell sends it, before the operation ends) must leave the undo stack where it was; the
+# old way in, the TOUCH_TWO_FINGER_TAP event, must not move it either.
+UNDO_CASES = [("OBJECT", "transform.translate"), ("OBJECT", "transform.rotate"), ("OBJECT", "transform.resize"),
+              ("EDIT", "mesh.knife_tool"), ("EDIT", "transform.translate"), ("EDIT", "mesh.bevel"),
+              ("OBJECT", "view3d.walk")]
+undo_state = {}
+
+
+def _menu_state():
+    top = tree(subs["toolbar"]) or {}
+    node = next((n for n in top.get("children", []) if n["key"] == "menu_state"), {})
+    return node.get("value")
+
+
+def _undo_behind():
+    """What an undo would change, read after the operation ended: the undo stack's place (the
+    toolbar's `menu_state`) and the cube's x, which the harness moved by one as the step behind."""
+    return (_menu_state(), round(bpy.data.objects["Cube"].location.x, 4))
+
+
+def tick_undo():
+    global step
+    try:
+        pump()
+        step += 1
+        problems = report.setdefault("problems", [])
+        window, area, region = _view3d()
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            subs["toolbar"] = subscribe("toolbar")
+            subs["operators"] = subscribe("operators")
+            cube = bpy.data.objects["Cube"]
+            bpy.context.view_layer.objects.active = cube
+            cube.select_set(True)
+            # A step to undo to.
+            cube.location.x += 1.0
+            bpy.ops.ed.undo_push(message="harness move")
+            undo_state["cases"] = list(UNDO_CASES)
+            undo_state["results"] = {}
+            return 0.5
+        phase = undo_state.get("phase", "start")
+        if phase == "start" and "steps_before" in undo_state:
+            # After the operation ended: had undo run, the undo stack has fewer steps behind it now.
+            behind = _undo_behind()
+            entry = undo_state["results"][undo_state["current"]]
+            entry["undone after it ended"] = behind[1] != undo_state.pop("steps_before")[1]
+            if entry["undone after it ended"]:
+                problems.append("%s: an Undo sent while it waited ran after it ended" % undo_state["current"])
+        if phase == "start":
+            if not undo_state["cases"]:
+                if "control" not in undo_state:
+                    # With nothing waiting, Undo runs: the harness's move by one is taken back.
+                    if bpy.context.object.mode != 'OBJECT':
+                        bpy.ops.object.mode_set(mode='OBJECT')
+                    undo_state["control"] = 600
+                    undo_state["x before control"] = round(bpy.data.objects["Cube"].location.x, 4)
+                    invoke(subs["operators"], "ED_OT_undo", 600)
+                    return 0.8
+                undo_state["control waits"] = undo_state.get("control waits", 0) + 1
+                if 600 not in acks and undo_state["control waits"] < 4:
+                    return 0.4
+                report["control: undo with nothing waiting"] = {
+                    "answer": acks.get(600), "cube x": [undo_state["x before control"],
+                                                        round(bpy.data.objects["Cube"].location.x, 4)]}
+                if acks.get(600) != "ok":
+                    problems.append("Undo with nothing waiting did not run (%s)" % acks.get(600))
+                report["results"] = undo_state["results"]
+                if len(undo_state["results"]) < 4:
+                    problems.append("fewer than four operations started")
+                finish("done" if not problems else "error")
+                return None
+            mode, name = undo_state["cases"].pop(0)
+            if bpy.context.object.mode != mode:
+                bpy.ops.object.mode_set(mode=mode)
+            module, op = name.split(".")
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                result = getattr(getattr(bpy.ops, module), op)('INVOKE_DEFAULT')
+            if 'RUNNING_MODAL' not in result:
+                undo_state["results"][mode + " " + name] = "did not wait: %s" % sorted(result)
+                return 0.3
+            undo_state.update(current=mode + " " + name, phase="tap")
+            return 0.5
+        if phase == "tap":
+            undo_state["before"] = _menu_state()
+            undo_state["steps_before"] = _undo_behind()
+            # The old way in: the window's two-finger tap event.
+            _simulate(window, 'TOUCH_TWO_FINGER_TAP', 'PRESS', region.x + 40, region.y + 40)
+            # The shell's way: Undo, as the button and now the taps send it.
+            invoke(subs["operators"], "ED_OT_undo", 500 + step)
+            undo_state.update(command=500 + step, phase="check")
+            return 0.6
+        if phase == "check":
+            if undo_state["command"] not in acks and not undo_state.get("waited"):
+                # The answer comes with the next update.
+                undo_state["waited"] = True
+                return 0.4
+            undo_state["waited"] = False
+            after = _menu_state()
+            entry = {"stack moved": after != undo_state["before"], "answer": acks.get(undo_state["command"])}
+            undo_state["results"][undo_state["current"]] = entry
+            if entry["stack moved"]:
+                problems.append("%s: undo ran while it waited" % undo_state["current"])
+            if not entry["answer"] or "Finish or cancel" not in entry["answer"]:
+                problems.append("%s: Undo was not refused with a word (%s)" % (undo_state["current"], entry["answer"]))
+            _simulate(window, 'ESC', 'PRESS', region.x + 12, region.y + 12)
+            _simulate(window, 'ESC', 'RELEASE', region.x + 12, region.y + 12)
+            undo_state["phase"] = "start"
+            return 0.6
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
 bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets": tick_insets, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror,
                          "extensions": tick_extensions, "keys": tick_keys,
                          "numinput": tick_numinput, "render": tick_render,
-                         "fingers": tick_fingers}.get(SCENARIO, tick_actions),
+                         "fingers": tick_fingers, "undo": tick_undo}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

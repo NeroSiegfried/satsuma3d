@@ -76,6 +76,16 @@ bool WM_native_ui_desktop_mode();
  */
 void WM_native_ui_notice(int level, const char *text, const char *button = "");
 /**
+ * The one gate for Undo and Redo the person asks for (ROUND6 TOUCH-3, findings C2, C1): the
+ * buttons, the palette and the two- and three-finger taps all come through it. While an operator
+ * waits or runs in a window (a modal handler), undoing would replace data it holds, and a request
+ * held back would run once it ended, undoing something else: refused, said in a message ("Finish or
+ * cancel Move first"), and the words returned. Empty when Undo and Redo may run.
+ */
+std::string WM_native_ui_undo_refusal(bContext *C);
+/** Whether \a idname is one of the undo commands the gate above answers for. */
+bool WM_native_ui_is_undo_command(std::string_view idname);
+/**
  * A line of the session's log, a text file in the temporary folder that says what was run and
  * shown, for finding out afterwards what happened on a device. Written in both interfaces.
  */

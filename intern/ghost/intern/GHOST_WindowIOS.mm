@@ -512,24 +512,6 @@ UIWindow *document_window = nil;
   rotation_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypeDirect) ];
   [window->getView() addGestureRecognizer:rotation_gesture_recognizer];
 
-#if !defined(APPLE_TARGET_VISIONOS)
-  /* Edge swipe: visionOS windows have no screen edges. */
-  edge_swipe_left = [[UIScreenEdgePanGestureRecognizer alloc]
-      initWithTarget:self
-              action:@selector(handleEdgeSwipe:)];
-  edge_swipe_left.edges = UIRectEdgeLeft;
-  edge_swipe_left.delegate = self;
-  edge_swipe_left.allowedTouchTypes = @[ @(UITouchTypeDirect) ];
-  [window->getView() addGestureRecognizer:edge_swipe_left];
-
-  edge_swipe_right = [[UIScreenEdgePanGestureRecognizer alloc]
-      initWithTarget:self
-              action:@selector(handleEdgeSwipe:)];
-  edge_swipe_right.edges = UIRectEdgeRight;
-  edge_swipe_right.delegate = self;
-  edge_swipe_right.allowedTouchTypes = @[ @(UITouchTypeDirect) ];
-  [window->getView() addGestureRecognizer:edge_swipe_right];
-#endif
 
   /* Apple Pencil hover recognizer. */
   hover_gesture_recognizer = [[GHOSTUIHoverGestureRecognizer alloc]
@@ -763,9 +745,6 @@ UIWindow *document_window = nil;
       gestureRecognizer == pan2f_gesture_recognizer ||
       gestureRecognizer == zoom_gesture_recognizer ||
       gestureRecognizer == rotation_gesture_recognizer ||
-#if !defined(APPLE_TARGET_VISIONOS)
-      gestureRecognizer == edge_swipe_left || gestureRecognizer == edge_swipe_right ||
-#endif
       gestureRecognizer == hover_gesture_recognizer)
   {
     return [self touchBeganInBlenderViewport:touch];
@@ -2901,19 +2880,25 @@ static UIBezierPath *pointer_move()
   return YES;
 }
 
+/**
+ * Two, three or four fingers tapped the view (ROUND6 TOUCH-3, finding A12): the shell's, not a key
+ * map's. Two undo and three redo, through the one gate Undo's button passes; four show or hide the
+ * interface around the view. The shell hears of it as `GHOSTIOSFingersTapped`; Blender is sent
+ * nothing, so no key map preset decides and no waiting operation is handed it.
+ */
+- (void)fingersTapped:(int)fingers
+{
+  [NSNotificationCenter.defaultCenter postNotificationName:@"GHOSTIOSFingersTapped"
+                                                    object:nil
+                                                  userInfo:@{@"fingers" : @(fingers)}];
+}
+
 - (void)handleTap2F:(GHOSTUITapGestureRecognizer *)sender
 {
   if (sender.state != UIGestureRecognizerStateEnded || [self fingerTweakHolds]) {
     return;
   }
-
-  CGPoint touch_point = [sender locationInView:window->getView()];
-  CGFloat scale = [window->getView() contentScaleFactor];
-  touch_point.x *= scale;
-  touch_point.y *= scale;
-
-  system->pushEvent(
-      std::make_unique<GHOST_Event>(system->getMilliSeconds(), GHOST_kEventTwoFingerTap, window));
+  [self fingersTapped:2];
 }
 
 - (void)handleTap3F:(GHOSTUITapGestureRecognizer *)sender
@@ -2921,14 +2906,7 @@ static UIBezierPath *pointer_move()
   if (sender.state != UIGestureRecognizerStateEnded || [self fingerTweakHolds]) {
     return;
   }
-
-  CGPoint touch_point = [sender locationInView:window->getView()];
-  CGFloat scale = [window->getView() contentScaleFactor];
-  touch_point.x *= scale;
-  touch_point.y *= scale;
-
-  system->pushEvent(std::make_unique<GHOST_Event>(
-      system->getMilliSeconds(), GHOST_kEventThreeFingerTap, window));
+  [self fingersTapped:3];
 }
 
 - (void)handleTap4F:(GHOSTUITapGestureRecognizer *)sender
@@ -2936,14 +2914,7 @@ static UIBezierPath *pointer_move()
   if (sender.state != UIGestureRecognizerStateEnded || [self fingerTweakHolds]) {
     return;
   }
-
-  CGPoint touch_point = [sender locationInView:window->getView()];
-  CGFloat scale = [window->getView() contentScaleFactor];
-  touch_point.x *= scale;
-  touch_point.y *= scale;
-
-  system->pushEvent(
-      std::make_unique<GHOST_Event>(system->getMilliSeconds(), GHOST_kEventFourFingerTap, window));
+  [self fingersTapped:4];
 }
 
 - (void)handlePan:(GHOSTUIPanGestureRecognizer *)sender
@@ -3258,34 +3229,6 @@ static bool ios_momentum_stopped(const CGPoint velocity)
   }
 }
 
-#if !defined(APPLE_TARGET_VISIONOS)
-- (void)handleEdgeSwipe:(UIScreenEdgePanGestureRecognizer *)gesture
-{
-  if (gesture.state != UIGestureRecognizerStateEnded) {
-    return;
-  }
-
-  UIView *view = window->getView();
-  CGPoint location = [gesture locationInView:view];
-  CGSize viewSize = view.bounds.size;
-
-  GHOST_TTouchEventSubTypes ghostEventType;
-
-  if (gesture.edges == UIRectEdgeLeft) {
-    ghostEventType = GHOST_kTouchEventEdgeSwipeInLeft;
-  }
-  else if (gesture.edges == UIRectEdgeRight) {
-    ghostEventType = GHOST_kTouchEventEdgeSwipeInRight;
-  }
-  else {
-    /* For now only handle left/right. */
-    return;
-  }
-
-  system->pushEvent(std::make_unique<GHOST_EventTouch>(
-      system->getMilliSeconds(), window, ghostEventType, location.x, location.y));
-}
-#endif
 
 - (void)handleHover:(GHOSTUIHoverGestureRecognizer *)sender
 {

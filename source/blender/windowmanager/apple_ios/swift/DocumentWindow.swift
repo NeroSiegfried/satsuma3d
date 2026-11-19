@@ -110,6 +110,9 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     /* The first Apple Pencil, from the window's input (ROUND6 TOUCH-1). */
     NotificationCenter.default.addObserver(self, selector: #selector(pencilSeen),
                                            name: Notification.Name("GHOSTIOSPencilSeen"), object: nil)
+    /* Two, three and four fingers tapping the view (ROUND6 TOUCH-3). */
+    NotificationCenter.default.addObserver(self, selector: #selector(fingersTapped(_:)),
+                                           name: Notification.Name("GHOSTIOSFingersTapped"), object: nil)
     observeScene()
     shell.pullViews()
     NativeViews.shared.checkViews()
@@ -142,6 +145,25 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     model.messages.say("Apple Pencil now uses the tool. Fingers move the view; a tap still selects.",
                        button: "Keep Fingers on Tools", target: "fingers:tool")
     WM_native_ui_log("touch", "pencil seen: fingers move the view")
+  }
+
+  /**
+   * Fingers tapped the view (ROUND6 TOUCH-3, finding A12): the shell's gestures, whichever key map
+   * Blender has. Two undo and three redo, as the Undo and Redo buttons do, through the same gate,
+   * which refuses with a word while an operation waits; four show or hide the interface around the
+   * view, the shell's focus.
+   */
+  @objc private func fingersTapped(_ note: Notification) {
+    switch note.userInfo?["fingers"] as? Int {
+      case 2:
+        Operators.run("ED_OT_undo")
+      case 3:
+        Operators.run("ED_OT_redo")
+      case 4:
+        commands.setInterfaceHidden(!model.interfaceHidden)
+      default:
+        return
+    }
   }
 
   @objc private func snapshotsPublished() {

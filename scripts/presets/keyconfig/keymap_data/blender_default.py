@@ -820,14 +820,6 @@ def km_screen(params):
          {"properties": [("direction", 'NEXT')]}),
         ("screen.workspace_cycle", {"type": 'PAGE_UP', "value": 'PRESS', "ctrl": True},
          {"properties": [("direction", 'PREV')]}),
-        # Zen mode
-        ("screen.screen_full_area", {"type": 'TOUCH_FOUR_FINGER_TAP', "value": "PRESS"},
-         {"properties": [("use_hide_panels", True)]}),
-        # Edge swipe
-        ("screen.edge_swipe", {"type": 'TOUCH_EDGE_SWIPE_IN_LEFT', "value": "PRESS"},
-         {"properties": [("direction", 'IN_LEFT')]}),
-        ("screen.edge_swipe", {"type": 'TOUCH_EDGE_SWIPE_IN_RIGHT', "value": "PRESS"},
-         {"properties": [("direction", 'IN_RIGHT')]}),
         # Quad view
         ("screen.region_quadview", {"type": 'Q', "value": 'PRESS', "ctrl": True, "alt": True}, None),
         # Repeat last
@@ -842,8 +834,6 @@ def km_screen(params):
         # Undo
         ("ed.undo", {"type": 'Z', "value": 'PRESS', "ctrl": True, "repeat": True}, None),
         ("ed.redo", {"type": 'Z', "value": 'PRESS', "shift": True, "ctrl": True, "repeat": True}, None),
-        ("ed.undo", {"type": 'TOUCH_TWO_FINGER_TAP', "value": "PRESS", "repeat": True}, None),
-        ("ed.redo", {"type": 'TOUCH_THREE_FINGER_TAP', "value": "PRESS", "repeat": True}, None),
         # Render
         ("render.render", {"type": 'F12', "value": 'PRESS'},
          {"properties": [("use_viewport", True)]}),

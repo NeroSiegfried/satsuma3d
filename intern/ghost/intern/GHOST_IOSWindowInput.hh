@@ -171,8 +171,6 @@ typedef struct UserInputEvent {
   GHOSTUIHoverGestureRecognizer *hover_gesture_recognizer;
 #if !defined(APPLE_TARGET_VISIONOS)
   UIPencilInteraction *pencil_interaction;
-  UIScreenEdgePanGestureRecognizer *edge_swipe_left;
-  UIScreenEdgePanGestureRecognizer *edge_swipe_right;
 #endif
   // GHOSTUILongPressGestureRecognizer *long_press_gesture_recognizer;
 

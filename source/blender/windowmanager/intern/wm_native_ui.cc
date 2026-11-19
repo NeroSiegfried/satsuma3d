@@ -521,6 +521,40 @@ wmOperator *bridge_repeatable_operator(bContext *C)
 }
 
 
+}  // namespace
+
+bool WM_native_ui_is_undo_command(const std::string_view idname)
+{
+  return ELEM(idname, "ED_OT_undo", "ED_OT_redo", "ED_OT_undo_history");
+}
+
+std::string WM_native_ui_undo_refusal(bContext *C)
+{
+  wmWindowManager *wm = CTX_wm_manager(C);
+  if (wm == nullptr) {
+    return "";
+  }
+  for (wmWindow &win : wm->windows) {
+    for (wmEventHandler &handler : win.runtime->modalhandlers) {
+      if (handler.type != WM_HANDLER_TYPE_OP) {
+        continue;
+      }
+      const wmEventHandler_Op &op_handler = reinterpret_cast<wmEventHandler_Op &>(handler);
+      if (op_handler.is_fileselect || op_handler.op == nullptr) {
+        continue;
+      }
+      const std::string text = fmt::format(
+          fmt::runtime(IFACE_("Finish or cancel {} first")),
+          WM_operatortype_name(op_handler.op->type, op_handler.op->ptr));
+      WM_native_ui_notice(RPT_WARNING, text.c_str());
+      return text;
+    }
+  }
+  return "";
+}
+
+namespace {
+
 bool bridge_undo_available(bContext *C, const char *op_name = "ED_OT_undo")
 {
   wmWindow *win = CTX_wm_window(C);
@@ -3467,6 +3501,10 @@ views::CommandResult bridge_toolbar_view_command(bContext *C,
   }
   if (invoke && ELEM(target, "undo", "redo")) {
     const char *op_name = target == "undo" ? "ED_OT_undo" : "ED_OT_redo";
+    if (std::string refusal = WM_native_ui_undo_refusal(C); !refusal.empty()) {
+      r_error = refusal;
+      return views::CommandResult::Failed;
+    }
     if (!bridge_undo_available(C, op_name)) {
       r_error = "Nothing to " + std::string(target);
       return views::CommandResult::Failed;
@@ -3517,6 +3555,9 @@ bool bridge_toolbar_view_live(const views::protocol::Command &command)
   return ELEM(target, "orientation", "pivot", "snap", "proportional", "mirror", "mirror_topology") ||
          ELEM(target, "snap_on", "snap_element", "proportional_on", "proportional_falloff", "automerge") ||
          target == "direction" || target.startswith("brush:") || target.startswith("axis:") ||
+         /* Undo and Redo answer at once, refused while an operation waits (ROUND6 TOUCH-3), never
+          * held back to run after it, undoing something else. */
+         ELEM(target, "undo", "redo") ||
          /* The waiting operation's own keys are for it: held back until it ends, they never
           * reach it (the knife's Undo and Escape did nothing). */
          target.startswith("modalkey:");
@@ -4987,7 +5028,10 @@ struct BridgeNotice {
   std::string text;
   std::string button;
 };
-static Vector<BridgeNotice> bridge_notices;
+/* A standard vector: it outlives Blender's allocator, freed as the process ends. More than four
+ * notices left at quitting were freed after the allocator, which crashed (found by ROUND6
+ * TOUCH-3's harness). */
+static std::vector<BridgeNotice> bridge_notices;
 static int bridge_notice_number = 0;
 static double bridge_notice_time = 0.0;
 
@@ -5171,15 +5215,15 @@ void WM_native_ui_notice(const int level, const char *text, const char *button)
   }
   /* What an operator reports can arrive twice, from its popup and from the log: said once. */
   const double now = BLI_time_now_seconds();
-  if (!bridge_notices.is_empty() && bridge_notices.last().text == text &&
+  if (!bridge_notices.empty() && bridge_notices.back().text == text &&
       now - bridge_notice_time < 1.0)
   {
     return;
   }
   bridge_notice_time = now;
-  bridge_notices.append({++bridge_notice_number, level, text, button ? button : ""});
+  bridge_notices.push_back({++bridge_notice_number, level, text, button ? button : ""});
   if (bridge_notices.size() > 6) {
-    bridge_notices.remove(0);
+    bridge_notices.erase(bridge_notices.begin());
   }
   wm::native_ui::view_type_dirty("toolbar");
   WM_native_ui_session_log(level >= RPT_WARNING ? "warning" : "info", text);

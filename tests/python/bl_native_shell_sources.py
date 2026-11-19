@@ -1168,4 +1168,34 @@ check('[self fingerToolSecondFinger];' in send_event_r6 and
 check('wm_apple_ios_window_hold_took_touch(model.window)' in (SWIFT / 'DocumentWindow.swift').read_text(encoding='utf-8'),
       "R6 TOUCH-2: the shell's hold ends what the finger began, so no click follows the menu")
 
+# ROUND6 TOUCH-3 (C2, A12): the touch gestures are the shell's, whatever the key map; Undo and Redo
+# pass one gate, wherever they are asked for. The window sends Blender no tap or edge event, no key
+# map preset binds one, and no edge recognizer is left; the taps run what the buttons run.
+ghost_r6 = (ROOT / 'intern/ghost/intern/GHOST_WindowIOS.mm').read_text(encoding='utf-8')
+check(not re.search(r'GHOST_kEvent(Two|Three|Four)FingerTap', ghost_r6) and 'GHOST_EventTouch>' not in ghost_r6 and
+      'UIScreenEdgePanGestureRecognizer' not in ghost_r6 and
+      '@"GHOSTIOSFingersTapped"' in ghost_r6,
+      "R6 TOUCH-3: the window gives the finger taps to the shell, not to Blender's key maps")
+presets = sorted((ROOT / 'scripts/presets/keyconfig/keymap_data').glob('*.py'))
+touch_bound = ['%s:%d' % (path.name, number) for path in presets
+               for number, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1) if "'TOUCH_" in line]
+check(len(presets) >= 2 and not touch_bound,
+      "R6 TOUCH-3: no key map preset binds a touch gesture (%s)" % touch_bound)
+window_r6 = (SWIFT / 'DocumentWindow.swift').read_text(encoding='utf-8')
+tapped = window_r6[window_r6.index('@objc private func fingersTapped'):]
+tapped = tapped[:tapped.index('\n  }\n')]
+undo_runs = set()
+for path in sources():
+    undo_runs |= set(re.findall(r'Operators\.run\("(ED_OT_(?:undo|redo))"\)', path.read_text(encoding='utf-8')))
+check('Operators.run("ED_OT_undo")' in tapped and 'Operators.run("ED_OT_redo")' in tapped and
+      undo_runs == {'ED_OT_undo', 'ED_OT_redo'} and 'Notification.Name("GHOSTIOSFingersTapped")' in window_r6,
+      "R6 TOUCH-3: the taps run Undo and Redo as their buttons do")
+views_text = (SWIFT.parents[1] / 'intern/wm_native_ui_views.cc').read_text(encoding='utf-8')
+run_body = views_text[views_text.index('bool operator_run(bContext *C,'):]
+run_body = run_body[:run_body.index('\n}\n')]
+check(0 < run_body.find('WM_native_ui_undo_refusal(C)') < run_body.find('WM_operator_poll(C, ot)') and
+      'WM_native_ui_is_undo_command(idname)' in views_text[views_text.index('operators.live = '):] and
+      'WM_native_ui_undo_refusal(C); !refusal.empty()' in bridge_text and 'ELEM(target, "undo", "redo") ||' in bridge_text,
+      "R6 TOUCH-3: one gate for Undo and Redo, answered at once, never held back")
+
 print('PASS: native shell sources ' + json.dumps(checks))

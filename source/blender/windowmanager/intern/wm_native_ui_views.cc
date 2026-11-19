@@ -795,6 +795,13 @@ bool operator_run(bContext *C,
     r_error = "No operator " + std::string(name);
     return false;
   }
+  /* Undo and Redo pass the one gate (ROUND6 TOUCH-3). */
+  if (WM_native_ui_is_undo_command(idname)) {
+    if (std::string refusal = WM_native_ui_undo_refusal(C); !refusal.empty()) {
+      r_error = refusal;
+      return false;
+    }
+  }
   if (!WM_operator_poll(C, ot)) {
     r_error = "It cannot run here";
     return false;
@@ -881,7 +888,10 @@ static Map<std::string, ViewType> builtin_view_types()
   operators.build = operators_build;
   operators.command = operators_command;
   operators.live = [](const protocol::Command &command) {
-    return operator_navigates(operator_idname(command.target()->string_view()));
+    const std::string idname = operator_idname(command.target()->string_view());
+    /* Undo and Redo answer at once: refused while an operation waits, never held back to run
+     * after it ended (ROUND6 TOUCH-3). */
+    return operator_navigates(idname) || WM_native_ui_is_undo_command(idname);
   };
   types.add("operators", std::move(operators));
   return types;
