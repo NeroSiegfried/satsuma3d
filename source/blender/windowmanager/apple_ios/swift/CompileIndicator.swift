@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 /** \file
- * The shader compilation pill below the toolbar: shown while Blender compiles shaders and is held
- * up by it, with its progress and count.
+ * The pills below the toolbar, in both interfaces: shader compilation, shown while Blender compiles
+ * shaders and is held up by it, with its progress and count; and every job Blender's status bar
+ * would show (a render, a bake, a simulation, an export), with its progress and a Stop, from
+ * Blender's `jobs` view (ROUND6 BUSY-1, `bridge_jobs_view_build`).
  */
 
 import SwiftUI
@@ -41,10 +43,111 @@ final class CompileProgress {
   }
 }
 
+/** Blender's running jobs, from its `jobs` view: a node per job, named by Blender, with its
+ * progress (0 until the job reports any) and a Stop button. */
+@MainActor
+enum BlenderJobs {
+  static let view = NativeViews.shared.subscribe("jobs")
+
+  struct Job: Identifiable {
+    let id: String
+    let name: String
+    /** From 0 to 1; 0 until the job reports progress, shown as working. */
+    let progress: Double
+    /** Stop was asked for and the job has not ended yet. */
+    let stopping: Bool
+  }
+
+  static var jobs: [Job] {
+    guard let top = view.top else { return [] }
+    return view.children(of: top).map { node in
+      let progress = view.node(node.key + ":progress")?.content(Blender_NativeUI_Data.self)?
+        .value(type: Blender_NativeUI_FloatValue.self)?.value ?? 0
+      return Job(id: node.key, name: node.label, progress: progress, stopping: node.node.description == "stopping")
+    }
+  }
+
+  /** Ask the job to stop, as desktop's ✕ does; it ends when it next looks. */
+  static func stop(_ job: Job) { NativeViews.shared.send(view, target: job.id + ":stop", op: .invoke) }
+}
+
+/** One running job: its name, its progress (or that it is working) and Stop. */
+private struct JobPill: View {
+  let job: BlenderJobs.Job
+
+  /** Blender's job names end in "...", as "Rendering...": the pill says it without. */
+  private var name: String {
+    var name = job.name
+    while name.hasSuffix(".") { name.removeLast() }
+    return job.stopping ? "Stopping \(name)" : name
+  }
+
+  var body: some View {
+    HStack(spacing: 10) {
+      Text(name)
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+      if job.progress > 0 && !job.stopping {
+        ProgressView(value: job.progress)
+          .frame(width: 88)
+        Text(job.progress, format: .percent.precision(.fractionLength(0)))
+          .font(.system(size: 12).monospacedDigit())
+          .foregroundStyle(.tertiary)
+      }
+      else {
+        ProgressView()
+          .controlSize(.small)
+      }
+      Button {
+        BlenderJobs.stop(job)
+      } label: {
+        Image(systemName: "xmark.circle.fill")
+          .font(.system(size: 17))
+          .symbolRenderingMode(.hierarchical)
+          .foregroundStyle(.secondary)
+          .frame(width: 32, height: 32)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .disabled(job.stopping)
+      .accessibilityLabel("Stop \(name)")
+    }
+    .tint(Color(uiColor: .systemBlue))
+    .padding(.leading, 14)
+    .padding(.trailing, 4)
+    .frame(height: 32)
+    .panelGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    .transition(.opacity.combined(with: .offset(y: -6)))
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel(name)
+    .accessibilityValue(job.progress > 0 ? "\(Int((job.progress * 100).rounded())) percent" : "Working")
+    .accessibilityIdentifier("blender.job")
+  }
+}
+
+/** The pills below the toolbar: shader compilation, then each running job. Only the pills take
+ * touches; the rest of the column lets them through to the viewport. */
 struct CompileIndicator: View {
   let progress: CompileProgress
 
   var body: some View {
+    VStack(spacing: 6) {
+      compilePill
+        .allowsHitTesting(false)
+      ForEach(BlenderJobs.jobs) { job in
+        JobPill(job: job)
+      }
+      Spacer(minLength: 0)
+        .allowsHitTesting(false)
+    }
+    .padding(.top, 8)
+    .animation(UIAccessibility.isReduceMotionEnabled ? nil : .easeOut(duration: 0.2),
+               value: BlenderJobs.jobs.map(\.id))
+  }
+
+  @ViewBuilder
+  private var compilePill: some View {
     VStack {
       if progress.shown {
         HStack(spacing: 10) {
@@ -61,15 +164,12 @@ struct CompileIndicator: View {
         .padding(.horizontal, 14)
         .frame(height: 32)
         .panelGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .padding(.top, 8)
         .transition(.opacity.combined(with: .offset(y: -6)))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Compiling Shaders")
         .accessibilityValue("\(progress.finished) of \(progress.total)")
         .accessibilityIdentifier("blender.shader-compilation")
       }
-      Spacer(minLength: 0)
     }
-    .allowsHitTesting(false)
   }
 }

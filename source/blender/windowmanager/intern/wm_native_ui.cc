@@ -93,6 +93,8 @@
 #include "RNA_access.hh"
 #include "RNA_path.hh"
 
+#include "RE_pipeline.h"
+
 #include "SEQ_sequencer.hh"
 #include "RNA_define.hh"
 
@@ -4838,6 +4840,45 @@ views::CommandResult bridge_settings_view_command(bContext *C,
   return views::CommandResult::Done;
 }
 
+/** How far the frame being rendered is, from the text its render job keeps with the result, as
+ * desktop's render window shows it; 0 when it says nothing of samples. */
+static double bridge_render_samples(const Scene *scene)
+{
+  Render *re = RE_GetSceneRender(scene);
+  if (re == nullptr) {
+    return 0.0;
+  }
+  double fraction = 0.0;
+  const RenderResult *result = RE_AcquireResultRead(re);
+  if (result && result->text) {
+    const std::string_view text = result->text;
+    int done = 0, total = 0;
+    size_t at = text.find(" samples");
+    if (at != std::string_view::npos) {
+      /* "... | Rendering 12 / 64 samples": the two numbers before it. */
+      const size_t start = text.rfind("Rendering ", at);
+      if (start != std::string_view::npos &&
+          sscanf(std::string(text.substr(start, at - start)).c_str(),
+                 "Rendering %d / %d",
+                 &done,
+                 &total) != 2)
+      {
+        total = 0;
+      }
+    }
+    else if ((at = text.find("Sample ")) != std::string_view::npos) {
+      if (sscanf(std::string(text.substr(at)).c_str(), "Sample %d/%d", &done, &total) != 2) {
+        total = 0;
+      }
+    }
+    if (total > 0) {
+      fraction = std::clamp(double(done) / double(total), 0.0, 1.0);
+    }
+  }
+  RE_ReleaseResult(re);
+  return fraction;
+}
+
 /** The render's state, as `bl_ui.native_render.status` gives it: a node of data for each of
  * its values, such as `state`, `done` and `image`. Built again soon while it renders. Buttons:
  * `image` and `animation` render, `cancel` and `clear`. */
@@ -4889,11 +4930,135 @@ void bridge_render_view_build(bContext *C,
           views::protocol::CreateFloatValue(buffer, number).Union());
     });
   }
-  if (bridge_text(*state, "state") == "rendering") {
+  /* How far the frame being rendered is, from the render job itself: the engine reports it to the
+   * job in an interactive session, where `render_stats` handlers hear only the per-frame time
+   * (R6 BUSY-1, G13: a still read 0 % until it was done). */
+  const bool rendering = bridge_text(*state, "state") == "rendering";
+  double samples = 0.0;
+  if (rendering) {
+    for (const wmJobListItem &job : WM_jobs_list(CTX_wm_manager(C))) {
+      if (job.job_type == WM_JOB_TYPE_RENDER) {
+        samples = std::clamp(double(job.progress), 0.0, 1.0);
+        if (samples == 0.0) {
+          /* EEVEE reports no progress to the job, only its text, which the job keeps with the
+           * result: "Rendering 12 / 64 samples" (Cycles: "Sample 12/64"). */
+          samples = bridge_render_samples(static_cast<const Scene *>(job.owner));
+        }
+      }
+    }
+  }
+  builder.add(top, "state:samples", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return views::protocol::CreateData(
+        buffer,
+        views::protocol::Value::FloatValue,
+        views::protocol::CreateFloatValue(buffer, samples).Union());
+  });
+  if (rendering) {
     /* Its progress, which no notifier tells of. */
     views::view_type_dirty("render");
   }
 }
+
+/* -------------------------------------------------------------------- */
+/** \name Running Work
+ *
+ * Every job Blender's status bar would show (#WM_jobs_list), with its progress and a Stop, for
+ * the shell's pill beside the shader compilation's, in both interfaces (ROUND6 BUSY-1, G6, G13,
+ * B1, D12). Stop asks the job to stop, as desktop's ✕ does (`template_running_jobs`): it is live,
+ * so it reaches a job whose operator holds a modal handler, and never waits for the job.
+ * \{ */
+
+static std::string bridge_job_key(const wmJobListItem &job)
+{
+  return fmt::format("job:{}:{}", job.job_type, fmt::ptr(job.owner));
+}
+
+/**
+ * The jobs that were running when Stop set `G.is_break`. Most jobs read only that (fluid, dynamic
+ * paint, ocean, the Cycles bake, a render), as desktop's Esc in each one's modal handler sets it;
+ * a few read only their own stop flag. Stop sets both. Nothing resets `G.is_break` until a job
+ * starts again, so it is cleared here once these have ended, before it can stop later work.
+ */
+static std::vector<std::string> bridge_jobs_breaking;
+
+static void bridge_jobs_view_build(bContext *C,
+                                   const views::Params & /*params*/,
+                                   views::ViewData * /*data*/,
+                                   views::ViewBuilder &builder)
+{
+  const NodeId top = builder.top("jobs", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return views::protocol::CreateGroup(buffer);
+  });
+  const std::vector<wmJobListItem> jobs = WM_jobs_list(CTX_wm_manager(C));
+  if (!bridge_jobs_breaking.empty() &&
+      std::none_of(jobs.begin(), jobs.end(), [&](const wmJobListItem &job) {
+        return std::find(bridge_jobs_breaking.begin(),
+                         bridge_jobs_breaking.end(),
+                         bridge_job_key(job)) != bridge_jobs_breaking.end();
+      }))
+  {
+    bridge_jobs_breaking.clear();
+    G.is_break = false;
+  }
+  for (const wmJobListItem &job : jobs) {
+    const std::string key = bridge_job_key(job);
+    const NodeId node = builder.add(top, key, [&](ViewBuffer &buffer, NodeFields &fields) {
+      fields.label = job.name;
+      fields.description = job.stopping ? "stopping" : "";
+      return views::protocol::CreateGroup(buffer);
+    });
+    builder.add(node, key + ":progress", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      /* Rounded to a percent, so the view changes as the person can see it. */
+      const double progress = std::round(std::clamp(double(job.progress), 0.0, 1.0) * 100.0) /
+                              100.0;
+      return views::protocol::CreateData(
+          buffer,
+          views::protocol::Value::FloatValue,
+          views::protocol::CreateFloatValue(buffer, progress).Union());
+    });
+    builder.add(node, key + ":stop", [&](ViewBuffer &buffer, NodeFields &fields) {
+      fields.label = IFACE_("Stop");
+      fields.enabled = !job.stopping;
+      return views::protocol::CreateButton(buffer);
+    });
+  }
+  if (!jobs.empty()) {
+    /* Progress, which no notifier tells of, while anything runs. */
+    views::view_type_dirty("jobs");
+  }
+}
+
+static views::CommandResult bridge_jobs_view_command(bContext *C,
+                                                     const views::Params & /*params*/,
+                                                     views::ViewData * /*data*/,
+                                                     const views::protocol::Command &command,
+                                                     std::string &r_error)
+{
+  const std::string_view target = command.target()->string_view();
+  if (command.op() != views::protocol::Op::Invoke || !target.ends_with(":stop")) {
+    r_error = "Running work is only stopped";
+    return views::CommandResult::Failed;
+  }
+  const std::string_view key = target.substr(0, target.size() - 5);
+  wmWindowManager *wm = CTX_wm_manager(C);
+  /* Found again by its key, so an owner that is gone is never read. */
+  for (const wmJobListItem &job : WM_jobs_list(wm)) {
+    if (bridge_job_key(job) == key) {
+      CLOG_INFO(&LOG, "Stop %s (job type %d)", job.name.c_str(), job.job_type);
+      WM_jobs_stop_type(wm, job.owner, eWM_JobType(job.job_type));
+      G.is_break = true;
+      for (const wmJobListItem &running : WM_jobs_list(wm)) {
+        bridge_jobs_breaking.push_back(bridge_job_key(running));
+      }
+      views::view_type_dirty("jobs");
+      return views::CommandResult::Done;
+    }
+  }
+  r_error = "It already ended";
+  return views::CommandResult::Failed;
+}
+
+/** \} */
 
 views::CommandResult bridge_render_view_command(bContext *C,
                                                 const views::Params & /*params*/,
@@ -5113,6 +5278,19 @@ void WM_native_ui_views_register()
            ELEM(command.target()->string_view(), "cancel", "clear");
   };
   view_type_add(std::move(render));
+
+  ViewType jobs;
+  jobs.name = "jobs";
+  /* Jobs say when they start, end and move on with `NC_WM | ND_JOB`; progress is read four times a
+   * second while any runs. */
+  jobs.notifiers = {NC_WM};
+  jobs.min_interval = 0.25;
+  jobs.build = bridge_jobs_view_build;
+  jobs.command = bridge_jobs_view_command;
+  /* Stop reaches the work it stops, whose operator may hold a modal handler for as long as it
+   * runs (as the render view's Cancel). */
+  jobs.live = [](const protocol::Command & /*command*/) { return true; };
+  view_type_add(std::move(jobs));
 }
 
 void WM_native_ui_starter_library_ensure()

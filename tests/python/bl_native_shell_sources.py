@@ -1425,4 +1425,22 @@ check(edges and edges <= mode_strings and 'setNeedsUpdateOfScreenEdgesDeferringS
       "R6 TOUCH-11: the bottom edge defers while a mode strokes (%s); the text keyboard shows with controls hidden"
       % sorted(edges - mode_strings))
 
+# ROUND6 BUSY-1 (G6, G13, B1, D12): one view of running work. Every job the status bar would show is
+# in the `jobs` view, whose Stop is live (it reaches work whose operator holds a modal handler); the
+# pill shows it in both interfaces (beside the shader compilation's, not behind the iPad controls'
+# gate); a render's progress comes from its job, not from `render_stats` handlers. The harness
+# scenario `jobs` walks `eWM_JobType` and stops each job it can start.
+jobs_view = bridge_text[bridge_text.index('ViewType jobs;'):]
+jobs_view = jobs_view[:jobs_view.index('view_type_add(std::move(jobs));')]
+pills = (SWIFT / 'CompileIndicator.swift').read_text(encoding='utf-8')
+layers_b1 = window_t8[window_t8.index('private func layers(bottom: Bool'):]
+layers_b1 = layers_b1[:layers_b1.index('\n  }\n')]
+render_py = (ROOT / 'scripts/startup/bl_ui/native_render.py').read_text(encoding='utf-8')
+check('jobs.live = [](const protocol::Command & /*command*/) { return true; };' in jobs_view and
+      'WM_jobs_list(' in bridge_text and 'G.is_break = true;' in bridge_text and
+      'BlenderJobs.stop(job)' in pills and 'subscribe("jobs")' in pills and
+      'CompileIndicator(progress: shell.compile)' in layers_b1 and 'controlsShown' not in layers_b1 and
+      'handlers.render_stats' not in render_py and '"state:samples"' in bridge_text,
+      "R6 BUSY-1: running work is listed with a live Stop in both interfaces; render progress from the job")
+
 print('PASS: native shell sources ' + json.dumps(checks))

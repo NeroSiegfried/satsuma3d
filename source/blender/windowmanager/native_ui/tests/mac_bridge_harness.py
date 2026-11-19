@@ -27,7 +27,7 @@ STAND_INS = argv[4] if len(argv) > 4 else None
 
 import flatbuffers  # noqa: E402
 from Blender.NativeUI import (  # noqa: E402
-    BoolValue, Button, ButtonStyle, Choice, Command, Commands, Content, Data, FloatsValue, Group, MenuButton, Node, Number,
+    BoolValue, Button, ButtonStyle, Choice, Command, Commands, Content, Data, FloatsValue, FloatValue, Group, MenuButton, Node, Number,
     Op, Param,
     Reference,
     Subscribe, TextValue, Toggle, Updates, Value,
@@ -236,6 +236,10 @@ def decode_node(raw):
             tv = TextValue.TextValue()
             tv.Init(data.Value().Bytes, data.Value().Pos)
             entry.update(value=s(tv.Value()))
+        elif data.ValueType() == Value.Value.FloatValue:
+            fv = FloatValue.FloatValue()
+            fv.Init(data.Value().Bytes, data.Value().Pos)
+            entry.update(value=fv.Value())
         elif data.ValueType() == Value.Value.FloatsValue:
             fv = FloatsValue.FloatsValue()
             fv.Init(data.Value().Bytes, data.Value().Pos)
@@ -2838,6 +2842,365 @@ def tick_touchstart():
     return 0.3
 
 
+# ROUND6 BUSY-1 (G13): a still render's progress rises as it renders. It is read from the render job
+# (the engine reports it there in an interactive session), not from `render_stats` handlers, which hear
+# only the per-frame time there: before, a still read 0 % until it was done.
+def tick_render_progress():
+    global step
+    try:
+        pump()
+        step += 1
+        if step == 1:
+            subs["render"] = subscribe("render")
+            scene = bpy.context.scene
+            scene.render.engine = 'BLENDER_EEVEE'
+            scene.eevee.taa_render_samples = 256
+            scene.render.resolution_percentage = 100
+            report["seen"] = []
+            return 0.3
+        if step == 3:
+            invoke(subs["render"], "image", 600)
+            report["sent"] = time.monotonic()
+            return 0.1
+        if step < 3:
+            return 0.3
+        view = views.get(subs["render"], {"nodes": {}})
+        state = view["nodes"].get("state:state", {}).get("value")
+        samples = view["nodes"].get("state:samples", {})
+        report["seen"].append((state, round(samples["value"], 3) if "value" in samples else None))
+        if state in ("done", "error", "cancelled") or time.monotonic() - report["sent"] > 120:
+            rising = [value for name, value in report["seen"] if name == "rendering" and value]
+            report["seen"] = report["seen"][-12:]
+            report["rising_values"] = len(rising)
+            finish("done" if state == "done" and rising and 0 < min(rising) < 1 else "error")
+            return None
+        return 0.1
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+
+
+# ROUND6 BUSY-1 (G6, G13, B1, D12): every job Blender's status bar would show is in the `jobs` view,
+# with its progress and a Stop that ends it. The sweep walks `eWM_JobType` as `WM_api.hh` declares it:
+# each type the harness can start is started, must be listed, and must end within a few seconds of
+# its Stop (sent while its operator holds a modal handler, where it has one); every other type is in
+# `_JOBS_NOT_STARTED` with the reason. A type in neither fails.
+def _job_types():
+    import os
+    import re
+    header = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "WM_api.hh")
+    with open(header) as f:
+        text = f.read()
+    body = text[text.index("enum eWM_JobType {"):]
+    body = body[:body.index("};")]
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    return {name: value for value, name in enumerate(re.findall(r"WM_JOB_TYPE_(\w+)", body))}
+
+
+_JOBS_NOT_STARTED = {
+    "ANY": "not a job type",
+    "RENDER_PREVIEW": "previews: no WM_JOB_PROGRESS, so not listed, as desktop's status bar",
+    "LOAD_PREVIEW": "previews: no WM_JOB_PROGRESS, so not listed, as desktop's status bar",
+    "STUDIOLIGHT": "studio light previews: no WM_JOB_PROGRESS, so not listed, as desktop's status bar",
+    "SEQ_DRAW_THUMBNAIL": "sequencer thumbnails: no WM_JOB_PROGRESS, so not listed, as desktop's status bar",
+    "SEQ_DRAG_DROP_PREVIEW": "sequencer drag preview: no WM_JOB_PROGRESS, so not listed, as desktop's status bar",
+    "FSMENU_BOOKMARK_VALIDATE": "no job of this type is started anywhere",
+    "SHADER_COMPILATION": "not a WM job: shaders compile on the GPU module's own threads; the "
+                          "Compiling Shaders pill shows it",
+    "FILESEL_READDIR": "Blender's file browser reading a folder: listed when it runs; the iPad shows "
+                       "no file browser of Blender's to start it from here",
+    "ASSET_LIBRARY_LOAD": "an asset library loading: listed when it runs; ends by itself in a moment",
+    "CLIP_BUILD_PROXY": "needs movie footage in a clip",
+    "CLIP_TRACK_MARKERS": "needs movie footage in a clip",
+    "CLIP_SOLVE_CAMERA": "needs tracked footage",
+    "CLIP_PREFETCH": "needs movie footage in a clip",
+    "SEQ_BUILD_PROXY": "needs a movie strip",
+    "SEQ_BUILD_PREVIEW": "needs a sound strip (no sound on the iPad, G11)",
+    "ALEMBIC_IMPORT": "needs an Alembic file; the export's job is started and stopped instead",
+    "USD_IMPORT": "USD is not built for the iPad",
+    "USD_EXPORT": "USD is not built for the iPad",
+    "COMPOSITE": "the compositor's job starts from its node editor's own updates, not an operator",
+    "TRACE_IMAGE": "needs an image empty to trace",
+    "LINEART": "needs a Grease Pencil object with a Line Art modifier",
+    "UV_PACK": "ends in a moment for any mesh the harness can make",
+    "QUADRIFLOW_REMESH": "ends or fails in a moment for any mesh the harness can make",
+    "OBJECT_BAKE_TEXTURE": "Blender Internal's multires bake: needs a multires setup",
+    "CALCULATE_SIMULATION_NODES": "started by playback's simulation, not an operator here; the "
+                                  "geometry nodes bake is started instead",
+}
+
+
+def _jobs_window():
+    window = bpy.context.window_manager.windows[0]
+    area = next((a for a in window.screen.areas if a.type == 'VIEW_3D'), window.screen.areas[0])
+    region = next(r for r in area.regions if r.type == 'WINDOW')
+    return dict(window=window, screen=window.screen, area=area, region=region)
+
+
+def _jobs_mesh(name, op, **kwargs):
+    for ob in list(bpy.data.objects):
+        bpy.data.objects.remove(ob)
+    with bpy.context.temp_override(**_jobs_window()):
+        op(**kwargs)
+    ob = bpy.context.view_layer.objects.active
+    ob.name = name
+    ob.select_set(True)
+    return ob
+
+
+def _jobs_start_render(directory):
+    scene = bpy.context.scene
+    scene.render.engine = 'BLENDER_EEVEE'
+    scene.render.resolution_percentage = 25
+    scene.frame_start, scene.frame_end = 1, 2000
+    scene.render.filepath = directory + "/render_"
+    bpy.context.preferences.view.render_display_type = 'NONE'
+    with bpy.context.temp_override(**_jobs_window()):
+        return bpy.ops.render.render('INVOKE_DEFAULT', animation=True)
+
+
+def _jobs_start_pointcache(directory):
+    ob = _jobs_mesh("Cloth", bpy.ops.mesh.primitive_grid_add, x_subdivisions=80, y_subdivisions=80, size=2)
+    ob.modifiers.new("Cloth", 'CLOTH')
+    bpy.context.scene.frame_start, bpy.context.scene.frame_end = 1, 5000
+    ob.modifiers["Cloth"].point_cache.frame_end = 5000
+    with bpy.context.temp_override(**_jobs_window()):
+        return bpy.ops.ptcache.bake_all('INVOKE_DEFAULT', bake=True)
+
+
+def _jobs_start_object_bake(directory):
+    ob = _jobs_mesh("Baked", bpy.ops.mesh.primitive_uv_sphere_add, segments=64, ring_count=32)
+    scene = bpy.context.scene
+    scene.render.engine = 'CYCLES'
+    scene.cycles.device = 'CPU'
+    scene.cycles.samples = 4096
+    material = bpy.data.materials.new("Baked")
+    material.use_nodes = True
+    ob.data.materials.append(material)
+    node = material.node_tree.nodes.new('ShaderNodeTexImage')
+    node.image = bpy.data.images.new("Baked", 2048, 2048)
+    material.node_tree.nodes.active = node
+    with bpy.context.temp_override(**_jobs_window(), object=ob, active_object=ob, selected_objects=[ob]):
+        return bpy.ops.object.bake('INVOKE_DEFAULT', type='COMBINED')
+
+
+def _jobs_start_geometry_nodes(directory):
+    ob = _jobs_mesh("Simulated", bpy.ops.mesh.primitive_ico_sphere_add, subdivisions=5)
+    group = bpy.data.node_groups.new("Simulated", 'GeometryNodeTree')
+    group.interface.new_socket("Geometry", in_out='INPUT', socket_type='NodeSocketGeometry')
+    group.interface.new_socket("Geometry", in_out='OUTPUT', socket_type='NodeSocketGeometry')
+    nodes, links = group.nodes, group.links
+    inputs, outputs = nodes.new('NodeGroupInput'), nodes.new('NodeGroupOutput')
+    sim_in, sim_out = nodes.new('GeometryNodeSimulationInput'), nodes.new('GeometryNodeSimulationOutput')
+    sim_in.pair_with_output(sim_out)
+    subdivide = nodes.new('GeometryNodeSubdivideMesh')
+    subdivide.inputs["Level"].default_value = 2
+    links.new(inputs.outputs[0], sim_in.inputs[0])
+    links.new(sim_in.outputs[1], subdivide.inputs[0])
+    links.new(subdivide.outputs[0], sim_out.inputs[0])
+    links.new(sim_out.outputs[0], outputs.inputs[0])
+    modifier = ob.modifiers.new("Simulated", 'NODES')
+    modifier.node_group = group
+    bpy.context.scene.frame_start, bpy.context.scene.frame_end = 1, 100000
+    with bpy.context.temp_override(**_jobs_window(), object=ob, active_object=ob, selected_objects=[ob]):
+        return bpy.ops.object.simulation_nodes_cache_bake('INVOKE_DEFAULT', selected=True)
+
+
+def _jobs_start_light_bake(directory):
+    for ob in list(bpy.data.objects):
+        bpy.data.objects.remove(ob)
+    scene = bpy.context.scene
+    scene.render.engine = 'BLENDER_EEVEE'
+    with bpy.context.temp_override(**_jobs_window()):
+        bpy.ops.mesh.primitive_monkey_add()
+        bpy.ops.object.lightprobe_add(type='VOLUME')
+    probe = bpy.context.view_layer.objects.active
+    probe.data.resolution_x = probe.data.resolution_y = probe.data.resolution_z = 32
+    probe.data.bake_samples = 4096
+    with bpy.context.temp_override(**_jobs_window(), object=probe, active_object=probe, selected_objects=[probe]):
+        return bpy.ops.object.lightprobe_cache_bake('INVOKE_DEFAULT', subset='ALL')
+
+
+def _jobs_start_ocean(directory):
+    ob = _jobs_mesh("Ocean", bpy.ops.mesh.primitive_plane_add)
+    modifier = ob.modifiers.new("Ocean", 'OCEAN')
+    modifier.resolution = 24
+    modifier.filepath = directory + "/ocean"
+    modifier.frame_start, modifier.frame_end = 1, 5000
+    with bpy.context.temp_override(**_jobs_window(), object=ob, active_object=ob):
+        return bpy.ops.object.ocean_bake('INVOKE_DEFAULT', modifier="Ocean")
+
+
+def _jobs_start_dynamic_paint(directory):
+    ob = _jobs_mesh("Canvas", bpy.ops.mesh.primitive_grid_add, x_subdivisions=20, y_subdivisions=20)
+    ob.modifiers.new("DynamicPaint", 'DYNAMIC_PAINT')
+    with bpy.context.temp_override(**_jobs_window(), object=ob, active_object=ob):
+        bpy.ops.dpaint.type_toggle(type='CANVAS')
+    surface = ob.modifiers["DynamicPaint"].canvas_settings.canvas_surfaces[0]
+    surface.surface_format = 'IMAGE'
+    surface.image_resolution = 2048
+    surface.image_output_path = directory + "/dpaint"
+    surface.frame_start, surface.frame_end = 1, 5000
+    with bpy.context.temp_override(**_jobs_window(), object=ob, active_object=ob):
+        bpy.ops.mesh.uv_texture_add() if not ob.data.uv_layers else None
+        return bpy.ops.dpaint.bake()
+
+
+def _jobs_start_alembic(directory):
+    ob = _jobs_mesh("Exported", bpy.ops.mesh.primitive_ico_sphere_add, subdivisions=6)
+    # Moving, so each frame is written.
+    ob.keyframe_insert("location", frame=1)
+    ob.location.x = 100
+    ob.keyframe_insert("location", frame=100000)
+    ob.modifiers.new("Wave", 'WAVE')
+    with bpy.context.temp_override(**_jobs_window()):
+        return bpy.ops.wm.alembic_export(filepath=directory + "/out.abc", start=1, end=100000,
+                                         as_background_job=True)
+
+
+_JOBS_STARTED = {
+    "RENDER": _jobs_start_render,
+    "POINTCACHE": _jobs_start_pointcache,
+    "OBJECT_BAKE": _jobs_start_object_bake,
+    "BAKE_GEOMETRY_NODES": _jobs_start_geometry_nodes,
+    "LIGHT_BAKE": _jobs_start_light_bake,
+    "OBJECT_SIM_OCEAN": _jobs_start_ocean,
+    "DPAINT_BAKE": _jobs_start_dynamic_paint,
+    "ALEMBIC_EXPORT": _jobs_start_alembic,
+    "OBJECT_SIM_FLUID": None,  # Filled in below: needs its own domain.
+}
+
+
+def _jobs_start_fluid(directory):
+    domain = _jobs_mesh("Domain", bpy.ops.mesh.primitive_cube_add, size=4)
+    domain.modifiers.new("Fluid", 'FLUID')
+    domain.modifiers["Fluid"].fluid_type = 'DOMAIN'
+    settings = domain.modifiers["Fluid"].domain_settings
+    settings.resolution_max = 96
+    settings.cache_directory = directory + "/fluid"
+    settings.cache_frame_end = 5000
+    with bpy.context.temp_override(**_jobs_window()):
+        bpy.ops.mesh.primitive_uv_sphere_add(radius=0.5)
+    flow = bpy.context.view_layer.objects.active
+    flow.modifiers.new("Fluid", 'FLUID')
+    flow.modifiers["Fluid"].fluid_type = 'FLOW'
+    flow.modifiers["Fluid"].flow_settings.flow_type = 'SMOKE'
+    flow.modifiers["Fluid"].flow_settings.flow_behavior = 'INFLOW'
+    bpy.context.view_layer.objects.active = domain
+    with bpy.context.temp_override(**_jobs_window(), object=domain, active_object=domain):
+        return bpy.ops.fluid.bake_data('INVOKE_DEFAULT')
+
+
+_JOBS_STARTED["OBJECT_SIM_FLUID"] = _jobs_start_fluid
+_jobs = {"queue": None, "current": None}
+
+
+def _jobs_listed(value):
+    view = views.get(subs["jobs"])
+    prefix = "job:%d:" % value
+    if not view:
+        return None
+    for key in view["children"].get("jobs", []):
+        if key.startswith(prefix):
+            return key
+    return None
+
+
+def tick_jobs():
+    global step
+    try:
+        pump()
+        step += 1
+        if step == 1:
+            types = _job_types()
+            report["types"] = len(types)
+            unknown = sorted(set(types) - set(_JOBS_STARTED) - set(_JOBS_NOT_STARTED))
+            stale = sorted((set(_JOBS_STARTED) | set(_JOBS_NOT_STARTED)) - set(types))
+            report["unlisted_types"], report["stale_types"] = unknown, stale
+            report["not_started"] = {name: _JOBS_NOT_STARTED[name] for name in sorted(_JOBS_NOT_STARTED)}
+            report["jobs"] = {}
+            subs["jobs"] = subscribe("jobs")
+            subs["render"] = subscribe("render")
+            _jobs["types"] = types
+            _jobs["queue"] = list(_JOBS_STARTED)
+            return 0.3
+        current = _jobs["current"]
+        now = time.monotonic()
+        if current is None:
+            # The next job's scene is made only once nothing runs: a job still running on data the
+            # next set-up deletes would end the run, not test anything.
+            if views.get(subs["jobs"], {}).get("children", {}).get("jobs"):
+                _jobs.setdefault("idle_wait", now)
+                if now - _jobs["idle_wait"] < 30:
+                    return 0.2
+                report["error"] = "jobs still listed 30 s after the last one ended: %s" % (
+                    views[subs["jobs"]]["children"]["jobs"])
+                finish("error")
+                return None
+            _jobs.pop("idle_wait", None)
+            print("JOBS", json.dumps(report.get("jobs")), flush=True)
+            if not _jobs["queue"]:
+                failed = [name for name, entry in report["jobs"].items() if not entry.get("ok")]
+                report["failed"] = failed
+                finish("done" if not failed and not report["unlisted_types"] and not report["stale_types"]
+                       else "error")
+                return None
+            name = _jobs["queue"].pop(0)
+            entry = report["jobs"][name] = {}
+            _jobs["current"] = {"name": name, "value": _jobs["types"][name], "started": now}
+            try:
+                entry["start"] = sorted(_JOBS_STARTED[name](REPORT.rsplit("/", 1)[0]))
+            except Exception as ex:
+                entry["error"] = "could not start: %s" % ex
+                _jobs["current"] = None
+            return 0.1
+        entry = report["jobs"][current["name"]]
+        key = _jobs_listed(current["value"])
+        if "stop_sent" not in current:
+            if key is None:
+                if "seen" in current:
+                    entry["error"] = "ended by itself before Stop was sent"
+                    _jobs["current"] = None
+                elif now - current["started"] > 15:
+                    entry["error"] = "never listed in the jobs view"
+                    _jobs["current"] = None
+                return 0.1
+            if "seen" not in current:
+                current["seen"] = now
+                node = views[subs["jobs"]]["nodes"].get(key, {})
+                entry["label"] = node.get("label")
+                return 0.1
+            if now - current["seen"] < 0.3:
+                return 0.05
+            progress = views[subs["jobs"]]["nodes"].get(key + ":progress", {})
+            entry["progress_node"] = "value" in progress or progress.get("content") == "Data"
+            # Stop must reach work whose operator holds a modal handler (non-live commands wait).
+            entry["modal_operator"] = _touchstart_running()
+            invoke(subs["jobs"], key + ":stop", 500 + len(report["jobs"]))
+            current["stop_sent"] = now
+            current["stop_id"] = 500 + len(report["jobs"])
+            return 0.05
+        if key is None:
+            entry["stopped_after"] = round(now - current["stop_sent"], 2)
+            entry["stop_ack"] = acks.get(current["stop_id"])
+            entry["ok"] = entry["stop_ack"] == "ok" and entry["label"] is not None
+            _jobs["current"] = None
+            if current["name"] == "RENDER":
+                invoke(subs["render"], "clear", 499)
+            return 0.5
+        if now - current["stop_sent"] > 20:
+            entry["error"] = "still listed 20 s after Stop"
+            entry["stop_ack"] = acks.get(current["stop_id"])
+            _jobs["current"] = None
+            return 0.5
+        return 0.05
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+
+
 def _touchstart_enter_for(idname):
     mode, name = _touchstart_mode(idname)
     _touchstart_enter(mode, name)
@@ -2849,5 +3212,6 @@ bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets
                          "numinput": tick_numinput, "render": tick_render,
                          "fingers": tick_fingers, "undo": tick_undo,
                          "tolerance": tick_tolerance, "waiting": tick_waiting,
-                         "touchstart": tick_touchstart}.get(SCENARIO, tick_actions),
+                         "touchstart": tick_touchstart, "jobs": tick_jobs,
+                         "renderprogress": tick_render_progress}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

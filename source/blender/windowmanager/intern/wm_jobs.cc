@@ -31,6 +31,7 @@
 #include "SEQ_prefetch.hh"
 
 #include "WM_api.hh"
+#include "WM_native_ui.hh"
 #include "WM_types.hh"
 #include "wm.hh"
 #include "wm_event_types.hh"
@@ -278,6 +279,21 @@ bool WM_jobs_test(const wmWindowManager *wm, const void *owner, int job_type)
   }
 
   return false;
+}
+
+std::vector<wmJobListItem> WM_jobs_list(const wmWindowManager *wm)
+{
+  std::vector<wmJobListItem> jobs;
+  for (const wmJob &wm_job : wm->runtime->jobs) {
+    if ((wm_job.flag & WM_JOB_PROGRESS) && (wm_job.running || wm_job.suspended)) {
+      jobs.push_back({wm_job.owner,
+                      int(wm_job.job_type),
+                      wm_job.name,
+                      wm_job.worker_status.progress,
+                      wm_job.worker_status.stop});
+    }
+  }
+  return jobs;
 }
 
 float WM_jobs_progress(const wmWindowManager *wm, const void *owner)
@@ -541,6 +557,11 @@ void WM_jobs_start(wmWindowManager *wm, wmJob *wm_job)
       }
 
       wm_job->start_time = BLI_time_now_seconds();
+      /* What lists running work hears of it as it starts, as it does as the job moves on and
+       * ends (the iPad's jobs view, ROUND6 BUSY-1). */
+      if (wm_job->flag & WM_JOB_PROGRESS) {
+        WM_event_add_notifier_ex(wm, wm_job->win, NC_WM | ND_JOB, nullptr);
+      }
     }
     else {
       printf("job fails, not initialized\n");

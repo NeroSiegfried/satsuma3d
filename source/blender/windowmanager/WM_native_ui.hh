@@ -13,16 +13,43 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace blender {
 
 struct ARegion;
 struct bContext;
+struct wmWindowManager;
 struct wmKeyMapItem;
 struct wmOperator;
 struct wmOperatorType;
 struct wmNotifier;
 struct wmWindow;
+
+/* -------------------------------------------------------------------- */
+/** \name Running Work
+ * \{ */
+
+/** A job as #WM_jobs_list gives it. */
+struct wmJobListItem {
+  const void *owner;
+  /** An #eWM_JobType. */
+  int job_type;
+  std::string name;
+  /** From 0 to 1, as the job reports it (0 until it does). */
+  float progress;
+  /** It was asked to stop and has not ended yet. */
+  bool stopping;
+};
+
+/**
+ * The jobs a person is told of, as #WM_jobs_test counts them (with #WM_JOB_PROGRESS, running or
+ * about to run), in the order they were added: the interface's list of running work, as desktop
+ * Blender's status bar (ROUND6 BUSY-1). In `wm_jobs.cc`, which is built without the native UI too.
+ */
+std::vector<wmJobListItem> WM_jobs_list(const wmWindowManager *wm);
+
+/** \} */
 
 /* -------------------------------------------------------------------- */
 /** \name Blender's Loop
