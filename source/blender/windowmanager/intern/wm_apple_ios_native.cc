@@ -170,6 +170,8 @@ wmNativeInterface native_interface_create()
   native.report_added = WM_apple_ios_report;
   native.operator_finished = WM_native_ui_operator_finished;
   native.replaces_redo_panel = [] { return !WM_native_ui_desktop_mode(); };
+  /* A touch screen with no hover, in either interface (ROUND6 TOUCH-6). */
+  native.touch_screen = [] { return true; };
   native.operator_registered = ui::native_redo_operator_register;
   native.operator_freed = ui::native_redo_operator_free;
   native.redo_cleared = ui::native_redo_operator_clear;

@@ -119,6 +119,14 @@ struct wmEventHandler_Op {
   /** Workaround: special case for file-select. */
   bool is_fileselect;
 
+  /**
+   * A touch started the operation with no button down (ROUND6 TOUCH-6, see
+   * #WM_native_awaits_press): 1 while it waits for the finger, 2 while the finger is down.
+   */
+  char touch_wait;
+  /** Started by a touch with no button down: its first press is still to come. */
+  bool touch_first_press;
+
   /** Store context for this handler for derived/modal handlers. */
   struct {
     /**
@@ -192,6 +200,8 @@ float wm_pressure_curve(float raw_pressure);
 /** A finger's window pixels a point, and whether the last press was a finger's (ROUND6 TOUCH-4). */
 void wm_event_finger_point_pixels_set(float point_pixels);
 void wm_event_finger_press_note(bool is_finger);
+/** Whether the last press was a touch, a finger's or the Pencil's (ROUND6 TOUCH-6). */
+void wm_event_touch_press_note(bool is_touch);
 void wm_tablet_data_from_ghost(const GHOST_TabletData *tablet_data, wmTabletData *wmtab);
 
 /* `wm_dropbox.cc`. */

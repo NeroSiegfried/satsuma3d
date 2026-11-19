@@ -2127,6 +2127,17 @@ bool WM_cursor_test_motion_and_update(const int mval[2]) ATTR_NONNULL(1) ATTR_WA
  * taps of a double tap. */
 int WM_event_finger_drag_threshold();
 int WM_event_finger_double_tap_distance();
+/**
+ * Whether the input is a touch, which has no hover (ROUND6 TOUCH-6): the last press was a finger's
+ * or the Pencil's, or, before any press, the native interface's screen is a touch screen.
+ */
+bool WM_event_touch_input();
+/**
+ * The event a touch-started operation gets as the finger lands, and the one it gets as the finger
+ * lifts (ROUND6 TOUCH-6, see #WM_native_awaits_press): an operation that can measure from where
+ * the finger landed starts there on the first instead of jumping.
+ */
+bool WM_event_is_touch_start(const wmEvent *event);
 /** Simulated mouse events stand for a finger with \a point_pixels window pixels a point; 0 for a
  * mouse again (a test's, ROUND6 TOUCH-4). */
 void WM_event_simulate_finger(float point_pixels);

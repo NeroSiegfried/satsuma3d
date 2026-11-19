@@ -1258,4 +1258,28 @@ check('WM_event_wait_for_input_operator(win)' in bridge_text and 'bridge_waiting
 check('ui_handler_wait_for_input &&\n            (ISMOUSE_GESTURE(event->type) || event->type == NDOF_MOTION)' in system_text,
       "R6 TOUCH-5: two fingers navigate while a command waits for a click")
 
+# ROUND6 TOUCH-6 (C5, A9, E6 ii, H10): the wait for the finger is the event system's. No operator
+# keeps its own copy of the wait (only Add Object's depth step, a hover phase inside a drag-started
+# operation, asks whether the input is a touch); the gate is "a touch started this", never the
+# interface or the editor; the modal handler turns a waiting operation's press into "start here" and
+# the lift into the confirmation; operations that can measure from the landing do so on "start here".
+waits = []
+for path in sorted((ROOT / 'source/blender/editors').rglob('*.cc')):
+    text = path.read_text(encoding='utf-8', errors='replace')
+    if 'WM_native_awaits_press' in text or 'WM_native_event_is_left_press' in text or 'awaits_press' in text:
+        waits.append(path.name)
+check(waits == ['view3d_placement.cc'], "R6 TOUCH-6: no operator keeps its own wait for the finger (%s)" % waits)
+gate = (SWIFT.parents[1] / 'intern/wm_native_interface.cc').read_text(encoding='utf-8')
+gate = gate[gate.index('bool WM_native_awaits_press('):]
+gate = gate[:gate.index('\n}\n')]
+check('WM_event_touch_input()' in gate and 'replaces_redo_panel' not in gate and 'SPACE_' not in gate,
+      "R6 TOUCH-6: the wait is gated on a touch having started it, not on the interface or editor")
+check('wm_operator_touch_arm(C, op, event);' in system_text and 'WM_EVENT_TOUCH_START' in system_text and
+      'WM_EVENT_TOUCH_CONFIRM' in system_text and 'wm_touch_wait_no_keymap[]' in system_text and
+      'ended on touch-down' in system_text,
+      "R6 TOUCH-6: the modal handler waits for the finger for every operation of the class")
+for name in ('editors/transform/transform.cc', 'editors/mesh/editmesh_bevel.cc', 'editors/mesh/editmesh_inset.cc'):
+    check('WM_event_is_touch_start(event)' in (ROOT / 'source/blender' / name).read_text(encoding='utf-8'),
+          "R6 TOUCH-6: %s measures from where the finger landed" % name.rsplit('/', 1)[1])
+
 print('PASS: native shell sources ' + json.dumps(checks))

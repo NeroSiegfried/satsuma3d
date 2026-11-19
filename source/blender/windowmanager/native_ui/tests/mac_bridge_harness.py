@@ -2544,9 +2544,308 @@ def tick_waiting():
     return 0.3
 
 
+# ROUND6 TOUCH-6 (C5, A9, E6 ii, H10): the wait for the finger is the event system's. Every operator
+# with a `modal` that the event system says waits for the finger (its modal key map ends on a left
+# press, or it is listed), and every operator of TOUCH-2's class, is started in its mode as a menu
+# starts it (no button down) with the input a finger's; one finger lands on the view and lifts. It
+# must still run after the touch-down, and nothing may be logged as "ended on touch-down". Then the
+# same for transforms in the Dope Sheet and the Graph Editor (H10: once 3D View only).
+TOUCH_WAIT_LIST = getattr(lib, "WM_event_test_modal_operators", None)
+TOUCH_DOWN_ENDINGS = getattr(lib, "WM_event_test_touch_down_endings", None)
+if TOUCH_WAIT_LIST is not None:
+    TOUCH_WAIT_LIST.restype = ctypes.c_void_p
+    TOUCH_WAIT_LIST.argtypes = [ctypes.c_void_p]
+    TOUCH_DOWN_ENDINGS.restype = ctypes.c_void_p
+touchstart_state = {}
+# Operators that need properties to start, as their menus give them.
+TOUCHSTART_PROPERTIES = {
+    "WM_OT_context_modal_mouse": {"data_path_iter": "selected_editable_objects",
+                                  "data_path_item": "empty_display_size"},
+    "WM_OT_radial_control": {"data_path_primary": "tool_settings.sculpt.brush.size"},
+    "TRANSFORM_OT_transform": {"mode": 'TRANSLATION'},
+}
+# Not started: not about the pointer, or they open a window or a file browser.
+TOUCHSTART_SKIP = ("RENDER_OT_", "OBJECT_OT_bake", "SCREEN_OT_", "FILE_OT_", "WM_OT_save", "WM_OT_open",
+                   "WM_OT_link", "WM_OT_append", "WM_OT_recover", "WM_OT_splash", "WM_OT_search", "WM_OT_call",
+                   "WM_OT_url", "WM_OT_window", "UI_OT_", "SEQUENCER_OT_", "CLIP_OT_", "IMAGE_OT_", "NODE_OT_",
+                   "OUTLINER_OT_", "GRAPH_OT_", "ACTION_OT_", "NLA_OT_", "TEXT_OT_", "CONSOLE_OT_", "MARKER_OT_",
+                   "ANIM_OT_", "VIEW2D_OT_", "PAINT_OT_", "GREASE_PENCIL_OT_", "GPENCIL_OT_", "CURVES_OT_",
+                   "SCULPT_CURVES_OT_", "PARTICLE_OT_", "WM_OT_xr", "VIEW3D_OT_navigate", "VIEW3D_OT_walk",
+                   "VIEW3D_OT_fly", "WM_OT_modal_timer", "PREFERENCES_OT_", "INFO_OT_", "BUTTONS_OT_",
+                   "PALETTE_OT_", "ED_OT_", "OBJECT_OT_quick", "SOUND_OT_", "MESH_OT_knife_project")
+
+
+def _touchstart_mode(idname):
+    module = idname.split("_OT_")[0]
+    if module in ("MESH",):
+        return 'EDIT', "Cube"
+    if module in ("POSE", "POSELIB"):
+        return 'POSE', "Armature"
+    if module in ("ARMATURE",):
+        return 'EDIT', "Armature"
+    if module in ("SCULPT",) or idname in ("OBJECT_OT_voxel_size_edit", "WM_OT_radial_control"):
+        return 'SCULPT', "Cube"
+    return 'OBJECT', "Cube"
+
+
+def _touchstart_enter(mode, name):
+    ob = bpy.data.objects[name]
+    if bpy.context.object and bpy.context.object.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+    for other in bpy.context.view_layer.objects:
+        other.select_set(other == ob)
+    bpy.context.view_layer.objects.active = ob
+    if mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode=mode)
+    if mode == 'EDIT' and name == "Cube":
+        bpy.ops.mesh.select_all(action='SELECT')
+    if mode in ('POSE', 'EDIT') and name == "Armature":
+        if mode == 'POSE':
+            bpy.ops.pose.select_all(action='SELECT')
+        else:
+            bpy.ops.armature.select_all(action='SELECT')
+
+
+def _touchstart_keys():
+    """The cube's two keys afresh, at frames 1 and 10: each editor case starts from the same keys,
+    not from what the case before scaled or moved."""
+    cube = bpy.data.objects["Cube"]
+    cube.animation_data_clear()
+    location = cube.location.copy()
+    cube.keyframe_insert("location", frame=1)
+    cube.location.x += 1.0
+    cube.keyframe_insert("location", frame=10)
+    cube.location = location
+
+
+def _touchstart_endings():
+    pointer = TOUCH_DOWN_ENDINGS()
+    text = ctypes.string_at(pointer).decode()
+    lib.free(ctypes.c_void_p(pointer))
+    return [line for line in text.splitlines() if line]
+
+
+def _touchstart_running():
+    return _touch_window()["modal"]
+
+
+def _touchstart_area(ui_type):
+    """The largest area other than the 3D View as \a ui_type: (window, area, region), or the
+    text "switched" when it had to change first (its regions are laid out at the next redraw)."""
+    window = bpy.context.window_manager.windows[0]
+    areas = [area for area in window.screen.areas if area.type != 'VIEW_3D']
+    if not areas:
+        # The layout is one 3D View, which cannot be split here: the editors' cases come last, so
+        # the view itself becomes the editor.
+        _view3d()[1].ui_type = ui_type
+        return "switched"
+    area = max(areas, key=lambda area: area.width * area.height)
+    if area.ui_type != ui_type:
+        area.ui_type = ui_type
+        return "switched"
+    region = next((r for r in area.regions if r.type == 'WINDOW'), None)
+    return (window, area, region) if region is not None else None
+
+
+def tick_touchstart():
+    global step
+    try:
+        pump()
+        step += 1
+        problems = report.setdefault("problems", [])
+        if TOUCH_WAIT_LIST is None or TOUCH_WINDOW is None or SIMULATE_FINGER is None:
+            problems.append("this build has no TOUCH-6 test functions")
+            finish("error")
+            return None
+        view = _view3d()
+        st = touchstart_state
+        if view is None:
+            # The view became an editor for the last cases (see `_touchstart_area`).
+            target = st.get("target")
+            view = (target[0], target[1], target[2]) if target else (bpy.context.window_manager.windows[0], None, None)
+        window, area, region = view
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            subs["toolbar"] = subscribe("toolbar")
+            cube = bpy.data.objects["Cube"]
+            cube.keyframe_insert("location", frame=1)
+            cube.location.x += 1.0
+            cube.keyframe_insert("location", frame=10)
+            cube.location.x -= 1.0
+            bpy.ops.object.armature_add(location=(3.0, 0.0, 0.0))
+            bpy.context.object.name = "Armature"
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.armature.extrude_move(TRANSFORM_OT_translate={"value": (0.0, 0.0, 1.0)})
+            bpy.ops.object.mode_set(mode='OBJECT')
+            # Keys on either side of the current frame, for Pose's In-Betweens.
+            armature = bpy.data.objects["Armature"]
+            for frame, angle in ((1, 0.0), (9, 0.6)):
+                for bone in armature.pose.bones:
+                    bone.rotation_mode = 'XYZ'
+                    bone.rotation_euler.x = angle
+                    bone.keyframe_insert("rotation_euler", frame=frame)
+            bpy.context.scene.frame_set(5)
+            pointer = TOUCH_WAIT_LIST(bpy.context.as_pointer())
+            rows = [line.split("|", 1) for line in ctypes.string_at(pointer).decode().splitlines() if line]
+            lib.free(ctypes.c_void_p(pointer))
+            st["refusals"] = dict(rows)
+            members = sorted(name for name, why in rows if not why)
+            ESCAPE_OPS.restype = ctypes.c_void_p
+            pointer = ESCAPE_OPS()
+            escape = [line.split("|")[0] for line in ctypes.string_at(pointer).decode().splitlines() if line]
+            lib.free(ctypes.c_void_p(pointer))
+            report["modal operators"] = len(rows)
+            report["wait for the finger"] = len(members)
+            report["not known to end on a press (no modal key map, not listed)"] = sorted(
+                name for name, why in rows if why == "not known to end on a left press")
+            queue = sorted(set(members) | set(escape))
+            # The editors first (H10): the 3D View is made each editor in turn, then a 3D View again.
+            st["queue"] = [("DOPESHEET", "TRANSFORM_OT_transform:TIME_SCALE"),
+                           ("DOPESHEET", "TRANSFORM_OT_transform:TIME_TRANSLATE"),
+                           ("FCURVES", "TRANSFORM_OT_translate"),
+                           ("VIEW_3D", "")]
+            st["queue"] += [("view", name) for name in queue if not name.startswith(TOUCHSTART_SKIP)]
+            st.update(results={}, not_started={})
+            # The input is a finger's from now on (2 pixels a point): a menu's command started now is
+            # one a touch started.
+            SIMULATE_FINGER(2.0)
+            _touchstart_endings()
+            return 0.5
+        phase = st.get("phase")
+        if phase == "down":
+            # Started, waiting: one finger lands away from where the pointer was.
+            target_window, _area, target_region, idname = st["target"]
+            x = target_region.x + target_region.width * 0.6
+            y = target_region.y + target_region.height * 0.4
+            st["point"] = (x, y)
+            _simulate(target_window, 'MOUSEMOVE', 'NOTHING', x, y)
+            _simulate(target_window, 'LEFTMOUSE', 'PRESS', x, y)
+            st["phase"] = "check down"
+            return 0.4
+        if phase == "check down":
+            target_window, _area, _region, idname = st["target"]
+            entry = st["results"][idname]
+            entry["running after touch-down"] = _touchstart_running()
+            ended = _touchstart_endings()
+            if ended:
+                problems.append("TOUCH-6: %s ended on touch-down" % ", ".join(ended))
+            if entry["waits"] and not entry["running after touch-down"]:
+                problems.append("TOUCH-6: %s waits for the finger but did not run after it landed" % idname)
+            x, y = st["point"]
+            _simulate(target_window, 'MOUSEMOVE', 'NOTHING', x + 30, y + 10)
+            _simulate(target_window, 'LEFTMOUSE', 'RELEASE', x + 30, y + 10)
+            st["phase"] = "check lift"
+            return 0.4
+        if phase == "check lift":
+            target_window, _area, _region, idname = st["target"]
+            entry = st["results"][idname]
+            entry["running after lift"] = _touchstart_running()
+            ended = _touchstart_endings()
+            if ended:
+                problems.append("TOUCH-6: %s ended on touch-down" % ", ".join(ended))
+            st["phase"] = None
+            if entry["running after lift"]:
+                _simulate(target_window, 'ESC', 'PRESS', region.x + 12, region.y + 12)
+                _simulate(target_window, 'ESC', 'RELEASE', region.x + 12, region.y + 12)
+                return 0.4
+        queue = st["queue"]
+        while queue:
+            where, name = queue.pop(0)
+            if where == "VIEW_3D":
+                # Back to the 3D View for the rest.
+                if _touchstart_running():
+                    queue.insert(0, (where, name))
+                    _simulate(window, 'ESC', 'PRESS', 12, 12)
+                    _simulate(window, 'ESC', 'RELEASE', 12, 12)
+                    return 0.5
+                if _view3d() is None:
+                    st["target"][1].ui_type = 'VIEW_3D'
+                    return 0.5
+                continue
+            idname, _, mode_value = name.partition(":")
+            module, opname = idname.split("_OT_")
+            operator = getattr(getattr(bpy.ops, module.lower()), opname)
+            properties = dict(TOUCHSTART_PROPERTIES.get(idname, {}))
+            if mode_value:
+                properties["mode"] = mode_value
+            if where == "view":
+                mode, ob = _touchstart_enter_for(idname)
+                target = (window, area, region)
+            else:
+                if _touchstart_running():
+                    # Never change an editor under a running operation.
+                    queue.insert(0, (where, name))
+                    _simulate(window, 'ESC', 'PRESS', 12, 12)
+                    _simulate(window, 'ESC', 'RELEASE', 12, 12)
+                    return 0.5
+                _touchstart_enter('OBJECT', "Cube")
+                _touchstart_keys()
+                found = _touchstart_area(where)
+                if found == "switched":
+                    queue.insert(0, (where, name))
+                    return 0.5
+                if found is None:
+                    st["not_started"].setdefault("no such editor", []).append(name)
+                    continue
+                target = found
+                with bpy.context.temp_override(window=target[0], area=target[1], region=target[2]):
+                    bpy.ops.action.select_all(action='SELECT') if where == "DOPESHEET" else \
+                        bpy.ops.graph.select_all(action='SELECT')
+            with bpy.context.temp_override(window=target[0], area=target[1], region=target[2]):
+                if not operator.poll():
+                    st["not_started"].setdefault("poll fails here", []).append(name)
+                    continue
+                try:
+                    result = operator('INVOKE_DEFAULT', **properties)
+                except Exception as error:
+                    st["not_started"].setdefault("refused", []).append(
+                        "%s: %s" % (name, str(error).splitlines()[0][:80]))
+                    continue
+            if 'RUNNING_MODAL' not in result:
+                st["not_started"].setdefault("did not wait", []).append(name)
+                continue
+            key = name if where == "view" else where + ":" + name
+            waits = not st["refusals"].get(idname, "unknown")
+            st["results"][key] = {"waits": waits, "why not": st["refusals"].get(idname, "unknown")}
+            st["target"] = (target[0], target[1], target[2], key)
+            st["phase"] = "down"
+            print("touchstart: started", key, flush=True)
+            return 0.4
+        if bpy.context.object and bpy.context.object.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        SIMULATE_FINGER(0.0)
+        results = st["results"]
+        report["started"] = len(results)
+        report["waited for the finger"] = sorted(n for n, e in results.items() if e["waits"])
+        report["started, not waiting (why)"] = {n: e["why not"] for n, e in results.items() if not e["waits"]}
+        report["still running after the lift"] = sorted(n for n, e in results.items() if e.get("running after lift"))
+        report["not started"] = st["not_started"]
+        for needed in ("POSE_OT_push", "POSE_OT_relax", "WM_OT_context_modal_mouse", "TRANSFORM_OT_translate",
+                       "MESH_OT_bevel", "MESH_OT_inset", "MESH_OT_loopcut_slide",
+                       "DOPESHEET:TRANSFORM_OT_transform:TIME_SCALE", "FCURVES:TRANSFORM_OT_translate"):
+            if needed not in results:
+                problems.append("TOUCH-6: %s was not started; the sweep proves little" % needed)
+            elif not results[needed]["waits"]:
+                problems.append("TOUCH-6: %s does not wait for the finger" % needed)
+        finish("done" if not problems else "error")
+        return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
+def _touchstart_enter_for(idname):
+    mode, name = _touchstart_mode(idname)
+    _touchstart_enter(mode, name)
+    return mode, name
+
+
 bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets": tick_insets, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror,
                          "extensions": tick_extensions, "keys": tick_keys,
                          "numinput": tick_numinput, "render": tick_render,
                          "fingers": tick_fingers, "undo": tick_undo,
-                         "tolerance": tick_tolerance, "waiting": tick_waiting}.get(SCENARIO, tick_actions),
+                         "tolerance": tick_tolerance, "waiting": tick_waiting,
+                         "touchstart": tick_touchstart}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

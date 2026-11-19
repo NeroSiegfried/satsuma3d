@@ -205,6 +205,8 @@ static float wm_event_simulated_finger = 0.0f;
 void WM_event_simulate_finger(const float point_pixels)
 {
   wm_event_simulated_finger = point_pixels;
+  /* A test's finger is a touch from now on, a test's mouse is not (ROUND6 TOUCH-6). */
+  wm_event_touch_press_note(point_pixels > 0.0f);
 }
 
 wmEvent *WM_event_add_simulate(wmWindow *win, const wmEvent *event_to_add)
@@ -221,6 +223,9 @@ wmEvent *WM_event_add_simulate(wmWindow *win, const wmEvent *event_to_add)
     if (ISMOUSE_BUTTON(event->type) && event->val == KM_PRESS) {
       wm_event_finger_press_note(true);
     }
+  }
+  else if (ISMOUSE_BUTTON(event->type) && event->val == KM_PRESS) {
+    wm_event_touch_press_note(false);
   }
 
   /* Logic for setting previous value is documented on the #wmEvent struct,
@@ -1697,6 +1702,8 @@ static void wm_region_mouse_co(bContext *C, wmEvent *event)
   }
 }
 
+static void wm_operator_touch_arm(bContext *C, wmOperator *op, const wmEvent *event);
+
 /**
  * Also used for exec when 'event' is nullptr.
  */
@@ -1809,6 +1816,9 @@ static wmOperatorStatus wm_operator_invoke(bContext *C,
     else if (retval & OPERATOR_RUNNING_MODAL) {
       /* Take ownership of reports (in case python provided its own). */
       op->reports->flag |= RPT_FREE;
+
+      /* A touch started it with no button down: it waits for the finger (ROUND6 TOUCH-6). */
+      wm_operator_touch_arm(C, op, event);
 
       /* Grab cursor during blocking modal operators (X11)
        * Also check for macro. */
@@ -2738,15 +2748,184 @@ static void wm_handler_operator_insert(wmWindow *win, wmEventHandler_Op *handler
   BLI_addhead(&win->runtime->modalhandlers, handler);
 }
 
+/* -------------------------------------------------------------------- */
+/** \name Touch Waits for the Press (ROUND6 TOUCH-6)
+ *
+ * A touch has no hover. An operation that follows the pointer and ends on a press, started by a
+ * touch with no button down (from a menu, the bar, Search, a key), would jump to where the finger
+ * lands and end there at once. The event system makes every such operation wait: motion is held
+ * back until the finger lands; that press is "start here", given to the operation as a mouse-move
+ * to the point (#WM_EVENT_TOUCH_START), not as a confirmation; lifting confirms (a press marked
+ * #WM_EVENT_TOUCH_CONFIRM, then the release). An operation still running after that waits for the
+ * next finger the same way. Gated on "a touch started this" (#WM_native_awaits_press), so it holds
+ * in the iPad interface, Blender's own interface and every editor alike.
+ *
+ * Which operations: those whose modal key map confirms on a left press, and those listed in
+ * #wm_touch_wait_no_keymap that do so in their own code. Gestures are not: their press is where
+ * they start (ROUND6 TOUCH-5's waiting state says so). An operation outside both that ends on the
+ * first touch after it started is logged "ended on touch-down", which the harness's `touchstart`
+ * scenario turns into a failure.
+ * \{ */
+
+enum {
+  WM_TOUCH_WAIT_NONE = 0,
+  WM_TOUCH_WAIT_PRESS = 1,
+  WM_TOUCH_WAIT_LIFT = 2,
+};
+
+/**
+ * Operations without a modal key map that follow the pointer and end on a left press in their own
+ * `modal`, each read there. A new one is found by the `touchstart` scenario as "ended on
+ * touch-down".
+ */
+static const char *const wm_touch_wait_no_keymap[] = {
+    /* `pose_slide.cc`, `pose_slide_modal`: LEFTMOUSE press confirms. */
+    "POSE_OT_push",
+    "POSE_OT_relax",
+    "POSE_OT_breakdown",
+    "POSE_OT_blend_to_neighbor",
+    "POSE_OT_blend_with_rest",
+    /* `bl_operators/wm.py`, `WM_OT_context_modal_mouse.modal`: any LEFTMOUSE ends it. */
+    "WM_OT_context_modal_mouse",
+    /* `editmesh_loopcut.cc`, `loopcut_modal`: LEFTMOUSE press cuts (Loop Cut and Slide's first). */
+    "MESH_OT_loopcut",
+    /* `editmesh_inset.cc`, `edbm_inset_modal`: LEFTMOUSE press confirms. */
+    "MESH_OT_inset",
+    /* `object_transform.cc`, `object_transform_axis_target_modal`: LEFTMOUSE ends it. */
+    "OBJECT_OT_transform_axis_target",
+    /* `wm_operators.cc`, `radial_control_modal`: LEFTMOUSE confirms. */
+    "WM_OT_radial_control",
+    /* `object_remesh.cc`, `voxel_size_edit_modal`: LEFTMOUSE release confirms. */
+    "OBJECT_OT_voxel_size_edit",
+};
+
+/** The first touch after a touch-started operation began: an operation that ends on it is said. */
+static bool wm_touch_first_press = false;
+/** What ended on touch-down since the harness last asked (`WM_event_test_touch_down_endings`). */
+static std::string wm_touch_down_endings;
+
+static bool wm_operator_is_gesture(const wmOperatorType *ot)
+{
+  return ELEM(ot->modal,
+              WM_gesture_box_modal,
+              WM_gesture_circle_modal,
+              WM_gesture_lines_modal,
+              WM_gesture_lasso_modal,
+              WM_gesture_polyline_modal,
+              WM_gesture_straightline_modal,
+              WM_gesture_straightline_oneshot_modal) ||
+         (ot->srna && RNA_struct_type_find_property(ot->srna, "wait_for_input"));
+}
+
+/**
+ * Why \a op does not wait for the finger, or null when it does: a gesture, a left press that is
+ * its input rather than its end, or an operation not known to end on a press.
+ */
+static const char *wm_touch_wait_refusal(wmWindowManager *wm, wmWindow *win, wmOperator *op)
+{
+  /* A macro waits as its running part does (Loop Cut and Slide: the cut, then the slide). */
+  wmOperator *running = op->opm ? op->opm : op;
+  wmOperatorType *ot = running->type;
+  if (wm_operator_is_gesture(ot)) {
+    return "its press is its input (a gesture, or it waits for input)";
+  }
+  if (ot->modalkeymap) {
+    wmKeyMap *keymap = WM_keymap_active(wm, ot->modalkeymap);
+    wmEvent probe = *win->runtime->eventstate;
+    probe.type = LEFTMOUSE;
+    probe.val = KM_PRESS;
+    probe.modifier = wmEventModifierFlag(0);
+    probe.keymodifier = EVENT_NONE;
+    probe.flag = eWM_EventFlag(0);
+    /* A running operation's own poll of its items, as for its events; a type alone (the
+     * harness's list) has no data to poll with. */
+    const wmKeyMapItem *kmi = nullptr;
+    if (keymap && running->customdata) {
+      kmi = wm_eventmatch_modal_keymap_items(keymap, running, &probe);
+    }
+    else if (keymap) {
+      for (const wmKeyMapItem &item : keymap->items) {
+        if (wm_eventmatch(&probe, &item)) {
+          kmi = &item;
+          break;
+        }
+      }
+    }
+    if (kmi) {
+      const char *identifier = nullptr;
+      if (keymap->modal_items) {
+        RNA_enum_identifier(static_cast<const EnumPropertyItem *>(keymap->modal_items),
+                            kmi->propvalue,
+                            &identifier);
+      }
+      if (identifier && strstr(identifier, "CONFIRM")) {
+        return nullptr;
+      }
+      return "its modal key map gives the left press another meaning";
+    }
+  }
+  for (const char *idname : wm_touch_wait_no_keymap) {
+    if (STREQ(idname, ot->idname)) {
+      return nullptr;
+    }
+  }
+  return ot->modalkeymap ? "its modal key map does not end on a left press" :
+                           "not known to end on a left press";
+}
+
+static wmEventHandler_Op *wm_operator_modal_handler_find(wmWindow *win, const wmOperator *op)
+{
+  for (wmEventHandler &handler_base : win->runtime->modalhandlers) {
+    if (handler_base.type == WM_HANDLER_TYPE_OP &&
+        reinterpret_cast<wmEventHandler_Op &>(handler_base).op == op)
+    {
+      return &reinterpret_cast<wmEventHandler_Op &>(handler_base);
+    }
+  }
+  return nullptr;
+}
+
+/** \a op was invoked by \a event and runs modal: wait for the finger when a touch started it. */
+static void wm_operator_touch_arm(bContext *C, wmOperator *op, const wmEvent *event)
+{
+  wmWindow *win = CTX_wm_window(C);
+  if (win == nullptr || event == nullptr || !WM_native_awaits_press(event)) {
+    return;
+  }
+  wmEventHandler_Op *handler = wm_operator_modal_handler_find(win, op);
+  if (handler == nullptr) {
+    return;
+  }
+  handler->touch_first_press = true;
+  if (wm_touch_wait_refusal(CTX_wm_manager(C), win, op) == nullptr) {
+    handler->touch_wait = WM_TOUCH_WAIT_PRESS;
+  }
+}
+
+/** Whether \a handler is still in \a handlers with \a op (an operation that ended frees it). */
+static bool wm_handler_op_alive(ListBaseT<wmEventHandler> *handlers,
+                                const wmEventHandler_Op *handler,
+                                const wmOperator *op)
+{
+  for (wmEventHandler &handler_base : *handlers) {
+    if (&handler_base == &handler->head) {
+      return handler->op == op;
+    }
+  }
+  return false;
+}
+
+/** \} */
+
 /**
  * \warning this function removes a modal handler, when finished.
  */
-static eHandlerActionFlag wm_handler_operator_call(bContext *C,
-                                                   ListBaseT<wmEventHandler> *handlers,
-                                                   wmEventHandler *handler_base,
-                                                   wmEvent *event,
-                                                   PointerRNA *properties,
-                                                   const char *kmi_idname)
+static eHandlerActionFlag wm_handler_operator_call_ex(bContext *C,
+                                                      ListBaseT<wmEventHandler> *handlers,
+                                                      wmEventHandler *handler_base,
+                                                      wmEvent *event,
+                                                      PointerRNA *properties,
+                                                      const char *kmi_idname)
 {
   wmOperatorStatus retval = OPERATOR_PASS_THROUGH;
 
@@ -2814,12 +2993,12 @@ static eHandlerActionFlag wm_handler_operator_call(bContext *C,
 
         /* Important to run 'wm_operator_finished' before setting the context members to null. */
         if (retval & OPERATOR_FINISHED) {
-          if (event->type == LEFTMOUSE && event->val == KM_PRESS &&
-              WM_native_awaits_press(nullptr))
-          {
-            /* A touch has no hover: an operation that ends as a finger lands may have jumped to
-             * it and ended at once. Logged to find those that need waiting for the press. */
+          if (wm_touch_first_press && event->type == LEFTMOUSE && event->val == KM_PRESS) {
+            /* A touch has no hover: an operation a touch started that ends as the finger first
+             * lands jumped to it and ended at once. It belongs in "Touch Waits for the Press"
+             * (ROUND6 TOUCH-6); the harness fails on it. */
             WM_native_ui_session_log("modal", (std::string("ended on touch-down ") + op->type->idname).c_str());
+            wm_touch_down_endings += std::string(op->type->idname) + "\n";
           }
           const bool has_undo_step = (undo_id_prev != wm_operator_undo_active_id(wm));
           const bool has_register = (register_id_prev != wm_operator_register_active_id(wm));
@@ -2941,6 +3120,143 @@ static eHandlerActionFlag wm_handler_operator_call(bContext *C,
   }
 
   return WM_HANDLER_BREAK;
+}
+
+/**
+ * \warning this function removes a modal handler, when finished.
+ * A touch-started operation's press and lift are turned into "start here" and "confirm" here
+ * (ROUND6 TOUCH-6, see "Touch Waits for the Press").
+ */
+static eHandlerActionFlag wm_handler_operator_call(bContext *C,
+                                                   ListBaseT<wmEventHandler> *handlers,
+                                                   wmEventHandler *handler_base,
+                                                   wmEvent *event,
+                                                   PointerRNA *properties,
+                                                   const char *kmi_idname)
+{
+  if (handler_base->type != WM_HANDLER_TYPE_OP ||
+      reinterpret_cast<wmEventHandler_Op *>(handler_base)->op == nullptr)
+  {
+    return wm_handler_operator_call_ex(C, handlers, handler_base, event, properties, kmi_idname);
+  }
+  wmEventHandler_Op *handler = reinterpret_cast<wmEventHandler_Op *>(handler_base);
+  wmOperator *op = handler->op;
+  const bool left_press = event->type == LEFTMOUSE && ELEM(event->val, KM_PRESS, KM_DBL_CLICK) &&
+                          (event->flag & WM_EVENT_TOUCH_CONFIRM) == 0;
+  const bool left_release = event->type == LEFTMOUSE && event->val == KM_RELEASE;
+
+  if (handler->touch_wait == WM_TOUCH_WAIT_PRESS) {
+    if (ISMOUSE_MOTION(event->type)) {
+      /* Nothing to follow until the finger lands. */
+      return WM_HANDLER_BREAK;
+    }
+    if (left_release) {
+      /* The lift of the tap that started it, when Blender saw that tap. */
+      return WM_HANDLER_BREAK;
+    }
+    if (left_press) {
+      handler->touch_wait = WM_TOUCH_WAIT_LIFT;
+      handler->touch_first_press = false;
+      wmEvent start = *event;
+      start.type = MOUSEMOVE;
+      start.val = KM_NOTHING;
+      start.flag |= WM_EVENT_TOUCH_START;
+      wm_handler_operator_call_ex(C, handlers, handler_base, &start, properties, kmi_idname);
+      return WM_HANDLER_BREAK;
+    }
+  }
+  else if (handler->touch_wait == WM_TOUCH_WAIT_LIFT) {
+    if (left_press) {
+      /* Another finger's press while the first is down: not this operation's. */
+      return WM_HANDLER_BREAK;
+    }
+    if (left_release) {
+      handler->touch_wait = WM_TOUCH_WAIT_NONE;
+      wmEvent confirm = *event;
+      confirm.val = KM_PRESS;
+      confirm.flag |= WM_EVENT_TOUCH_CONFIRM;
+      eHandlerActionFlag action = wm_handler_operator_call_ex(
+          C, handlers, handler_base, &confirm, properties, kmi_idname);
+      if (wm_handler_op_alive(handlers, handler, op)) {
+        /* Ends on the lift itself, or not yet: the release, then wait for the next finger. */
+        action = wm_handler_operator_call_ex(
+            C, handlers, handler_base, event, properties, kmi_idname);
+        if (wm_handler_op_alive(handlers, handler, op)) {
+          handler->touch_wait = WM_TOUCH_WAIT_PRESS;
+        }
+      }
+      return action | WM_HANDLER_BREAK;
+    }
+  }
+
+  const bool first = handler->touch_first_press && left_press;
+  if (first) {
+    handler->touch_first_press = false;
+  }
+  wm_touch_first_press = first;
+  const eHandlerActionFlag action = wm_handler_operator_call_ex(
+      C, handlers, handler_base, event, properties, kmi_idname);
+  wm_touch_first_press = false;
+  return action;
+}
+
+/** For the harness (ROUND6 TOUCH-6): why \a idname does not wait for the finger, or "" when it
+ * does; and what ended on touch-down since the last call, one per line (free with `free`). */
+extern "C" const char *WM_event_test_touch_wait(bContext *C, const char *idname)
+{
+  static std::string refusal;
+  wmOperatorType *ot = WM_operatortype_find(idname, true);
+  wmWindow *win = CTX_wm_window(C);
+  if (ot == nullptr || win == nullptr) {
+    refusal = "unknown";
+    return refusal.c_str();
+  }
+  wmOperator probe = {};
+  probe.type = ot;
+  const char *why = wm_touch_wait_refusal(CTX_wm_manager(C), win, &probe);
+  refusal = why ? why : "";
+  return refusal.c_str();
+}
+
+/** For the harness (ROUND6 TOUCH-6): every operator with a `modal`, as lines `<idname>|<why it
+ * does not wait for the finger, empty when it does>`. A macro is judged by its first part with a
+ * `modal`, the one that runs first. Free with `free`. */
+extern "C" char *WM_event_test_modal_operators(bContext *C)
+{
+  std::string text;
+  wmWindow *win = CTX_wm_window(C);
+  wmWindowManager *wm = CTX_wm_manager(C);
+  for (wmOperatorType *ot : WM_operatortypes_registered_get()) {
+    wmOperatorType *running = ot;
+    if (ot->macro.first != nullptr) {
+      running = nullptr;
+      for (wmOperatorTypeMacro &macro : ot->macro) {
+        wmOperatorType *part = WM_operatortype_find(macro.idname, true);
+        if (part && part->modal) {
+          running = part;
+          break;
+        }
+      }
+    }
+    if (running == nullptr || running->modal == nullptr || win == nullptr) {
+      continue;
+    }
+    wmOperator probe = {};
+    probe.type = running;
+    const char *why = wm_touch_wait_refusal(wm, win, &probe);
+    text += std::string(ot->idname) + "|" + (why ? why : "") + "\n";
+  }
+  char *result = static_cast<char *>(malloc(text.size() + 1));
+  memcpy(result, text.c_str(), text.size() + 1);
+  return result;
+}
+
+extern "C" char *WM_event_test_touch_down_endings()
+{
+  char *text = static_cast<char *>(malloc(wm_touch_down_endings.size() + 1));
+  memcpy(text, wm_touch_down_endings.c_str(), wm_touch_down_endings.size() + 1);
+  wm_touch_down_endings.clear();
+  return text;
 }
 
 static void wm_operator_free_for_fileselect(wmOperator *file_operator)
@@ -6420,6 +6736,8 @@ void wm_event_add_ghostevent(wmWindowManager *wm,
       wm_tablet_data_from_ghost(&bd->tablet, &event.tablet);
       if (event.val == KM_PRESS) {
         wm_event_finger_press_note(event.tablet.is_finger);
+        /* A finger or the Pencil: no hover (ROUND6 TOUCH-6). */
+        wm_event_touch_press_note(event.tablet.is_finger || event.tablet.active != EVT_TABLET_NONE);
       }
 
       wm_eventemulation(&event, false);

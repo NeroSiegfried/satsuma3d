@@ -78,6 +78,11 @@ struct wmNativeInterface {
    * interface is shown instead.
    */
   bool (*replaces_redo_panel)() = nullptr;
+  /**
+   * The screen is touched and has no hover (ROUND6 TOUCH-6): until Blender has seen a press, the
+   * input is taken to be a touch. After that, the last press says (#WM_event_touch_input).
+   */
+  bool (*touch_screen)() = nullptr;
   void (*operator_registered)(bContext *C, wmOperator *op) = nullptr;
   void (*operator_freed)(wmOperator *op) = nullptr;
   void (*redo_cleared)() = nullptr;
@@ -206,12 +211,12 @@ void WM_native_interface_set(const wmNativeInterface *native);
 
 /**
  * An operation that follows the pointer, started by \a event, should wait for the first press:
- * under a touch interface, which has no hover, when it was started without a button held down
- * (from a menu, a button or a key). That press is where it starts measuring, not a confirmation,
- * and lifting confirms, as for a tool's drag.
+ * when a touch started it (a finger or the Pencil, which have no hover; in either interface) and
+ * no button is held down (it came from a menu, a button or a key). That press is where it starts,
+ * not a confirmation, and lifting confirms, as for a tool's drag. The event system does this for
+ * every such operation (ROUND6 TOUCH-6, `wm_event_system.cc` "Touch Waits for the Press"); with
+ * a null \a event, only whether the input is a touch.
  */
 bool WM_native_awaits_press(const wmEvent *event);
-/** Whether \a event is a left press, also once a modal key-map has turned it into an item. */
-bool WM_native_event_is_left_press(const wmEvent *event);
 
 }  // namespace blender

@@ -727,6 +727,13 @@ enum eWM_EventFlag {
    * Mouse-move on trackpad/touch screen where three fingers triggered the event.
    */
   WM_EVENT_MULTITOUCH_THREE_FINGERS = (1 << 4),
+  /**
+   * A touch-started operation's "start here": the finger landed, given as a mouse-move to where
+   * it landed, not as a press (ROUND6 TOUCH-6, see #WM_event_is_touch_start).
+   */
+  WM_EVENT_TOUCH_START = (1 << 5),
+  /** A touch-started operation's confirmation: the finger lifted, given as a press. */
+  WM_EVENT_TOUCH_CONFIRM = (1 << 6),
 };
 ENUM_OPERATORS(eWM_EventFlag);
 

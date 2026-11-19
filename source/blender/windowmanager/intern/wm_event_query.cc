@@ -24,6 +24,7 @@
 #include "RNA_access.hh"
 
 #include "WM_api.hh"
+#include "WM_native_interface.hh"
 #include "WM_types.hh"
 
 #include "wm_event_system.hh"
@@ -376,6 +377,32 @@ void wm_event_finger_point_pixels_set(const float point_pixels)
 void wm_event_finger_press_note(const bool is_finger)
 {
   wm_last_press_finger = is_finger;
+  if (is_finger) {
+    wm_event_touch_press_note(true);
+  }
+}
+
+/* Whether the last press was a touch (ROUND6 TOUCH-6): -1 before any press, then 0 or 1. */
+static std::atomic<int> wm_last_press_touch = -1;
+
+void wm_event_touch_press_note(const bool is_touch)
+{
+  wm_last_press_touch = is_touch ? 1 : 0;
+}
+
+bool WM_event_is_touch_start(const wmEvent *event)
+{
+  return (event->flag & WM_EVENT_TOUCH_START) != 0;
+}
+
+bool WM_event_touch_input()
+{
+  const int touch = wm_last_press_touch.load();
+  if (touch >= 0) {
+    return touch == 1;
+  }
+  const wmNativeInterface *native = WM_native_interface();
+  return native && native->touch_screen && native->touch_screen();
 }
 
 int WM_event_finger_drag_threshold()
