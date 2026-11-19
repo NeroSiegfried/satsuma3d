@@ -633,7 +633,18 @@ extension DocumentController: UIGestureRecognizerDelegate {
     /* The finger pressed nothing yet, and its lifting is no click (ROUND6 TOUCH-2). */
     wm_apple_ios_window_hold_took_touch(model.window)
     let point = press.location(in: metalView)
-    let menu = wm_apple_ios_context_menu()
+    var menu = wm_apple_ios_context_menu()
+    /* What is under the finger, to pick one of several or what is behind (ROUND6 TOUCH-4): the
+     * desktop's Alt-click list, for objects and, in Pose Mode, bones. */
+    if ["objectmode", "posemode"].contains(model.mode), metalView.bounds.width > 0, metalView.bounds.height > 0 {
+      let fraction = CGPoint(x: point.x / metalView.bounds.width, y: point.y / metalView.bounds.height)
+      let target = "select_menu:\(fraction.x),\(fraction.y)"
+      let pick = UIAction(title: "Select Menu…", image: UIImage(systemName: "square.stack.3d.up")) { [weak model] _ in
+        model?.send(target, .invoke)
+      }
+      let first: [UIMenuElement] = [UIMenu(options: .displayInline, children: [pick])]
+      menu = UIMenu(title: menu.title, children: first + menu.children)
+    }
     guard !menu.children.isEmpty else { return }
     ShellMenuPresenter.shared.present(menu, at: CGRect(origin: point, size: CGSize(width: 1, height: 1)),
                                       in: metalView, kind: "context menu")

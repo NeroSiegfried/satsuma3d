@@ -1198,4 +1198,44 @@ check(0 < run_body.find('WM_native_ui_undo_refusal(C)') < run_body.find('WM_oper
       'WM_native_ui_undo_refusal(C); !refusal.empty()' in bridge_text and 'ELEM(target, "undo", "redo") ||' in bridge_text,
       "R6 TOUCH-3: one gate for Undo and Redo, answered at once, never held back")
 
+# ROUND6 TOUCH-4 (A13, E2, H11): a finger's tolerances are a finger's. Nothing of the bridge or the
+# shell writes the person's click, drag or motion thresholds or tooltips; every finger GHOST sends
+# Blender is marked as one; the WM picks a finger's distances in points where the event says so.
+writers_u = []
+for path in [SWIFT.parents[1] / 'intern' / name for name in ('wm_native_ui.cc', 'wm_native_ui_views.cc',
+                                                              'wm_apple_ios_native.cc',
+                                                              'wm_apple_ios_finger_tweak.cc')]:
+    for number, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
+        if re.search(r'U\.(drag_threshold\w*|move_threshold|dbl_click_time)\s*=|U\.flag\s*&=\s*~USER_TOOLTIPS', line):
+            writers_u.append('%s:%d' % (path.name, number))
+        if path.name == 'wm_apple_ios_finger_tweak.cc' and 'U.drag_threshold' in line:
+            writers_u.append('%s:%d (a finger measured with the tablet\'s threshold)' % (path.name, number))
+check(not writers_u, "R6 TOUCH-4: the person's thresholds and tooltips are theirs, and a finger is measured as one (%s)"
+      % writers_u)
+query_text = (SWIFT.parents[1] / 'intern/wm_event_query.cc').read_text(encoding='utf-8')
+system_text = (SWIFT.parents[1] / 'intern/wm_event_system.cc').read_text(encoding='utf-8')
+drag_body = query_text[query_text.index('int WM_event_drag_threshold(const wmEvent *event)'):]
+drag_body = drag_body[:drag_body.index('\n}\n')]
+dbl_body = system_text[system_text.index('static bool wm_event_is_double_click('):]
+dbl_body = dbl_body[:dbl_body.index('\n}\n')]
+check('event->tablet.is_finger' in drag_body and 'WM_event_finger_double_tap_distance()' in dbl_body and
+      'wm_cursor_motion_threshold()' in query_text[query_text.index('bool WM_cursor_test_motion_and_update('):] and
+      'Active == GHOST_kTabletModeFinger' in system_text,
+      "R6 TOUCH-4: drag, double tap and same place are a finger's when the event is one")
+# Every place GHOST builds a finger's event marks it: the tool finger, the tap, the gizmo's drag,
+# the interface (13B) through the pointer path while a finger sends it.
+for name in ('- (void)fingerToolPress', '- (void)viewClickAt:(CGPoint)location'):
+    body = objc_method(ghost_r6, name)
+    check('[self fingerTabletData]' in body and 'GHOST_TABLET_DATA_NONE' not in body,
+          "R6 TOUCH-4: %s marks a finger's event" % name.split(')')[1].split(':')[0])
+move_body = objc_method(ghost_r6, '- (void)sendPointerMove:(CGPoint)location')
+check('pointer_finger ? [self fingerTabletData]' in move_body and 'pointer_finger = touch.type == UITouchTypeDirect;' in ghost_r6,
+      "R6 TOUCH-4: a finger on Blender's interface is marked as one through the pointer path")
+keymap_text = (ROOT / 'scripts/presets/keyconfig/keymap_data/blender_default.py').read_text(encoding='utf-8')
+check("(params.use_mouse_emulate_3_button or _touch_platform()) and params.select_mouse == 'LEFTMOUSE'" in keymap_text,
+      "R6 TOUCH-4: a double tap on an edge selects its loop on the iPad (PLAN 4.3)")
+check('"Select Menu…"' in (SWIFT / 'DocumentWindow.swift').read_text(encoding='utf-8') and
+      'startswith("select_menu:")' in bridge_text and 'RNA_boolean_set(&props, "enumerate", true);' in bridge_text,
+      "R6 TOUCH-4: the long-press menu has Select Menu…, the list of what is under the finger")
+
 print('PASS: native shell sources ' + json.dumps(checks))

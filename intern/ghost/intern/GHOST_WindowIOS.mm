@@ -376,6 +376,7 @@ UIWindow *document_window = nil;
   finger_tool_enabled = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
   view_finger_hovered = false;
   view_gizmo_drag = false;
+  pointer_finger = false;
   finger_pending = false;
   finger_scripted = false;
   finger_landed_modal = false;
@@ -927,6 +928,16 @@ static constexpr CGFloat ios_finger_slop = 10.0;
 /** How long after a Pencil lifts a finger landing is still taken for the palm. */
 static constexpr CFTimeInterval ios_palm_seconds = 0.5;
 
+/** A finger's tablet data: no tablet, marked as a finger with the window's pixels a point
+ * (ROUND6 TOUCH-4). */
+- (GHOST_TabletData)fingerTabletData
+{
+  GHOST_TabletData data = GHOST_TABLET_DATA_NONE;
+  data.Active = GHOST_kTabletModeFinger;
+  data.PointPixels = window ? window->getWindowScaleFactor() : 1.0f;
+  return data;
+}
+
 - (void)fingerToolBegan:(CGPoint)location
 {
   finger_pending = true;
@@ -934,7 +945,7 @@ static constexpr CFTimeInterval ios_palm_seconds = 0.5;
   finger_landed_modal = [self touchAnswerAt:location].modal;
   finger_drag_owned = false;
   pencil_button_active = false;
-  tablet_data = GHOST_TABLET_DATA_NONE;
+  tablet_data = [self fingerTabletData];
 }
 
 /** The finger is a drag: the press where it began. */
@@ -943,7 +954,7 @@ static constexpr CFTimeInterval ios_palm_seconds = 0.5;
   finger_pending = false;
   pencil_button_active = true;
   finger_drag_owned = !finger_landed_modal;
-  tablet_data = GHOST_TABLET_DATA_NONE;
+  tablet_data = [self fingerTabletData];
   CGPoint start = window->scalePointToWindow(finger_start);
   UserInputEvent down(&start, nullptr, nullptr, true);
   down.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
@@ -1232,6 +1243,15 @@ static constexpr CFTimeInterval ios_palm_seconds = 0.5;
       }
     }
     for (UITouch *touch in event.allTouches) {
+      /* What this touch sends Blender is a finger's, or not (ROUND6 TOUCH-4). */
+      pointer_finger = touch.type == UITouchTypeDirect;
+      if (pointer_finger && touch.phase == UITouchPhaseBegan) {
+        if (const GHOST_IOSNativeInterface *native = GHOST_ios_native_interface();
+            native && native->finger_point_pixels)
+        {
+          native->finger_point_pixels(window->getWindowScaleFactor());
+        }
+      }
       if ([palm_touches containsObject:touch]) {
         if (touch.phase == UITouchPhaseEnded || touch.phase == UITouchPhaseCancelled) {
           [palm_touches removeObject:touch];
@@ -1440,6 +1460,7 @@ static constexpr CFTimeInterval ios_palm_seconds = 0.5;
           break;
       }
     }
+    pointer_finger = false;
   }
   [super sendEvent:event];
 }
@@ -1836,7 +1857,7 @@ static NSString *ios_event_kind(UIEvent *event)
 
 - (void)sendPointerMove:(CGPoint)location
 {
-  tablet_data = GHOST_TABLET_DATA_NONE;
+  tablet_data = pointer_finger ? [self fingerTabletData] : GHOST_TABLET_DATA_NONE;
   CGPoint point = window->scalePointToWindow(location);
   UserInputEvent event_info(&point, nullptr, nullptr, false);
   event_info.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
@@ -1900,7 +1921,9 @@ static GHOST_TButton pointer_button(int index)
                                                               GHOST_kEventButtonUp,
                                                           window,
                                                           pointer_button(index),
-                                                          GHOST_TABLET_DATA_NONE));
+                                                          pointer_finger ?
+                                                              [self fingerTabletData] :
+                                                              GHOST_TABLET_DATA_NONE));
   }
   pointer_buttons = buttons;
 }
@@ -2246,6 +2269,14 @@ enum {
 {
   UNUSED_VARS(timer);
   [self stopInterfaceHoldTimer];
+  /* A finger's hold (ROUND6 TOUCH-4). */
+  pointer_finger = true;
+  [self interfaceHoldPress];
+  pointer_finger = false;
+}
+
+- (void)interfaceHoldPress
+{
   if ((interface_touch == nil && !interface_scripted) || interface_state != IOS_INTERFACE_PENDING) {
     return;
   }
@@ -2446,6 +2477,14 @@ enum {
  * is not interface (at landing), or the gate is closed.
  */
 - (BOOL)scriptInterfaceTouch:(int)phase at:(CGPoint)point
+{
+  pointer_finger = true;
+  const BOOL taken = [self scriptInterfaceTouchFinger:phase at:point];
+  pointer_finger = false;
+  return taken;
+}
+
+- (BOOL)scriptInterfaceTouchFinger:(int)phase at:(CGPoint)point
 {
   const CFTimeInterval now = CACurrentMediaTime();
   if (phase == 0) {
@@ -2789,7 +2828,7 @@ static UIBezierPath *pointer_move()
 - (void)viewClickAt:(CGPoint)location
 {
   CGPoint point = window->scalePointToWindow(location);
-  tablet_data = GHOST_TABLET_DATA_NONE;
+  tablet_data = [self fingerTabletData];
   UserInputEvent event_info(&point, nullptr, nullptr, false);
   event_info.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
   event_info.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_DOWN);
@@ -2846,6 +2885,14 @@ static UIBezierPath *pointer_move()
  * while it does. */
 - (BOOL)viewGizmoDrag:(GHOSTUIPanGestureRecognizer *)sender
 {
+  pointer_finger = true;
+  const BOOL taken = [self viewGizmoDragFinger:sender];
+  pointer_finger = false;
+  return taken;
+}
+
+- (BOOL)viewGizmoDragFinger:(GHOSTUIPanGestureRecognizer *)sender
+{
   if (sender.state == UIGestureRecognizerStateBegan) {
     [self endViewGizmoDrag:YES];
     if (!view_finger_hovered || sender.numberOfTouches != 1 ||
@@ -2856,7 +2903,7 @@ static UIBezierPath *pointer_move()
     }
     view_gizmo_drag = true;
     CGPoint start = window->scalePointToWindow(view_finger_start);
-    tablet_data = GHOST_TABLET_DATA_NONE;
+    tablet_data = [self fingerTabletData];
     UserInputEvent down(&start, nullptr, nullptr, false);
     down.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
     down.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_DOWN);

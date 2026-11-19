@@ -2313,8 +2313,104 @@ def tick_undo():
     return 0.3
 
 
+# ROUND6 TOUCH-4 (A13, E2, H11): a finger's tolerances are a finger's. The bridge no longer
+# overwrites the person's thresholds and tooltips on a layout pass; and a finger (simulated events
+# marked as one, 2 pixels a point) that taps twice 4 pixels apart over two stacked objects picks the
+# one behind on the second tap, as "click again in the same place" does on the desktop, while a
+# mouse with a motion threshold of 0 (what the bridge used to force) picks the front one again.
+SIMULATE_FINGER = getattr(lib, "WM_native_ui_test_simulate_finger", None)
+if SIMULATE_FINGER is not None:
+    SIMULATE_FINGER.argtypes = [ctypes.c_float]
+tolerance_state = {}
+
+
+def _tap(window, x, y):
+    _simulate(window, 'MOUSEMOVE', 'NOTHING', x, y)
+    _simulate(window, 'LEFTMOUSE', 'PRESS', x, y)
+    _simulate(window, 'LEFTMOUSE', 'RELEASE', x, y)
+
+
+def tick_tolerance():
+    global step
+    try:
+        pump()
+        step += 1
+        problems = report.setdefault("problems", [])
+        if SIMULATE_FINGER is None:
+            problems.append("this build has no WM_native_ui_test_simulate_finger")
+            finish("error")
+            return None
+        window, area, region = _view3d()
+        prefs = bpy.context.preferences
+        wanted = {"drag_threshold_mouse": 7, "drag_threshold_tablet": 11, "drag_threshold": 4, "move_threshold": 5}
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            subs["toolbar"] = subscribe("toolbar")
+            for key, value in wanted.items():
+                setattr(prefs.inputs, key, value)
+            prefs.view.show_tooltips = True
+            # Two objects under one point: the cube and a smaller one inside it.
+            bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0.0, 0.0, 0.0))
+            bpy.context.active_object.name = "Inner"
+            return 1.0
+        if step == 2:
+            # Layout passes have run: the person's values stand.
+            now = {key: getattr(prefs.inputs, key) for key in wanted}
+            report["preferences after layout"] = dict(now, show_tooltips=prefs.view.show_tooltips)
+            if now != wanted or not prefs.view.show_tooltips:
+                problems.append("TOUCH-4: the bridge changed the person's thresholds or tooltips: %s" % now)
+            from bpy_extras import view3d_utils
+            rv3d = area.spaces[0].region_3d
+            centre = view3d_utils.location_3d_to_region_2d(region, rv3d, (0.0, 0.0, 0.0))
+            tolerance_state["point"] = (region.x + centre.x, region.y + centre.y)
+            bpy.ops.object.select_all(action='DESELECT')
+            # The mouse first, as the bridge left it: "the same place" was the same pixel.
+            prefs.inputs.move_threshold = 0
+            x, y = tolerance_state["point"]
+            _tap(window, x, y)
+            return 0.5
+        if step == 3:
+            tolerance_state["mouse first"] = bpy.context.view_layer.objects.active.name
+            x, y = tolerance_state["point"]
+            _tap(window, x + 4, y)
+            return 0.5
+        if step == 4:
+            report["mouse, move threshold 0, two clicks 4 px apart"] = [
+                tolerance_state["mouse first"], bpy.context.view_layer.objects.active.name]
+            prefs.inputs.move_threshold = wanted["move_threshold"]
+            bpy.ops.object.select_all(action='DESELECT')
+            SIMULATE_FINGER(2.0)
+            x, y = tolerance_state["point"]
+            # Away first, so the finger's first tap is a fresh place.
+            _tap(window, x + 200, y + 200)
+            return 0.5
+        if step == 5:
+            x, y = tolerance_state["point"]
+            _tap(window, x, y)
+            return 0.5
+        if step == 6:
+            tolerance_state["finger first"] = bpy.context.view_layer.objects.active.name
+            x, y = tolerance_state["point"]
+            _tap(window, x + 4, y)
+            return 0.5
+        if step == 7:
+            first, second = tolerance_state["finger first"], bpy.context.view_layer.objects.active.name
+            report["finger, two taps 4 px apart"] = [first, second]
+            if first == second:
+                problems.append("TOUCH-4: a finger's second tap 4 px away did not pick what is behind")
+            SIMULATE_FINGER(0.0)
+            finish("done" if not problems else "error")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
 bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets": tick_insets, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror,
                          "extensions": tick_extensions, "keys": tick_keys,
                          "numinput": tick_numinput, "render": tick_render,
-                         "fingers": tick_fingers, "undo": tick_undo}.get(SCENARIO, tick_actions),
+                         "fingers": tick_fingers, "undo": tick_undo,
+                         "tolerance": tick_tolerance}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

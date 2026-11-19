@@ -144,6 +144,9 @@ struct GHOST_IOSNativeInterface {
   /** A line in the session's log, such as input arriving while something is presented above the
    * viewport (ROUND5 9G.1). */
   void (*log)(const char *kind, const char *text) = nullptr;
+  /** A finger landed in a window with \a point_pixels pixels a point: a finger's distances, given in
+   * points, are measured with it (ROUND6 TOUCH-4). */
+  void (*finger_point_pixels)(float point_pixels) = nullptr;
 };
 
 /** Register the native interface, before the app starts, see #GHOST_iosmain. */

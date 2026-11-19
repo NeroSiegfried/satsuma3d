@@ -54,6 +54,7 @@
 #  include "WM_apple_ios.hh"
 #  include "WM_native_ui.hh"
 #  include "WM_native_interface.hh"
+#  include "wm_event_system.hh"
 #  include "WM_toolsystem.hh"
 #  include "WM_types.hh"
 
@@ -259,7 +260,8 @@ void finger_move(bContext *C, wmWindow *win, Finger &finger, const int2 &xy)
     return;
   }
   if (!finger.dragging) {
-    const float threshold = U.drag_threshold_tablet * UI_SCALE_FAC;
+    /* A finger's distance, in points (ROUND6 TOUCH-4). */
+    const float threshold = WM_event_finger_drag_threshold();
     if (math::distance(float2(xy), float2(finger.start_xy)) < threshold) {
       return;
     }
@@ -301,6 +303,9 @@ void finger_tap(bContext *C, wmWindow *win, const Finger &finger)
   event.val = KM_CLICK;
   event.xy[0] = finger.start_xy.x;
   event.xy[1] = finger.start_xy.y;
+  /* A finger's tap: "the same place" is a finger's (ROUND6 TOUCH-4). */
+  event.tablet.is_finger = true;
+  wm_event_finger_press_note(true);
   const bool shift = (event.modifier & KM_SHIFT) != 0;
   PointerRNA props = WM_operator_properties_create_ptr(ot);
   RNA_boolean_set(&props, "deselect_all", !shift);
@@ -321,7 +326,7 @@ void finger_lift(bContext *C, wmWindow *win, const int index, const bool cancell
   }
   else if (!cancelled && !finger.dragging && fingers_in_gesture == 1 &&
            math::distance(float2(finger.xy), float2(finger.start_xy)) <
-               U.drag_threshold_tablet * UI_SCALE_FAC)
+               WM_event_finger_drag_threshold())
   {
     finger_tap(C, win, finger);
   }

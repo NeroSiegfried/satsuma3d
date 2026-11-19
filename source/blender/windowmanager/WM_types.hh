@@ -742,6 +742,8 @@ struct wmTabletData {
   float2 tilt;
   /** Interpret mouse motion as absolute as typical for tablets. */
   char is_motion_absolute;
+  /** A finger on a touch screen, not a mouse (iOS, ROUND6 TOUCH-4): see #WM_event_drag_threshold. */
+  char is_finger;
 };
 
 /**

@@ -2118,6 +2118,13 @@ char WM_event_utf8_to_ascii(const wmEvent *event) ATTR_NONNULL(1) ATTR_WARN_UNUS
  * changing regions resets this value to (-1, -1).
  */
 bool WM_cursor_test_motion_and_update(const int mval[2]) ATTR_NONNULL(1) ATTR_WARN_UNUSED_RESULT;
+/** A finger's distances in the window's pixels (ROUND6 TOUCH-4): to start a drag, and between the
+ * taps of a double tap. */
+int WM_event_finger_drag_threshold();
+int WM_event_finger_double_tap_distance();
+/** Simulated mouse events stand for a finger with \a point_pixels window pixels a point; 0 for a
+ * mouse again (a test's, ROUND6 TOUCH-4). */
+void WM_event_simulate_finger(float point_pixels);
 
 /**
  * Return true if this event type is a candidate for being flagged as consecutive.

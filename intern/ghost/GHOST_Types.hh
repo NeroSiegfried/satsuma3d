@@ -187,7 +187,10 @@ enum GHOST_TCapabilityFlag {
 enum GHOST_TTabletMode {
   GHOST_kTabletModeNone = 0,
   GHOST_kTabletModeStylus,
-  GHOST_kTabletModeEraser
+  GHOST_kTabletModeEraser,
+  /** Not a tablet: a finger on a touch screen (iOS, ROUND6 TOUCH-4). Blender reads it as no tablet,
+   * marked as a finger, so a finger's click, drag and double-click distances are a finger's. */
+  GHOST_kTabletModeFinger,
 };
 
 enum GHOST_TTabletAPI {
@@ -203,6 +206,9 @@ struct GHOST_TabletData {
   float Pressure;           /* range 0.0 (not touching) to 1.0 (full pressure) */
   float Xtilt;              /* range -1.0 (left) to +1.0 (right) */
   float Ytilt;              /* range -1.0 (away from user) to +1.0 (toward user) */
+  /** With #GHOST_kTabletModeFinger only: the window's pixels a point, for distances given in
+   * points. Unset otherwise. */
+  float PointPixels;
 };
 
 static const GHOST_TabletData GHOST_TABLET_DATA_NONE = {

@@ -224,6 +224,9 @@ typedef struct UserInputEvent {
    * whether an operator was already waiting as it landed; whether its press began a drag of the
    * tool's own (only that is undone with Escape when a second finger lands). A check script's
    * `finger` step holds the state instead of a touch. */
+  /* The pointer events sent now are a finger's (ROUND6 TOUCH-4): marked as one, so Blender
+   * measures them with a finger's distances. */
+  bool pointer_finger;
   bool finger_pending;
   bool finger_scripted;
   CGPoint finger_start;

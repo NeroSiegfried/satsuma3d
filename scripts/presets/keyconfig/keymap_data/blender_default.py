@@ -228,6 +228,14 @@ class Params:
 # Constants
 
 from math import pi
+
+
+def _touch_platform():
+    # The iPad, where the interface is touched: Python reports `ios` there.
+    import sys
+    return sys.platform == "ios" or "iphoneos" in getattr(sys.implementation, "_multiarch", "")
+
+
 PI_2 = pi / 2.0
 
 # Physical layout.
@@ -5602,7 +5610,9 @@ def km_edit_mesh(params):
         *_template_items_context_menu("VIEW3D_MT_edit_mesh_context_menu", params.context_menu_event),
     ])
 
-    if params.use_mouse_emulate_3_button and params.select_mouse == 'LEFTMOUSE':
+    # A finger has no Alt: on the iPad a double tap on an edge selects its loop, as with an emulated
+    # three-button mouse (PLAN 4.3, ROUND6 TOUCH-4).
+    if (params.use_mouse_emulate_3_button or _touch_platform()) and params.select_mouse == 'LEFTMOUSE':
         items.extend([
             ("mesh.loop_select", {"type": params.select_mouse, "value": 'DOUBLE_CLICK'}, None),
             ("mesh.loop_select", {"type": params.select_mouse, "value": 'DOUBLE_CLICK', "shift": True},

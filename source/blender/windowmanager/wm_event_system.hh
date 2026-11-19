@@ -189,6 +189,9 @@ void wm_event_handler_ui_cancel_ex(bContext *C,
  * Applies the global tablet pressure correction curve.
  */
 float wm_pressure_curve(float raw_pressure);
+/** A finger's window pixels a point, and whether the last press was a finger's (ROUND6 TOUCH-4). */
+void wm_event_finger_point_pixels_set(float point_pixels);
+void wm_event_finger_press_note(bool is_finger);
 void wm_tablet_data_from_ghost(const GHOST_TabletData *tablet_data, wmTabletData *wmtab);
 
 /* `wm_dropbox.cc`. */

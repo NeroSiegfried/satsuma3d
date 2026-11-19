@@ -27,6 +27,8 @@
 #include "WM_types.hh"
 
 #include "wm_event_system.hh"
+
+#include <atomic>
 #include "wm_event_types.hh"
 
 #include "RNA_enum_types.hh"
@@ -350,10 +352,54 @@ int WM_event_drag_direction(const wmEvent *event)
   return val;
 }
 
+/* -------------------------------------------------------------------- */
+/** \name A Finger's Distances (ROUND6 TOUCH-4)
+ *
+ * A finger on a touch screen is judged by distances in points, a finger's, not by the mouse's
+ * preferences scaled by the interface size: about 10 pt before a touch is a drag, 22 pt between
+ * the two taps of a double tap, 12 pt for "the same place" (tap again to pick what is behind). The
+ * Pencil keeps the tablet's preference, a mouse the mouse's. Chosen where the event is made: GHOST
+ * marks a finger's events (#GHOST_kTabletModeFinger) with its window's pixels a point.
+ * \{ */
+
+/* Set from the window's thread as a finger lands, read on Blender's. */
+static std::atomic<float> wm_finger_point_pixels = 1.0f;
+static std::atomic<bool> wm_last_press_finger = false;
+
+void wm_event_finger_point_pixels_set(const float point_pixels)
+{
+  if (point_pixels > 0.0f) {
+    wm_finger_point_pixels = point_pixels;
+  }
+}
+
+void wm_event_finger_press_note(const bool is_finger)
+{
+  wm_last_press_finger = is_finger;
+}
+
+int WM_event_finger_drag_threshold()
+{
+  return int(10.0f * wm_finger_point_pixels.load());
+}
+
+int WM_event_finger_double_tap_distance()
+{
+  return int(22.0f * wm_finger_point_pixels.load());
+}
+
+/** "The same place" for the last press: a finger's 12 pt, or the preference. */
+static float wm_cursor_motion_threshold()
+{
+  return wm_last_press_finger ? 12.0f * wm_finger_point_pixels.load() : WM_EVENT_CURSOR_MOTION_THRESHOLD;
+}
+
+/** \} */
+
 bool WM_cursor_test_motion_and_update(const int mval[2])
 {
   static int mval_prev[2] = {-1, -1};
-  bool use_cycle = (len_manhattan_v2v2_int(mval, mval_prev) <= WM_EVENT_CURSOR_MOTION_THRESHOLD);
+  bool use_cycle = (len_manhattan_v2v2_int(mval, mval_prev) <= wm_cursor_motion_threshold());
   copy_v2_v2_int(mval_prev, mval);
   return !use_cycle;
 }
@@ -412,6 +458,10 @@ int WM_event_drag_threshold(const wmEvent *event)
     /* Using the previous type is important is we want to check the last pressed/released button,
      * The `event->type` would include #MOUSEMOVE which is always the case when dragging
      * and does not help us know which threshold to use. */
+    if (event->tablet.is_finger) {
+      /* A finger's, in points, not scaled by the interface size (ROUND6 TOUCH-4). */
+      return WM_event_finger_drag_threshold();
+    }
     if (WM_event_is_tablet(event)) {
       drag_threshold = U.drag_threshold_tablet;
     }

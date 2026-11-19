@@ -199,6 +199,14 @@ wmEvent *WM_event_add(wmWindow *win, const wmEvent *event_to_add)
   return wm_event_add_intern(win, event_to_add);
 }
 
+/** Window pixels a point for simulated events that stand for a finger, or 0 for a mouse. */
+static float wm_event_simulated_finger = 0.0f;
+
+void WM_event_simulate_finger(const float point_pixels)
+{
+  wm_event_simulated_finger = point_pixels;
+}
+
 wmEvent *WM_event_add_simulate(wmWindow *win, const wmEvent *event_to_add)
 {
   if ((G.f & G_FLAG_EVENT_SIMULATE) == 0) {
@@ -206,6 +214,14 @@ wmEvent *WM_event_add_simulate(wmWindow *win, const wmEvent *event_to_add)
     return nullptr;
   }
   wmEvent *event = WM_event_add(win, event_to_add);
+  /* A test's finger (ROUND6 TOUCH-4, see #WM_event_simulate_finger). */
+  if (wm_event_simulated_finger > 0.0f && (ISMOUSE_BUTTON(event->type) || event->type == MOUSEMOVE)) {
+    event->tablet.is_finger = true;
+    wm_event_finger_point_pixels_set(wm_event_simulated_finger);
+    if (ISMOUSE_BUTTON(event->type) && event->val == KM_PRESS) {
+      wm_event_finger_press_note(true);
+    }
+  }
 
   /* Logic for setting previous value is documented on the #wmEvent struct,
    * see #wm_event_add_ghostevent for the implementation of logic this follows. */
@@ -5802,6 +5818,7 @@ constexpr wmTabletData wm_event_tablet_data_default()
   tablet_data.pressure = 1.0f;
   tablet_data.tilt = float2(0.0f, 0.0f);
   tablet_data.is_motion_absolute = false;
+  tablet_data.is_finger = false;
   return tablet_data;
 }
 
@@ -5812,7 +5829,13 @@ void WM_event_tablet_data_default_set(wmTabletData *tablet_data)
 
 void wm_tablet_data_from_ghost(const GHOST_TabletData *tablet_data, wmTabletData *wmtab)
 {
-  if ((tablet_data != nullptr) && tablet_data->Active != GHOST_kTabletModeNone) {
+  if ((tablet_data != nullptr) && tablet_data->Active == GHOST_kTabletModeFinger) {
+    /* A finger is no tablet: no pressure or tilt, but marked, with its window's scale. */
+    *wmtab = wm_event_tablet_data_default();
+    wmtab->is_finger = true;
+    wm_event_finger_point_pixels_set(tablet_data->PointPixels);
+  }
+  else if ((tablet_data != nullptr) && tablet_data->Active != GHOST_kTabletModeNone) {
     wmtab->active = int(tablet_data->Active);
     wmtab->pressure = wm_pressure_curve(tablet_data->Pressure);
     wmtab->tilt = float2(tablet_data->Xtilt, tablet_data->Ytilt);
@@ -5895,7 +5918,13 @@ static bool wm_event_is_double_click(const wmEvent *event,
   if ((event->type == event->prev_type) && (event->prev_val == KM_RELEASE) &&
       (event->val == KM_PRESS))
   {
-    if (ISMOUSE_BUTTON(event->type) && WM_event_drag_test(event, event->prev_press_xy)) {
+    if (ISMOUSE_BUTTON(event->type) && event->tablet.is_finger) {
+      /* A finger's two taps land apart more than a mouse's two clicks (ROUND6 TOUCH-4). */
+      if (len_v2v2_int(event->xy, event->prev_press_xy) > WM_event_finger_double_tap_distance()) {
+        return false;
+      }
+    }
+    else if (ISMOUSE_BUTTON(event->type) && WM_event_drag_test(event, event->prev_press_xy)) {
       /* Pass. */
     }
     else {
@@ -6358,6 +6387,9 @@ void wm_event_add_ghostevent(wmWindowManager *wm,
 
       /* Get tablet data. */
       wm_tablet_data_from_ghost(&bd->tablet, &event.tablet);
+      if (event.val == KM_PRESS) {
+        wm_event_finger_press_note(event.tablet.is_finger);
+      }
 
       wm_eventemulation(&event, false);
       wm_event_state_update_and_click_set(&event,

@@ -3490,6 +3490,35 @@ views::CommandResult bridge_toolbar_view_command(bContext *C,
   if (set && StringRef(target).startswith("viewport:")) {
     return setting("viewport_toggle", std::string(target.substr(9)));
   }
+  if (invoke && StringRef(target).startswith("select_menu:")) {
+    /* The long-press menu's Select Menu… (ROUND6 TOUCH-4, finding E2): the objects or bones under
+     * the point, as Alt-click lists them on the desktop. The point is given as fractions of the
+     * window, from the top left. */
+    float fraction[2];
+    if (sscanf(std::string(target.substr(12)).c_str(), "%f,%f", &fraction[0], &fraction[1]) != 2) {
+      r_error = "Not a point";
+      return views::CommandResult::Failed;
+    }
+    wmWindow *win = CTX_wm_window(C);
+    const BridgeContextStore context_store = bridge_context_push_view3d(C);
+    ARegion *region = CTX_wm_region(C);
+    wmOperatorType *ot = WM_operatortype_find("VIEW3D_OT_select", false);
+    if (win == nullptr || region == nullptr || ot == nullptr) {
+      bridge_context_pop(C, context_store);
+      r_error = "No 3D View";
+      return views::CommandResult::Failed;
+    }
+    const int location[2] = {
+        int(fraction[0] * WM_window_native_pixel_x(win)) - region->winrct.xmin,
+        int((1.0f - fraction[1]) * WM_window_native_pixel_y(win)) - region->winrct.ymin};
+    PointerRNA props = WM_operator_properties_create_ptr(ot);
+    RNA_boolean_set(&props, "enumerate", true);
+    RNA_int_set_array(&props, "location", location);
+    WM_operator_name_call_ptr(C, ot, wm::OpCallContext::ExecRegionWin, &props, nullptr);
+    WM_operator_properties_free(&props);
+    bridge_context_pop(C, context_store);
+    return views::CommandResult::Done;
+  }
   if (invoke && target == "repeat") {
     if (bridge_repeatable_operator(C) == nullptr) {
       r_error = "Nothing to repeat";
@@ -5751,14 +5780,8 @@ void bridge_apply_viewport_preferences(bContext *C)
 
   bool refresh_gizmo_map = bridge_gizmo_refresh_pending;
 
-  /* Keep taps (including Pencil jitter) on Blender's click-selection path, which
-   * also sets the active object. Real tool drags start after a small movement,
-   * with no hold delay; pressure strokes still receive every motion event. */
-  U.drag_threshold_mouse = 3;
-  U.drag_threshold_tablet = 3;
-  U.drag_threshold = 0;
-  U.move_threshold = 0;
-  U.flag &= ~USER_TOOLTIPS;
+  /* The person's click, drag and motion thresholds and tooltips are theirs: a finger's distances
+   * are chosen where its events are made, in points (ROUND6 TOUCH-4, #WM_event_drag_threshold). */
 
   if ((U.uiflag & USER_SHOW_GIZMO_NAVIGATE) == 0) {
     U.uiflag |= USER_SHOW_GIZMO_NAVIGATE;
@@ -6939,6 +6962,13 @@ extern "C" char *WM_native_ui_escape_cancel_operators()
   char *result = static_cast<char *>(malloc(text.size() + 1));
   memcpy(result, text.c_str(), text.size() + 1);
   return result;
+}
+
+/** Simulated mouse events stand for a finger, \a point_pixels window pixels a point, or a mouse
+ * again with 0: the Mac harness's `tolerance` scenario (ROUND6 TOUCH-4). */
+extern "C" void WM_native_ui_test_simulate_finger(const float point_pixels)
+{
+  WM_event_simulate_finger(point_pixels);
 }
 
 /**
