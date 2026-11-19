@@ -15,6 +15,9 @@ Sweeps of the iPad document's sources, one per class, so the next gap fails loud
   (`BKE_main_needs_overwrite_confirm`) has the held document's words, and nothing writes a held
   document before the person answers.
 
+- SAFE-4: whatever opens a document at launch passes the session marker first, every path that
+  opens a document sets it, and the log is kept where iOS keeps it, dated, within a second.
+
 Read from the sources, so it runs on any Mac without a build:
 `python3 -m unittest tests/ios/test_document_safety.py`.
 """
@@ -234,6 +237,51 @@ class OverwriteQuestionIsAskedTest(unittest.TestCase):
         self.assertIn('_opening = NO;', failed, "The launcher refuses files for a minute")
         open_doc = body_of(self.doc, 'bool WM_apple_ios_document_open(')
         self.assertIn('r_opened.error', open_doc)
+
+
+class UncleanEndIsSaidTest(unittest.TestCase):
+    """SAFE-4: a launch after a bad end stays in the launcher, and the log says what happened."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.launcher = LAUNCH.read_text(encoding='utf-8')
+
+    def test_nothing_opens_by_itself_after_an_unclean_end(self):
+        load = body_of(self.launcher, '- (void)viewDidLoad')
+        marker = load.index('dictionaryForKey:launcher_marker_key')
+        # Every way the launch opens a document (the system's pending file, the last document's
+        # bookmark) comes after the marker is read, and is skipped while it says the last session
+        # ended badly.
+        for opener in ('dataForKey:launcher_open_document_key', '[self openDocumentAtURL:url]'):
+            self.assertLess(marker, load.index(opener), opener)
+        self.assertRegex(load, r'if \(_endedMarker\) \{[^}]*url = nil;', "An ended document reopens")
+        ended = body_of(self.launcher, '- (void)presentEndedSession')
+        for answer in ('Open Again', 'Open a Copy', 'Stay Here', 'Start Without Add-ons and Saved Preferences'):
+            self.assertIn('@"%s"' % answer, ended)
+        self.assertIn('_openingEnds >= 2', ended)
+
+    def test_every_open_sets_the_marker(self):
+        # One door: every way a document opens passes openDocumentAtURL:, which sets it.
+        opening = body_of(self.launcher, '- (void)openDocumentAtURL:(NSURL *)url')
+        self.assertIn('launcherMarkerSet(url, @"opening")', opening)
+        others = re.findall(r'self\.document = (?!nil|document;)', self.launcher)
+        self.assertEqual(others, [], "A document is set other than through openDocumentAtURL:")
+        self.assertIn('launcherMarkerClear("in the background")',
+                      body_of(self.launcher, '- (void)appDidEnterBackground:(NSNotification *)notification'))
+        self.assertIn('launcherMarkerClear("closed")', body_of(self.launcher, '- (void)setDocument:(UIDocument *)document'))
+
+    def test_the_log_survives_and_is_dated(self):
+        native = (WM / 'intern/wm_native_ui.cc').read_text(encoding='utf-8')
+        path = body_of(native, 'static void session_log_path(')
+        self.assertIn('"Application Support"', path)
+        self.assertIn('static constexpr double session_log_delay = 1.0;', native)
+        self.assertNotIn('> 10.0', body_of(native, 'void WM_native_ui_session_log(const char *kind'))
+        diagnostics = (APPLE / 'swift/SessionDiagnostics.swift').read_text(encoding='utf-8')
+        for needed in ('MXMetricManager.shared.add', 'pastDiagnosticPayloads', 'yyyy-MM-dd',
+                       'os_proc_available_memory', 'the last session ended cleanly'):
+            self.assertIn(needed, diagnostics)
+        cmake = (ROOT / 'source/creator/CMakeLists.txt').read_text(encoding='utf-8')
+        self.assertIn('apple_ios/swift/SessionDiagnostics.swift', cmake)
 
 
 if __name__ == '__main__':

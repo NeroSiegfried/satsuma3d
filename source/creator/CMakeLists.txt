@@ -483,6 +483,7 @@ else()
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/ItemCard.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/RevealCoordinator.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/SaveSpace.swift
+      ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/SessionDiagnostics.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/DeviceFloor.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/DeviceFloorNotice.swift
       ${CMAKE_SOURCE_DIR}/source/blender/windowmanager/apple_ios/swift/Snapshots.swift

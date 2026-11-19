@@ -442,6 +442,13 @@ bool WM_apple_ios_document_is_loaded()
   return false;
 }
 
+void WM_apple_ios_factory_preferences(bContext *C)
+{
+  WM_native_ui_session_log("launch", "factory preferences, add-ons off, for this session");
+  WM_operator_name_call(
+      C, "WM_OT_read_factory_userpref", wm::OpCallContext::ExecDefault, nullptr, nullptr);
+}
+
 bool WM_apple_ios_document_reload_with_scripts(bContext *C)
 {
   if (G.background || document_path.empty() || !WM_apple_ios_document_is_loaded()) {

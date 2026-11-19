@@ -101,6 +101,8 @@ EXEC_SITES = {
         'opens the manual; no file is read or written',
     ('wm_apple_ios_document.cc', 'wm_document_operator'):
         'the document\'s own open (readFromURL), which records what it loaded',
+    ('wm_apple_ios_document.cc', 'WM_apple_ios_factory_preferences'):
+        'read_factory_userpref: the preferences only, backstop only (ROUND6 SAFE-4)',
 }
 
 # Every caller of wm_file_read_opwrap, with what a read by its exec (past the front door) does

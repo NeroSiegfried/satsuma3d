@@ -4993,8 +4993,9 @@ static double bridge_notice_time = 0.0;
 
 /**
  * The session's log is buffered: a line per write would dirty a page of flash each time, which
- * iOS counts against the app. Written at most every ten seconds, and at once for anything that
- * is not an operator or a report, when the app goes to the background, and at exit.
+ * iOS counts against the app. Operators and reports are written at most once a second (the
+ * commands just before an unexpected end must be on disk, ROUND6 SAFE-4), anything else at once,
+ * and all of it when the app goes to the background and at exit.
  */
 struct SessionLog {
   std::mutex mutex;
@@ -5029,6 +5030,29 @@ static void session_log_close_run(SessionLog &log)
   log.last_key.clear();
 }
 
+/** How long an operator's or a report's line may wait to be written, in seconds. */
+static constexpr double session_log_delay = 1.0;
+
+/**
+ * Where the log is. On iOS in Application Support (`Logs/platypus-session.log`), which iOS keeps:
+ * the temporary folder may be emptied, and a log is most needed after the app ended unexpectedly
+ * (ROUND6 SAFE-4). Elsewhere in Blender's temporary folder.
+ */
+static void session_log_path(char *path, const size_t path_size)
+{
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  if (const char *home = BLI_getenv("HOME")) {
+    char folder[FILE_MAX];
+    BLI_path_join(folder, sizeof(folder), home, "Library", "Application Support", "Logs");
+    if (BLI_dir_create_recursive(folder)) {
+      BLI_path_join(path, path_size, folder, "platypus-session.log");
+      return;
+    }
+  }
+#endif
+  BLI_path_join(path, path_size, BKE_tempdir_base(), "platypus-session.log");
+}
+
 static void session_log_write(SessionLog &log)
 {
   session_log_close_run(log);
@@ -5037,7 +5061,7 @@ static void session_log_write(SessionLog &log)
     return;
   }
   char path[FILE_MAX];
-  BLI_path_join(path, sizeof(path), BKE_tempdir_base(), "platypus-session.log");
+  session_log_path(path, sizeof(path));
   /* Start again once it is large; the one before is kept beside it. */
   if (BLI_exists(path) && BLI_file_size(path) > 1024 * 1024) {
     const std::string previous = std::string(path) + ".1";
@@ -5083,7 +5107,7 @@ void WM_native_ui_session_log(const char *kind, const char *text)
     log.last_key = key;
   }
   const bool routine = STREQ(kind, "op") || STREQ(kind, "info");
-  if (!routine || BLI_time_now_seconds() - log.last_write > 10.0) {
+  if (!routine || BLI_time_now_seconds() - log.last_write > session_log_delay) {
     session_log_write(log);
   }
 }
@@ -5098,7 +5122,7 @@ void WM_native_ui_session_log_flush(const bool force)
   if (!lock.owns_lock() || log.lines.empty()) {
     return;
   }
-  if (force || BLI_time_now_seconds() - log.last_write > 10.0) {
+  if (force || BLI_time_now_seconds() - log.last_write > session_log_delay) {
     session_log_write(log);
   }
 }
@@ -5124,7 +5148,7 @@ extern "C" bool WM_native_ui_session_log_file(char *path, const size_t path_size
     std::scoped_lock lock(log.mutex);
     session_log_write(log);
   }
-  BLI_path_join(path, path_size, BKE_tempdir_base(), "platypus-session.log");
+  session_log_path(path, path_size);
   return BLI_exists(path);
 }
 

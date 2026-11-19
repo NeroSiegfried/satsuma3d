@@ -243,6 +243,74 @@ static NSArray<NSDictionary *> *launcherTemplates()
 
 /** Where a document was open when the app was left, to continue there. */
 static NSString *const launcher_open_document_key = @"BlenderOpenDocument";
+
+/* -------------------------------------------------------------------- */
+/** \name The session marker (ROUND6 SAFE-4, decision R6-3)
+ *
+ * Set before a document opens (phase `opening`), moved to `open` once its first frame shows, and
+ * cleared when the app goes to the background cleanly or the document closes. Still set at the
+ * next launch: the app ended while the document was open, perhaps because of it, so the launcher
+ * stays where it is and says so instead of opening it again (a document that ends the app
+ * would otherwise do so at every launch).
+ * \{ */
+
+static NSString *const launcher_marker_key = @"BlenderSessionMarker";
+/** How many launches in a row found the marker in phase `opening`. */
+static NSString *const launcher_opening_ends_key = @"BlenderSessionOpeningEnds";
+
+/* The launch line and the system's own reasons for earlier exits, `SessionDiagnostics.swift`. */
+@interface NSObject (WMIOSSwiftSessionDiagnostics)
++ (void)startWithLastSession:(NSString *)last_session;
+@end
+
+static NSString *launcherBuild()
+{
+  NSDictionary *info = NSBundle.mainBundle.infoDictionary;
+  return [NSString stringWithFormat:@"%@ (%@)",
+                                    info[@"CFBundleShortVersionString"] ?: @"?",
+                                    info[@"CFBundleVersion"] ?: @"?"];
+}
+
+static void launcherMarkerSet(NSURL *url, NSString *phase)
+{
+  NSData *bookmark = [url bookmarkDataWithOptions:0
+                   includingResourceValuesForKeys:nil
+                                    relativeToURL:nil
+                                            error:nil];
+  NSMutableDictionary *marker = [NSMutableDictionary dictionary];
+  marker[@"name"] = url.lastPathComponent ?: @"";
+  marker[@"phase"] = phase;
+  marker[@"time"] = [NSDate date];
+  marker[@"build"] = launcherBuild();
+  if (bookmark) {
+    marker[@"bookmark"] = bookmark;
+  }
+  [NSUserDefaults.standardUserDefaults setObject:marker forKey:launcher_marker_key];
+  if ([phase isEqual:@"open"]) {
+    [NSUserDefaults.standardUserDefaults removeObjectForKey:launcher_opening_ends_key];
+  }
+  WM_native_ui_log("session", [NSString stringWithFormat:@"marker %@ %@", phase,
+                                                         url.lastPathComponent]
+                                  .UTF8String);
+}
+
+static void launcherMarkerClear(const char *why)
+{
+  NSDictionary *marker = [NSUserDefaults.standardUserDefaults dictionaryForKey:launcher_marker_key];
+  if (marker == nil) {
+    return;
+  }
+  /* A check launch leaves the person's marker for their next launch. */
+  if (NSProcessInfo.processInfo.environment[@"PLATYPUS_SCRATCH_DOCUMENT"] != nil &&
+      ![marker[@"name"] hasPrefix:@"PlatypusCheck"])
+  {
+    return;
+  }
+  [NSUserDefaults.standardUserDefaults removeObjectForKey:launcher_marker_key];
+  WM_native_ui_log("session", (std::string("marker cleared: ") + why).c_str());
+}
+
+/** \} */
 /** Choosing a template before creating a document. */
 static UIDocumentCreationIntent const launcher_template_intent = @"template";
 static UIDocumentCreationIntent const launcher_general_intent = @"general";
@@ -398,6 +466,10 @@ static NSURL *launcher_pending_url = nil;
 
 @implementation WMIOSLauncherController
 {
+  /** The marker found at launch: the app ended while this document was open (ROUND6 SAFE-4). */
+  NSDictionary *_endedMarker;
+  /** Launches in a row that ended while the document was opening. */
+  NSInteger _openingEnds;
   /** A document is being opened: Blender loads one file at a time. */
   BOOL _opening;
   BOOL _creating;
@@ -487,6 +559,50 @@ static NSURL *launcher_pending_url = nil;
                                          selector:@selector(sceneWillDeactivate:)
                                              name:@"BlenderSceneInactive"
                                            object:nil];
+  /* The session marker: a clean background clears it, coming back sets it again (SAFE-4). */
+  [NSNotificationCenter.defaultCenter addObserver:self
+                                         selector:@selector(appDidEnterBackground:)
+                                             name:UIApplicationDidEnterBackgroundNotification
+                                           object:nil];
+  [NSNotificationCenter.defaultCenter addObserver:self
+                                         selector:@selector(appWillEnterForeground:)
+                                             name:UIApplicationWillEnterForegroundNotification
+                                           object:nil];
+
+  /* Did the last session end cleanly? Read before anything opens (ROUND6 SAFE-4). */
+  NSDictionary *marker = [NSUserDefaults.standardUserDefaults
+      dictionaryForKey:launcher_marker_key];
+  const BOOL check_launch = NSProcessInfo.processInfo.environment[@"PLATYPUS_SCRATCH_DOCUMENT"] !=
+                            nil;
+  /* A check launch heeds only a marker of its own copy, and leaves the person's as it is. */
+  if (marker && (!check_launch || [marker[@"name"] hasPrefix:launcher_scratch_name])) {
+    _endedMarker = [marker copy];
+    _openingEnds = [NSUserDefaults.standardUserDefaults integerForKey:launcher_opening_ends_key];
+    if ([marker[@"phase"] isEqual:@"opening"]) {
+      _openingEnds++;
+      [NSUserDefaults.standardUserDefaults setInteger:_openingEnds
+                                               forKey:launcher_opening_ends_key];
+    }
+    [NSUserDefaults.standardUserDefaults removeObjectForKey:launcher_marker_key];
+  }
+  NSString *last_session = nil;
+  if (_endedMarker) {
+    NSDateFormatter *format = [[[NSDateFormatter alloc] init] autorelease];
+    format.dateFormat = @"yyyy-MM-dd HH:mm:ss";
+    last_session = [NSString
+        stringWithFormat:@"the last session did not end cleanly: %@ was %@ (%@, build %@)",
+                         _endedMarker[@"name"],
+                         _endedMarker[@"phase"],
+                         [format stringFromDate:_endedMarker[@"time"]] ?: @"?",
+                         _endedMarker[@"build"] ?: @"?"];
+  }
+  Class diagnostics = NSClassFromString(@"WMIOSSessionDiagnostics");
+  if (diagnostics) {
+    [diagnostics startWithLastSession:last_session];
+  }
+  else if (last_session) {
+    WM_native_ui_log("launch", last_session.UTF8String);
+  }
 
   NSURL *url = [[launcher_pending_url retain] autorelease];
   [launcher_pending_url release];
@@ -502,7 +618,13 @@ static NSURL *launcher_pending_url = nil;
     launcherScratchRemove();
     launcherCheckOutputRemove();
   }
-  if (url == nil && !_scratch) {
+  if (_endedMarker) {
+    /* The app ended while a document was open: stay here and say so, never open it again by
+     * itself (ROUND6 SAFE-4). Not even one the system asked to open. */
+    WM_native_ui_log("launch", "stayed in the launcher after an unclean end");
+    url = nil;
+  }
+  else if (url == nil && !_scratch) {
     /* Continue in the document that was open when the app was left. */
     NSData *bookmark = [NSUserDefaults.standardUserDefaults dataForKey:launcher_open_document_key];
     BOOL stale = NO;
@@ -521,6 +643,9 @@ static NSURL *launcher_pending_url = nil;
 - (void)viewDidAppear:(BOOL)animated
 {
   [super viewDidAppear:animated];
+  if (_endedMarker && self.presentedViewController == nil) {
+    [self presentEndedSession];
+  }
   /* An iPad below the floor is told so, here when the app opens on its documents (ROUND5 8N);
    * once per launch, whichever of this and a document's window asks first. */
   Class floor_class = NSClassFromString(@"WMIOSSwiftDeviceFloor");
@@ -532,6 +657,7 @@ static NSURL *launcher_pending_url = nil;
 - (void)dealloc
 {
   [NSNotificationCenter.defaultCenter removeObserver:self];
+  [_endedMarker release];
   [_creatingTemplate release];
   [_createdURL release];
   [_createdPresentation release];
@@ -794,6 +920,11 @@ static NSURL *launcher_pending_url = nil;
     return;
   }
   _opening = YES;
+  /* Opening: should it end the app, the next launch says so instead of opening it again
+   * (ROUND6 SAFE-4). A check launch marks only its own copies. */
+  if (!_scratch || launcherIsScratch(url)) {
+    launcherMarkerSet(url, @"opening");
+  }
   /* Should iOS never report the document open, don't refuse files from then on. */
   dispatch_after(
       dispatch_time(DISPATCH_TIME_NOW, int64_t(60 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -988,6 +1119,9 @@ static NSURL *launcherMoveToDocuments(NSURL *source)
     if (closed && !_scratch) {
       [NSUserDefaults.standardUserDefaults removeObjectForKey:launcher_open_document_key];
     }
+    if (closed) {
+      launcherMarkerClear("closed");
+    }
     GHOST_ios_document_window_set_visible(false, true);
   }
 #if defined(APPLE_TARGET_VISIONOS)
@@ -1007,8 +1141,17 @@ static NSURL *launcherMoveToDocuments(NSURL *source)
   if (bookmark && !_scratch) {
     [NSUserDefaults.standardUserDefaults setObject:bookmark forKey:launcher_open_document_key];
   }
-  /* Blender has loaded the file: show it. */
+  /* Blender has loaded the file: show it. Its first frames are part of opening: two seconds on,
+   * the session marker says open (ROUND6 SAFE-4). */
   GHOST_ios_document_window_set_visible(true, true);
+  UIDocument *opened = [[self.document retain] autorelease];
+  [opened retain];
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(2 * NSEC_PER_SEC)),
+                 dispatch_get_main_queue(),
+                 ^{
+                   [self documentShown:opened];
+                   [opened release];
+                 });
 #if defined(APPLE_TARGET_VISIONOS)
   [self updateOrnaments];
 #endif
@@ -1020,6 +1163,133 @@ static NSURL *launcherMoveToDocuments(NSURL *source)
     _createdURL = nil;
     [_createdPresentation release];
     _createdPresentation = nil;
+  }
+}
+
+/** The app ended while a document was open (ROUND6 SAFE-4): say so, with ways on. */
+- (void)presentEndedSession
+{
+  NSDictionary *marker = [[_endedMarker retain] autorelease];
+  [_endedMarker release];
+  _endedMarker = nil;
+  NSDateFormatter *format = [[[NSDateFormatter alloc] init] autorelease];
+  format.timeStyle = NSDateFormatterShortStyle;
+  format.dateStyle = NSDateFormatterNoStyle;
+  NSString *name = marker[@"name"] ?: @"a document";
+  NSString *message = [NSString
+      stringWithFormat:@"%@ closed unexpectedly while “%@” was %@ (%@).",
+                       wm_apple_ios_app_name(),
+                       name,
+                       [marker[@"phase"] isEqual:@"opening"] ? @"opening" : @"open",
+                       [format stringFromDate:marker[@"time"]] ?: @"?"];
+  BOOL stale = NO;
+  NSURL *url = [marker[@"bookmark"] isKindOfClass:NSData.class] ?
+                   [NSURL URLByResolvingBookmarkData:marker[@"bookmark"]
+                                             options:0
+                                       relativeToURL:nil
+                                 bookmarkDataIsStale:&stale
+                                               error:nil] :
+                   nil;
+  UIAlertController *alert = [UIAlertController
+      alertControllerWithTitle:@"Closed Unexpectedly"
+                       message:message
+                preferredStyle:UIAlertControllerStyleAlert];
+  if (url) {
+    [alert addAction:[UIAlertAction actionWithTitle:@"Open Again"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *) {
+                                              WM_native_ui_log("launch", "after an unclean end: open again");
+                                              [self openDocumentAtURL:url];
+                                            }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Open a Copy"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *) {
+                                              WM_native_ui_log("launch", "after an unclean end: open a copy");
+                                              [self openCopyOf:url];
+                                            }]];
+    if (_openingEnds >= 2) {
+      /* Twice in a row while opening: what loads with every document may be the cause. */
+      [alert addAction:[UIAlertAction
+                           actionWithTitle:@"Start Without Add-ons and Saved Preferences"
+                                     style:UIAlertActionStyleDefault
+                                   handler:^(UIAlertAction *) {
+                                     WM_native_ui_log("launch",
+                                                      "after an unclean end: factory preferences");
+                                     GHOST_ios_engine_perform([](blender::bContext *C) {
+                                       if (C) {
+                                         blender::WM_apple_ios_factory_preferences(C);
+                                       }
+                                     });
+                                     [self openDocumentAtURL:url];
+                                   }]];
+    }
+  }
+  [alert addAction:[UIAlertAction actionWithTitle:@"Stay Here"
+                                            style:UIAlertActionStyleCancel
+                                          handler:^(UIAlertAction *) {
+                                            WM_native_ui_log("launch", "after an unclean end: stay here");
+                                          }]];
+  WM_native_ui_log("launch", [@"said: " stringByAppendingString:message].UTF8String);
+  [self presentViewController:alert animated:YES completion:nil];
+}
+
+/** A copy of the document beside it, opened instead (ROUND6 SAFE-4): what is on disk, without
+ * the auto-save that may be what ended the app. */
+- (void)openCopyOf:(NSURL *)url
+{
+  NSFileManager *files = NSFileManager.defaultManager;
+  NSURL *folder = [NSURL
+      fileURLWithPath:[NSTemporaryDirectory()
+                          stringByAppendingPathComponent:NSUUID.UUID.UUIDString]];
+  NSString *name = [url.URLByDeletingPathExtension.lastPathComponent
+      stringByAppendingString:@" copy.blend"];
+  NSURL *copy = [folder URLByAppendingPathComponent:name];
+  const BOOL accessing = [url startAccessingSecurityScopedResource];
+  const BOOL copied = [files createDirectoryAtURL:folder
+                      withIntermediateDirectories:YES
+                                       attributes:nil
+                                            error:nil] &&
+                      [files copyItemAtURL:url toURL:copy error:nil];
+  if (accessing) {
+    [url stopAccessingSecurityScopedResource];
+  }
+  if (!copied) {
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:@"Could Not Copy"
+                         message:[NSString stringWithFormat:@"“%@” could not be copied.",
+                                                            url.lastPathComponent]
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                              style:UIAlertActionStyleDefault
+                                            handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+    return;
+  }
+  [self adoptCopy:copy nextTo:url];
+}
+
+- (void)appDidEnterBackground:(NSNotification *)notification
+{
+  /* iOS may end a background app at any time: that is a clean end, not one to warn about. */
+  launcherMarkerClear("in the background");
+}
+
+- (void)appWillEnterForeground:(NSNotification *)notification
+{
+  if (self.document && !(self.document.documentState & UIDocumentStateClosed) &&
+      (!_scratch || launcherIsScratch(self.document.fileURL)))
+  {
+    launcherMarkerSet(self.document.fileURL, @"open");
+  }
+}
+
+/** The document has shown for a moment: open, no longer opening. */
+- (void)documentShown:(UIDocument *)document
+{
+  if (self.document == document && !(document.documentState & UIDocumentStateClosed) &&
+      (!_scratch || launcherIsScratch(document.fileURL)))
+  {
+    launcherMarkerSet(document.fileURL, @"open");
   }
 }
 
@@ -1377,7 +1647,9 @@ UIViewController *wm_apple_ios_top_presenter()
  * `open <name>`, `stat <name>` (size, date and a hash), `list`, `save` (marked edited and saved
  * now), `reopen` (as the refusal's Reopen Document), `back`; `lock` and `unlock` (the scratch
  * folder read-only and back, so the document cannot be written: ROUND6 SAFE-1), `status` (what the
- * header says and the alert shown, if any); `marker`, `check` and `python <code>` run in Blender,
+ * header says and the alert shown, if any); `raise <name>` (a file from a newer Blender) and
+ * `answer copy|anyway|readonly` (ROUND6 SAFE-2); `ended [opening|open]` (the session marker as an
+ * unexpected end leaves it, ROUND6 SAFE-4); `marker`, `check` and `python <code>` run in Blender,
  * see #WM_apple_ios_document_check_step.
  */
 void wm_apple_ios_document_check_step(NSString *step, void (^done)(NSString *answer))
@@ -1517,6 +1789,14 @@ void wm_apple_ios_document_check_step(NSString *step, void (^done)(NSString *ans
       [document answerHold:[rest isEqual:@"anyway"] ? 1 : 2 closing:NO];
     }
     say([NSString stringWithFormat:@"answer %@: %@", rest, document ? @"given" : @"no document"]);
+  }
+  else if ([verb isEqual:@"ended"]) {
+    /* The marker as an unexpected end leaves it (ROUND6 SAFE-4): end the app now, and the next
+     * check launch must stay in the launcher and say so. */
+    if (document) {
+      launcherMarkerSet(document.fileURL, rest.length ? rest : @"opening");
+    }
+    say([NSString stringWithFormat:@"ended: marker %@", document ? @"set" : @"not set, no document"]);
   }
   else if ([verb isEqual:@"lock"] || [verb isEqual:@"unlock"]) {
     /* The folder, not the file: iOS writes beside the file and moves the result into place. */
