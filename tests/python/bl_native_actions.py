@@ -292,4 +292,13 @@ for name, _space, data in blender_default.generate_keymaps():
 for row in table:
     print("staple: {:<24} {:<32} {}".format(*row))
 check(any(row[1] == "screen.repeat_last" for row in table), "Shift+R was found in the keymaps")
+# ROUND6 TOUCH-7 (C4, E6 i): an action whose operator reads the pointer to choose what to act on
+# asks for a tap instead of running wherever the last touch left it. Every such action is invoked
+# (it runs at the tap); the tap's own operator waits for the tap as a menu's command does.
+placed = [action.id for action in actions._BY_ID.values() if actions.needs_place(action)]
+check("sculpt.face_set_grow" in placed and "sculpt.face_set_shrink" in placed,
+      "Grow and Shrink Face Set ask for a tap: " + ", ".join(placed))
+check(all(actions._BY_ID[name].invoke for name in placed), "An action that asks for a tap runs as invoked there")
+check('DEPENDS_ON_CURSOR' in bpy.ops.wm.native_action_at_tap.bl_options,
+      "The tap's operator waits for the tap, as a menu's command that depends on the pointer does")
 print('PASS: native context actions ' + json.dumps(checks))

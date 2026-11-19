@@ -1407,7 +1407,24 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     /* Why it did not run, when it did not: a tap is answered. */
     char *reason = nullptr;
     if (BPY_run_string_as_string(C, imports, expression.c_str(), nullptr, &reason) && reason) {
-      WM_native_ui_notice(RPT_WARNING, reason);
+      if (reason[0] == '\x01') {
+        /* It needs a place (ROUND6 TOUCH-7): one tap supplies it, as for a menu's command that
+         * depends on the pointer ("Tap where to run Grow"), never wherever the pointer was. */
+        wmOperatorType *ot = WM_operatortype_find("WM_OT_native_action_at_tap", false);
+        if (ot) {
+          const BridgeContextStore context_store = bridge_context_push_view3d(C);
+          PointerRNA props = WM_operator_properties_create_ptr(ot);
+          RNA_string_set(&props, "action", command.value.c_str());
+          RNA_string_set(&props, "tool", tool ? tool->idname : "");
+          WM_operator_name_call_ptr_with_depends_on_cursor(
+              C, ot, blender::wm::OpCallContext::InvokeRegionWin, &props, nullptr, reason + 1);
+          WM_operator_properties_free(&props);
+          bridge_context_pop(C, context_store);
+        }
+      }
+      else if (reason[0]) {
+        WM_native_ui_notice(RPT_WARNING, reason);
+      }
     }
     if (reason) {
       MEM_delete(reason);
@@ -3812,18 +3829,46 @@ void bridge_timeline_keys_view_build(bContext *C,
  * with each, so the interface shows each once.
  * \{ */
 
-/** Blender's cursor where the pointer is, at the `x` and `y` of \a params in the window's pixels,
- * for menus that list and operators that follow the pointer from there, as Bevel. */
+/** Blender's pointer to the middle of the visible part of the largest 3D View in \a win (inside
+ * the shell's bars and sidebars), for a command run with no position (ROUND6 TOUCH-7). */
+void bridge_pointer_to_view_middle(wmWindow *win)
+{
+  bScreen *screen = win ? WM_window_get_active_screen(win) : nullptr;
+  ARegion *region = bridge_find_window_region(bridge_find_view3d_area(screen));
+  if (region == nullptr || win->runtime->eventstate == nullptr) {
+    return;
+  }
+  int leading = 0, trailing = 0, top = 0, bottom = 0;
+  WM_native_ui_view3d_frame_insets(win, region, &leading, &trailing, &top, &bottom);
+  const int width = std::max(1, region->winx - leading - trailing);
+  const int height = std::max(1, region->winy - top - bottom);
+  win->runtime->eventstate->xy[0] = region->winrct.xmin + leading + width / 2;
+  win->runtime->eventstate->xy[1] = region->winrct.ymin + bottom + height / 2;
+}
+
+/**
+ * Where Blender's pointer is for a command the shell runs (ROUND6 TOUCH-7, A10): every command
+ * carries a position or says it has none. With one (the `x` and `y` of \a params in the window's
+ * pixels: the long-press menu, the Pencil's palette), there, for menus that list and operators
+ * that follow the pointer from there. With none (a header menu, Search, the bar), the middle of
+ * the visible 3D View, never wherever the last touch left it (a sheet's touch parks it off the
+ * window). A command that needs a place asks for one tap instead (the "Input pending" wait).
+ */
 void bridge_menu_cursor_set(bContext *C, const views::Params &params)
 {
   wmWindow *win = CTX_wm_window(C);
+  if (win == nullptr || win->runtime->eventstate == nullptr) {
+    return;
+  }
   const std::optional<double> x = params.number("x"), y = params.number("y");
-  if (win && x && y && win->runtime->eventstate) {
+  if (x && y) {
     int position[2] = {int(*x), int(*y)};
     wm_cursor_position_from_ghost_client_coords(win, &position[0], &position[1]);
     win->runtime->eventstate->xy[0] = position[0];
     win->runtime->eventstate->xy[1] = position[1];
+    return;
   }
+  bridge_pointer_to_view_middle(win);
 }
 
 void bridge_menu_view_build(bContext *C,

@@ -1282,4 +1282,81 @@ for name in ('editors/transform/transform.cc', 'editors/mesh/editmesh_bevel.cc',
     check('WM_event_is_touch_start(event)' in (ROOT / 'source/blender' / name).read_text(encoding='utf-8'),
           "R6 TOUCH-6: %s measures from where the finger landed" % name.rsplit('/', 1)[1])
 
+# ROUND6 TOUCH-7 (C4, E6 i, A10): a command that needs a place asks for one. Every operator whose
+# `invoke` reads the pointer (`event->mval`, `event->xy`) and acts at once without going modal, and
+# that a menu draws, either depends on the cursor (it then waits for one tap from a menu, Search or
+# the bar) or is in this reviewed table with why its reading is harmless. A new one fails here.
+POINTER_READERS_REVIEWED = {
+    # The pointer is read only for a mode the menus never give.
+    'ACTION_OT_select_leftright': "only for mode Check; menus give Before or After Current Frame",
+    'GRAPH_OT_select_leftright': "only for mode Check; menus give Before or After Current Frame",
+    'NLA_OT_select_leftright': "only for mode Check; menus give Before or After Current Frame",
+    'NLA_OT_select_box': "only with tweak, which no menu sets",
+    'SEQUENCER_OT_delete': "only to leave out the markers' row along the bottom",
+    # Toward the pointer, else the middle: from a menu the pointer is the view's middle (A10).
+    'CLIP_OT_view_zoom_in': "zooms toward the pointer, the view's middle from a menu",
+    'CLIP_OT_view_zoom_out': "zooms toward the pointer, the view's middle from a menu",
+    'IMAGE_OT_view_zoom_in': "zooms toward the pointer, the view's middle from a menu",
+    'IMAGE_OT_view_zoom_out': "zooms toward the pointer, the view's middle from a menu",
+    'VIEW2D_OT_zoom_in': "zooms toward the pointer, the view's middle from a menu",
+    'VIEW2D_OT_zoom_out': "zooms toward the pointer, the view's middle from a menu",
+    'RENDER_OT_view_show': "places the render window only",
+    'OBJECT_OT_collection_instance_add': "places the instance under the pointer, the view's middle from a menu",
+    # Editors whose menus are Blender's own (the Desktop Interface): there the pointer is at the
+    # menu, in that editor, as on the desktop.
+    'NODE_OT_clipboard_paste': "Blender's own Node Editor menu: pastes by the pointer, as on the desktop",
+    'NODE_OT_join': "Blender's own Node Editor menu: the frame by the pointer, as on the desktop",
+    'NODE_OT_select': "Blender's own Node Editor menu, as on the desktop",
+    'SEQUENCER_OT_gap_insert': "Blender's own Sequencer menu: the side from the pointer, as on the desktop",
+    'SEQUENCER_OT_gap_remove': "Blender's own Sequencer menu: the side from the pointer, as on the desktop",
+    'SEQUENCER_OT_paste': "Blender's own Sequencer menu, as on the desktop",
+    'SEQUENCER_OT_retiming_key_delete': "Blender's own Sequencer menu, as on the desktop",
+    'SEQUENCER_OT_split': "Blender's own Sequencer menu: the side from the pointer, as on the desktop",
+}
+invoke_re = re.compile(r'^(?:static\s+)?(?:wmOperatorStatus|int)\s+(\w+)\s*\(\s*bContext\s*\*\s*\w*\s*,\s*'
+                       r'wmOperator\s*\*\s*\w*\s*,\s*const\s+wmEvent\s*\*\s*(\w+)\s*\)\s*\n?\{', re.M)
+invoke_bodies, op_defs = {}, []
+for path in sorted((ROOT / 'source/blender/editors').rglob('*.cc')):
+    text = path.read_text(encoding='utf-8', errors='replace')
+    for match in invoke_re.finditer(text):
+        end = c_balanced(text, match.end() - 1)
+        invoke_bodies[match.group(1)] = (text[match.end():end], match.group(2))
+    for match in re.finditer(r'ot->idname\s*=\s*"(\w+)";', text):
+        start, end = text.rfind('\n{', 0, match.start()), text.find('\n}', match.end())
+        op_defs.append((match.group(1), text[start:end]))
+menu_ops = set()
+for path in (ROOT / 'scripts/startup/bl_ui').glob('*.py'):
+    menu_ops |= set(re.findall(r'\.operator(?:_menu_enum|_enum)?\(\s*"([a-z_0-9]+\.[a-z_0-9]+)"',
+                               path.read_text(encoding='utf-8')))
+pointer_unflagged, readers = [], 0
+for idname, definition in op_defs:
+    invoke = re.search(r'ot->invoke\s*=\s*(\w+);', definition)
+    if not invoke or invoke.group(1) not in invoke_bodies:
+        continue
+    body, event = invoke_bodies[invoke.group(1)]
+    if not re.search(r'\b%s->(mval|xy)\b' % event, body) or 'WM_event_add_modal_handler' in body or \
+            'OPERATOR_RUNNING_MODAL' in body or re.search(r'\bWM_gesture_\w+_invoke\(', body):
+        continue
+    module, name = idname.split('_OT_')
+    if '%s.%s' % (module.lower(), name) not in menu_ops:
+        continue
+    readers += 1
+    if 'DEPENDS_ON_CURSOR' in definition or 'depends_on_cursor' in definition:
+        continue
+    if idname not in POINTER_READERS_REVIEWED:
+        pointer_unflagged.append(idname)
+check(readers >= 20 and not pointer_unflagged,
+      "R6 TOUCH-7: every menu command that reads the pointer at invoke asks for a tap or is reviewed "
+      "(%d; not: %s)" % (readers, pointer_unflagged))
+actions_text = (ROOT / 'scripts/startup/bl_ui/native_actions.py').read_text(encoding='utf-8')
+check("'DEPENDS_ON_CURSOR' in action.operator().bl_options" in actions_text and
+      'reason[0] == \'\\x01\'' in bridge_text and 'WM_OT_native_action_at_tap' in bridge_text and
+      'did nothing here' in actions_text,
+      "R6 TOUCH-7: the bar's commands that need a place ask for a tap, and a silent cancel is said")
+cursor_body = bridge_text[bridge_text.index('void bridge_menu_cursor_set(bContext *C'):]
+cursor_body = cursor_body[:cursor_body.index('\n}\n')]
+check('bridge_pointer_to_view_middle(win);' in cursor_body and
+      'nothing there to act on' in system_text,
+      "R6 TOUCH-7: a command with no position has the view's middle, never a stale pointer")
+
 print('PASS: native shell sources ' + json.dumps(checks))

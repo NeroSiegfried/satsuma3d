@@ -2176,13 +2176,26 @@ static int ui_handler_wait_for_input(bContext *C, const wmEvent *event, void *us
     WM_cursor_modal_restore(win);
 
     if (state == EXECUTE) {
+      wmWindowManager *wm = CTX_wm_manager(C);
+      const int reports_before = BLI_listbase_count(&wm->runtime->reports.list);
       CTX_store_set(C, opwait->context ? &opwait->context.value() : nullptr);
-      WM_operator_name_call_ptr(C,
-                                opwait->optype_params.optype,
-                                opwait->optype_params.opcontext,
-                                opwait->optype_params.opptr,
-                                event);
+      const wmOperatorStatus retval = WM_operator_name_call_ptr(C,
+                                                                opwait->optype_params.optype,
+                                                                opwait->optype_params.opcontext,
+                                                                opwait->optype_params.opptr,
+                                                                event);
       CTX_store_set(C, nullptr);
+      if (retval == OPERATOR_CANCELLED && WM_native_interface() &&
+          BLI_listbase_count(&wm->runtime->reports.list) == reports_before)
+      {
+        /* A tap that placed a command which then did nothing and said nothing is answered
+         * (ROUND6 TOUCH-7): Grow Face Set off the mesh, Transfer Mode on no object. */
+        WM_global_reportf(RPT_WARNING,
+                          "%s: nothing there to act on",
+                          WM_operatortype_name(opwait->optype_params.optype,
+                                               opwait->optype_params.opptr)
+                              .c_str());
+      }
     }
 
     WM_event_remove_ui_handler(&win->runtime->modalhandlers,

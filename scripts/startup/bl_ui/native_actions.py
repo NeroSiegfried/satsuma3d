@@ -833,9 +833,23 @@ def _error_text(context, action, error):
     return text.strip()
 
 
-def run_reported(context, action_id, tool=""):
+# What `run_reported` answers for an action that needs a place (ROUND6 TOUCH-7): the bridge then
+# waits for one tap ("Tap where to run …") and runs `wm.native_action_at_tap` there.
+NEEDS_PLACE = "\x01"
+
+
+def needs_place(action):
+    """Whether the action's operator reads the pointer to choose what to act on, as Grow Face Set
+    does: run from the bar it would act wherever the last touch left the pointer."""
+    return action.invoke and not action.tool and not action.menu and \
+        'DEPENDS_ON_CURSOR' in action.operator().bl_options
+
+
+def run_reported(context, action_id, tool="", at_tap=False):
     """Run an action as `run` does, and say why not when it does not: a string for the person, or
-    an empty one once it ran. A tap on an action is always answered."""
+    an empty one once it ran. A tap on an action is always answered: an action that needs a place
+    answers `NEEDS_PLACE` and its label, for the bridge to ask for a tap; one that did nothing
+    and said nothing is said to have done nothing."""
     action = _BY_ID.get(action_id)
     if action is None:
         return ""
@@ -843,13 +857,38 @@ def run_reported(context, action_id, tool=""):
     reason = action.reason(state)
     if reason:
         return reason
+    if not at_tap and needs_place(action):
+        return NEEDS_PLACE + action.label
     operator = action.operator()
     context_type = 'INVOKE_REGION_WIN' if action.invoke else 'EXEC_REGION_WIN'
     try:
-        operator(context_type, True, **action.properties(state))
+        result = operator(context_type, True, **action.properties(state))
     except RuntimeError as ex:
         return _error_text(context, action, ex)
+    if result == {'CANCELLED'}:
+        if at_tap:
+            return "{:s}: nothing there to act on".format(action.label)
+        return "{:s} did nothing here".format(action.label)
     return ""
+
+
+class WM_OT_native_action_at_tap(bpy.types.Operator):
+    """Run an action of the bar where the next tap lands"""
+
+    bl_idname = "wm.native_action_at_tap"
+    bl_label = "Run at Tap"
+    # Waits for one tap before it runs, as a menu's command that depends on the pointer does.
+    bl_options = {'INTERNAL', 'DEPENDS_ON_CURSOR'}
+
+    action: bpy.props.StringProperty(options={'SKIP_SAVE'})
+    tool: bpy.props.StringProperty(options={'SKIP_SAVE'})
+
+    def invoke(self, context, _event):
+        reason = run_reported(context, self.action, self.tool, at_tap=True)
+        if reason:
+            self.report({'WARNING'}, reason)
+            return {'CANCELLED'}
+        return {'FINISHED'}
 
 
 class OBJECT_OT_native_modifier_toggle(bpy.types.Operator):
@@ -890,4 +929,5 @@ class OBJECT_OT_native_modifier_toggle(bpy.types.Operator):
 
 classes = (
     OBJECT_OT_native_modifier_toggle,
+    WM_OT_native_action_at_tap,
 )
