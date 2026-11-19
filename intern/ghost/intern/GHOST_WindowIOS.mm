@@ -4314,15 +4314,97 @@ bool GHOST_ios_window_presented_frame(GHOST_WindowIOS *window)
   return window->surface && window->surface->hasPresentedFrame();
 }
 
+/**
+ * The text a key types, as a US keyboard types it (with \a shift held or not), into \a r_utf8;
+ * empty for a key that types none. A key the app presses for the person carries it as the
+ * keyboard's would: Blender's numeric input and text fields read typed digits and signs from it,
+ * not from the key (R6 C3; the bridge's injected keys do the same, `bridge_key_character`).
+ */
+static void ios_key_text(const GHOST_TKey key, const bool shift, char r_utf8[6])
+{
+  memset(r_utf8, 0, 6);
+  if (key >= GHOST_kKey0 && key <= GHOST_kKey9) {
+    r_utf8[0] = shift ? ")!@#$%^&*("[key - GHOST_kKey0] : char('0' + (key - GHOST_kKey0));
+  }
+  else if (key >= GHOST_kKeyA && key <= GHOST_kKeyZ) {
+    r_utf8[0] = char((shift ? 'A' : 'a') + (key - GHOST_kKeyA));
+  }
+  else if (key >= GHOST_kKeyNumpad0 && key <= GHOST_kKeyNumpad9) {
+    r_utf8[0] = char('0' + (key - GHOST_kKeyNumpad0));
+  }
+  else {
+    switch (key) {
+      case GHOST_kKeyNumpadPeriod:
+        r_utf8[0] = '.';
+        break;
+      case GHOST_kKeyNumpadPlus:
+        r_utf8[0] = '+';
+        break;
+      case GHOST_kKeyNumpadMinus:
+        r_utf8[0] = '-';
+        break;
+      case GHOST_kKeyNumpadAsterisk:
+        r_utf8[0] = '*';
+        break;
+      case GHOST_kKeyNumpadSlash:
+        r_utf8[0] = '/';
+        break;
+      case GHOST_kKeySpace:
+        r_utf8[0] = ' ';
+        break;
+      case GHOST_kKeyQuote:
+        r_utf8[0] = shift ? '"' : '\'';
+        break;
+      case GHOST_kKeyComma:
+        r_utf8[0] = shift ? '<' : ',';
+        break;
+      case GHOST_kKeyMinus:
+        r_utf8[0] = shift ? '_' : '-';
+        break;
+      case GHOST_kKeyPlus:
+        r_utf8[0] = '+';
+        break;
+      case GHOST_kKeyPeriod:
+        r_utf8[0] = shift ? '>' : '.';
+        break;
+      case GHOST_kKeySlash:
+        r_utf8[0] = shift ? '?' : '/';
+        break;
+      case GHOST_kKeySemicolon:
+        r_utf8[0] = shift ? ':' : ';';
+        break;
+      case GHOST_kKeyEqual:
+        r_utf8[0] = shift ? '+' : '=';
+        break;
+      case GHOST_kKeyLeftBracket:
+        r_utf8[0] = shift ? '{' : '[';
+        break;
+      case GHOST_kKeyRightBracket:
+        r_utf8[0] = shift ? '}' : ']';
+        break;
+      case GHOST_kKeyBackslash:
+        r_utf8[0] = shift ? '|' : '\\';
+        break;
+      case GHOST_kKeyAccentGrave:
+        r_utf8[0] = shift ? '~' : '`';
+        break;
+      default:
+        break;
+    }
+  }
+}
+
 void GHOST_ios_window_send_key(GHOST_WindowIOS *window, GHOST_TKey key)
 {
   GHOST_SystemIOS *system = window->getSystem();
   if (system == nullptr) {
     return;
   }
+  char text[6];
+  ios_key_text(key, false, text);
   const uint64_t time = system->getMilliSeconds();
   system->pushEvent(
-      std::make_unique<GHOST_EventKey>(time, GHOST_kEventKeyDown, window, key, false, nullptr));
+      std::make_unique<GHOST_EventKey>(time, GHOST_kEventKeyDown, window, key, false, text));
   system->pushEvent(
       std::make_unique<GHOST_EventKey>(time, GHOST_kEventKeyUp, window, key, false, nullptr));
 }
@@ -4354,27 +4436,32 @@ void GHOST_ios_window_press_key(GHOST_WindowIOS *window,
       {ctrl, {GHOST_kKeyLeftControl, GHOST_kModifierKeyLeftControl}},
       {alt, {GHOST_kKeyLeftAlt, GHOST_kModifierKeyLeftAlt}},
   };
-  const auto push = [&](const GHOST_TKey pushed, const bool down) {
+  const auto push = [&](const GHOST_TKey pushed, const bool down, const char *text) {
     system->pushEvent(std::make_unique<GHOST_EventKey>(system->getMilliSeconds(),
                                                        down ? GHOST_kEventKeyDown :
                                                               GHOST_kEventKeyUp,
                                                        window,
                                                        pushed,
                                                        false,
-                                                       nullptr));
+                                                       text));
   };
   for (const auto &[held, modifier] : modifiers) {
     if (held) {
       GHOST_ios_set_modifier_held(modifier.second, true);
-      push(modifier.first, true);
+      push(modifier.first, true, nullptr);
     }
   }
-  push(key, true);
-  push(key, false);
+  /* A key typed with Ctrl or Alt held is a shortcut, and a keyboard's types nothing either. */
+  char text[6] = {0};
+  if (!ctrl && !alt) {
+    ios_key_text(key, shift, text);
+  }
+  push(key, true, text);
+  push(key, false, nullptr);
   for (const auto &[held, modifier] : modifiers) {
     if (held) {
       GHOST_ios_set_modifier_held(modifier.second, false);
-      push(modifier.first, false);
+      push(modifier.first, false, nullptr);
     }
   }
 }

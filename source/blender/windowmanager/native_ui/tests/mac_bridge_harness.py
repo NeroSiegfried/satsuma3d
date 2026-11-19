@@ -1050,6 +1050,43 @@ def tick_knife():
     return 0.3
 
 
+# ROUND6 0.2 (C3): the number pad types into a waiting operation. Move, X, `2.5`, Confirm, each sent
+# as the pad sends it (`modalkey:`), puts the cube at x = 2.5: the digits reach the numeric input as
+# a typed character, as a keyboard's does. Before, digits carried no character and did nothing.
+def tick_numinput():
+    global step
+    try:
+        pump()
+        step += 1
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            subs["toolbar"] = subscribe("toolbar")
+            cube = bpy.data.objects["Cube"]
+            cube.location = (0.0, 0.0, 0.0)
+            bpy.context.view_layer.objects.active = cube
+            cube.select_set(True)
+        elif step == 3:
+            window, area, region = _view3d()
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                report["invoke"] = list(bpy.ops.transform.translate('INVOKE_DEFAULT'))
+        elif step in (5, 6, 7, 8):
+            key = {5: "X", 6: "TWO", 7: "PERIOD", 8: "FIVE"}[step]
+            invoke(subs["toolbar"], "modalkey:" + key, 80 + step)
+        elif step == 9:
+            invoke(subs["toolbar"], "modalkey:RET", 90)
+        elif step == 12:
+            location = tuple(round(v, 4) for v in bpy.data.objects["Cube"].location)
+            report["location"] = location
+            report["acks"] = {k: acks.get(k) for k in (85, 86, 87, 88, 90)}
+            finish("done" if location == (2.5, 0.0, 0.0) else "error")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
 # Materials as the Material tab makes them (ROUND5 7D): with no slots, New makes one slot holding one
 # material (C5); the slot's Link is sent with its role, can be set and reads back; the material's
 # reference lists its actions; in Edit Mode, Assign gives the selected faces the active slot.
@@ -1942,5 +1979,6 @@ def tick_touch():
 
 
 bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets": tick_insets, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror,
-                         "extensions": tick_extensions, "keys": tick_keys}.get(SCENARIO, tick_actions),
+                         "extensions": tick_extensions, "keys": tick_keys,
+                         "numinput": tick_numinput}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

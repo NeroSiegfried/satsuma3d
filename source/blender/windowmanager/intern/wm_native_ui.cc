@@ -1158,6 +1158,63 @@ static std::atomic<bool> bridge_navigation_top = false;
 static std::atomic<bool> bridge_navigation_minimal = false;
 static std::atomic<bool> bridge_navigation_left = false;
 
+/**
+ * The character a key types, as a US keyboard types it (with \a shift held or not), or 0 for a
+ * key that types none. An injected key carries it as the keyboard's would: Blender's numeric
+ * input and text fields read typed digits and signs from #wmEvent::utf8_buf, not from the key
+ * type (R6 C3).
+ */
+static char bridge_key_character(const wmEventType type, const bool shift)
+{
+  if (type >= EVT_ZEROKEY && type <= EVT_NINEKEY) {
+    return shift ? ")!@#$%^&*("[type - EVT_ZEROKEY] : char('0' + (type - EVT_ZEROKEY));
+  }
+  if (type >= EVT_AKEY && type <= EVT_ZKEY) {
+    return char((shift ? 'A' : 'a') + (type - EVT_AKEY));
+  }
+  if (type >= EVT_PAD0 && type <= EVT_PAD9) {
+    return char('0' + (type - EVT_PAD0));
+  }
+  switch (type) {
+    case EVT_PADPERIOD:
+      return '.';
+    case EVT_PADASTERKEY:
+      return '*';
+    case EVT_PADSLASHKEY:
+      return '/';
+    case EVT_PADMINUS:
+      return '-';
+    case EVT_PADPLUSKEY:
+      return '+';
+    case EVT_SPACEKEY:
+      return ' ';
+    case EVT_SEMICOLONKEY:
+      return shift ? ':' : ';';
+    case EVT_PERIODKEY:
+      return shift ? '>' : '.';
+    case EVT_COMMAKEY:
+      return shift ? '<' : ',';
+    case EVT_QUOTEKEY:
+      return shift ? '"' : '\'';
+    case EVT_ACCENTGRAVEKEY:
+      return shift ? '~' : '`';
+    case EVT_MINUSKEY:
+      return shift ? '_' : '-';
+    case EVT_SLASHKEY:
+      return shift ? '?' : '/';
+    case EVT_BACKSLASHKEY:
+      return shift ? '|' : '\\';
+    case EVT_EQUALKEY:
+      return shift ? '+' : '=';
+    case EVT_LEFTBRACKETKEY:
+      return shift ? '{' : '[';
+    case EVT_RIGHTBRACKETKEY:
+      return shift ? '}' : ']';
+    default:
+      return 0;
+  }
+}
+
 void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
 {
 #ifdef WITH_PYTHON
@@ -1281,9 +1338,15 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
     event.val = KM_PRESS;
     event.flag = eWM_EventFlag(0);
     event.prev_type = EVENT_NONE;
+    /* The character the key types, as a keyboard's press carries it; a release carries none. */
+    memset(event.utf8_buf, 0, sizeof(event.utf8_buf));
+    if ((event.modifier & (KM_CTRL | KM_ALT | KM_OSKEY)) == 0) {
+      event.utf8_buf[0] = bridge_key_character(event.type, event.modifier & KM_SHIFT);
+    }
     WM_event_add(win, &event);
     if (!ISMOUSE_WHEEL(event.type)) {
       event.val = KM_RELEASE;
+      event.utf8_buf[0] = '\0';
       WM_event_add(win, &event);
     }
     WM_event_add_mousemove(win);
