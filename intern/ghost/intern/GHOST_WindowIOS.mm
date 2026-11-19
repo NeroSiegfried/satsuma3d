@@ -1724,6 +1724,10 @@ static NSString *ios_event_kind(UIEvent *event)
     else {
       NSString *base = ui_key.charactersIgnoringModifiers;
       key = convertKey(int(ui_key.keyCode), base.length ? [base characterAtIndex:0] : 0);
+      if (key == GHOST_kKeyPeriod && (ui_key.modifierFlags & UIKeyModifierCommand)) {
+        /* Cmd+. is Escape on Apple's keyboards, which may have no Esc key (ROUND6 TOUCH-11). */
+        key = GHOST_kKeyEsc;
+      }
       if (key == GHOST_kKeyUnknown) {
         continue;
       }
@@ -1814,6 +1818,12 @@ static NSString *ios_event_kind(UIEvent *event)
     return;
   }
   if (link.timestamp < key_repeat_next) {
+    return;
+  }
+  if (![self blenderTakesKeyboard]) {
+    /* A sheet or field opened while the key was held: it no longer repeats into Blender, as the
+     * first press would not have reached it (ROUND6 TOUCH-11, A14). */
+    [self stopKeyRepeat];
     return;
   }
   key_repeat_next = link.timestamp + 1.0 / 30.0;

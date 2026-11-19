@@ -180,6 +180,16 @@ extern "C" void wm_apple_ios_window_hold_modifier(void *window, const char *key,
       ghost_window(window), STREQ(key, "shift") ? GHOST_kKeyLeftShift : GHOST_kKeyLeftControl, down);
 }
 
+/* GHOST_SystemIOS.mm: a hardware key by its HID usage and the character the layout gives it. */
+GHOST_TKey convertKey(int usage, unichar recvChar);
+/* wm_event_system.cc: Blender's name for a GHOST key's event type. */
+extern "C" const char *WM_event_type_name_from_ghost_key(int ghost_key);
+
+extern "C" const char *wm_apple_ios_key_name(const int usage, const unsigned short character)
+{
+  return WM_event_type_name_from_ghost_key(int(convertKey(usage, character)));
+}
+
 extern "C" void wm_apple_ios_window_sticky_modifier(void *window, const int index, const int action)
 {
   if (window) {

@@ -46,6 +46,10 @@ void wm_apple_ios_window_hold_modifier(void *_Nullable window, const char *_Nonn
 void wm_apple_ios_window_sticky_modifier(void *_Nullable window, int index, int action);
 /** Two bits each for Shift, Ctrl, Alt: 0 off, 1 held, 2 latched, 3 locked. */
 unsigned int wm_apple_ios_sticky_modifiers(void);
+/** A hardware key as Blender's event types name it ("A", "DEL"), by its HID usage and the
+ * character the keyboard's layout gives it, as the viewport reads keys: one rule for the viewport
+ * and the native editors (ROUND6 TOUCH-11, A14). Null for none. */
+const char *_Nullable wm_apple_ios_key_name(int usage, unsigned short character);
 /** Whether a document is open that the launcher can go back from, and going back. */
 bool wm_apple_ios_documents_available(void);
 void wm_apple_ios_show_documents(id _Nullable sender);

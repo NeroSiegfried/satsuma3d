@@ -71,6 +71,8 @@
 #include "UI_interface_layout.hh"
 #include "UI_view2d.hh"
 
+#include "RNA_enum_types.hh"
+
 #include "WM_api.hh"
 #include "WM_keymap.hh"
 #include "WM_message.hh"
@@ -5881,6 +5883,18 @@ static wmEventType wm_event_type_from_ndof_button(GHOST_NDOF_ButtonT button)
 /**
  * \return The WM enum for key or #EVENT_NONE (which should be ignored).
  */
+static wmEventType wm_event_type_from_ghost_key(GHOST_TKey key);
+
+extern "C" const char *WM_event_type_name_from_ghost_key(const int ghost_key)
+{
+  const wmEventType type = wm_event_type_from_ghost_key(GHOST_TKey(ghost_key));
+  const char *name = nullptr;
+  if (type == EVENT_NONE || !RNA_enum_identifier(rna_enum_event_type_items, type, &name)) {
+    return nullptr;
+  }
+  return name;
+}
+
 static wmEventType wm_event_type_from_ghost_key(GHOST_TKey key)
 {
   if (key >= GHOST_kKeyA && key <= GHOST_kKeyZ) {

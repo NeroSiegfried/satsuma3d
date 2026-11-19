@@ -177,6 +177,10 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     if desktop != model.desktop { desktopChanged() }
     desktopScaleChanged()
     refreshMenuBar()
+    if edgesMode != model.mode {
+      edgesMode = model.mode
+      setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
+    }
   }
 
   /** Blender's own Window menu changes its interface's size too (Interface Size): kept as Settings
@@ -229,6 +233,17 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
   }
 
   override public var prefersHomeIndicatorAutoHidden: Bool { true }
+  /** While a mode strokes with a brush, a stroke that begins at the bottom edge is the stroke's,
+   * not the system's Home swipe at once: the system asks for a second swipe (ROUND6 TOUCH-11, A15). */
+  override public var preferredScreenEdgesDeferringSystemGestures: UIRectEdge {
+    Self.strokeModes.contains(model.mode) ? .bottom : []
+  }
+  private static let strokeModes: Set<String> = [
+    "sculpt_mode", "weightpaint", "vertexpaint", "imagepaint", "particlemode", "curves_sculpt",
+    "grease_pencil_paint", "grease_pencil_sculpt", "grease_pencil_weight", "grease_pencil_vertex",
+  ]
+  /** The mode the edges were last deferred for. */
+  private var edgesMode = ""
   override public var prefersStatusBarHidden: Bool { model.interfaceHidden }
 
   override public func viewDidLoad() {
@@ -976,6 +991,13 @@ public struct DocumentWindow: View {
       }
       .onChange(of: model.viewportReady, initial: true) { _, ready in
         if ready && GestureGuide.due { guideShown = true }
+      }
+      /* A text object's keyboard whether or not the shell's controls are shown (ROUND6 TOUCH-11,
+       * E11): with them, it lies over the viewport among them. */
+      .overlay(alignment: .bottom) {
+        if !controlsShown && model.viewportReady {
+          TextObjectKeyboard(model: model)
+        }
       }
       /* Shift, Ctrl and Alt as real keys for a finger, in both interfaces (ROUND6 TOUCH-8). */
       .overlay(alignment: .bottomLeading) {

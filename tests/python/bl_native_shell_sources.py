@@ -1406,4 +1406,23 @@ check(all(word in guide for word in ('"One finger"', '"Two fingers"', '"Three fi
       'GestureGuideSheet()' in window_t8 and 'GestureGuide.due' in window_t8,
       "R6 TOUCH-10: How to Use names every gesture, in Settings and once at the first launch")
 
+# ROUND6 TOUCH-11 (A14, A15, E11): small input faults. Cmd+. is Escape; a held key's repeat asks
+# the gate; the native editors name keys with the viewport's own rule (by layout), with no table of
+# their own; the bottom edge waits for a second swipe while a mode strokes; a text object's
+# keyboard shows with the shell's controls hidden too.
+node_t11 = (SWIFT / 'NodeEditor.swift').read_text(encoding='utf-8')
+blender_key = node_t11[node_t11.index('static func blenderKey(_ key: UIKey)'):]
+blender_key = blender_key[:blender_key.index('\n  }\n')]
+repeat_body = objc_method(ghost_r6, '- (void)repeatKey:(CADisplayLink *)link')
+check('key == GHOST_kKeyPeriod && (ui_key.modifierFlags & UIKeyModifierCommand)' in ghost_r6 and
+      '[self blenderTakesKeyboard]' in repeat_body and
+      'wm_apple_ios_key_name(' in blender_key and 'case ' not in blender_key,
+      "R6 TOUCH-11: Cmd+. is Escape, a repeat asks the gate, one rule names keys for the viewport and the editors")
+edges = window_t8[window_t8.index('private static let strokeModes: Set<String> = ['):]
+edges = set(re.findall(r'"(\w+)"', edges[:edges.index(']')]))
+check(edges and edges <= mode_strings and 'setNeedsUpdateOfScreenEdgesDeferringSystemGestures()' in window_t8 and
+      'if !controlsShown && model.viewportReady {\n          TextObjectKeyboard(model: model)' in window_t8,
+      "R6 TOUCH-11: the bottom edge defers while a mode strokes (%s); the text keyboard shows with controls hidden"
+      % sorted(edges - mode_strings))
+
 print('PASS: native shell sources ' + json.dumps(checks))

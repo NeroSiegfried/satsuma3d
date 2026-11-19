@@ -3100,8 +3100,9 @@ final class NodeKeyCaptureView: UIView, UIKeyInput {
     var handled = false
     for press in presses {
       guard let key = press.key, let name = Self.blenderKey(key) else { continue }
-      if key.keyCode == .keyboardEscape { continue }
       let flags = key.modifierFlags
+      /* Escape, and Cmd+. which is Escape (ROUND6 TOUCH-11), close the editor's own panels. */
+      if key.keyCode == .keyboardEscape || (key.keyCode == .keyboardPeriod && flags.contains(.command)) { continue }
       model?.sendKey(name, shift: flags.contains(.shift), ctrl: flags.contains(.control),
                      alt: flags.contains(.alternate), oskey: flags.contains(.command))
       handled = true
@@ -3109,41 +3110,12 @@ final class NodeKeyCaptureView: UIView, UIKeyInput {
     if !handled { super.pressesBegan(presses, with: event) }
   }
 
-  /** The key as Blender's event types name it. */
+  /** The key as Blender's event types name it, by the keyboard's layout as the viewport reads
+   * keys: the one rule for both (ROUND6 TOUCH-11, A14). On QWERTZ the key labelled Z is Z here too. */
   static func blenderKey(_ key: UIKey) -> String? {
-    let usage = key.keyCode.rawValue
-    switch usage {
-      case 4...29: return String(UnicodeScalar(UInt8(65 + usage - 4)))
-      case 30...38:
-        return ["ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE"][usage - 30]
-      case 39: return "ZERO"
-      case 40: return "RET"
-      case 42: return "BACK_SPACE"
-      case 43: return "TAB"
-      case 44: return "SPACE"
-      case 45: return "MINUS"
-      case 46: return "EQUAL"
-      case 47: return "LEFT_BRACKET"
-      case 48: return "RIGHT_BRACKET"
-      case 49: return "BACK_SLASH"
-      case 51: return "SEMI_COLON"
-      case 52: return "QUOTE"
-      case 53: return "ACCENT_GRAVE"
-      case 54: return "COMMA"
-      case 55: return "PERIOD"
-      case 56: return "SLASH"
-      case 58...69: return "F\(usage - 57)"
-      case 74: return "HOME"
-      case 75: return "PAGE_UP"
-      case 76: return "DEL"
-      case 77: return "END"
-      case 78: return "PAGE_DOWN"
-      case 79: return "RIGHT_ARROW"
-      case 80: return "LEFT_ARROW"
-      case 81: return "DOWN_ARROW"
-      case 82: return "UP_ARROW"
-      default: return nil
-    }
+    let character = key.charactersIgnoringModifiers.utf16.first ?? 0
+    guard let name = wm_apple_ios_key_name(Int32(key.keyCode.rawValue), character) else { return nil }
+    return String(cString: name)
   }
 }
 
