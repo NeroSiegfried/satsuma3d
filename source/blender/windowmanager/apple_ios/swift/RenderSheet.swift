@@ -5,8 +5,10 @@
 /** \file
  * Renders the image or animation with a native sheet instead of Blender's render window: live
  * progress, then the result, kept with every earlier render in a film strip to look back at and
- * share. Animations become a video. A render goes on in the background as a continued processing
- * task, with the system's progress, so leaving the app doesn't end it. Blender renders through
+ * share. The scene's Output is honoured: an animation in an image format is kept as its frames, one
+ * in a movie format becomes that movie, written by Blender's FFmpeg; frames are kept as they finish,
+ * whatever ends the render. A render goes on in the background as a continued processing task,
+ * with the system's progress, so leaving the app doesn't end it. Blender renders through
  * `bl_ui.native_render`; its state arrives in the toolbar snapshot.
  */
 
@@ -20,14 +22,22 @@ import ImageIO
 import SwiftUI
 import UIKit
 
-/** Frames rendered as images, encoded as an H.264 video off the main thread. */
 /** A render started from here, from Blender's `render` view, see `bridge_render_view_build`. */
 @MainActor
 enum BlenderRender {
   static let view = NativeViews.shared.subscribe("render")
 
-  /** Render the `image` or the `animation`, `cancel` it, or `clear` its state. */
+  /** `cancel` the render, or `clear` its state. */
   static func run(_ action: String) { NativeViews.shared.send(view, target: action, op: .invoke) }
+
+  /**
+   * Start work that writes into `folder` (R6 BUSY-3): `image`, `animation`, `continue` (the frames
+   * still missing from the animation in `folder`) or `video` (of the frames in `folder`). Its
+   * number, to read whether Blender took it, see `NativeViews.outcome(of:)`.
+   */
+  static func start(_ verb: String, folder: URL) -> UInt32 {
+    NativeViews.shared.send(view, target: verb + ":" + folder.path, op: .invoke, answer: true)
+  }
 
   static var status: RenderStatus {
     var values: [String: Blender_NativeUI_Data] = [:]
@@ -46,85 +56,60 @@ struct RenderStatus {
 
   func string(_ key: String) -> String? { values[key]?.value(type: Blender_NativeUI_TextValue.self)?.value }
   func double(_ key: String) -> Double? { values[key]?.value(type: Blender_NativeUI_FloatValue.self)?.value }
+  func int(_ key: String) -> Int { Int(double(key) ?? 0) }
+  func bool(_ key: String) -> Bool { (double(key) ?? 0) != 0 }
   func strings(_ key: String) -> [String] {
     guard let texts = values[key]?.value(type: Blender_NativeUI_TextsValue.self) else { return [] }
     return (0..<texts.valueCount).compactMap { texts.value(at: $0) }
   }
 }
 
-private func encodeVideo(frames: [String], fps: Double, output: URL, progress: @escaping (Float) -> Void,
-                         done: @escaping (URL?) -> Void)
-{
-  DispatchQueue.global(qos: .userInitiated).async {
-    var result: URL?
-    autoreleasepool {
-      guard let first = frames.first.flatMap({ UIImage(contentsOfFile: $0)?.cgImage }) else { return }
-      /* H.264 needs even dimensions. */
-      let width = first.width & ~1, height = first.height & ~1
-      try? FileManager.default.removeItem(at: output)
-      guard width > 0, height > 0, let writer = try? AVAssetWriter(outputURL: output, fileType: .mp4) else { return }
-      let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
-        AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height])
-      let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
-        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-        kCVPixelBufferWidthKey as String: width, kCVPixelBufferHeightKey as String: height])
-      guard writer.canAdd(input) else { return }
-      writer.add(input)
-      writer.startWriting()
-      writer.startSession(atSourceTime: .zero)
-      let timescale: Int32 = 600
-      var ok = true
-      for (index, path) in frames.enumerated() where ok {
-        autoreleasepool {
-          while !input.isReadyForMoreMediaData { Thread.sleep(forTimeInterval: 0.005) }
-          var buffer: CVPixelBuffer?
-          if let image = UIImage(contentsOfFile: path)?.cgImage, let pool = adaptor.pixelBufferPool,
-             CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer) == kCVReturnSuccess, let buffer
-          {
-            CVPixelBufferLockBaseAddress(buffer, [])
-            let context = CGContext(data: CVPixelBufferGetBaseAddress(buffer), width: width, height: height,
-                                    bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
-                                    space: CGColorSpaceCreateDeviceRGB(),
-                                    bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue |
-                                      CGBitmapInfo.byteOrder32Little.rawValue)
-            context?.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-            CVPixelBufferUnlockBaseAddress(buffer, [])
-            let time = CMTime(value: Int64((Double(index) * Double(timescale) / fps).rounded()), timescale: timescale)
-            ok = adaptor.append(buffer, withPresentationTime: time)
-          }
-          let fraction = Float(index + 1) / Float(frames.count)
-          DispatchQueue.main.async { progress(fraction) }
-        }
-      }
-      input.markAsFinished()
-      let finished = DispatchSemaphore(value: 0)
-      writer.finishWriting { finished.signal() }
-      finished.wait()
-      if ok && writer.status == .completed { result = output }
-    }
-    DispatchQueue.main.async { done(result) }
-  }
-}
-
 /* -------------------------------------------------------------------- */
 /** \name Render library
  *
- * Every finished render of a project, kept on disk in the app's Application Support folder, so
- * none is lost when the sheet closes, the next render starts or the app quits. Each project has
- * its own folder, found by the document's location.
+ * Every render of a project, kept on disk in the app's Application Support folder, so none is lost
+ * when the sheet closes, the next render starts or the app quits. Each project has its own folder,
+ * found by the document's location. An animation's frames are written straight into a folder of
+ * the library as they finish, and are listed from the start: a render that is stopped, ended by
+ * the system, or killed with the app keeps every frame it finished, and can be continued or made a
+ * video of (R6 BUSY-3, G5, D3).
  * \{ */
 
 struct RenderItem: Codable, Identifiable, Hashable {
   let id: String
-  /** The image or video, by name in the library folder. */
-  let file: String
-  /** A still for a video. */
-  let poster: String?
+  /** The image or video, by path in the library folder; for an animation's frames, their folder. */
+  var file: String
+  /** The image shown: a video's still, the first of an animation's frames, or a still's PNG when
+   * its own format is not one the iPad shows. */
+  var poster: String?
   let video: Bool
   let date: Date
-  let width: Int
-  let height: Int
-  let frames: Int
+  var width: Int
+  var height: Int
+  /** Frames rendered. */
+  var frames: Int
+  /** `frames` for an animation kept as its frames. */
+  var kind: String?
+  /** How many frames the animation has, and the first still missing (0 once none is). */
+  var total: Int?
+  var next: Int?
+  /** The frames' extension, and whether the scene's Output was a movie to be made of them. */
+  var ext: String?
+  var movie: Bool?
+  /** A folder of the library's holding this render's files, removed with it. */
+  var folder: String?
+
+  var isFrames: Bool { kind == "frames" }
+  /** Frames of an animation that stopped before its end. */
+  var stopped: Bool { isFrames && (next ?? 0) > 0 }
+  /** A video the iPad plays; others play in other apps. */
+  var playable: Bool { ["mp4", "mov", "m4v"].contains((file as NSString).pathExtension.lowercased()) }
+
+  var framesSummary: String {
+    let format = (ext ?? "").dropFirst().uppercased()
+    if stopped { return "\(frames) of \(total ?? frames) frames rendered" }
+    return format.isEmpty ? "\(frames) frames" : "\(frames) frames, \(format)"
+  }
 }
 
 @MainActor
@@ -155,16 +140,65 @@ final class RenderLibrary: ObservableObject {
     if let data = try? Data(contentsOf: index),
        let stored = try? JSONDecoder().decode([RenderItem].self, from: data)
     {
-      items = stored.filter { FileManager.default.fileExists(atPath: url($0).path) }
+      /* Frames are counted again from what Blender listed as written: the app may have been
+       * killed after the index was last saved. Frames of which none was finished are not kept. */
+      var kept: [RenderItem] = []
+      for item in stored where FileManager.default.fileExists(atPath: url(item).path) {
+        guard item.isFrames else {
+          kept.append(item)
+          continue
+        }
+        let refreshed = counted(item)
+        if refreshed.frames > 0 { kept.append(refreshed) }
+        else { try? FileManager.default.removeItem(at: url(item)) }
+      }
+      items = kept
+      if kept != stored { save() }
     }
   }
 
   func url(_ item: RenderItem) -> URL { folder.appendingPathComponent(item.file) }
 
-  /** The image shown for an item: the render itself, or a video's still. */
+  /** The image shown for an item: a still, a video's still or the first frame. */
   func still(_ item: RenderItem) -> URL? {
-    if item.video { return item.poster.map { folder.appendingPathComponent($0) } }
-    return url(item)
+    if let poster = item.poster { return folder.appendingPathComponent(poster) }
+    return item.video || item.isFrames ? nil : url(item)
+  }
+
+  /** A path of the library's, as kept in the index; nil for one outside it. */
+  func relative(_ path: String) -> String? {
+    let base = folder.standardizedFileURL.path + "/"
+    let full = URL(fileURLWithPath: path).standardizedFileURL.path
+    return full.hasPrefix(base) ? String(full.dropFirst(base.count)) : nil
+  }
+
+  /** A new folder for a render's files. */
+  func makeFolder(_ id: String) -> URL {
+    let url = folder.appendingPathComponent(id, isDirectory: true)
+    try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url
+  }
+
+  /** The frames an animation's folder lists as written whole (`Render.json`, written by
+   * `bl_ui.native_render`), how many it wants and the first missing. */
+  private func counted(_ item: RenderItem) -> RenderItem {
+    var item = item
+    guard let data = try? Data(contentsOf: url(item).appendingPathComponent("Render.json")),
+          let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return item }
+    let frames = manifest["frames"] as? [String: String] ?? [:]
+    let numbers = frames.keys.compactMap(Int.init).sorted()
+    let wanted = manifest["wanted"] as? [Int] ?? []
+    let have = Set(numbers)
+    item.frames = numbers.count
+    item.total = wanted.count
+    item.next = wanted.first { !have.contains($0) } ?? 0
+    item.ext = manifest["ext"] as? String ?? item.ext
+    item.movie = manifest["movie"] as? Bool ?? item.movie
+    if item.poster == nil, let first = numbers.first, let name = frames[String(first)] {
+      item.poster = item.file + "/" + name
+    }
+    return item
   }
 
   private func pixelSize(_ url: URL) -> (Int, Int) {
@@ -173,27 +207,61 @@ final class RenderLibrary: ObservableObject {
     return (properties[kCGImagePropertyPixelWidth] as? Int ?? 0, properties[kCGImagePropertyPixelHeight] as? Int ?? 0)
   }
 
-  /** Keep a rendered image; the original stays where Blender wrote it. */
-  func addImage(_ path: String) -> RenderItem? {
-    let id = UUID().uuidString
-    let file = id + ".png"
-    guard (try? FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: folder.appendingPathComponent(file))) != nil
-    else { return nil }
-    let (width, height) = pixelSize(folder.appendingPathComponent(file))
-    return append(RenderItem(id: id, file: file, poster: nil, video: false, date: .now, width: width,
-                             height: height, frames: 1))
+  /** Keep a still Blender saved in the render's `folder` (as the scene's format names it), with
+   * the PNG shown for it when the iPad cannot show that format. */
+  func addImage(id: String, folder: URL, image: String, preview: String?) -> RenderItem? {
+    guard let file = relative(image), FileManager.default.fileExists(atPath: image) else { return nil }
+    let poster = preview.flatMap { $0.isEmpty ? nil : relative($0) }
+    let (width, height) = pixelSize(self.folder.appendingPathComponent(poster ?? file))
+    return append(RenderItem(id: id, file: file, poster: poster, video: false, date: .now, width: width,
+                             height: height, frames: 1, folder: relative(folder.path)))
   }
 
-  /** Keep a rendered animation, moving its video into the library. */
+  /** List an animation's frames as it starts: its folder, already in the library. */
+  func addFrames(id: String, folder: URL) -> RenderItem? {
+    guard let file = relative(folder.path) else { return nil }
+    return append(RenderItem(id: id, file: file, poster: nil, video: false, date: .now, width: 0, height: 0,
+                             frames: 0, kind: "frames", total: nil, next: nil, folder: file))
+  }
+
+  /** Change an item, keeping the index on disk up to date. */
+  func update(_ id: String, _ change: (inout RenderItem) -> Void) {
+    guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+    var item = items[index]
+    change(&item)
+    guard item != items[index] else { return }
+    items[index] = item
+    save()
+  }
+
+  /** The frames an animation has now, as the render reports them. */
+  func updateFrames(_ id: String, status: RenderStatus) {
+    update(id) { item in
+      item.frames = status.int("done")
+      if status.double("total") != nil { item.total = status.int("total") }
+      if status.double("next") != nil { item.next = status.int("next") }
+      if let ext = status.string("ext") { item.ext = ext }
+      if status.double("movie") != nil { item.movie = status.bool("movie") }
+      if item.poster == nil, let first = status.strings("frames").first ?? status.string("last"),
+         let poster = relative(first)
+      {
+        item.poster = poster
+        (item.width, item.height) = pixelSize(self.folder.appendingPathComponent(poster))
+      }
+    }
+  }
+
+  /** Keep a video Blender wrote, moving it into the library. */
   func addVideo(_ video: URL, poster: String?, frames: Int) -> RenderItem? {
     let id = UUID().uuidString
-    let file = id + ".mp4"
+    let file = id + "." + video.pathExtension
     guard (try? FileManager.default.moveItem(at: video, to: folder.appendingPathComponent(file))) != nil else { return nil }
     var still: String?
-    if let poster, (try? FileManager.default.copyItem(at: URL(fileURLWithPath: poster),
-                                                     to: folder.appendingPathComponent(id + ".png"))) != nil
-    {
-      still = id + ".png"
+    if let poster {
+      let name = id + "." + URL(fileURLWithPath: poster).pathExtension
+      if (try? FileManager.default.copyItem(at: URL(fileURLWithPath: poster), to: folder.appendingPathComponent(name))) != nil {
+        still = name
+      }
     }
     let (width, height) = still.map { pixelSize(folder.appendingPathComponent($0)) } ?? (0, 0)
     return append(RenderItem(id: id, file: file, poster: still, video: true, date: .now, width: width,
@@ -209,8 +277,24 @@ final class RenderLibrary: ObservableObject {
   func remove(_ item: RenderItem) {
     try? FileManager.default.removeItem(at: url(item))
     if let poster = item.poster { try? FileManager.default.removeItem(at: folder.appendingPathComponent(poster)) }
+    if let own = item.folder { try? FileManager.default.removeItem(at: folder.appendingPathComponent(own)) }
     withMotion { items.removeAll { $0.id == item.id } }
     save()
+  }
+
+  /** A copy of an animation's frames alone, in a folder named for them, to save to Files. */
+  func framesCopy(_ item: RenderItem, name: String) -> URL? {
+    let source = url(item)
+    let copy = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+      .appendingPathComponent(name, isDirectory: true)
+    guard (try? FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)) != nil,
+          let names = try? FileManager.default.contentsOfDirectory(atPath: source.path) else { return nil }
+    for frame in names where frame.hasPrefix("Frame ") {
+      /* A clone on APFS: no space until either changes. */
+      guard (try? FileManager.default.copyItem(at: source.appendingPathComponent(frame),
+                                               to: copy.appendingPathComponent(frame))) != nil else { return nil }
+    }
+    return copy
   }
 
   private func save() {
@@ -368,6 +452,8 @@ final class BackgroundRender {
 final class RenderModel: ObservableObject {
   @Published var rendering = false
   @Published var animation = false
+  /** What is being made: "Rendering Image", "Rendering Animation" or "Making Video". */
+  @Published var title = ""
   @Published var progress = 0.0
   @Published var phase = ""
   @Published var remaining: String?
@@ -375,9 +461,21 @@ final class RenderModel: ObservableObject {
   @Published var live: UIImage?
   /** The render shown, or nil for the one in progress. */
   @Published var selection: String?
+  /** Stop was asked for and Blender has not yet answered. */
+  @Published var stopping = false
+  /** What Stop would lose, when that is more than a minute of rendering: it asks first. */
+  @Published var confirmStop: String?
   var started = Date.now
+  /** Stop, asking first when more than a minute of rendering would be lost. */
   var stop: () -> Void = {}
+  /** Stop, once asked. */
+  var stopConfirmed: () -> Void = {}
   var close: () -> Void = {}
+  /** An animation's kept frames (R6 BUSY-3): render the missing ones, make a video of them, or
+   * save them to Files. */
+  var continueFrames: (RenderItem) -> Void = { _ in }
+  var makeVideo: (RenderItem) -> Void = { _ in }
+  var saveFrames: (RenderItem) -> Void = { _ in }
 
   /** The page for the render in progress. */
   static let live = "rendering"
@@ -420,7 +518,7 @@ struct RenderSheetView: View {
       }
       .animation(.smooth, value: model.rendering)
       .background(Color(uiColor: .systemGroupedBackground))
-      .navigationTitle(model.rendering ? (model.animation ? "Rendering Animation" : "Rendering Image") : "Renders")
+      .navigationTitle(model.rendering ? model.title : "Renders")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
 #if !os(macOS)
@@ -430,7 +528,7 @@ struct RenderSheetView: View {
           Button(role: .close, action: model.close)
         }
 #endif
-        if let selected {
+        if let selected, !selected.isFrames {
           ToolbarItem(placement: .primaryAction) {
             ShareLink(item: library.url(selected)) { Image(systemName: "square.and.arrow.up") }
               .accessibilityLabel("Share")
@@ -439,6 +537,16 @@ struct RenderSheetView: View {
       }
     }
     .tint(Color(uiColor: .systemBlue))
+    .alert("Stop Rendering?", isPresented: Binding(get: { model.confirmStop != nil },
+                                                    set: { if !$0 { model.confirmStop = nil } })) {
+      Button("Keep Rendering", role: .cancel) { model.confirmStop = nil }
+      Button("Stop", role: .destructive) {
+        model.confirmStop = nil
+        model.stopConfirmed()
+      }
+    } message: {
+      Text(model.confirmStop ?? "")
+    }
   }
 }
 
@@ -502,13 +610,30 @@ struct RenderGallery: View {
       }
       else if let item = library.items.first(where: { $0.id == id }) {
         let url = library.url(item)
-        if item.video {
+        if item.isFrames {
+          RenderFramesPage(item: item, model: model, still: library.still(item))
+        }
+        else if item.video && item.playable {
           RenderVideo(url: url, playing: active)
             /* Held, the video file drags out to other apps. */
             .onDrag { NSItemProvider(contentsOf: url) ?? NSItemProvider() }
         }
+        else if item.video {
+          /* A container the iPad does not play (the scene's Output asked for it): its first frame,
+           * and where it plays. */
+          ZStack(alignment: .bottom) {
+            if let still = library.still(item) { RenderStill(url: still) }
+            Text("This \(url.pathExtension.uppercased()) video plays in other apps. Share it to open it.")
+              .font(.footnote)
+              .padding(.horizontal, 12)
+              .padding(.vertical, 8)
+              .background(.regularMaterial, in: Capsule())
+              .padding(16)
+          }
+        }
         else {
-          RenderStill(url: url)
+          /* A still in a format the iPad does not show is shown by its PNG. */
+          RenderStill(url: library.still(item) ?? url)
         }
       }
     }
@@ -541,15 +666,55 @@ struct RenderProgressCard: View {
           .foregroundStyle(.secondary)
           .contentTransition(.opacity)
         Spacer()
-        Button("Stop", role: .destructive, action: model.stop)
+        Button(model.stopping ? "Stopping…" : "Stop", role: .destructive, action: model.stop)
           .buttonStyle(.bordered)
           .controlSize(.small)
+          .disabled(model.stopping)
       }
     }
     .animation(.smooth, value: model.progress)
     .padding(16)
     .background(Color(uiColor: .secondarySystemGroupedBackground),
                 in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+  }
+}
+
+/** An animation kept as its frames (R6 BUSY-3): the first frame, how many there are, and what can
+ * be done with them: continue from the first missing frame, make a video, save them to Files. */
+struct RenderFramesPage: View {
+  let item: RenderItem
+  @ObservedObject var model: RenderModel
+  let still: URL?
+
+  var body: some View {
+    ZStack(alignment: .bottom) {
+      if let still {
+        RenderStill(url: still)
+      }
+      VStack(spacing: 10) {
+        Text(item.framesSummary)
+          .font(.headline)
+        if model.rendering {
+          Text("Wait for the render in progress, or stop it.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        }
+        HStack(spacing: 10) {
+          if item.stopped, let next = item.next {
+            Button("Continue from Frame \(next)") { model.continueFrames(item) }
+          }
+          if item.frames > 0 {
+            Button(item.stopped ? "Make Video of \(item.frames) Frames" : "Make Video") { model.makeVideo(item) }
+            Button("Save Frames to Files…") { model.saveFrames(item) }
+          }
+        }
+        .buttonStyle(.bordered)
+        .disabled(model.rendering)
+      }
+      .padding(16)
+      .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+      .padding(20)
+    }
   }
 }
 
@@ -773,7 +938,8 @@ struct FilmStrip: View {
         deleting = nil
       }
     } message: {
-      Text("This render will be removed from the film strip.")
+      Text(deleting?.isFrames == true ? "Its \(deleting?.frames ?? 0) frames will be deleted." :
+            "This render will be removed from the film strip.")
     }
   }
 
@@ -803,19 +969,27 @@ struct FilmStrip: View {
       Button {
         withMotion(.snappy) { model.select(id) }
       } label: {
-        FilmFrame(url: library.still(item), video: item.video, frames: item.frames)
+        FilmFrame(url: library.still(item), video: item.video, frames: item.frames, sequence: item.isFrames,
+                  stopped: item.stopped)
           .filmFrame(selected: selected,
                      aspect: item.height > 0 ? CGFloat(item.width) / CGFloat(item.height) : 1.5)
       }
       .buttonStyle(.plain)
-      .accessibilityLabel(item.video ? "Animation, \(item.frames) frames" : "Image")
+      .accessibilityLabel(item.isFrames ? "Animation frames, " + item.framesSummary :
+                            item.video ? "Animation, \(item.frames) frames" : "Image")
       .accessibilityValue(item.date.formatted(date: .abbreviated, time: .shortened))
       .accessibilityAddTraits(selected ? .isSelected : [])
       .contextMenu {
-        ShareLink(item: library.url(item)) { Label("Share", systemImage: "square.and.arrow.up") }
+        if item.isFrames {
+          Button { model.saveFrames(item) } label: { Label("Save Frames to Files…", systemImage: "folder") }
+        }
+        else {
+          ShareLink(item: library.url(item)) { Label("Share", systemImage: "square.and.arrow.up") }
+        }
         Button(role: .destructive) { deleting = item } label: { Label("Delete", systemImage: "trash") }
       } preview: {
-        FilmFrame(url: library.still(item), video: item.video, frames: item.frames)
+        FilmFrame(url: library.still(item), video: item.video, frames: item.frames, sequence: item.isFrames,
+                  stopped: item.stopped)
           .frame(width: 360, height: 360 / max(0.3, item.height > 0 ? CGFloat(item.width) / CGFloat(item.height) : 1.5))
       }
     }
@@ -839,6 +1013,9 @@ struct FilmFrame: View {
   let url: URL?
   let video: Bool
   let frames: Int
+  /** An animation kept as its frames, and whether it stopped before its end. */
+  var sequence = false
+  var stopped = false
   @State private var image: UIImage?
 
   var body: some View {
@@ -847,8 +1024,8 @@ struct FilmFrame: View {
       if let image {
         Image(uiImage: image).resizable().scaledToFill()
       }
-      if video {
-        Image(systemName: "play.fill")
+      if video || sequence {
+        Image(systemName: video ? "play.fill" : stopped ? "pause.fill" : "square.stack.fill")
           .font(.system(size: 8, weight: .bold))
           .foregroundStyle(.white)
           .padding(3)
@@ -871,23 +1048,57 @@ struct FilmFrame: View {
 /**
  * A render and its results, whichever window shows them: the iPad's sheet or the Mac's window.
  * Blender's state arrives in the `render` view, see #updateStatus.
+ *
+ * Every render writes into a folder of the document's render library (R6 BUSY-3): a still's
+ * image, or an animation's frames as they finish, listed from its start. Stop asks first when more
+ * than a minute of rendering would be lost; whatever ends a render, the frames it finished stay,
+ * to continue from the first missing frame or to make a video of.
  */
 @MainActor
 final class RenderSession {
+  /** What is being made. */
+  private enum Work {
+    case still
+    case frames
+    case video
+  }
+
   let model = RenderModel()
   /** Where the render in progress is kept: the project it was started in. */
   private(set) var renderLibrary = RenderLibrary.forDocument(nil)
+  private var work = Work.still
+  /** The library item and folder of the work in progress. */
+  private var itemID = ""
+  private var folder = URL(fileURLWithPath: "/")
+  /** The command that started it, until Blender answered it. */
+  private var command: UInt32?
+  /** The state Blender showed when the work started: older states are not this work's. */
+  private var startedAfter = 0.0
   private var lastID: Double?
   private var lastFrame: String?
-  private var finishing = false
+  private var lastDone = 0
+  /** When the last frame finished, or the work started: what Stop would lose is rendered since. */
+  private var lastFinished = Date.now
+  /** The system ended the background work: said once the app is back. */
+  private var expired = false
+  private var cancelSentAgain = false
   /** Shows the renders. */
   var present: () -> Void = {}
-  /** Tells why a render could not be completed. */
-  var fail: (String) -> Void = { _ in }
+  /** Tells why a render could not be completed, or (`title`) why it stopped. */
+  var fail: (_ message: String, _ title: String) -> Void = { _, _ in }
+  /** Offers a folder to save in Files. */
+  var export: (URL) -> Void = { _ in }
 
   init() {
-    model.stop = { [weak self] in self?.stop() }
-    BackgroundRender.shared.expired = { [weak self] in self?.stop() }
+    model.stop = { [weak self] in self?.requestStop() }
+    model.stopConfirmed = { [weak self] in self?.stop() }
+    model.continueFrames = { [weak self] in self?.continueFrames($0) }
+    model.makeVideo = { [weak self] in self?.makeVideo($0) }
+    model.saveFrames = { [weak self] in self?.saveFrames($0) }
+    BackgroundRender.shared.expired = { [weak self] in
+      self?.expired = true
+      self?.stop()
+    }
   }
 
   /** The open project's renders; while one renders, the project it belongs to. */
@@ -907,54 +1118,145 @@ final class RenderSession {
       present()
       return
     }
+    renderLibrary = RenderLibrary.forDocument(wm_apple_ios_document_url())
+    let id = UUID().uuidString
+    let folder = renderLibrary.makeFolder(id)
+    if animation {
+      /* Listed from the start, so whatever ends the render, the frames it finished are found. */
+      guard renderLibrary.addFrames(id: id, folder: folder) != nil else {
+        fail("The render's folder could not be made.", "Unable to Render")
+        return
+      }
+    }
+    begin(animation ? .frames : .still, id: id, folder: folder,
+          phase: animation ? "Starting" : "Rendering Image", verb: animation ? "animation" : "image")
+  }
+
+  /** Render the frames an animation is still missing, from the first one. */
+  private func continueFrames(_ item: RenderItem) {
+    guard !model.rendering, item.isFrames else { return }
+    renderLibrary = library
+    begin(.frames, id: item.id, folder: renderLibrary.url(item), phase: "Starting", verb: "continue")
+  }
+
+  /** Make a video of an animation's frames: the scene's movie, or a quick H.264 one. */
+  private func makeVideo(_ item: RenderItem) {
+    guard !model.rendering, item.isFrames else { return }
+    renderLibrary = library
+    begin(.video, id: item.id, folder: renderLibrary.url(item), phase: "Making Video", verb: "video")
+  }
+
+  private func saveFrames(_ item: RenderItem) {
+    let name = (wm_apple_ios_document_url()?.deletingPathExtension().lastPathComponent ?? "Animation") + " Frames"
+    guard let copy = library.framesCopy(item, name: name) else {
+      fail("The frames could not be copied.", "Unable to Save Frames")
+      return
+    }
+    export(copy)
+  }
+
+  private func begin(_ work: Work, id: String, folder: URL, phase: String, verb: String) {
+    self.work = work
+    itemID = id
+    self.folder = folder
     lastID = nil
     lastFrame = nil
-    finishing = false
-    model.animation = animation
+    lastDone = 0
+    lastFinished = .now
+    expired = false
+    cancelSentAgain = false
+    startedAfter = BlenderRender.status.double("id") ?? 0
+    model.animation = work != .still
+    model.title = title
     model.rendering = true
+    model.stopping = false
     model.progress = 0
     model.remaining = nil
     model.live = nil
     model.selection = nil
-    renderLibrary = RenderLibrary.forDocument(wm_apple_ios_document_url())
-    model.phase = animation ? "Starting" : "Rendering Image"
+    model.phase = phase
     model.started = .now
-    BlenderRender.run(animation ? "animation" : "image")
-    BackgroundRender.shared.begin(title: animation ? "Rendering Animation" : "Rendering Image")
+    command = BlenderRender.start(verb, folder: folder)
+    BackgroundRender.shared.begin(title: title)
     present()
   }
 
+  private var title: String {
+    switch work {
+      case .still: return "Rendering Image"
+      case .frames: return "Rendering Animation"
+      case .video: return "Making Video"
+    }
+  }
+
+  /** Stop asks first when it would lose more than a minute of rendering: the frame in progress,
+   * or the whole still. Frames already finished are kept either way. */
+  private func requestStop() {
+    guard model.rendering, !model.stopping else { return }
+    let lost = Date.now.timeIntervalSince(lastFinished)
+    guard lost > 60, work != .video else {
+      stop()
+      return
+    }
+    let formatter = DateComponentsFormatter()
+    formatter.unitsStyle = .full
+    formatter.maximumUnitCount = 1
+    formatter.allowedUnits = lost >= 3600 ? [.hour] : [.minute]
+    let time = formatter.string(from: lost) ?? ""
+    model.confirmStop = work == .still ?
+      "The image has been rendering for \(time). It will be lost." :
+      "The frame in progress has been rendering for \(time). It will be lost; the \(lastDone) frames finished are kept."
+  }
+
+  /** Blender answers with the render's state: `cancelled`, with the frames it kept. */
   private func stop() {
-    guard model.rendering else { return }
+    guard model.rendering, !model.stopping else { return }
+    model.stopping = true
+    model.phase = "Stopping"
     BlenderRender.run("cancel")
-    end(success: false)
   }
 
   private func end(success: Bool) {
     model.rendering = false
+    model.stopping = false
     model.live = nil
-    finishing = false
+    command = nil
     BackgroundRender.shared.finish(success: success)
   }
 
   func updateStatus(_ status: RenderStatus) {
-    guard model.rendering, !finishing, let id = status.double("id"), lastID != id else { return }
+    guard model.rendering else { return }
+    /* A command Blender refused (a bake running, say) leaves nothing to wait for. */
+    if let sent = command, let outcome = NativeViews.shared.outcome(of: sent) {
+      command = nil
+      if let refusal = outcome {
+        failed(refusal, frames: 0)
+        return
+      }
+    }
+    guard let id = status.double("id"), id > startedAfter, lastID != id else { return }
+    let state = status.string("state")
+    /* States of earlier work (a render stopped before this one began) are not this work's. */
+    if let shown = status.string("folder"), shown != folder.path { return }
     lastID = id
-    switch status.string("state") {
+    switch state {
       case "rendering":
+        if model.stopping, !cancelSentAgain {
+          /* Stop reached Blender before the work had started (it waited behind other work). */
+          cancelSentAgain = true
+          BlenderRender.run("cancel")
+        }
         showProgress(status)
       case "done":
-        finishing = true
         BlenderRender.run("clear")
-        if model.animation { makeVideo(status) }
-        else { keepImage(status.string("image")) }
+        finished(status)
       case "error":
         BlenderRender.run("clear")
-        end(success: false)
-        fail(status.string("message") ?? "The render could not be completed.")
+        failed(status.string("message") ?? "The render could not be completed.", frames: status.int("done"),
+               status: status)
       case "cancelled":
         BlenderRender.run("clear")
-        end(success: false)
+        cancelled(status)
       default:
         break
     }
@@ -973,70 +1275,123 @@ final class RenderSession {
   }
 
   private func showProgress(_ status: RenderStatus) {
-    let total = max(1, status.double("total") ?? 1)
-    let done = status.double("done") ?? 0
+    let total = Double(max(1, status.int("total")))
+    let done = status.int("done")
     let samples = status.double("samples") ?? 0
-    model.progress = min(1, (done + samples) / total)
-    if model.animation {
-      model.phase = "Frame \(Int(min(done + 1, total))) of \(Int(total))"
-      /* Show each frame as it is finished. */
-      if let last = status.string("last"), !last.isEmpty, last != lastFrame {
-        lastFrame = last
-        Task {
-          let image = await Task.detached(priority: .utility) {
-            await UIImage(contentsOfFile: last)?.byPreparingForDisplay()
-          }.value
-          if let image, self.model.rendering { self.model.live = image }
-        }
+    /* Frames there before a Continue are not progress of this render's. */
+    let resumed = Double(status.int("resumed"))
+    model.progress = min(1, (Double(done) - resumed + samples) / max(1, total - resumed))
+    let video = status.string("phase") == "video"
+    if done != lastDone, !video {
+      lastDone = done
+      lastFinished = .now
+      if work == .frames { renderLibrary.updateFrames(itemID, status: status) }
+    }
+    switch status.string("phase") {
+      case "video":
+        model.phase = "Making Video"
+      default:
+        model.phase = model.stopping ? "Stopping" :
+          work == .still ? "Rendering Image" : "Frame \(min(done + 1, Int(total))) of \(Int(total))"
+    }
+    /* Show each frame as it is finished. */
+    if work == .frames, let last = status.string("last"), !last.isEmpty, last != lastFrame {
+      lastFrame = last
+      Task {
+        let image = await Task.detached(priority: .utility) {
+          await UIImage(contentsOfFile: last)?.byPreparingForDisplay()
+        }.value
+        if let image, self.model.rendering { self.model.live = image }
       }
     }
-    else {
-      model.phase = "Rendering Image"
-    }
     model.remaining = estimate()
-    BackgroundRender.shared.update(title: model.animation ? "Rendering Animation" : "Rendering Image",
-                                   subtitle: model.animation ? model.phase : "\(Int((model.progress * 100).rounded()))%",
+    BackgroundRender.shared.update(title: title,
+                                   subtitle: work == .frames ? model.phase : "\(Int((model.progress * 100).rounded()))%",
                                    fraction: model.progress)
   }
 
-  private func keepImage(_ path: String?) {
-    guard let path, let item = renderLibrary.addImage(path) else {
-      end(success: false)
-      fail("The render could not be completed.")
-      return
+  private func finished(_ status: RenderStatus) {
+    switch work {
+      case .still:
+        guard let image = status.string("image"),
+              let item = renderLibrary.addImage(id: itemID, folder: folder, image: image,
+                                                preview: status.string("preview"))
+        else {
+          failed("The rendered image could not be kept.", frames: 0)
+          return
+        }
+        show(item)
+      case .frames, .video:
+        renderLibrary.updateFrames(itemID, status: status)
+        let video = status.string("video") ?? ""
+        guard !video.isEmpty else {
+          /* An image format: the frames are the result. */
+          if let item = renderLibrary.items.first(where: { $0.id == itemID }) { show(item) }
+          else { end(success: true) }
+          return
+        }
+        let frames = status.strings("frames")
+        guard let item = renderLibrary.addVideo(URL(fileURLWithPath: video), poster: frames.first,
+                                                frames: frames.count)
+        else {
+          failed("The video could not be kept.", frames: frames.count)
+          return
+        }
+        /* The scene's movie of all its frames stands for them, written only to make it; a video
+         * made of an image format's frames, or of frames still to be continued, is an extra. */
+        if status.bool("movie"), !status.bool("quick"), status.int("next") == 0,
+           let frames = renderLibrary.items.first(where: { $0.id == itemID })
+        {
+          renderLibrary.remove(frames)
+        }
+        show(item)
     }
-    try? FileManager.default.removeItem(at: URL(fileURLWithPath: path).deletingLastPathComponent())
-    finished(item)
   }
 
-  private func makeVideo(_ status: RenderStatus) {
-    let frames = status.strings("frames")
-    guard !frames.isEmpty, let folder = status.string("folder") else {
-      end(success: false)
-      fail("No frames were rendered.")
-      return
+  private func cancelled(_ status: RenderStatus) {
+    let wasExpired = expired
+    switch work {
+      case .still:
+        try? FileManager.default.removeItem(at: folder)
+      case .frames:
+        keepFrames(status)
+      case .video:
+        break  // The frames are as they were.
     }
-    model.phase = "Creating Video"
-    model.progress = 0
-    model.remaining = nil
-    BackgroundRender.shared.update(title: "Rendering Animation", subtitle: "Creating Video", fraction: 0.99)
-    encodeVideo(frames: frames, fps: max(1, status.double("fps") ?? 24),
-                output: URL(fileURLWithPath: folder).appendingPathComponent("Animation.mp4"),
-                progress: { [weak self] in self?.model.progress = Double($0) })
-    { [weak self] video in
-      guard let self else { return }
-      guard let video, let item = self.renderLibrary.addVideo(video, poster: frames.first, frames: frames.count)
-      else {
-        self.end(success: false)
-        self.fail("The video could not be created.")
-        return
-      }
-      try? FileManager.default.removeItem(at: URL(fileURLWithPath: folder))
-      self.finished(item)
+    end(success: false)
+    if wasExpired {
+      let kept = work == .frames && status.int("done") > 0 ?
+        " The \(status.int("done")) frames rendered are kept in Renders: continue from there, or make a video of them." : ""
+      fail("iPadOS ended the work in the background." + kept, "Rendering Stopped")
     }
   }
 
-  private func finished(_ item: RenderItem) {
+  /** The frames a render that ended early made: kept and listed, or the empty item removed. */
+  private func keepFrames(_ status: RenderStatus) {
+    renderLibrary.updateFrames(itemID, status: status)
+    guard let item = renderLibrary.items.first(where: { $0.id == itemID }) else { return }
+    if item.frames == 0 { renderLibrary.remove(item) }
+    else { model.selection = item.id }
+  }
+
+  private func failed(_ message: String, frames: Int, status: RenderStatus? = nil) {
+    switch work {
+      case .still:
+        try? FileManager.default.removeItem(at: folder)
+      case .frames:
+        if let status { keepFrames(status) }
+        else if let item = renderLibrary.items.first(where: { $0.id == itemID }), item.frames == 0 {
+          renderLibrary.remove(item)
+        }
+      case .video:
+        break
+    }
+    end(success: false)
+    let kept = work != .still && frames > 0 ? " The \(frames) frames rendered are kept in Renders." : ""
+    fail(message + kept, "Unable to Render")
+  }
+
+  private func show(_ item: RenderItem) {
     model.selection = item.id
     end(success: true)
     Haptics.success()
@@ -1047,10 +1402,12 @@ final class RenderSession {
 /** The iPad's renders, in a sheet over the document. */
 @MainActor
 @objc(WMIOSSwiftRender)
-public final class SwiftRender: NSObject, UIAdaptivePresentationControllerDelegate {
+public final class SwiftRender: NSObject, UIAdaptivePresentationControllerDelegate, UIDocumentPickerDelegate {
   private weak var presenter: UIViewController?
   private var sheet: UIViewController?
   private let session = RenderSession()
+  /** A copy of frames being saved to Files, removed once that is done. */
+  private var exported: URL?
 
   @objc(initWithPresenter:)
   public init(presenter: UIViewController) {
@@ -1058,7 +1415,8 @@ public final class SwiftRender: NSObject, UIAdaptivePresentationControllerDelega
     super.init()
     session.model.close = { [weak self] in self?.close() }
     session.present = { [weak self] in self?.present() }
-    session.fail = { [weak self] in self?.fail($0) }
+    session.fail = { [weak self] in self?.fail($0, title: $1) }
+    session.export = { [weak self] in self?.export($0) }
   }
 
   private func present() {
@@ -1090,12 +1448,35 @@ public final class SwiftRender: NSObject, UIAdaptivePresentationControllerDelega
 
   func updateStatus(_ status: RenderStatus) { session.updateStatus(status) }
 
-  private func fail(_ message: String) {
-    let alert = UIAlertController(title: "Unable to Render", message: message, preferredStyle: .alert)
-    alert.addAction(UIAlertAction(title: "OK", style: .default))
+  private var top: UIViewController? {
     var top = presenter
     while let next = top?.presentedViewController, !next.isBeingDismissed { top = next }
+    return top
+  }
+
+  private func fail(_ message: String, title: String) {
+    let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+    alert.addAction(UIAlertAction(title: "OK", style: .default))
     top?.present(alert, animated: true)
+  }
+
+  /** Save a folder of frames to Files, as a folder. */
+  private func export(_ folder: URL) {
+    exported = folder
+    let picker = UIDocumentPickerViewController(forExporting: [folder], asCopy: true)
+    picker.delegate = self
+    top?.present(picker, animated: true)
+  }
+
+  public func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+    removeExported()
+  }
+
+  public func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { removeExported() }
+
+  private func removeExported() {
+    if let exported { try? FileManager.default.removeItem(at: exported.deletingLastPathComponent()) }
+    exported = nil
   }
 }
 #endif

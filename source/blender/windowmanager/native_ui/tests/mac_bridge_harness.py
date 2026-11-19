@@ -30,7 +30,7 @@ from Blender.NativeUI import (  # noqa: E402
     BoolValue, Button, ButtonStyle, Choice, Command, Commands, Content, Data, FloatsValue, FloatValue, Group, MenuButton, Node, Number,
     Op, Param,
     Reference,
-    Subscribe, TextValue, Toggle, Updates, Value,
+    Subscribe, TextValue, TextsValue, Toggle, Updates, Value,
 )
 
 lib = ctypes.CDLL(None)
@@ -256,6 +256,10 @@ def decode_node(raw):
             fv = FloatsValue.FloatsValue()
             fv.Init(data.Value().Bytes, data.Value().Pos)
             entry.update(value=[fv.Value(i) for i in range(fv.ValueLength())])
+        elif data.ValueType() == Value.Value.TextsValue:
+            tv = TextsValue.TextsValue()
+            tv.Init(data.Value().Bytes, data.Value().Pos)
+            entry.update(value=[s(tv.Value(i)) for i in range(tv.ValueLength())])
     elif node.ContentType() == Content.Content.Number:
         table = node.Content()
         number = Number.Number()
@@ -1163,6 +1167,144 @@ def tick_render():
         finish("error")
         return None
     return 0.3
+
+
+# ROUND6 BUSY-3 (G5, D3, F10): an animation render keeps what it made, through the bridge as the
+# iPad drives it (a window, the render as a job). Stop part way: the frames written are listed and on
+# disk. Continue: only the missing frames render. A movie scene: the frames, then the scene's movie
+# written by FFmpeg from a timer once the frames' job ended. Make Video of the first frames, with the
+# scene now set to a movie: that movie (a refused codec can be changed and the video made again).
+def _render_state():
+    view = views.get(subs["render"], {"nodes": {}})
+    nodes = view["nodes"]
+
+    def value(key):
+        node = nodes.get("state:" + key, {})
+        return node.get("value")
+    return value
+
+
+def tick_render_keep():
+    global step
+    import os
+    try:
+        pump()
+        step += 1
+        scene = bpy.context.scene
+        value = _render_state() if "render" in subs else None
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            subs["render"] = subscribe("render")
+            scene.render.resolution_percentage = 25
+            scene.frame_start, scene.frame_end = 1, 400
+            scene.render.image_settings.file_format = 'PNG'
+            report["folder"] = os.path.join(argv[0], "kept frames")
+            report["movie_folder"] = os.path.join(argv[0], "movie frames")
+            report["phase"] = "stop"
+            return 0.3
+        if step == 3:
+            invoke(subs["render"], "animation:" + report["folder"], 700)
+            report["sent"] = time.monotonic()
+            return 0.1
+        if step < 3:
+            return 0.3
+        state = value("state")
+        if (value("id") or 0) <= report.get("sent_id", 0):
+            state = "sent"  # What was shown before the command: its answer is still to come.
+        if time.monotonic() - report["sent"] > 180:
+            report["error"] = "timed out in phase %s at state %s" % (report["phase"], state)
+            report["acks"] = {k: acks.get(k) for k in range(700, 708)}
+            finish("error")
+            return None
+        if report["phase"] == "stop":
+            if state == "rendering" and (value("done") or 0) >= 3 and "cancel_at" not in report:
+                invoke(subs["render"], "cancel", 701)
+                report["cancel_at"] = value("done")
+            elif state == "cancelled":
+                manifest = json.load(open(os.path.join(report["folder"], "Render.json")))
+                files = sorted(name for name in os.listdir(report["folder"]) if name.startswith("Frame "))
+                report["stopped"] = {"done": int(value("done")), "listed": len(manifest["frames"]), "files": len(files),
+                                     "next": value("next"), "frames_said": len(value("frames") or [])}
+                ok = (value("done") >= 3 and value("done") == len(manifest["frames"]) == len(files) ==
+                      report["stopped"]["frames_said"] and value("next") == value("done") + 1)
+                if not ok:
+                    report["error"] = "the frames rendered before Stop are not all kept"
+                    finish("error")
+                    return None
+                scene.frame_end = int(value("done")) + 2
+                report["written"] = []
+                bpy.app.handlers.render_write.append(lambda s, *_: report["written"].append(s.frame_current))
+                invoke(subs["render"], "clear", 702)
+                invoke(subs["render"], "continue:" + report["folder"], 703)
+                report["phase"] = "continue"
+                report["sent"] = time.monotonic()
+                report["sent_id"] = value("id") or 0
+            return 0.1
+        if report["phase"] == "continue":
+            if state == "done":
+                report["continued"] = {"done": value("done"), "written": list(report["written"])}
+                expected = [report["stopped"]["done"] + 1, report["stopped"]["done"] + 2]
+                if report["written"] != expected or value("done") != report["stopped"]["done"] + 2:
+                    report["error"] = "Continue did not render only the missing frames"
+                    finish("error")
+                    return None
+                scene.frame_start, scene.frame_end = 1, 3
+                scene.render.image_settings.media_type = 'VIDEO'
+                scene.render.ffmpeg.format, scene.render.ffmpeg.codec = 'MPEG4', 'H264'
+                invoke(subs["render"], "clear", 704)
+                invoke(subs["render"], "animation:" + report["movie_folder"], 705)
+                report["phase"] = "movie"
+                report["phases_seen"] = []
+                report["sent"] = time.monotonic()
+                report["sent_id"] = value("id") or 0
+            elif state in ("error", "cancelled"):
+                report["error"] = "Continue ended %s: %s" % (state, value("message"))
+                finish("error")
+                return None
+            return 0.1
+        if report["phase"] == "movie":
+            if state == "rendering" and value("phase") not in report["phases_seen"]:
+                report["phases_seen"].append(value("phase"))
+            if state == "done":
+                video = value("video") or ""
+                with open(video, "rb") as f:
+                    head = f.read(8)
+                report["movie"] = {"video": os.path.basename(video), "frames": len(value("frames") or []),
+                                   "phases": report["phases_seen"]}
+                # The video phase may pass between two looks: the movie's name says which it was.
+                if (head[4:8] != b"ftyp" or not os.path.basename(video).startswith("Video ") or
+                        not video.endswith(".mp4") or report["phases_seen"][:1] != ["frames"]):
+                    report["error"] = "the scene's movie was not written after its frames"
+                    finish("error")
+                    return None
+                invoke(subs["render"], "clear", 706)
+                invoke(subs["render"], "video:" + report["folder"], 707)
+                report["phase"] = "quick"
+                report["sent"] = time.monotonic()
+                report["sent_id"] = value("id") or 0
+            elif state in ("error", "cancelled"):
+                report["error"] = "the movie render ended %s: %s" % (state, value("message"))
+                finish("error")
+                return None
+            return 0.1
+        if report["phase"] == "quick":
+            if state == "done":
+                video = value("video") or ""
+                report["quick"] = {"video": os.path.basename(video), "quick": value("quick"),
+                                   "settings_kept": scene.render.image_settings.media_type == 'VIDEO' and
+                                   scene.render.ffmpeg.format == 'MPEG4' and ".Render Video" not in bpy.data.scenes}
+                finish("done" if video.endswith(".mp4") and report["quick"]["settings_kept"] else "error")
+                return None
+            if state in ("error", "cancelled"):
+                report["error"] = "the quick video ended %s: %s" % (state, value("message"))
+                finish("error")
+                return None
+            return 0.1
+        return 0.1
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
 
 
 # Materials as the Material tab makes them (ROUND5 7D): with no slots, New makes one slot holding one
@@ -3337,5 +3479,6 @@ bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets
                          "fingers": tick_fingers, "undo": tick_undo,
                          "tolerance": tick_tolerance, "waiting": tick_waiting,
                          "touchstart": tick_touchstart, "jobs": tick_jobs,
-                         "renderprogress": tick_render_progress, "busy": tick_busy}.get(SCENARIO, tick_actions),
+                         "renderprogress": tick_render_progress, "busy": tick_busy,
+                         "renderkeep": tick_render_keep}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

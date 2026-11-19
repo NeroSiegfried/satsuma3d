@@ -1555,8 +1555,23 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
       expression = "bl_ui.native_render.clear(bpy.context)";
     }
     else {
-      expression = std::string("bl_ui.native_render.start(bpy.context, ") +
-                   (command.value == "animation" ? "True" : "False") + ")";
+      /* `image` or `animation`, alone or with the iPad's folder for the render after a colon;
+       * `continue` and `video` with the folder of an animation's frames (R6 BUSY-3).
+       * See #bridge_render_view_command. */
+      const size_t colon = command.value.find(':');
+      const std::string verb = command.value.substr(0, colon);
+      const std::string folder = colon == std::string::npos ?
+                                     "None" :
+                                     "\"" + bridge_json_escape(command.value.substr(colon + 1)) +
+                                         "\"";
+      if (verb == "video") {
+        expression = "bl_ui.native_render.make_video(bpy.context, " + folder + ")";
+      }
+      else {
+        expression = std::string("bl_ui.native_render.start(bpy.context, ") +
+                     (verb == "image" ? "False" : "True") + ", " + folder + ", " +
+                     (verb == "continue" ? "True" : "False") + ")";
+      }
     }
     BPY_run_string_eval(C, imports, expression.c_str());
     bridge_context_pop(C, context_store);
@@ -5136,8 +5151,13 @@ views::CommandResult bridge_render_view_command(bContext *C,
                                                 std::string &r_error)
 {
   const std::string_view target = command.target()->string_view();
+  /* A verb, and for those that write files the folder after a colon (R6 BUSY-3): the iPad keeps
+   * each render's frames in a folder of the document's that outlives the session. */
+  const std::string_view verb = target.substr(0, target.find(':'));
+  const bool with_folder = verb.size() < target.size() && verb.size() + 1 < target.size();
   if (command.op() != views::protocol::Op::Invoke ||
-      !ELEM(target, "image", "animation", "cancel", "clear"))
+      !(ELEM(target, "image", "animation", "cancel", "clear") ||
+        (with_folder && ELEM(verb, "image", "animation", "continue", "video"))))
   {
     r_error = "Not something rendering does";
     return views::CommandResult::Failed;
@@ -8111,6 +8131,21 @@ void WM_native_ui_flush_commands(bContext *C)
     return;
   }
   bridge_viewport_regions_note(C);
+
+  /* A job's modal operator (a render's, a bake's) sees that its job ended only at its next event,
+   * and until then every command waits for it. On desktop the mouse moving brings that event; here
+   * nothing may come, and Continue after a render's Stop waited for a touch (R6 BUSY-3). When the
+   * last job ends, each window is given one. */
+  static bool bridge_jobs_were_running = false;
+  if (wmWindowManager *wm = CTX_wm_manager(C)) {
+    const bool running = WM_jobs_has_running(wm);
+    if (bridge_jobs_were_running && !running) {
+      for (wmWindow &win : wm->windows) {
+        WM_event_add_mousemove(&win);
+      }
+    }
+    bridge_jobs_were_running = running;
+  }
 
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
   WM_apple_ios_dialog_flush(C);

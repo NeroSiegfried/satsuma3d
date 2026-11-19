@@ -1461,4 +1461,21 @@ check('.overlay { BusyVeil(state: shell.busy) }' in window_t8 and 'shell.busy.re
       'native_interface->engine_document_held(C)' in ghost_b2,
       "R6 BUSY-2: a veil names the work, stale and job-blocked commands are refused, the lock is honoured")
 
+# ROUND6 BUSY-3 (G5, F10, D3, D22, R6-11): an animation render keeps what it made and honours the
+# scene's Output. Frames go into a folder of the document's render library, listed from the start
+# and counted again from Blender's manifest at launch; Stop asks first past a minute and waits for
+# Blender's answer; Continue, Make Video and Save Frames act on kept frames; the video is written by
+# Blender's FFmpeg (the shell encodes nothing itself). `script_native_render` sweeps every format
+# and container; the harness scenario `renderkeep` stops, continues and makes the videos.
+render_swift = (SWIFT / 'RenderSheet.swift').read_text(encoding='utf-8')
+check('AVAssetWriter' not in render_swift and 'BlenderRender.start(' in render_swift and
+      'addFrames(id: id, folder: folder)' in render_swift and '"Render.json"' in render_swift and
+      'Continue from Frame' in render_swift and 'Make Video of' in render_swift and
+      'Save Frames to Files…' in render_swift and '"Stop Rendering?"' in render_swift and
+      'NativeViews.shared.outcome(of: sent)' in render_swift and
+      'ELEM(verb, "image", "animation", "continue", "video")' in bridge_text and
+      'WM_jobs_has_running(wm)' in bridge_text and
+      'def make_video(' in render_py and 'MANIFEST = "Render.json"' in render_py,
+      "R6 BUSY-3: renders keep their frames, continue, make videos with FFmpeg, and ask before losing work")
+
 print('PASS: native shell sources ' + json.dumps(checks))
