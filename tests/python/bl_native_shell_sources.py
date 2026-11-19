@@ -1443,4 +1443,22 @@ check('jobs.live = [](const protocol::Command & /*command*/) { return true; };' 
       'handlers.render_stats' not in render_py and '"state:samples"' in bridge_text,
       "R6 BUSY-1: running work is listed with a live Stop in both interfaces; render progress from the job")
 
+# ROUND6 BUSY-2 (G6, C1, R6-12): taps are refused, not replayed. A veil over the window after half a
+# second of a blocked pass, naming the operator (pushed around every operator callback); every command
+# carries the view version it was tapped on and the bridge refuses one whose node went or changed
+# after work ran; a job's modal operator refuses commands, naming the job; live commands honour the
+# interface lock; a held document request says so. The harness scenario `busy` runs each.
+views_b2 = (SWIFT.parents[1] / 'intern/wm_native_ui_views.cc').read_text(encoding='utf-8')
+events_b2 = (SWIFT.parents[1] / 'intern/wm_event_system.cc').read_text(encoding='utf-8')
+ghost_b2 = (ROOT / 'intern/ghost/intern/GHOST_SystemIOS.mm').read_text(encoding='utf-8')
+native_views_b2 = (SWIFT / 'NativeViews.swift').read_text(encoding='utf-8')
+check('.overlay { BusyVeil(state: shell.busy) }' in window_t8 and 'shell.busy.refresh()' in window_t8 and
+      'WM_native_ui_busy_label(' in pills and events_b2.count('const NativeBusyScope busy(') == 5 and
+      'version: view.version)' in native_views_b2 and 'version: uint;' in
+      (SWIFT.parents[1] / 'native_ui/protocol.fbs').read_text(encoding='utf-8') and
+      'command_stale(' in views_b2 and 'command_job_refusal(C)' in views_b2 and
+      'command_locked(C, subscription, command)' in views_b2 and
+      'native_interface->engine_document_held(C)' in ghost_b2,
+      "R6 BUSY-2: a veil names the work, stale and job-blocked commands are refused, the lock is honoured")
+
 print('PASS: native shell sources ' + json.dumps(checks))

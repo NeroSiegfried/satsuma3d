@@ -16,12 +16,16 @@
 #include <limits>
 #include <variant>
 
+#include <fmt/format.h>
+
 #include "BKE_context.hh"
 #include "BKE_report.hh"
 
 #include "CLG_log.h"
 
 #include "BLI_map.hh"
+
+#include "BLT_translation.hh"
 
 #include "DNA_windowmanager_types.h"
 
@@ -351,6 +355,8 @@ static bool property_command(bContext *C, const protocol::Command &command, std:
 struct WaitingCommand {
   std::shared_ptr<std::vector<uint8_t>> bytes;
   const protocol::Command *command;
+  /** It waited for an operator to end, which may have changed what it was tapped on. */
+  bool parked = false;
 };
 static std::deque<WaitingCommand> waiting;
 
@@ -427,6 +433,96 @@ static void command_execute(bContext *C, const protocol::Command &command)
   }
 }
 
+/** Send what \a subscription shows now, at once, so a command can be checked against it. */
+static void subscription_build_now(bContext *C, const uint32_t key, Subscription &subscription)
+{
+  subscription.last_build = std::chrono::steady_clock::now();
+  subscription.urgent = false;
+  subscription.dirty = false;
+  flatbuffers::FlatBufferBuilder buffer;
+  ViewBuilder builder(subscription.state, subscription.reset);
+  subscription.type->build(C, subscription.params(), subscription.data.get(), builder);
+  const auto update = builder.finish(buffer, key);
+  subscription.reset = false;
+  if (update.IsNull()) {
+    return;
+  }
+  const std::vector<flatbuffers::Offset<protocol::Update>> updates = {update};
+  buffer.Finish(protocol::CreateUpdates(
+      buffer,
+      buffer.CreateVector(updates),
+      buffer.CreateVector(std::vector<flatbuffers::Offset<protocol::Ack>>())));
+  outbox.push(buffer.Release());
+}
+
+/**
+ * Why a command that changes data is not run: its node changed or went since the update the
+ * interface showed when it was tapped (ROUND6 BUSY-2, G6, C1). Taps made while Blender was busy
+ * reach it together, after the work that held it up, as a second Apply after the first: that one
+ * was meant for a modifier that is gone. The view is built again first when a command earlier in
+ * the pass changed data, or something changed it since it was sent. Empty to run it.
+ */
+static std::string command_stale(bContext *C,
+                                 const uint32_t key,
+                                 Subscription &subscription,
+                                 const protocol::Command &command,
+                                 const bool changed_data,
+                                 const bool parked)
+{
+  if (command.version() == 0 || subscription.reset) {
+    return "";
+  }
+  if (changed_data || subscription.dirty) {
+    subscription_build_now(C, key, subscription);
+  }
+  switch (subscription.state.since(command.target()->string_view(), command.version())) {
+    case ViewState::Since::Gone:
+      return IFACE_("Not done: what was tapped is gone, after the work before it");
+    case ViewState::Since::Changed:
+      /* Only after work that could have changed it: a node may change on its own, as a label
+       * that follows the frame, between the update shown and the tap. */
+      if (changed_data || parked) {
+        return IFACE_("Not done: what was tapped changed before it could run");
+      }
+      break;
+    case ViewState::Since::Unknown:
+    case ViewState::Since::Unchanged:
+      break;
+  }
+  return "";
+}
+
+/** The refusal of a command that would wait while a job's operator runs, naming the job. */
+static std::string command_job_refusal(bContext *C)
+{
+  for (const wmJobListItem &job : WM_jobs_list(CTX_wm_manager(C))) {
+    std::string name = job.name;
+    while (!name.empty() && name.back() == '.') {
+      name.pop_back();
+    }
+    return fmt::format(fmt::runtime(IFACE_("Wait for {}, or stop it")), name);
+  }
+  return "";
+}
+
+/**
+ * A render with Lock Interface keeps Blender's own events away while it runs; live commands
+ * honour it too (G6, D22), but for the render's own buttons and the jobs view's Stop.
+ */
+static std::string command_locked(bContext *C,
+                                  const Subscription *subscription,
+                                  const protocol::Command & /*command*/)
+{
+  const wmWindowManager *wm = CTX_wm_manager(C);
+  if (wm == nullptr || !wm->runtime->is_interface_locked) {
+    return "";
+  }
+  if (subscription && ELEM(subscription->type->name, "render", "jobs")) {
+    return "";
+  }
+  return IFACE_("The render locks the interface: wait for it, or stop it");
+}
+
 /**
  * Run commands, those waiting first. While a stroke or another modal operator runs, one hand can
  * keep changing things with the other: values change at once, but what would change data under
@@ -467,21 +563,46 @@ static bool commands_execute(bContext *C, std::vector<std::vector<uint8_t>> rece
       }
     }
   }
+  /* A command that changes data ran in this pass: what a later one was tapped on may be gone. */
+  bool changed_data = false;
   for (WaitingCommand &item : commands) {
     if (item.command == nullptr) {
       continue;
     }
+    const protocol::Command &command = *item.command;
     const bool running = WM_native_ui_engine_busy(C);
     if (!running) {
       bridge_undo_push_pending(C);
     }
-    const Subscription *subscription = subscriptions().lookup_ptr(item.command->subscription());
-    if ((running || !waiting.empty()) && !command_live(subscription, *item.command)) {
-      waiting.push_back(std::move(item));
+    Subscription *subscription = subscriptions().lookup_ptr(command.subscription());
+    const bool live = command_live(subscription, command);
+    std::string refusal = live ? command_locked(C, subscription, command) : "";
+    if (refusal.empty() && !live && (running || !waiting.empty())) {
+      /* While a job's operator holds its modal handler, as for a whole bake, a command would wait
+       * for all of it and then run on whatever is current: it is refused instead (R6-12). */
+      refusal = command_job_refusal(C);
+      if (refusal.empty()) {
+        item.parked = true;
+        waiting.push_back(std::move(item));
+        continue;
+      }
+    }
+    if (refusal.empty() && !live && subscription) {
+      refusal = command_stale(
+          C, command.subscription(), *subscription, command, changed_data, item.parked);
+    }
+    if (!refusal.empty()) {
+      CLOG_INFO(&LOG, "Command %u to %s refused: %s", command.id(), command.target()->c_str(),
+                refusal.c_str());
+      WM_native_ui_notice(RPT_WARNING, refusal.c_str());
+      if (command.id() != 0) {
+        answers.emplace_back(command.id(), std::move(refusal));
+      }
       continue;
     }
-    command_execute(C, *item.command);
+    command_execute(C, command);
     executed = true;
+    changed_data |= !live;
   }
   if (!WM_native_ui_engine_busy(C)) {
     bridge_undo_push_pending(C);

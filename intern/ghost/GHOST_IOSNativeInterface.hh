@@ -95,6 +95,11 @@ struct GHOST_IOSNativeInterface {
    * and shortcuts waits for it to end.
    */
   bool (*engine_busy)(blender::bContext *C) = nullptr;
+  /**
+   * Work for a document (open, save, close, a shortcut) arrived while #engine_busy and waits for
+   * it: say so, once per wait (ROUND6 BUSY-2).
+   */
+  void (*engine_document_held)(blender::bContext *C) = nullptr;
 
   /** An Apple Pencil hovers over the viewport, at a window position in pixels, or stopped. */
   void (*pencil_hover)(bool active, int x, int y) = nullptr;

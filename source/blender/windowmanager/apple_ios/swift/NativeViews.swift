@@ -52,7 +52,8 @@ final class NativeView {
   /** Counts the nodes coming and going, so a node looked up before it arrived is shown once it
    * does. Their values are observed on the nodes themselves. */
   private var shape = 0
-  @ObservationIgnored private var version: UInt32 = 0
+  /** The version of the last update applied, sent with each command (ROUND6 BUSY-2). */
+  @ObservationIgnored fileprivate var version: UInt32 = 0
   /** Counts the updates applied, to tell whether anything changed since. */
   @ObservationIgnored private(set) var revision = 0
   /** Why its latest command failed, until another works. */
@@ -317,7 +318,7 @@ final class NativeViews {
     let paramsVector = Self.write(params, &builder)
     let viewOffset = builder.create(string: name)
     let subscribe = Blender_NativeUI_Subscribe.createSubscribe(&builder, viewOffset: viewOffset,
-                                                               paramsVectorOffset: paramsVector)
+                                                               paramsVectorOffset: paramsVector, version: view.version)
     builder.finish(offset: subscribe)
     return builder.sizedByteArray.withUnsafeBufferPointer { bytes in
       WM_native_ui_subscribe(bytes.baseAddress!, bytes.count)
@@ -345,7 +346,7 @@ final class NativeViews {
     let command = Blender_NativeUI_Command.createCommand(&builder, id: id, subscription: view.subscription,
                                                          targetOffset: targetOffset, op: op, valueType: valueType,
                                                          valueOffset: valueOffset, phase: phase,
-                                                         paramsVectorOffset: paramsVector)
+                                                         paramsVectorOffset: paramsVector, version: view.version)
     let commands = builder.createVector(ofOffsets: [command])
     builder.finish(offset: Blender_NativeUI_Commands.createCommands(&builder, commandsVectorOffset: commands))
     builder.sizedByteArray.withUnsafeBufferPointer { bytes in

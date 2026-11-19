@@ -127,6 +127,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
       MainActor.assumeIsolated {
         self?.model.refreshWindowState()
         self?.shell.compile.refresh()
+        self?.shell.busy.refresh()
       }
     }
   }
@@ -1007,6 +1008,8 @@ public struct DocumentWindow: View {
             .padding(.bottom, model.desktop ? 12 : 96)
         }
       }
+      /* Blender held up by one long piece of work: taps are swallowed, not queued (ROUND6 BUSY-2). */
+      .overlay { BusyVeil(state: shell.busy) }
 #if !os(visionOS)
       /* The palette a Pencil's squeeze shows, over everything; its commands follow the context. */
       .overlay { SqueezePaletteLayer() }

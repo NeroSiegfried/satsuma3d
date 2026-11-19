@@ -130,6 +130,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <atomic>
 #include <chrono>
@@ -755,6 +756,74 @@ std::string WM_native_ui_undo_refusal(bContext *C)
     }
   }
   return "";
+}
+
+/* -------------------------------------------------------------------- */
+/** \name What Blender Runs (ROUND6 BUSY-2)
+ *
+ * Operators whose callbacks Blender is in, outermost first, for the veil the interface shows
+ * while Blender is held up. Pushed and popped on Blender's thread around every operator callback,
+ * read from the interface's: static names only, so nothing is allocated per call.
+ * \{ */
+
+static std::mutex bridge_busy_mutex;
+static std::array<const char *, 16> bridge_busy_names{};
+static int bridge_busy_depth = 0;
+
+void WM_native_ui_busy_push(const char *name)
+{
+  std::scoped_lock lock(bridge_busy_mutex);
+  if (bridge_busy_depth < int(bridge_busy_names.size())) {
+    bridge_busy_names[bridge_busy_depth] = name;
+  }
+  bridge_busy_depth++;
+}
+
+void WM_native_ui_busy_pop()
+{
+  std::scoped_lock lock(bridge_busy_mutex);
+  bridge_busy_depth = std::max(0, bridge_busy_depth - 1);
+}
+
+extern "C" bool WM_native_ui_busy_label(char *label, const size_t size)
+{
+  std::scoped_lock lock(bridge_busy_mutex);
+  const char *name = bridge_busy_depth > 0 ? bridge_busy_names[0] : nullptr;
+  if (name == nullptr || name[0] == '\0' || size == 0) {
+    return false;
+  }
+  BLI_strncpy(label, name, size);
+  return true;
+}
+
+/** \} */
+
+void WM_native_ui_document_held(bContext *C)
+{
+  wmWindowManager *wm = CTX_wm_manager(C);
+  if (wm == nullptr) {
+    return;
+  }
+  std::string name;
+  for (wmWindow &win : wm->windows) {
+    for (wmEventHandler &handler : win.runtime->modalhandlers) {
+      if (handler.type != WM_HANDLER_TYPE_OP) {
+        continue;
+      }
+      const wmEventHandler_Op &op_handler = reinterpret_cast<wmEventHandler_Op &>(handler);
+      if (!op_handler.is_fileselect && op_handler.op && name.empty()) {
+        name = WM_operatortype_name(op_handler.op->type, op_handler.op->ptr);
+      }
+    }
+  }
+  const std::string text = name.empty() ?
+                               std::string(IFACE_("The document waits for the current operation "
+                                                  "to finish")) :
+                               fmt::format(fmt::runtime(IFACE_("The document waits for {} to "
+                                                               "finish, or cancel it")),
+                                           name);
+  CLOG_INFO(&LOG, "%s", text.c_str());
+  WM_native_ui_notice(RPT_INFO, text.c_str());
 }
 
 /* The brush ring after a size change (ROUND6 TOUCH-9), see #WM_native_ui_stylus_hover_active. */

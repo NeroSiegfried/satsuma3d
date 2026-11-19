@@ -70,13 +70,38 @@ class ViewState {
     uint64_t children = 0;
     /** The build that last had it. */
     uint32_t build = 0;
+    /** The version of the update that last sent it changed, or moved to another parent. */
+    uint32_t changed = 0;
+    /** Its parent's key, as a node keyed by its place moves with what is around it. */
+    std::string parent;
   };
   std::unordered_map<std::string, Sent, StringHash, std::equal_to<>> sent_;
+  /** Nodes gone, with the version of the update that said so; the latest few hundred. */
+  std::unordered_map<std::string, uint32_t, StringHash, std::equal_to<>> removed_;
   std::string top_;
   uint32_t build_ = 0;
   uint32_t version_ = 0;
 
  public:
+  /** What became of a node since an interface was shown update \a version (ROUND6 BUSY-2). */
+  enum class Since {
+    /** Not a node of this view, now or lately, such as an operator's name. */
+    Unknown,
+    Unchanged,
+    Changed,
+    Gone,
+  };
+  Since since(const std::string_view key, const uint32_t version) const
+  {
+    if (const auto sent = sent_.find(key); sent != sent_.end()) {
+      return sent->second.changed > version ? Since::Changed : Since::Unchanged;
+    }
+    if (const auto removed = removed_.find(key); removed != removed_.end()) {
+      return removed->second > version ? Since::Gone : Since::Unknown;
+    }
+    return Since::Unknown;
+  }
+
   /** The version of the last update, see `protocol::Update::version`. */
   uint32_t version() const
   {

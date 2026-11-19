@@ -49,6 +49,16 @@ struct wmJobListItem {
  */
 std::vector<wmJobListItem> WM_jobs_list(const wmWindowManager *wm);
 
+/**
+ * The operator whose callback Blender is in, named for the interface's veil (ROUND6 BUSY-2, see
+ * `WM_native_ui_busy_label`): pushed around each operator's invoke, exec and modal call, popped
+ * as it returns. \a name is a static string, the operator type's translated name.
+ */
+/** A document's work (open, save, close) waits for the running operation: says which (BUSY-2). */
+void WM_native_ui_document_held(bContext *C);
+void WM_native_ui_busy_push(const char *name);
+void WM_native_ui_busy_pop();
+
 /** \} */
 
 /* -------------------------------------------------------------------- */

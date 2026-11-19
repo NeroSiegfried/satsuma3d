@@ -570,6 +570,10 @@ table Command {
   phase: Phase;
   /// What it is done with, such as the properties of an operator it runs.
   params: [Param];
+  /// The version of the view's update the interface showed when it was sent (`Update::version`),
+  /// 0 for none. A command that changes data is refused when its node changed or went since then,
+  /// as after another command ran first (ROUND6 BUSY-2): it was meant for what was shown.
+  version: uint;
 }
 
 /// Commands sent at once, see `WM_native_ui_send`.

@@ -61,6 +61,10 @@ void ViewBuilder::finish_node(const NodeId parent,
   }
   sent->second.build = state_.build_;
   if (reset_ || sent->second.node != hash) {
+    if (sent->second.node != hash) {
+      /* The update this build makes, which carries it. */
+      sent->second.changed = state_.version_ + 1;
+    }
     sent->second.node = hash;
     changed_starts_.push_back(changed_.size());
     changed_.insert(changed_.end(), bytes, bytes + size);
@@ -81,6 +85,15 @@ flatbuffers::Offset<protocol::Update> ViewBuilder::finish(flatbuffers::FlatBuffe
     const NodeId parent = nodes_[id].parent;
     if (parent == no_parent) {
       continue;
+    }
+    /* A node now under another parent is another thing to whoever tapped it, such as the second
+     * modifier's Remove keyed by its place once the first is gone (ROUND6 BUSY-2). */
+    ViewState::Sent &moved = state_.sent_.find(key(nodes_[id]))->second;
+    if (moved.parent != key(nodes_[parent])) {
+      if (!moved.parent.empty() || moved.changed == 0) {
+        moved.changed = state_.version_ + 1;
+      }
+      moved.parent.assign(key(nodes_[parent]));
     }
     if (first_child[parent] == no_parent) {
       first_child[parent] = id;
@@ -121,12 +134,16 @@ flatbuffers::Offset<protocol::Update> ViewBuilder::finish(flatbuffers::FlatBuffe
 
   /* Nodes gone since the last build. */
   std::vector<flatbuffers::Offset<flatbuffers::String>> removed;
+  if (state_.removed_.size() > 512) {
+    state_.removed_.clear();
+  }
   for (auto sent = state_.sent_.begin(); sent != state_.sent_.end();) {
     if (sent->second.build == state_.build_) {
       ++sent;
       continue;
     }
     removed.push_back(buffer.CreateString(sent->first));
+    state_.removed_.insert_or_assign(sent->first, state_.version_ + 1);
     sent = state_.sent_.erase(sent);
   }
 

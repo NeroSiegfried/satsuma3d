@@ -6,7 +6,8 @@
  * The pills below the toolbar, in both interfaces: shader compilation, shown while Blender compiles
  * shaders and is held up by it, with its progress and count; and every job Blender's status bar
  * would show (a render, a bake, a simulation, an export), with its progress and a Stop, from
- * Blender's `jobs` view (ROUND6 BUSY-1, `bridge_jobs_view_build`).
+ * Blender's `jobs` view (ROUND6 BUSY-1, `bridge_jobs_view_build`). And the veil while Blender is
+ * held up by one long piece of work (ROUND6 BUSY-2).
  */
 
 import SwiftUI
@@ -170,6 +171,70 @@ struct CompileIndicator: View {
         .accessibilityValue("\(progress.finished) of \(progress.total)")
         .accessibilityIdentifier("blender.shader-compilation")
       }
+    }
+  }
+}
+
+/** Blender held up by one long piece of work, as an Apply or an import (ROUND6 BUSY-2, decision
+ * R6-12): after half a second, a veil over the window says what runs, and taps on it are
+ * swallowed, not queued to run afterwards on whatever is then current. Shader compilation has its
+ * own pill and no veil. Polled with the window's state. */
+@MainActor
+@Observable
+final class BusyVeilState {
+  /** Brief hitches are not worth a veil. */
+  private static let showAfter = 0.5
+
+  private(set) var shown = false
+  private(set) var label = ""
+
+  func refresh() {
+    var finished: Int32 = 0, total: Int32 = 0, busy = 0.0
+    let compiling = wm_apple_ios_shader_compilation(&finished, &total, &busy)
+    let held = busy > Self.showAfter && !compiling
+    if held {
+      var buffer = [CChar](repeating: 0, count: 256)
+      let named = WM_native_ui_busy_label(&buffer, buffer.count)
+      let text = named ? buffer.withUnsafeBufferPointer { String(cString: $0.baseAddress!) } : ""
+      let label = text.isEmpty ? "Working" : text
+      if self.label != label { self.label = label }
+    }
+    if held != shown {
+      withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .easeOut(duration: 0.15)) { shown = held }
+    }
+  }
+}
+
+/** The veil itself: dims the window, names the work, takes every touch. */
+struct BusyVeil: View {
+  let state: BusyVeilState
+
+  var body: some View {
+    if state.shown {
+      ZStack {
+        Color.black.opacity(0.18)
+        HStack(spacing: 10) {
+          ProgressView()
+            .controlSize(.small)
+          Text("\(state.label)…")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 36)
+        .panelGlass(in: Capsule())
+      }
+      .ignoresSafeArea()
+      .contentShape(Rectangle())
+      /* Taps are swallowed while Blender cannot answer them. */
+      .onTapGesture {}
+      .gesture(DragGesture(minimumDistance: 0).onEnded { _ in })
+      .transition(.opacity)
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("\(state.label), please wait")
+      .accessibilityAddTraits(.updatesFrequently)
+      .accessibilityIdentifier("blender.busy-veil")
     }
   }
 }

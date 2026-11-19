@@ -282,8 +282,16 @@ static void run_engine()
     /* Runs in the background too: leaving the foreground is when work must be kept. */
     run_engine_autosave();
     if (engine_document_pending.exchange(false)) {
+      const bool was_waiting = !engine_document_waiting.empty();
       for (auto &request : engine_document_requests.take()) {
         engine_document_waiting.push_back(std::move(request));
+      }
+      /* Held back: said, once per wait, rather than nothing for up to five minutes. */
+      if (!was_waiting && !engine_document_waiting.empty() && native_interface &&
+          native_interface->engine_busy && native_interface->engine_busy(C) &&
+          native_interface->engine_document_held)
+      {
+        native_interface->engine_document_held(C);
       }
     }
     /* Opening, saving or a shortcut under a stroke or other operator would change data it holds;

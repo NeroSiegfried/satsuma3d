@@ -99,6 +99,25 @@
 
 namespace blender {
 
+/** Names the operator whose callback runs, for the iPad's veil while Blender is held up (ROUND6
+ * BUSY-2). Nothing without the native interface. */
+struct NativeBusyScope {
+#ifdef WITH_NATIVE_UI
+  explicit NativeBusyScope(const wmOperatorType *ot)
+  {
+    WM_native_ui_busy_push(CTX_IFACE_(ot->translation_context, ot->name));
+  }
+  ~NativeBusyScope()
+  {
+    WM_native_ui_busy_pop();
+  }
+#else
+  explicit NativeBusyScope(const wmOperatorType * /*ot*/) {}
+#endif
+  NativeBusyScope(const NativeBusyScope &) = delete;
+  NativeBusyScope &operator=(const NativeBusyScope &) = delete;
+};
+
 /**
  * When a gizmo is highlighted and uses click/drag events,
  * this prevents mouse button press events from being passed through to other key-maps
@@ -1464,7 +1483,10 @@ static wmOperatorStatus wm_operator_exec(bContext *C,
       wm->op_undo_depth++;
     }
 
-    retval = op->type->exec(C, op);
+    {
+      const NativeBusyScope busy(op->type);
+      retval = op->type->exec(C, op);
+    }
     OPERATOR_RETVAL_CHECK(retval);
 
     if (op->type->flag & OPTYPE_UNDO && CTX_wm_manager(C) == wm) {
@@ -1507,6 +1529,7 @@ static wmOperatorStatus wm_operator_exec_notest(bContext *C, wmOperator *op)
     return retval;
   }
 
+  const NativeBusyScope busy(op->type);
   retval = op->type->exec(C, op);
   OPERATOR_RETVAL_CHECK(retval);
 
@@ -1775,7 +1798,10 @@ static wmOperatorStatus wm_operator_invoke(bContext *C,
         wm->op_undo_depth++;
       }
 
-      retval = op->type->invoke(C, op, &event_temp);
+      {
+        const NativeBusyScope busy(op->type);
+        retval = op->type->invoke(C, op, &event_temp);
+      }
       OPERATOR_RETVAL_CHECK(retval);
 
       if (op->type->flag & OPTYPE_UNDO && CTX_wm_manager(C) == wm) {
@@ -1787,7 +1813,10 @@ static wmOperatorStatus wm_operator_invoke(bContext *C,
         wm->op_undo_depth++;
       }
 
-      retval = op->type->exec(C, op);
+      {
+        const NativeBusyScope busy(op->type);
+        retval = op->type->exec(C, op);
+      }
       OPERATOR_RETVAL_CHECK(retval);
 
       if (op->type->flag & OPTYPE_UNDO && CTX_wm_manager(C) == wm) {
@@ -2976,7 +3005,10 @@ static eHandlerActionFlag wm_handler_operator_call_ex(bContext *C,
       }
 
       /* Warning, after this call all context data and 'event' may be freed. see check below. */
-      retval = ot->modal(C, op, event);
+      {
+        const NativeBusyScope busy(ot);
+        retval = ot->modal(C, op, event);
+      }
       OPERATOR_RETVAL_CHECK(retval);
 
       if (ot->flag & OPTYPE_UNDO && CTX_wm_manager(C) == wm) {

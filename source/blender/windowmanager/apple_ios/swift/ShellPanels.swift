@@ -19,6 +19,8 @@ final class ShellPanels {
   let timeline = SwiftTimeline()
   let assets = SwiftAssets()
   let compile = CompileProgress()
+  /** The veil while Blender is held up (ROUND6 BUSY-2). */
+  let busy = BusyVeilState()
 
   init(model: ShellModel) {
     self.model = model

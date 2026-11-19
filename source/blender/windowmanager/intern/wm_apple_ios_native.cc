@@ -252,6 +252,7 @@ GHOST_IOSNativeInterface ghost_interface_create()
     WM_apple_ios_autosave_now(C);
   };
   native.engine_busy = WM_native_ui_engine_busy;
+  native.engine_document_held = WM_native_ui_document_held;
   native.finger_point_pixels = wm_event_finger_point_pixels_set;
   native.pencil_hover = WM_native_ui_stylus_hover_set;
   native.pencil_roll = WM_native_ui_stylus_roll_set;

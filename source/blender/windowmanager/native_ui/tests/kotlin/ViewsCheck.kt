@@ -91,7 +91,7 @@ fun command(): ByteBuffer {
     val builder = FlatBufferBuilder(64)
     val target = builder.createString("location_x")
     val value = FloatValue.createFloatValue(builder, 2.25)
-    val command = Command.createCommand(builder, 7u, 1u, target, Op.Set, Value.FloatValue, value, Phase.End, 0)
+    val command = Command.createCommand(builder, 7u, 1u, target, Op.Set, Value.FloatValue, value, Phase.End, 0, 0u)
     builder.finish(Commands.createCommands(builder, Commands.createCommandsVector(builder, intArrayOf(command))))
     return builder.dataBuffer()
 }

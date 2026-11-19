@@ -121,6 +121,10 @@ void WM_native_ui_navigation_hover_set(bool active);
  * of.
  * \{ */
 
+/** What Blender is running right now, by its name as Blender shows it ("Apply Modifier"), for the
+ * interface's veil while Blender is held up (ROUND6 BUSY-2). False with nothing named, as between
+ * operators or while a script runs. Safe from any thread. */
+bool WM_native_ui_busy_label(char *label, size_t size);
 /** A line of the session's log (see `WM_native_ui_session_log`), from the interface's own code:
  * \a kind such as "layout" or "reveal". Safe from any thread. */
 void WM_native_ui_log(const char *kind, const char *text);

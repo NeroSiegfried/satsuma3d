@@ -110,16 +110,28 @@ def subscribe(view, **params):
 
 
 def invoke(subscription, target, command_id, op=None):
+    invoke_many(subscription, [(target, command_id)], op=op, version=0)
+
+
+def invoke_many(subscription, targets, op=None, version=None):
+    """Commands sent together, as taps that reach Blender in one pass; each carries the version of
+    the view shown (as the shell's do), unless `version` says otherwise."""
+    if version is None:
+        version = views.get(subscription, {}).get("version", 0)
     builder = flatbuffers.Builder(256)
-    t = builder.CreateString(target)
-    Command.Start(builder)
-    Command.AddId(builder, command_id)
-    Command.AddSubscription(builder, subscription)
-    Command.AddTarget(builder, t)
-    Command.AddOp(builder, Op.Op.Invoke if op is None else op)
-    c = Command.End(builder)
-    Commands.StartCommandsVector(builder, 1)
-    builder.PrependUOffsetTRelative(c)
+    offsets = []
+    for target, command_id in targets:
+        t = builder.CreateString(target)
+        Command.Start(builder)
+        Command.AddId(builder, command_id)
+        Command.AddSubscription(builder, subscription)
+        Command.AddTarget(builder, t)
+        Command.AddOp(builder, Op.Op.Invoke if op is None else op)
+        Command.AddVersion(builder, version)
+        offsets.append(Command.End(builder))
+    Commands.StartCommandsVector(builder, len(offsets))
+    for c in reversed(offsets):
+        builder.PrependUOffsetTRelative(c)
     v = builder.EndVector()
     Commands.Start(builder)
     Commands.AddCommands(builder, v)
@@ -285,6 +297,7 @@ def pump():
         for i in range(updates.UpdatesLength()):
             update = updates.Updates(i)
             view = views.setdefault(update.Subscription(), {"top": None, "nodes": {}, "children": {}})
+            view["version"] = update.Version()
             if update.Reset():
                 view.update(top=s(update.Top()), nodes={}, children={})
             elif update.Top():
@@ -1113,8 +1126,9 @@ def tick_render():
             # Past its first frame, which compiles shaders and stops only once they are done.
             if bpy.app.is_job_running('RENDER') and bpy.context.scene.frame_current > 2:
                 if "clear_sent" not in report:
-                    # Each of the view's buttons is live or waits: Clear answers at once (and leaves
-                    # a running render alone), rendering again waits for this render.
+                    # Each of the view's buttons is live or refused: Clear answers at once (and leaves
+                    # a running render alone); rendering again is refused while this render's job
+                    # runs, with its name (ROUND6 BUSY-2: refused, not queued to run afterwards).
                     invoke(subs["render"], "clear", 102)
                     invoke(subs["render"], "image", 103)
                     report["clear_sent"] = step
@@ -1141,7 +1155,7 @@ def tick_render():
                 report["job_running"] = running
                 report["cancel_sent"] = None
                 finish("done" if not running and acks.get(101) == "ok" and report["clear_ack"] == "ok" and
-                       report["image_ack_while_rendering"] is None else "error")
+                       (report["image_ack_while_rendering"] or "").startswith("Wait for") else "error")
                 return None
             return 0.05
     except Exception:
@@ -2842,6 +2856,112 @@ def tick_touchstart():
     return 0.3
 
 
+# ROUND6 BUSY-2 (G6, C1, R6-12): taps are refused, not replayed. (1) Two removes of the same modifier
+# sent together, as two taps that reached Blender in one pass after it was held up: the first runs,
+# the second is refused, its button gone. (2) While a job's operator holds its modal handler, an
+# operator command is refused naming the job, not parked to run when it ends. (3) An operator names
+# itself while it runs, for the veil (`WM_native_ui_busy_label`). (4) With Lock Interface, a live
+# command is refused while the render runs; the render's own Cancel still works.
+class TEST_OT_busy_probe(bpy.types.Operator):
+    bl_idname = "test.busy_probe"
+    bl_label = "Busy Probe"
+
+    def execute(self, _context):
+        buffer = ctypes.create_string_buffer(256)
+        named = lib.WM_native_ui_busy_label(buffer, 256)
+        report["busy_label"] = buffer.value.decode() if named else None
+        return {'FINISHED'}
+
+
+def _busy_buttons(subscription, operator):
+    view = views.get(subscription, {"nodes": {}})
+    return [key for key, node in view["nodes"].items()
+            if node.get("operator") == operator or key.split(":")[0] == operator]
+
+
+def tick_busy():
+    global step
+    try:
+        pump()
+        step += 1
+        if step == 1:
+            lib.WM_native_ui_busy_label.restype = ctypes.c_bool
+            lib.WM_native_ui_busy_label.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
+            bpy.utils.register_class(TEST_OT_busy_probe)
+            bpy.ops.test.busy_probe()
+            idle = ctypes.create_string_buffer(256)
+            report["busy_label_idle"] = bool(lib.WM_native_ui_busy_label(idle, 256))
+            cube = bpy.data.objects["Cube"]
+            for index in range(2):
+                cube.modifiers.new("Bevel %d" % index, 'BEVEL')
+            subs["MODIFIER"] = subscribe("properties", tab="MODIFIER", properties=True)
+            subs["operators"] = subscribe("operators")
+            subs["jobs"] = subscribe("jobs")
+            return 0.5
+        if step == 3:
+            removes = _busy_buttons(subs["MODIFIER"], "OBJECT_OT_modifier_remove")
+            report["remove_buttons"] = removes
+            if not removes:
+                nodes = views.get(subs["MODIFIER"], {"nodes": {}})["nodes"]
+                report["operators_seen"] = sorted({n.get("operator") for n in nodes.values() if n.get("operator")})
+                report["node_sample"] = [(k, n.get("content"), n.get("label")) for k, n in list(nodes.items())[:60]]
+                finish("error")
+                return None
+            invoke_many(subs["MODIFIER"], [(removes[0], 701), (removes[0], 702)])
+            return 0.5
+        if step == 5:
+            report["first_remove"] = acks.get(701)
+            report["second_remove"] = acks.get(702)
+            report["modifiers_left"] = [m.name for m in bpy.data.objects["Cube"].modifiers]
+            report["job_start"] = sorted(_jobs_start_pointcache(REPORT.rsplit("/", 1)[0]))
+            return 0.5
+        if step == 7:
+            invoke(subs["operators"], "object.select_all", 703)
+            return 0.5
+        if step == 9:
+            report["command_during_job"] = acks.get(703)
+            for key in views[subs["jobs"]]["children"].get("jobs", []):
+                invoke(subs["jobs"], key + ":stop", 704)
+            return 1.0
+        if step == 11:
+            # Only once the bake ended: a render starting as the cloth bake ends is not this test.
+            if views[subs["jobs"]]["children"].get("jobs"):
+                step -= 1
+                return 0.2
+            scene = bpy.context.scene
+            scene.render.use_lock_interface = True
+            report["lock_start"] = sorted(_jobs_start_render(REPORT.rsplit("/", 1)[0]))
+            subs["timeline"] = subscribe("timeline")
+            subs["render"] = subscribe("render")
+            return 1.0
+        if step == 13:
+            report["render_running_locked"] = bpy.app.is_job_running('RENDER')
+            return 0.1
+        if step == 14:
+            set_text(subs["timeline"], "frame", "10", 706)
+            return 0.5
+        if step == 16:
+            report["live_while_locked"] = acks.get(706)
+            invoke(subs["render"], "cancel", 707)
+            return 1.0
+        if step == 18:
+            report["cancel_while_locked"] = acks.get(707)
+            report["render_running_after_cancel"] = bpy.app.is_job_running('RENDER')
+            ok = (report["busy_label"] == "Busy Probe" and not report["busy_label_idle"] and
+                  report["first_remove"] == "ok" and (report["second_remove"] or "").startswith("Not done") and
+                  len(report["modifiers_left"]) == 1 and
+                  (report["command_during_job"] or "").startswith("Wait for Baking point cache") and
+                  (report["live_while_locked"] or "").startswith("The render locks") and
+                  report["cancel_while_locked"] == "ok")
+            finish("done" if ok else "error")
+            return None
+        return 0.25
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+
+
 # ROUND6 BUSY-1 (G13): a still render's progress rises as it renders. It is read from the render job
 # (the engine reports it there in an interactive session), not from `render_stats` handlers, which hear
 # only the per-frame time there: before, a still read 0 % until it was done.
@@ -2951,6 +3071,10 @@ def _jobs_mesh(name, op, **kwargs):
 
 def _jobs_start_render(directory):
     scene = bpy.context.scene
+    if scene.camera is None:
+        camera = bpy.data.objects.new("Camera", bpy.data.cameras.new("Camera"))
+        scene.collection.objects.link(camera)
+        scene.camera = camera
     scene.render.engine = 'BLENDER_EEVEE'
     scene.render.resolution_percentage = 25
     scene.frame_start, scene.frame_end = 1, 2000
@@ -3213,5 +3337,5 @@ bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets
                          "fingers": tick_fingers, "undo": tick_undo,
                          "tolerance": tick_tolerance, "waiting": tick_waiting,
                          "touchstart": tick_touchstart, "jobs": tick_jobs,
-                         "renderprogress": tick_render_progress}.get(SCENARIO, tick_actions),
+                         "renderprogress": tick_render_progress, "busy": tick_busy}.get(SCENARIO, tick_actions),
                         first_interval=1.0)
