@@ -353,6 +353,8 @@ static NSURL *launcherScratchCreate()
     : UIDocumentViewController <UIDocumentBrowserViewControllerDelegate,
                                 UIDocumentPickerDelegate>
 - (void)openDocumentAtURL:(NSURL *)url;
+- (void)openFailed:(UIDocument *)document reason:(NSString *)reason;
+- (void)adoptCopy:(NSURL *)copy nextTo:(NSURL *)next_to;
 - (void)documentCommand:(blender::wmDocumentCommand)command argument:(NSString *)argument;
 - (void)templatePickerDismissed;
 - (void)chooseTemplate:(void (^)(NSString *app_template))completion;
@@ -804,6 +806,14 @@ static NSURL *launcher_pending_url = nil;
     self.document = document;
     return;
   }
+  /* A held document asks first (ROUND6 SAFE-2): its work is in no file. */
+  if ([previous isKindOfClass:WMIOSBlendDocument.class] &&
+      ((WMIOSBlendDocument *)previous).needsAnswerBeforeClosing)
+  {
+    _opening = NO;
+    [(WMIOSBlendDocument *)previous presentHold:YES];
+    return;
+  }
   /* One file at a time: the current one saves as it closes, a save the person asked for: its
    * failure is said (ROUND6 SAFE-1). */
   if ([previous isKindOfClass:WMIOSBlendDocument.class]) {
@@ -830,6 +840,100 @@ static NSURL *launcher_pending_url = nil;
       GHOST_ios_document_window_set_visible(true, true);
     }
   }];
+}
+
+/** The document could not be opened: back to the documents, saying why (ROUND6 SAFE-2). */
+- (void)openFailed:(UIDocument *)document reason:(NSString *)reason
+{
+  /* Takes files again at once, not after a minute. */
+  _opening = NO;
+  NSString *name = document.fileURL.lastPathComponent ?: @"the file";
+  WM_native_ui_log("document",
+                   [NSString stringWithFormat:@"could not open %@: %@", name, reason].UTF8String);
+  if (self.document == document) {
+    self.document = nil;
+  }
+  UIAlertController *alert = [UIAlertController
+      alertControllerWithTitle:[NSString stringWithFormat:@"Could Not Open “%@”", name]
+                       message:reason
+                preferredStyle:UIAlertControllerStyleAlert];
+  [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                            style:UIAlertActionStyleDefault
+                                          handler:nil]];
+  [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+}
+
+/** Move `source` into the app's own Documents folder, which the browser always shows, under a
+ * name not taken yet; nil when it could not be moved. */
+static NSURL *launcherMoveToDocuments(NSURL *source)
+{
+  NSFileManager *files = NSFileManager.defaultManager;
+  NSURL *folder =
+      [files URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;
+  if (!folder) {
+    return nil;
+  }
+  NSString *name = source.URLByDeletingPathExtension.lastPathComponent;
+  NSString *extension = source.pathExtension;
+  NSURL *destination = [folder URLByAppendingPathComponent:source.lastPathComponent];
+  for (NSInteger number = 2; [files fileExistsAtPath:destination.path] && number < 10000; number++)
+  {
+    destination = [folder URLByAppendingPathComponent:[NSString stringWithFormat:@"%@ %ld.%@",
+                                                                                 name,
+                                                                                 (long)number,
+                                                                                 extension]];
+  }
+  return [files moveItemAtURL:source toURL:destination error:nil] ? destination : nil;
+}
+
+/** Save a Copy and Work on That (ROUND6 SAFE-2): the copy placed beside the document by the
+ * browser, which lists it, then opened in its place. */
+- (void)adoptCopy:(NSURL *)copy nextTo:(NSURL *)next_to
+{
+  NSURL *temporary = copy.URLByDeletingLastPathComponent;
+  if (_scratch) {
+    /* A check launch keeps to its own folder (ROUND5 9D.5). */
+    NSURL *destination = [launcherScratchFolder() URLByAppendingPathComponent:copy.lastPathComponent];
+    NSFileManager *files = NSFileManager.defaultManager;
+    [files removeItemAtURL:destination error:nil];
+    const BOOL moved = [files moveItemAtURL:copy toURL:destination error:nil];
+    [files removeItemAtURL:temporary error:nil];
+    WM_native_ui_log("document", moved ? "copy to work on: in the scratch folder" :
+                                         "copy to work on: could not be placed");
+    if (moved) {
+      [self openDocumentAtURL:destination];
+    }
+    return;
+  }
+  [self.launchOptions.browserViewController
+      importDocumentAtURL:copy
+      nextToDocumentAtURL:next_to
+                     mode:UIDocumentBrowserImportModeMove
+        completionHandler:^(NSURL *destination, NSError *error) {
+          if (!destination) {
+            /* Where the document is may refuse a new file: the app's own folder never does. */
+            destination = launcherMoveToDocuments(copy);
+          }
+          [NSFileManager.defaultManager removeItemAtURL:temporary error:nil];
+          if (!destination) {
+            UIAlertController *alert = [UIAlertController
+                alertControllerWithTitle:@"Could Not Save a Copy"
+                                 message:error.localizedDescription ?:
+                                             @"Check available storage and try again."
+                          preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                                      style:UIAlertActionStyleDefault
+                                                    handler:nil]];
+            [wm_apple_ios_top_presenter() presentViewController:alert
+                                                       animated:YES
+                                                     completion:nil];
+            return;
+          }
+          WM_native_ui_log("document",
+                           [@"copy to work on: " stringByAppendingString:destination.lastPathComponent]
+                               .UTF8String);
+          [self openDocumentAtURL:destination];
+        }];
 }
 
 /** Present Blender's templates; `completion` gets the chosen one, or nil. */
@@ -1127,6 +1231,22 @@ void wm_apple_ios_launcher_new_document(UIViewController *presenter)
   [launcher_controller newDocumentFrom:presenter];
 }
 
+void wm_apple_ios_launcher_open_failed(UIDocument *document, NSString *reason)
+{
+  [document retain];
+  [reason retain];
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [launcher_controller openFailed:document reason:reason];
+    [document release];
+    [reason release];
+  });
+}
+
+void wm_apple_ios_launcher_adopt_copy(NSURL *copy, NSURL *next_to)
+{
+  [launcher_controller adoptCopy:copy nextTo:next_to];
+}
+
 UIDocument *wm_apple_ios_launcher_document()
 {
   return launcher_controller.document;
@@ -1154,6 +1274,13 @@ static void launcher_close_document(id sender);
 void wm_apple_ios_launcher_show_documents(id sender)
 {
   UIDocument *document = launcher_controller.document;
+  /* A held document's work is in no file: it asks first (ROUND6 SAFE-2). */
+  if ([document isKindOfClass:WMIOSBlendDocument.class] &&
+      ((WMIOSBlendDocument *)document).needsAnswerBeforeClosing)
+  {
+    [(WMIOSBlendDocument *)document presentHold:YES];
+    return;
+  }
   if ([document isKindOfClass:WMIOSBlendDocument.class] && document.hasUnsavedChanges) {
     /* Save first, while Blender's window is still shown for the preview. Never again by itself
      * (ROUND6 SAFE-1): refused, its alert offers to save a copy (ROUND5 9D.1), and asked again
@@ -1262,7 +1389,7 @@ void wm_apple_ios_document_check_step(NSString *step, void (^done)(NSString *ans
   NSArray<NSString *> *words = [step componentsSeparatedByString:@" "];
   NSString *verb = words.firstObject ?: @"";
   NSString *rest = words.count > 1 ? [step substringFromIndex:verb.length + 1] : @"";
-  const BOOL names_file = [@[ @"copy", @"open", @"stat" ] containsObject:verb];
+  const BOOL names_file = [@[ @"copy", @"open", @"stat", @"raise" ] containsObject:verb];
   NSFileManager *files = NSFileManager.defaultManager;
   NSURL *file = names_file && rest.length ?
                     [launcherScratchFolder() URLByAppendingPathComponent:rest] :
@@ -1354,6 +1481,38 @@ void wm_apple_ios_document_check_step(NSString *step, void (^done)(NSString *ans
       say(@"dismiss: nothing presented");
     }
   }
+  else if ([verb isEqual:@"raise"]) {
+    /* A file from a newer Blender (ROUND6 SAFE-2): an uncompressed file's version raised by 98,
+     * as `python bpy.ops.wm.save_as_mainfile(filepath=…, copy=True, compress=False)` writes. */
+    NSMutableData *data = [NSMutableData dataWithContentsOfURL:file];
+    char *bytes = (char *)data.mutableBytes;
+    BOOL raised = NO;
+    if (data.length > 17 && memcmp(bytes, "BLENDER", 7) == 0) {
+      /* `BLENDER17-01v0501` (format 1) or `BLENDER-v501` (format 0). */
+      const int at = bytes[7] == '-' ? 9 : 13;
+      const int digits = bytes[7] == '-' ? 3 : 4;
+      const std::string version(bytes + at, digits);
+      char text[8];
+      snprintf(text, sizeof(text), "%0*d", digits, atoi(version.c_str()) + 98);
+      memcpy(bytes + at, text, digits);
+      raised = [data writeToURL:file atomically:YES];
+    }
+    say([NSString stringWithFormat:@"raise %@: %@", rest, raised ? @"done" : @"not an uncompressed .blend"]);
+  }
+  else if ([verb isEqual:@"answer"]) {
+    /* The held document's question, answered as a tap would: `copy`, `anyway` or `readonly`. */
+    UIViewController *top = wm_apple_ios_top_presenter();
+    if ([top isKindOfClass:UIAlertController.class]) {
+      [top dismissViewControllerAnimated:NO completion:nil];
+    }
+    if ([rest isEqual:@"copy"]) {
+      [document saveCopyAndWorkOnIt];
+    }
+    else if ([rest isEqual:@"anyway"] || [rest isEqual:@"readonly"]) {
+      [document answerHold:[rest isEqual:@"anyway"] ? 1 : 2 closing:NO];
+    }
+    say([NSString stringWithFormat:@"answer %@: %@", rest, document ? @"given" : @"no document"]);
+  }
   else if ([verb isEqual:@"lock"] || [verb isEqual:@"unlock"]) {
     /* The folder, not the file: iOS writes beside the file and moves the result into place. */
     const BOOL lock = [verb isEqual:@"lock"];
@@ -1365,8 +1524,9 @@ void wm_apple_ios_document_check_step(NSString *step, void (^done)(NSString *ans
   else if ([verb isEqual:@"status"]) {
     UIViewController *top = wm_apple_ios_top_presenter();
     NSString *alert = [top isKindOfClass:UIAlertController.class] ? top.title : nil;
-    say([NSString stringWithFormat:@"status: %@; alert: %@",
+    say([NSString stringWithFormat:@"status: %@; held: %@; alert: %@",
                                    document.status ?: @"saved",
+                                   document.held ? @"yes" : document.readOnly ? @"read-only" : @"no",
                                    alert ?: @"none"]);
   }
   else if ([verb isEqual:@"back"]) {

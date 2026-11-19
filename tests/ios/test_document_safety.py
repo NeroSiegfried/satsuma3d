@@ -11,6 +11,10 @@ Sweeps of the iPad document's sources, one per class, so the next gap fails loud
   `save(to:)`, `close`, `autosave`) is known, and every write ends in the one failure path: the
   write's outcome from `writeContents`, or UIKit's error through `handleError:`.
 
+- SAFE-2: every condition Blender's Save asks about before overwriting
+  (`BKE_main_needs_overwrite_confirm`) has the held document's words, and nothing writes a held
+  document before the person answers.
+
 Read from the sources, so it runs on any Mac without a build:
 `python3 -m unittest tests/ios/test_document_safety.py`.
 """
@@ -80,7 +84,12 @@ def enclosing(text, offset):
 def body_of(text, signature):
     """The body of the function or method whose definition starts with \a signature."""
     start = text.index(signature)
-    start = text.index('\n{\n', start) + 3
+    while True:
+        brace = text.index('\n{\n', start)
+        if ';' not in text[start:brace]:
+            break  # A definition, not a declaration.
+        start = text.index(signature, start + 1)
+    start = brace + 3
     return text[start:text.index('\n}\n', start)]
 
 
@@ -163,6 +172,68 @@ class SaveFailureIsSaidTest(unittest.TestCase):
         top_bar = (APPLE / 'swift/TopBar.swift').read_text(encoding='utf-8')
         self.assertIn('model.documentStatus', top_bar)
         self.assertIn('wm_apple_ios_document_status_tapped()', top_bar)
+
+
+class OverwriteQuestionIsAskedTest(unittest.TestCase):
+    """SAFE-2: Blender's overwrite question is asked."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.document = BDOC.read_text(encoding='utf-8')
+        cls.launcher = LAUNCH.read_text(encoding='utf-8')
+        cls.doc = DOC.read_text(encoding='utf-8')
+
+    def test_every_overwrite_condition_has_words(self):
+        main = (ROOT / 'source/blender/blenkernel/intern/main.cc').read_text(encoding='utf-8')
+        confirm = body_of(main, 'bool BKE_main_needs_overwrite_confirm(')
+        flags = re.findall(r'bmain->([\w.]+)', confirm)
+        self.assertGreaterEqual(len(flags), 3, "The sweep no longer reads Blender's conditions")
+        hold = body_of(self.doc, 'static void document_hold(')
+        missing = [flag for flag in flags if 'bmain->' + flag not in hold]
+        self.assertEqual(missing, [], "Blender asks before overwriting for these, and the held "
+                                      "document has no words for them")
+
+    def test_a_recovered_document_asks_by_its_own_file(self):
+        # Its auto-save was written by this Blender: the file's header decides.
+        hold = body_of(self.doc, 'static void document_hold(')
+        self.assertIn('blend_file_version(filepath)', hold)
+        self.assertIn('if (r_opened.recovered)', hold)
+
+    def test_nothing_writes_a_held_document(self):
+        unsaved = body_of(self.document, '- (BOOL)hasUnsavedChanges')
+        self.assertIn('self.held || self.readOnly', unsaved)
+        along = body_of(self.document, '- (void)saveAlongTheWay')
+        self.assertIn('self.held || self.readOnly', along)
+        place = body_of(self.document, '- (BOOL)canWriteInPlace')
+        self.assertIn('!self.held && !self.readOnly', place, "Save As and Share would write it")
+        edited = body_of(self.document, '- (void)setBlenderModified:(BOOL)modified')
+        self.assertLess(edited.index('[self presentHold:NO]'), edited.index('[self saveAlongTheWay]'))
+        save = body_of(self.document, '- (void)saveNow')
+        self.assertLess(save.index('[self presentHold:NO]'), save.index('saveForPerson:'))
+
+    def test_closing_a_held_document_asks(self):
+        back = body_of(self.launcher, 'void wm_apple_ios_launcher_show_documents(id sender)')
+        self.assertLess(back.index('needsAnswerBeforeClosing'), back.index('saveForPerson:'))
+        open_other = body_of(self.launcher, '- (void)openDocumentAtURL:(NSURL *)url')
+        self.assertLess(open_other.index('needsAnswerBeforeClosing'),
+                        open_other.index('closeWithCompletionHandler:'))
+
+    def test_the_question_has_its_answers(self):
+        for words in ('Save a Copy and Work on That', 'Save Here Anyway', 'Keep Read-Only'):
+            self.assertIn('@"%s"' % words, self.document)
+        ask = body_of(self.document, '- (void)presentHold:(BOOL)closing')
+        self.assertIn('!_holdCopyOnly', ask, "An asset system file may only be saved as a copy")
+
+    def test_a_failed_open_says_why(self):
+        read = body_of(self.document, '- (BOOL)readFromURL:(NSURL *)url error:(NSError **)outError')
+        self.assertNotIn('NSFileReadCorruptFileError', read, "Every cause called corrupt")
+        self.assertIn('@"WMIOSDocumentOutcome" : @"open"', read)
+        opened = body_of(self.document, '- (void)openWithCompletionHandler:')
+        self.assertIn('wm_apple_ios_launcher_open_failed(self', opened)
+        failed = body_of(self.launcher, '- (void)openFailed:(UIDocument *)document reason:(NSString *)reason')
+        self.assertIn('_opening = NO;', failed, "The launcher refuses files for a minute")
+        open_doc = body_of(self.doc, 'bool WM_apple_ios_document_open(')
+        self.assertIn('r_opened.error', open_doc)
 
 
 if __name__ == '__main__':

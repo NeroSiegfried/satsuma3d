@@ -37,6 +37,18 @@
 - (void)prepareToSaveForPerson:(BOOL)closing;
 /** The header's status was tapped: say why again, with what can be done. */
 - (void)statusTapped;
+/** Not written until the person answers (ROUND6 SAFE-2), see #presentHold:. */
+@property(nonatomic, readonly) BOOL held;
+/** Kept read-only, as the person answered: never written. */
+@property(nonatomic, readonly) BOOL readOnly;
+/** Held or read-only with work not in the file: closing must ask first. */
+@property(nonatomic, readonly) BOOL needsAnswerBeforeClosing;
+/** Ask the held document's question; `closing` for ‹ or opening another document. */
+- (void)presentHold:(BOOL)closing;
+/** The question's answers, as its buttons give them: 1 Save Here Anyway, 2 Keep Read-Only (Close
+ * Without Saving when `closing`); and Save a Copy and Work on That. */
+- (void)answerHold:(int)answer closing:(BOOL)closing;
+- (void)saveCopyAndWorkOnIt;
 @end
 
 /**

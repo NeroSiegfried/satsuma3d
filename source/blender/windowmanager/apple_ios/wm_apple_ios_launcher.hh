@@ -17,6 +17,12 @@ bool wm_apple_ios_launcher_can_show_documents();
 void wm_apple_ios_launcher_show_documents(id sender);
 /** Choose a template and create an independent document without replacing unsaved work. */
 void wm_apple_ios_launcher_new_document(UIViewController *presenter);
+/** The document could not be opened: back to the launcher, which says why in Blender's words
+ * and takes files again at once (ROUND6 SAFE-2). */
+void wm_apple_ios_launcher_open_failed(UIDocument *document, NSString *reason);
+/** A copy of the open document's work, written beside it at `next_to` and opened in its place
+ * (ROUND6 SAFE-2: Save a Copy and Work on That). */
+void wm_apple_ios_launcher_adopt_copy(NSURL *copy, NSURL *next_to);
 /** A check launch's `document …` step, see `Snapshots.swift`; `done` gets what it logged. */
 void wm_apple_ios_document_check_step(NSString *step, void (^done)(NSString *answer));
 

@@ -13,6 +13,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace blender {
 
@@ -50,6 +51,23 @@ enum class wmDocumentWrite : int8_t {
   Deferred,
   /** Blender could not write the file; its reason comes with it. */
   Failed,
+};
+
+/** What opening a document found (ROUND6 SAFE-2). */
+struct wmDocumentOpened {
+  /** The document's auto-save was newer and opened instead: work it has yet to save. */
+  bool recovered = false;
+  /**
+   * Why the document is not written until the person answers once: what Blender's Save asks
+   * before overwriting, see #BKE_main_needs_overwrite_confirm. Empty when nothing. `hold_title`
+   * is the header's short line, `hold_reason` the question's text.
+   */
+  std::string hold_title;
+  std::string hold_reason;
+  /** Only a new file may be written (an asset system file). */
+  bool hold_copy_only = false;
+  /** Why it could not be opened, in Blender's words. */
+  std::string error;
 };
 
 }  // namespace blender

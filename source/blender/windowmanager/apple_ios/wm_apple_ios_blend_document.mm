@@ -22,7 +22,7 @@ namespace blender {
 bool WM_apple_ios_document_open(bContext *C,
                                 const char *filepath,
                                 bool template_document,
-                                bool *r_recovered);
+                                wmDocumentOpened &r_opened);
 wmDocumentWrite WM_apple_ios_document_write(
     bContext *C, const char *filepath, bool preview, bool when_idle, std::string &r_error);
 bool WM_apple_ios_document_is_loaded();
@@ -68,6 +68,8 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work, bool *r_t
   }
   return wait->success;
 }
+
+static void writeFreshCopy(NSString *name, UIViewController *presenter, void (^done)(NSURL *url));
 
 @implementation WMIOSBlendDocument
 {
@@ -115,6 +117,21 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work, bool *r_t
   BOOL _outcomeSaid;
   /** The alert of the failure path, while it shows: one at a time. */
   UIAlertController *_problemAlert;
+  /**
+   * Why the document is held (ROUND6 SAFE-2, decision R6-2): Blender's Save would ask before
+   * overwriting it. Nothing is written until the person answers once. nil when nothing.
+   */
+  NSString *_holdTitle;
+  NSString *_holdReason;
+  /** Only a new file may be written. */
+  BOOL _holdCopyOnly;
+  /** The answer: 0 none yet, 1 Save Here Anyway, 2 Keep Read-Only. */
+  int _holdAnswer;
+  /** The question was asked at the first edit; then only at Save, closing, or a tap. */
+  BOOL _holdAsked;
+  UIAlertController *_holdAlert;
+  /** Why the file could not be opened, in Blender's words, for the launcher. */
+  NSString *_openProblem;
 }
 
 - (void)dealloc
@@ -122,6 +139,10 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work, bool *r_t
   [_failure release];
   [_failureShown release];
   [_problemAlert release];
+  [_holdTitle release];
+  [_holdReason release];
+  [_holdAlert release];
+  [_openProblem release];
   [super dealloc];
 }
 
@@ -150,6 +171,12 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work, bool *r_t
   if (_discard || _refused) {
     return nil;
   }
+  if (self.held) {
+    return [_holdTitle stringByAppendingString:@": not saved"];
+  }
+  if (self.readOnly) {
+    return @"Read-only: not saved";
+  }
   if (_failure) {
     return @"Not saved";
   }
@@ -161,7 +188,10 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work, bool *r_t
 
 - (void)statusTapped
 {
-  if (_failure) {
+  if (self.held || self.readOnly) {
+    [self presentHold:NO];
+  }
+  else if (_failure) {
     [_failureShown release];
     _failureShown = nil;
     _explicitSave = YES;
@@ -176,7 +206,7 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work, bool *r_t
 /** Whether Save As and Share may save the document in place before handing on its file. */
 - (BOOL)canWriteInPlace
 {
-  return !_refused && !_discard;
+  return !_refused && !_discard && !self.held && !self.readOnly;
 }
 
 - (void)prepareToSaveForPerson:(BOOL)closing
@@ -354,6 +384,155 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work, bool *r_t
 
 /** \} */
 
+/* -------------------------------------------------------------------- */
+/** \name Held documents (ROUND6 SAFE-2)
+ *
+ * A file Blender's Save would ask about before overwriting (from a newer Blender, with missing
+ * colour spaces, managed by the asset system) is not written until the person answers once:
+ * Save a Copy and Work on That, Save Here Anyway, or Keep Read-Only. Asked at the first edit or
+ * the first Save, never at open; the header says so meanwhile. Blender's own auto-save still
+ * keeps the work.
+ * \{ */
+
+- (BOOL)held
+{
+  return _holdReason.length && _holdAnswer == 0;
+}
+
+- (BOOL)readOnly
+{
+  return _holdReason.length && _holdAnswer == 2;
+}
+
+- (BOOL)needsAnswerBeforeClosing
+{
+  return (self.held || self.readOnly) && !_discard && (_blenderModified || _recovered);
+}
+
+- (void)presentHold:(BOOL)closing
+{
+  if (_holdAlert.presentingViewController) {
+    return;
+  }
+  _holdAsked = YES;
+  const BOOL read_only = self.readOnly;
+  NSString *message = read_only ? [NSString stringWithFormat:@"“%@” is kept read-only: changes "
+                                                             @"are not saved to it. Save a copy "
+                                                             @"to keep them.",
+                                                             self.name] :
+                                  _holdReason;
+  UIAlertController *alert = [UIAlertController
+      alertControllerWithTitle:[NSString stringWithFormat:closing ? @"Close “%@”?" :
+                                                                    @"Save “%@”?",
+                                                          self.name]
+                       message:message
+                preferredStyle:UIAlertControllerStyleAlert];
+  UIAlertAction *copy = [UIAlertAction actionWithTitle:@"Save a Copy and Work on That"
+                                                 style:UIAlertActionStyleDefault
+                                               handler:^(UIAlertAction *) {
+                                                 [self saveCopyAndWorkOnIt];
+                                               }];
+  [alert addAction:copy];
+  if (!read_only && !_holdCopyOnly) {
+    [alert addAction:[UIAlertAction actionWithTitle:@"Save Here Anyway"
+                                              style:UIAlertActionStyleDestructive
+                                            handler:^(UIAlertAction *) {
+                                              [self answerHold:1 closing:closing];
+                                            }]];
+  }
+  if (closing) {
+    [alert addAction:[UIAlertAction actionWithTitle:@"Close Without Saving"
+                                              style:UIAlertActionStyleDestructive
+                                            handler:^(UIAlertAction *) {
+                                              [self answerHold:2 closing:YES];
+                                            }]];
+  }
+  else if (!read_only) {
+    [alert addAction:[UIAlertAction actionWithTitle:@"Keep Read-Only"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *) {
+                                              [self answerHold:2 closing:NO];
+                                            }]];
+  }
+  [alert addAction:[UIAlertAction actionWithTitle:closing ? @"Cancel" : @"Not Now"
+                                            style:UIAlertActionStyleCancel
+                                          handler:^(UIAlertAction *) {
+                                            WM_native_ui_log("document", "held: not answered");
+                                          }]];
+  alert.preferredAction = copy;
+  [_holdAlert release];
+  _holdAlert = [alert retain];
+  WM_native_ui_log("document",
+                   [NSString stringWithFormat:@"held: asked%@%@", closing ? @" on closing" : @"",
+                                              read_only ? @" (read-only)" : @""]
+                       .UTF8String);
+  [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+}
+
+/** 1: Save Here Anyway, 2: Keep Read-Only (or Close Without Saving when `closing`). */
+- (void)answerHold:(int)answer closing:(BOOL)closing
+{
+  _holdAnswer = answer;
+  WM_native_ui_log("document", answer == 1 ? "held: save here anyway" : "held: kept read-only");
+  if (answer == 1) {
+    if (closing) {
+      wm_apple_ios_launcher_show_documents(nil);
+    }
+    else if (_blenderModified || _recovered) {
+      [self updateChangeCount:UIDocumentChangeDone];
+      [self saveAlongTheWay];
+    }
+  }
+  else if (closing) {
+    [self closeWithoutSaving];
+  }
+}
+
+/** What is loaded, written as a new file beside the document, which then opens in its place:
+ * the document's own file is left as it is. */
+- (void)saveCopyAndWorkOnIt
+{
+  NSString *stem = self.name.stringByDeletingPathExtension;
+  if ([stem.pathExtension isEqualToString:@"asset"]) {
+    stem = stem.stringByDeletingPathExtension;
+  }
+  NSString *name = [NSString stringWithFormat:@"%@ (%d.%d).blend",
+                                              stem,
+                                              BLENDER_VERSION / 100,
+                                              BLENDER_VERSION % 100];
+  /* The document is not written from here on, whatever becomes of the copy. */
+  _holdAnswer = 2;
+  WM_native_ui_log("document", [@"held: a copy to work on, " stringByAppendingString:name].UTF8String);
+  NSURL *next_to = [[self.fileURL copy] autorelease];
+  writeFreshCopy(name, nil, ^(NSURL *copy) {
+    if (copy) {
+      wm_apple_ios_launcher_adopt_copy(copy, next_to);
+    }
+  });
+}
+
+- (void)setHold:(const blender::wmDocumentOpened &)opened
+{
+  NSString *title = opened.hold_title.empty() ?
+                        nil :
+                        [NSString stringWithUTF8String:opened.hold_title.c_str()];
+  NSString *reason = opened.hold_reason.empty() ?
+                         nil :
+                         [NSString stringWithUTF8String:opened.hold_reason.c_str()];
+  /* A reopen of the same file keeps the answer given. */
+  if (![reason isEqual:_holdReason]) {
+    _holdAnswer = 0;
+    _holdAsked = NO;
+  }
+  [_holdTitle release];
+  _holdTitle = [title copy];
+  [_holdReason release];
+  _holdReason = [reason copy];
+  _holdCopyOnly = opened.hold_copy_only;
+}
+
+/** \} */
+
 - (void)saveChangesWithCompletionHandler:(void (^)(BOOL success))completionHandler
 {
   if (!self.hasUnsavedChanges) {
@@ -412,7 +591,7 @@ static const CFTimeInterval document_save_interval = 60.0;
       dispatch_time(DISPATCH_TIME_NOW, int64_t(wait * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         _alongTheWayScheduled = NO;
         if ((self.documentState & UIDocumentStateClosed) ||
-            !(_blenderModified || [super hasUnsavedChanges]))
+            !(_blenderModified || [super hasUnsavedChanges]) || self.held || self.readOnly)
         {
           return;
         }
@@ -443,6 +622,10 @@ static const CFTimeInterval document_save_interval = 60.0;
   /* Blender opens the file by its path, outside of the document's coordinated read. */
   _accessing = [self.fileURL startAccessingSecurityScopedResource];
   [super openWithCompletionHandler:^(BOOL success) {
+    if (!success) {
+      /* Said in the launcher, with Blender's words; the launcher takes files again at once. */
+      wm_apple_ios_launcher_open_failed(self, _openProblem ?: @"Blender could not read this file.");
+    }
     /* Work recovered from the auto-save goes into the document, as an edit would. */
     if (success && _recovered) {
       dispatch_async(dispatch_get_main_queue(), ^{
@@ -479,22 +662,37 @@ static const CFTimeInterval document_save_interval = 60.0;
   /* Blender loads the file now, so the document opens on its scene. */
   const std::string path = url.path.UTF8String ?: "";
   const bool template_document = self.templateDocument;
-  auto recovered = std::make_shared<std::atomic<bool>>(false);
-  if (engine_wait([path, template_document, recovered](blender::bContext *C) {
-        bool r_recovered = false;
-        const bool success = blender::WM_apple_ios_document_open(
-            C, path.c_str(), template_document, &r_recovered);
-        recovered->store(r_recovered);
-        return success;
-      }))
+  auto opened = std::make_shared<blender::wmDocumentOpened>();
+  bool timed_out = false;
+  if (engine_wait(
+          [path, template_document, opened](blender::bContext *C) {
+            return blender::WM_apple_ios_document_open(C, path.c_str(), template_document, *opened);
+          },
+          &timed_out))
   {
-    _recovered = recovered->load();
+    _recovered = opened->recovered;
+    blender::wmDocumentOpened hold = *opened;
+    /* Before the open completes on the main queue, so it is known when the document shows. */
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [self setHold:hold];
+    });
     return YES;
   }
+  /* Blender's own reason, for the launcher to show (ROUND6 SAFE-2): never "corrupt" for all. */
+  NSString *reason = timed_out ? @"Blender was busy for five minutes and did not open the file." :
+                                 [NSString stringWithUTF8String:opened->error.c_str()];
+  if (!reason.length) {
+    reason = @"Blender could not read this file.";
+  }
+  [_openProblem release];
+  _openProblem = [reason copy];
   if (outError) {
     *outError = [NSError errorWithDomain:NSCocoaErrorDomain
-                                    code:NSFileReadCorruptFileError
-                                userInfo:nil];
+                                    code:NSFileReadUnknownError
+                                userInfo:@{
+                                  NSLocalizedFailureReasonErrorKey : reason,
+                                  @"WMIOSDocumentOutcome" : @"open",
+                                }];
   }
   return NO;
 }
@@ -587,8 +785,8 @@ static const CFTimeInterval document_save_interval = 60.0;
 - (BOOL)hasUnsavedChanges
 {
   /* Refused: nothing loaded is the document's to save, see #_refused. Closed without saving, as
-   * the person chose. */
-  if (_refused || _discard) {
+   * the person chose. Held or read-only: not written until the person answers (ROUND6 SAFE-2). */
+  if (_refused || _discard || self.held || self.readOnly) {
     return NO;
   }
   return _blenderModified || _previewStale || [super hasUnsavedChanges];
@@ -655,6 +853,10 @@ static const CFTimeInterval document_save_interval = 60.0;
 
 - (void)saveNow
 {
+  if (self.held || self.readOnly) {
+    [self presentHold:NO];
+    return;
+  }
   if (!self.hasUnsavedChanges && !_failure) {
     WM_native_ui_log("document", "save: nothing changed since it was saved");
     return;
@@ -682,6 +884,13 @@ static const CFTimeInterval document_save_interval = 60.0;
     WM_native_ui_log("document", "edited");
     /* Marks the document edited, as any edit of a document does. */
     [self updateChangeCount:UIDocumentChangeDone];
+    if (self.held) {
+      /* Asked at the first edit, not at open (ROUND6 SAFE-2). */
+      if (!_holdAsked) {
+        [self presentHold:NO];
+      }
+      return;
+    }
     [self saveAlongTheWay];
   }
 }

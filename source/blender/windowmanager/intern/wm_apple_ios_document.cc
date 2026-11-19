@@ -12,12 +12,16 @@
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
 
 #  include <cstring>
+#  include <fcntl.h>
 #  include <ctime>
 #  include <fmt/format.h>
 #  include <optional>
+#  include <variant>
+#  include <vector>
 #  include <string>
 
 #  include "BKE_appdir.hh"
+#  include "BKE_blender_version.h"
 #  include "BKE_context.hh"
 #  include "BKE_global.hh"
 #  include "BKE_image.hh"
@@ -27,6 +31,7 @@
 #  include "BKE_report.hh"
 #  include "BLI_fileops.h"
 #  include "BLI_fileops_types.h"
+#  include "BLI_filereader.h"
 #  include "BLI_listbase.h"
 #  include "BLI_listbase_iterator.hh"
 #  include "BLI_math_matrix.hh"
@@ -36,6 +41,8 @@
 #  include "BLI_string.h"
 #  include "BLI_string_ref.hh"
 #  include "BLT_translation.hh"
+#  include "BLO_core_blend_header.hh"
+#  include "BLO_core_file_reader.hh"
 #  include "DEG_depsgraph_query.hh"
 #  include "DNA_image_types.h"
 #  include "DNA_object_types.h"
@@ -300,7 +307,10 @@ void WM_apple_ios_autosave_now(bContext *C)
  * Run an operator on the first window, as when the system opens a file, see
  * #GHOST_kEventOpenMainFile. Documents are opened and created from outside Blender's event loop.
  */
-static bool wm_document_operator(bContext *C, const char *idname, PointerRNA *props)
+static bool wm_document_operator(bContext *C,
+                                 const char *idname,
+                                 PointerRNA *props,
+                                 ReportList *reports)
 {
   wmWindowManager *wm = CTX_wm_manager(C);
   wmWindow *win = wm ? static_cast<wmWindow *>(wm->windows.first) : nullptr;
@@ -309,10 +319,92 @@ static bool wm_document_operator(bContext *C, const char *idname, PointerRNA *pr
   }
   wmWindow *win_prev = CTX_wm_window(C);
   CTX_wm_window_set(C, win);
-  const wmOperatorStatus status = WM_operator_name_call_ptr(
-      C, WM_operatortype_find(idname, false), wm::OpCallContext::ExecDefault, props, nullptr);
+  /* Its reports kept, so what Blender says about a file it could not open reaches the person
+   * (ROUND6 SAFE-2). */
+  const wmOperatorStatus status = WM_operator_call_py(
+      C, WM_operatortype_find(idname, false), wm::OpCallContext::ExecDefault, props, reports, false);
   CTX_wm_window_set(C, win_prev);
   return status & OPERATOR_FINISHED;
+}
+
+/**
+ * The Blender version that wrote the file at \a filepath, from its header (compressed or not),
+ * or 0. For a document that continued from its auto-save, which this Blender wrote: the file's
+ * own version is what decides whether it may be written over.
+ */
+static int blend_file_version(const char *filepath)
+{
+  const int filedes = BLI_open(filepath, O_BINARY | O_RDONLY, 0);
+  if (filedes == -1) {
+    return 0;
+  }
+  FileReader *file = BLO_file_reader_uncompressed_from_descriptor(filedes);
+  if (file == nullptr) {
+    return 0;
+  }
+  const BlenderHeaderVariant header = BLO_readfile_blender_header_decode(file);
+  file->close(file);
+  if (const BlenderHeader *blender = std::get_if<BlenderHeader>(&header)) {
+    return blender->file_version;
+  }
+  return 0;
+}
+
+/**
+ * Why the open document must not be written before the person answers (ROUND6 SAFE-2, decision
+ * R6-2): each of what Blender's Save asks about before overwriting, see
+ * #BKE_main_needs_overwrite_confirm, which the document's direct write never runs. A flag added
+ * there needs its words here (`tests/ios/test_document_safety.py`).
+ */
+static void document_hold(const Main *bmain, const char *filepath, wmDocumentOpened &r_opened)
+{
+  std::vector<std::string> titles, reasons;
+  /* A document that continued from its auto-save was loaded from a file this Blender wrote: the
+   * document's own file says whether it came from a newer Blender. */
+  int writer_version = bmain->versionfile;
+  int writer_subversion = bmain->subversionfile;
+  bool newer = bmain->has_forward_compatibility_issues;
+  if (r_opened.recovered) {
+    const int file_version = blend_file_version(filepath);
+    if (file_version > BLENDER_FILE_VERSION) {
+      newer = true;
+      writer_version = file_version;
+      writer_subversion = -1;
+    }
+  }
+  if (newer) {
+    char version[16];
+    BKE_blender_version_blendfile_string_from_values(
+        version,
+        sizeof(version),
+        short(writer_version),
+        short(writer_version == BLENDER_FILE_VERSION ? writer_subversion : -1));
+    titles.push_back(fmt::format("Saved by a newer Blender ({})", version));
+    reasons.push_back(
+        fmt::format("This file was saved by a newer Blender ({}). Saving it here can lose what "
+                    "this version does not know.",
+                    version));
+  }
+  if (bmain->is_asset_edit_file) {
+    titles.push_back("Managed by the asset system");
+    reasons.push_back(
+        "This file is managed by Blender's asset system. It can only be saved as a new, regular "
+        "file.");
+    r_opened.hold_copy_only = true;
+  }
+  if (bmain->colorspace.is_missing_opencolorio_config) {
+    titles.push_back("Color spaces changed");
+    reasons.push_back(
+        "Displays, views or color spaces in this file were missing and have been changed. Saving "
+        "it here can lose them.");
+  }
+  if (titles.empty()) {
+    return;
+  }
+  r_opened.hold_title = titles.front();
+  for (const std::string &reason : reasons) {
+    r_opened.hold_reason += (r_opened.hold_reason.empty() ? "" : "\n\n") + reason;
+  }
 }
 
 /**
@@ -334,8 +426,9 @@ bool WM_apple_ios_document_is_loaded()
 bool WM_apple_ios_document_open(bContext *C,
                                 const char *filepath,
                                 const bool template_document,
-                                bool *r_recovered)
+                                wmDocumentOpened &r_opened)
 {
+  r_opened = {};
   /* A document that failed to open has loaded nothing of its own. */
   document_read = UINT64_MAX;
   document_path.clear();
@@ -345,20 +438,49 @@ bool WM_apple_ios_document_open(bContext *C,
   if (template_document) {
     RNA_boolean_set(&props, "use_scripts", false);
   }
-  const bool success = wm_document_operator(C, "WM_OT_open_mainfile", &props);
+  ReportList reports;
+  BKE_reports_init(&reports, RPT_STORE);
+  const bool success = wm_document_operator(C, "WM_OT_open_mainfile", &props, &reports);
   WM_operator_properties_free(&props);
+  if (!success) {
+    /* Blender's own words, for the launcher to show (ROUND6 SAFE-2, F5). */
+    std::string error;
+    for (const Report &report : reports.list) {
+      if (report.type >= RPT_ERROR && report.message && report.message[0]) {
+        error = report.message;
+        break;
+      }
+    }
+    r_opened.error = error.empty() ? std::string("Blender could not read this file.") : error;
+  }
+  else {
+    /* What a file loaded with warnings says, as Blender's status bar would. */
+    for (const Report &report : reports.list) {
+      if (report.type >= RPT_WARNING && report.message) {
+        WM_native_ui_session_log("document", fmt::format("open: {}", report.message).c_str());
+      }
+    }
+  }
+  /* Shown as Blender shows an operator's reports. */
+  if (wmWindowManager *wm = CTX_wm_manager(C)) {
+    WM_reports_from_reports_move(wm, &reports);
+  }
+  BKE_reports_free(&reports);
   /* Opening continues from the auto-save when it is newer, see #wm_apple_ios_autosave_newer. */
-  *r_recovered = success && CTX_data_main(C)->recovered;
+  r_opened.recovered = success && CTX_data_main(C)->recovered;
   if (success) {
     document_read = WM_file_read_count();
     document_path = filepath;
+    document_hold(CTX_data_main(C), filepath, r_opened);
   }
   WM_native_ui_session_log(
       "document",
-      fmt::format("{} {}{}",
+      fmt::format("{} {}{}{}",
                   success ? "opened" : "could not open",
                   BLI_path_basename(filepath),
-                  *r_recovered ? " (from its newer auto-save)" : "")
+                  r_opened.recovered ? " (from its newer auto-save)" : "",
+                  success ? (r_opened.hold_title.empty() ? "" : ", held: " + r_opened.hold_title) :
+                            ": " + r_opened.error)
           .c_str());
   return success;
 }

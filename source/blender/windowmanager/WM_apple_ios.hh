@@ -19,6 +19,7 @@ struct ReportList;
 /** See `WM_document_command.hh`. */
 enum class wmDocumentCommand : int8_t;
 enum class wmDocumentWrite : int8_t;
+struct wmDocumentOpened;
 
 /* Engine-thread API. UIKit exchanges only owned values and request identifiers. */
 /**
@@ -78,13 +79,13 @@ void WM_apple_ios_autosave_now(bContext *C);
 /* Documents. UIKit owns them, and Blender reads and writes their files when asked. */
 
 /**
- * Open the document's file. `r_recovered`: its auto-save was newer and opened instead, work the
- * document has yet to save.
+ * Open the document's file. `r_opened`: whether its newer auto-save opened instead, why it must
+ * not be written before the person answers (ROUND6 SAFE-2), or why it could not be opened.
  */
 bool WM_apple_ios_document_open(bContext *C,
                                 const char *filepath,
                                 bool template_document,
-                                bool *r_recovered);
+                                wmDocumentOpened &r_opened);
 /**
  * Write the open file to `filepath`, for iOS to move into place as the saved document. Without
  * `preview` the file stores no preview image, which needs the GPU.
