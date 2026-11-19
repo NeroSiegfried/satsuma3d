@@ -84,7 +84,9 @@ struct ActionsOrnament: View {
   private let inlineActions = 7
 
   var body: some View {
-    let actions = showQuickActions ? QuickAction.list(model.actions) : []
+    let all = QuickAction.list(model.actions)
+    /* The setting hides the actions, never a waiting operation's Confirm and Cancel (R6 C1). */
+    let actions = showQuickActions || all.contains(where: \.modalKey) ? all : []
     HStack(spacing: 4) {
       ForEach(actions.prefix(inlineActions)) { action in
         QuickActionButton(action: action, model: model, onGlass: true)

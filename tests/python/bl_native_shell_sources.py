@@ -1072,4 +1072,18 @@ check('model.hasTransformSettings' in row_text and 'flag("transform_settings")' 
       'builder.add(top, "transform_settings"' in bridge_text,
       "R6 0.4: the row of transform settings shows where Blender says the mode has them")
 
+# ROUND6 0.7 (C1, part): Settings › Quick Actions hides the actions, never a waiting operation's
+# Confirm and Cancel, which are the way out of it. Every place the shell reads the setting to hide
+# something keeps the modal bar (`modalKey`) on the same line.
+quick_gates = []
+for path in sources():
+    if path.name == 'SettingsSheet.swift':
+        continue  # Where the setting is stored and its toggle.
+    for number, line in enumerate(code_only(path.read_text(encoding='utf-8')).splitlines(), 1):
+        if 'showQuickActions' in line and '@AppStorage' not in line:
+            quick_gates.append((path.name, number, 'modalKey' in line))
+check(len(quick_gates) >= 2 and all(kept for _, _, kept in quick_gates),
+      "R6 0.7: every use of the Quick Actions setting keeps a waiting operation's Confirm and Cancel (%s)"
+      % ['%s:%d' % (name, number) for name, number, kept in quick_gates if not kept])
+
 print('PASS: native shell sources ' + json.dumps(checks))

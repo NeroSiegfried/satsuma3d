@@ -453,8 +453,10 @@ struct QuickActionsRow: View {
   }
 
   private var actions: [QuickAction] {
-    guard showQuickActions else { return [] }
     let own = QuickAction.list(model.actions)
+    /* Settings › Quick Actions hides the actions, never the way out of a waiting operation: while
+     * one waits the bar is its modal bar, Confirm and Cancel, whatever the setting (R6 C1). */
+    guard showQuickActions else { return own.contains(where: \.modalKey) ? own : [] }
     /* Pinned commands follow, but not while a move takes keys: then the bar is its keys. */
     guard !own.contains(where: { !$0.key.isEmpty }) else { return own }
     let ids = Set(own.map(\.id))
