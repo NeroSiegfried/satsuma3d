@@ -295,7 +295,12 @@ UIWindow *document_window = nil;
   [self cancelPencilStroke];
   [self cancelFingerTweakTouches];
   [self stopOrbitMomentum];
+  [self stopScrollMomentum];
+  [self stopInterfaceHoldTimer];
   [self hideOnscreenKeyboard];
+  /* Owned (this file is built without ARC): retained where it is set, released here. */
+  [original_text release];
+  original_text = nil;
   [NSNotificationCenter.defaultCenter removeObserver:self];
   self.userInteractionEnabled = NO;
   NSArray *recognizers = [window->getView().gestureRecognizers copy];
@@ -340,6 +345,7 @@ UIWindow *document_window = nil;
   system = sys;
   window = win;
   text_field = nil;
+  [original_text release];
   original_text = nil;
   onscreen_keyboard_active = false;
   free(text_field_string);
@@ -1928,6 +1934,7 @@ enum {
 - (void)stopScrollMomentum
 {
   [scroll_display_link invalidate];
+  [scroll_display_link release];
   scroll_display_link = nil;
 }
 
@@ -1945,8 +1952,9 @@ enum {
   scroll_remainder = CGPointZero;
   scroll_location = location;
   scroll_timestamp = CACurrentMediaTime();
-  scroll_display_link = [CADisplayLink displayLinkWithTarget:self
-                                                    selector:@selector(updateScrollMomentum:)];
+  scroll_display_link = [[CADisplayLink displayLinkWithTarget:self
+                                                     selector:@selector(updateScrollMomentum:)]
+      retain];
   [scroll_display_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
 }
 
@@ -1981,11 +1989,18 @@ enum {
   }
 }
 
+/** Ends the wait for a hold. The timer is owned (this file is built without ARC). */
+- (void)stopInterfaceHoldTimer
+{
+  [interface_hold_timer invalidate];
+  [interface_hold_timer release];
+  interface_hold_timer = nil;
+}
+
 /** The press at where the finger began: from now on the touch is the control's. */
 - (void)pressInterface
 {
-  [interface_hold_timer invalidate];
-  interface_hold_timer = nil;
+  [self stopInterfaceHoldTimer];
   interface_state = IOS_INTERFACE_PRESSED;
   [self sendPointerMove:interface_start];
   [self sendPointerButtons:UIEventButtonMaskPrimary];
@@ -1994,7 +2009,7 @@ enum {
 - (void)interfaceHold:(NSTimer *)timer
 {
   UNUSED_VARS(timer);
-  interface_hold_timer = nil;
+  [self stopInterfaceHoldTimer];
   if ((interface_touch == nil && !interface_scripted) || interface_state != IOS_INTERFACE_PENDING) {
     return;
   }
@@ -2009,8 +2024,7 @@ enum {
 /** The touch on interface is over: \a cancelled releases what it pressed and runs nothing on. */
 - (void)endInterfaceTouch:(BOOL)cancelled
 {
-  [interface_hold_timer invalidate];
-  interface_hold_timer = nil;
+  [self stopInterfaceHoldTimer];
   if (interface_touch == nil && !interface_scripted) {
     return;
   }
@@ -2044,11 +2058,12 @@ enum {
   interface_velocity = CGPointZero;
   /* Blender's cursor there: the control lights up, nothing is pressed. */
   [self sendPointerMove:point];
-  interface_hold_timer = [NSTimer scheduledTimerWithTimeInterval:ios_interface_hold_seconds
-                                                          target:self
-                                                        selector:@selector(interfaceHold:)
-                                                        userInfo:nil
-                                                         repeats:NO];
+  [self stopInterfaceHoldTimer];
+  interface_hold_timer = [[NSTimer scheduledTimerWithTimeInterval:ios_interface_hold_seconds
+                                                           target:self
+                                                         selector:@selector(interfaceHold:)
+                                                         userInfo:nil
+                                                          repeats:NO] retain];
   return YES;
 }
 
@@ -2070,8 +2085,7 @@ enum {
     const bool along_x = fabs(travel.x) >= fabs(travel.y);
     const bool scrolls = along_x ? interface_answer.scroll_x : interface_answer.scroll_y;
     const bool taken = interface_answer.takes & (along_x ? GHOST_kIOSTakesX : GHOST_kIOSTakesY);
-    [interface_hold_timer invalidate];
-    interface_hold_timer = nil;
+    [self stopInterfaceHoldTimer];
     if (scrolls && !taken) {
       interface_state = IOS_INTERFACE_SCROLLING;
       [self noteInterfaceGesture:@"scroll"];
@@ -2100,8 +2114,7 @@ enum {
 - (void)interfaceTouchEnded:(CGPoint)point time:(CFTimeInterval)time
 {
   const int state = interface_state;
-  [interface_hold_timer invalidate];
-  interface_hold_timer = nil;
+  [self stopInterfaceHoldTimer];
   if (state == IOS_INTERFACE_PENDING) {
     /* A tap: a click where it began. */
     [self sendPointerMove:interface_start];
@@ -2638,8 +2651,10 @@ static UIBezierPath *pointer_move()
     orbit_location = point;
     orbit_remainder = CGPointZero;
     orbit_timestamp = CACurrentMediaTime();
-    orbit_display_link = [CADisplayLink displayLinkWithTarget:self
-                                                     selector:@selector(updateOrbitMomentum:)];
+    [self stopOrbitMomentum];
+    orbit_display_link = [[CADisplayLink displayLinkWithTarget:self
+                                                      selector:@selector(updateOrbitMomentum:)]
+        retain];
     [orbit_display_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
   }
 }
@@ -2792,6 +2807,7 @@ static UIBezierPath *pointer_move()
 - (void)stopOrbitMomentum
 {
   [orbit_display_link invalidate];
+  [orbit_display_link release];
   orbit_display_link = nil;
 }
 
@@ -3363,14 +3379,13 @@ static bool ios_momentum_stopped(const CGPoint velocity)
   /* Where to display the text on-screen. */
   text_field.frame = displayRect;
 
+  /* Keep the text as it was, for Cancel to put back. Owned: this file is built without ARC, and
+   * an autoreleased string would be gone by the time Cancel reads it (R6 A2). */
+  [original_text release];
+  original_text = [[NSString alloc]
+      initWithUTF8String:keyboard_properties.text_string ? keyboard_properties.text_string : ""];
   /* Initialise text with existing string. */
-  text_field.text = keyboard_properties.text_string ?
-                        [NSString stringWithUTF8String:keyboard_properties.text_string] :
-                        @"";
-  /* Take a copy of the string so we can restore it if neccessary */
-  original_text = keyboard_properties.text_string ?
-                      [NSString stringWithUTF8String:keyboard_properties.text_string] :
-                      @"";
+  text_field.text = original_text;
 
   /* Set keyboard type and text alignment.
    * NOTE - the keyboard type is only honoured if using an Apple

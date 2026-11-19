@@ -51,6 +51,7 @@ static void dialogPump()
   WMIOSDialogRequest *request = dialog_queue.firstObject;
   if (!request) {
     [dialog_timer invalidate];
+    [dialog_timer release];
     dialog_timer = nil;
     return;
   }
@@ -222,11 +223,12 @@ bool wm_apple_ios_dialog_begin(void *window,
     request.window = native_window;
     [dialog_queue addObject:request];
     if (!dialog_timer) {
-      dialog_timer = [NSTimer timerWithTimeInterval:0.05
-                                            repeats:YES
-                                              block:^(NSTimer *) {
-                                                dialogPump();
-                                              }];
+      /* Owned: this file is built without ARC. */
+      dialog_timer = [[NSTimer timerWithTimeInterval:0.05
+                                             repeats:YES
+                                               block:^(NSTimer *) {
+                                                 dialogPump();
+                                               }] retain];
       [NSRunLoop.mainRunLoop addTimer:dialog_timer forMode:NSRunLoopCommonModes];
     }
     dialogPump();

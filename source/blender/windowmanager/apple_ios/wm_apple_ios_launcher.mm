@@ -67,9 +67,10 @@ static UIColor *launcherDynamicColor(UIColor *light, UIColor *dark)
 - (instancetype)initWithFrame:(CGRect)frame
 {
   if ((self = [super initWithFrame:frame])) {
-    _base = [CAGradientLayer layer];
-    _orange = [CAGradientLayer layer];
-    _blue = [CAGradientLayer layer];
+    /* Owned: this file is built without ARC. */
+    _base = [[CAGradientLayer alloc] init];
+    _orange = [[CAGradientLayer alloc] init];
+    _blue = [[CAGradientLayer alloc] init];
     _orange.type = _blue.type = kCAGradientLayerRadial;
     for (CALayer *layer in @[ _base, _blue, _orange ]) {
       [self.layer addSublayer:layer];
@@ -79,6 +80,14 @@ static UIColor *launcherDynamicColor(UIColor *light, UIColor *dark)
     [self updateColors];
   }
   return self;
+}
+
+- (void)dealloc
+{
+  [_base release];
+  [_orange release];
+  [_blue release];
+  [super dealloc];
 }
 
 - (void)updateColors

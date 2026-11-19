@@ -894,4 +894,144 @@ check('case "sidebar":' in snapshots_text and 'case "mark":' in snapshots_text a
       'case "editor" where words.first == "nodes":' in snapshots_text,
       "10A: the snapshot steps `sidebar properties|outliner open|close`, `editor nodes`, `mark`")
 
+# ROUND6 0.1 (A2): the iPad's Objective-C sources are built without ARC (no target turns it on), so
+# an object kept in an instance variable or a file's static must be owned: retained, copied or made
+# with alloc/new. One kept straight from a convenience constructor (`[NSString stringWith...]`,
+# `[CALayer layer]`, `[NSTimer scheduledTimer...]`) is freed with the autorelease pool, or when
+# whatever else holds it lets go, and is read afterwards: "Cancel" above the keyboard did that.
+def c_code_only(text):
+    """\a text with C comments, strings and character literals blanked (C comments do not nest)."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        if text.startswith('//', i):
+            j = text.find('\n', i)
+            j = n if j < 0 else j
+        elif text.startswith('/*', i):
+            j = text.find('*/', i + 2)
+            j = n if j < 0 else j + 2
+        elif text[i] in '"\'':
+            quote, j = text[i], i + 1
+            while j < n and text[j] not in quote + '\n':
+                j += 2 if text[j] == '\\' else 1
+            j += 1
+        else:
+            out.append(text[i])
+            i += 1
+            continue
+        out.append(''.join(c if c == '\n' else ' ' for c in text[i:j]))
+        i = j
+    return ''.join(out)
+
+
+def c_balanced(text, start):
+    """The end (exclusive) of the bracket opened at \a start, in text without strings or comments."""
+    pairs = {'[': ']', '(': ')', '{': '}'}
+    stack, i = [], start
+    while i < len(text):
+        if text[i] in pairs:
+            stack.append(pairs[text[i]])
+        elif stack and text[i] == stack[-1]:
+            stack.pop()
+            if not stack:
+                return i + 1
+        i += 1
+    return len(text)
+
+
+def c_top_level_split(text, separators):
+    """\a text split at the characters in \a separators that are outside any bracket."""
+    parts, depth, last = [], 0, 0
+    for i, c in enumerate(text):
+        if c in '([{':
+            depth += 1
+        elif c in ')]}':
+            depth -= 1
+        elif depth == 0 and c in separators:
+            parts.append(text[last:i])
+            last = i + 1
+    parts.append(text[last:])
+    return parts
+
+
+def unowned_message(arm):
+    """Whether the expression \a arm is one message whose result the caller does not own."""
+    arm = arm.strip()
+    while True:  # Casts: `(MTLCommandQueue *)[device newCommandQueue]`.
+        cast = re.match(r'\(\s*[A-Za-z_][\w<>, ]*\s*\*?\s*\)\s*(?=\[)', arm)
+        if not cast:
+            break
+        arm = arm[cast.end():].strip()
+    if arm.startswith('@['):
+        return True  # An array literal is autoreleased.
+    if not arm.startswith('[') or c_balanced(arm, 0) != len(arm):
+        return False
+    inner = arm[1:-1].strip()
+    if inner.startswith('['):
+        receiver_end = c_balanced(inner, 0)
+        receiver, rest = inner[:receiver_end], inner[receiver_end:]
+    else:
+        match = re.match(r'[\w.>-]+', inner)
+        if not match:
+            return False
+        receiver, rest = match.group(0), inner[match.end():]
+    selector = re.match(r'\s*(\w+)', rest)
+    if not selector:
+        return False
+    selector = selector.group(1)
+    if selector in ('retain', 'copy', 'mutableCopy') or selector.startswith(('alloc', 'new')):
+        return False
+    if selector.startswith('init') and re.fullmatch(r'\[\s*[\w.]+\s+(alloc|new)\s*\]', receiver):
+        return False
+    return True
+
+
+MRC_SOURCES = (sorted((ROOT / 'intern/ghost/intern').glob('*IOS*.mm')) +
+               sorted((ROOT / 'source/blender/windowmanager/apple_ios').glob('*.mm')))
+MRC_HEADERS = (sorted((ROOT / 'intern/ghost/intern').glob('*IOS*.hh')) +
+               sorted((ROOT / 'source/blender/windowmanager/apple_ios').glob('*.hh')))
+mrc_cmake = '\n'.join(path.read_text(encoding='utf-8') for path in
+                      (ROOT / 'source/creator/CMakeLists.txt', ROOT / 'intern/ghost/CMakeLists.txt',
+                       ROOT / 'source/blender/windowmanager/CMakeLists.txt'))
+check(len(MRC_SOURCES) >= 11 and 'fobjc-arc' not in mrc_cmake and
+      not re.search(r'CLANG_ENABLE_OBJC_ARC\s+"?YES', mrc_cmake),
+      "R6 0.1: the iPad's Objective-C sources are built without ARC (%d files)" % len(MRC_SOURCES))
+# A class's instance variables: the braces after `@interface Name : Super <Protocols>` or
+# `@implementation Name`, with the preprocessor's lines (an `#if` between the two) left out.
+ivar_block = re.compile(r'@(?:interface|implementation)\s+\w+(?:\s*\([^)]*\))?[^;@{}()]*\{')
+mrc_texts = {path: re.sub(r'^[ \t]*#.*$', '', c_code_only(path.read_text(encoding='utf-8')), flags=re.M)
+             for path in MRC_SOURCES + MRC_HEADERS}
+kept = set()
+for text in mrc_texts.values():
+    for block in ivar_block.finditer(text):
+        body = text[block.end() - 1:c_balanced(text, block.end() - 1)]
+        for statement in body[1:-1].split(';'):
+            statement = statement.strip()
+            if re.match(r'(?:[A-Z]\w*|id)\b', statement):
+                kept.update(re.findall(r'\*\s*(\w+)\s*(?=,|$)', statement))
+                if statement.startswith('id'):
+                    kept.update(re.findall(r'>?\s*(\w+)\s*(?=,|$)', statement.split('>', 1)[-1]))
+    kept.update(re.findall(r'^static\s+(?:[A-Z]\w*|id)\b[^;=(]*?\*?\s*(\w+)\s*(?:=[^;]*)?;', text, re.M))
+unowned = []
+for path in MRC_SOURCES:
+    text = mrc_texts[path]
+    for match in re.finditer(r'(?<![\w.])(\w+)\s*=(?!=)', text):
+        if match.group(1) not in kept or text[:match.start()].rstrip().endswith(('*', '>')):
+            continue
+        end = match.end()
+        while end < len(text) and text[end] != ';':
+            end = c_balanced(text, end) if text[end] in '([{' else end + 1
+        arms = c_top_level_split(text[match.end():end], '?:')
+        if any(unowned_message(arm) for arm in arms):
+            unowned.append('%s:%d %s' % (path.name, text.count('\n', 0, match.start()) + 1, match.group(1)))
+for offender in unowned:
+    print('%s: an instance variable or static keeps an object it does not own' % offender)
+check('original_text' in kept and 'dialog_timer' in kept and '_blue' in kept and not unowned,
+      "R6 0.1: every object kept in an instance variable or static of the iPad's Objective-C is "
+      "owned (%d names; %s)" % (len(kept), unowned))
+ghost_window_text = mrc_texts[ROOT / 'intern/ghost/intern/GHOST_WindowIOS.mm']
+detach = ghost_window_text[ghost_window_text.index('- (void)detachBlender'):]
+detach = detach[:detach.index('\n}\n')]
+check('[original_text release];' in detach,
+      "R6 0.1: the text Cancel puts back is released when Blender's window goes")
+
 print('PASS: native shell sources ' + json.dumps(checks))
