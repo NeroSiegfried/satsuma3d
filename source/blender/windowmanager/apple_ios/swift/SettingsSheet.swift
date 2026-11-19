@@ -1015,7 +1015,7 @@ struct GestureGuide: View {
         row("magnifyingglass", "Search",
             "The magnifying glass in the top bar finds any command by name.")
         row("macwindow", "Desktop Interface",
-            "More › Switch to Desktop Interface shows the full desktop layout. Window › Return to iPad Interface comes back.")
+            "More › Switch to Desktop Interface shows the full desktop layout. Its small panel in a corner holds iPad Interface (the way back), Undo, Esc, Tab, Return, Shift, Ctrl and Alt, and Confirm or Cancel while a command waits; drag it to another corner or fold it. Window › Return to iPad Interface comes back too.")
       } header: {
         Text("Finding Commands")
       }

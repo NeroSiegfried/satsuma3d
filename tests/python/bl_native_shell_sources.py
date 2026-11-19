@@ -1377,8 +1377,10 @@ modifier_button = rails_r6[rails_r6.index('private func modifierButton(_ key: St
 modifier_button = modifier_button[:modifier_button.index('\n  }\n')]
 check('.onDisappear' in sticky and 'wm_apple_ios_window_sticky_modifier(model.window, Int32(index), 3)' in sticky and
       '.onDisappear' in modifier_button and
-      'StickyModifierKeys(model: model)' in window_t8 and 'model.desktop || controlsShown' in window_t8,
-      "R6 TOUCH-8: the keys are drawn in both interfaces and let go when their buttons go")
+      'StickyModifierKeys(model: model)' in window_t8 and 'model.viewportReady && controlsShown' in window_t8 and
+      'StickyModifierKeys(model: model, embedded: true)' in (SWIFT / 'DesktopCluster.swift').read_text(encoding='utf-8'),
+      "R6 TOUCH-8: the keys are drawn in both interfaces (the Desktop Interface's in its cluster, DESK-1) and "
+      "let go when their buttons go")
 
 # ROUND6 TOUCH-9 (A8, E14): what a brush will touch is drawn without hover. Every gate on hover for
 # what Blender draws at the pointer goes through one rule, which also shows it while a button is
@@ -1442,6 +1444,7 @@ check('jobs.live = [](const protocol::Command & /*command*/) { return true; };' 
       'WM_jobs_list(' in bridge_text and 'G.is_break = true;' in bridge_text and
       'BlenderJobs.stop(job)' in pills and 'subscribe("jobs")' in pills and
       'CompileIndicator(progress: shell.compile)' in layers_b1 and 'controlsShown' not in layers_b1 and
+      'CompileIndicator(progress: compile, inCluster: true)' in (SWIFT / 'DesktopCluster.swift').read_text(encoding='utf-8') and
       'handlers.render_stats' not in render_py and '"state:samples"' in bridge_text,
       "R6 BUSY-1: running work is listed with a live Stop in both interfaces; render progress from the job")
 
@@ -1517,5 +1520,37 @@ check(0 <= userdef_b5.find('WM_apple_ios_memory_defaults();') < userdef_b5.find(
       'native.memory_low = WM_apple_ios_memory_low;' in
       (SWIFT.parents[1] / 'intern/wm_apple_ios_native.cc').read_text(encoding='utf-8'),
       "R6 BUSY-5: the iPad's memory limits at start-up; low memory keeps the work and frees what it can")
+
+# ROUND6 DESK-1 (H1, H3, H12, C1, C10; decision R6-6): over Blender's own interface the app draws one
+# small cluster, in every screen state, Focus Mode included: it is shown on `model.desktop` alone,
+# never gated by what Blender's screen shows. It holds the way back, Undo and Redo through the shell's
+# one gate, Escape, Tab and Return, Shift, Ctrl and Alt, what one finger does, the jobs, the app's
+# messages, and, folded or not, the waiting operation's ends. Blender builds that operation's bar in
+# any editor, a 3D View current or not. The harness scenario `desk` starts the H1 operations from
+# their menus in Focus Mode and ends each the way the cluster does.
+cluster_d1 = (SWIFT / 'DesktopCluster.swift').read_text(encoding='utf-8')
+cluster_body_d1 = cluster_d1[cluster_d1.index('struct DesktopCluster: View {'):]
+cluster_body_d1 = cluster_body_d1[cluster_body_d1.index('  var body: some View {'):]
+cluster_body_d1 = cluster_body_d1[:cluster_body_d1.index('\n  }\n')]
+window_d1 = window_t8[window_t8.rindex('.overlay {', 0, window_t8.index('DesktopClusterLayer(model: model')):]
+window_d1 = window_d1[:window_d1.index('\n      }\n')]
+panel_d1 = cluster_d1[cluster_d1.index('  private var panel: some View {'):]
+panel_d1 = panel_d1[:panel_d1.index('\n  }\n')]
+toolbar_d1 = bridge_text[bridge_text.index('void bridge_toolbar_view_build('):]
+toolbar_d1 = toolbar_d1[:toolbar_d1.index('\n}\n')]
+window_mm_d1 = (SWIFT.parent / 'wm_apple_ios_window.mm').read_text(encoding='utf-8')
+check('if model.viewportReady && model.desktop {' in window_d1 and 'controlsShown' not in window_d1 and
+      'interfaceHidden' not in window_d1 and
+      all(part in panel_d1 for part in ('BlenderSettings.set("desktop", .bool(false))', 'Operators.run("ED_OT_undo")',
+                                        'Operators.run("ED_OT_redo")', '"ESC")', '"TAB")', '"RET")',
+                                        'StickyModifierKeys(model: model, embedded: true)', 'fingerMenu', 'moreMenu')) and
+      'commands.chooseFingerUsesTool(true)' in cluster_d1 and 'commands.chooseFingerUsesTool(false)' in cluster_d1 and
+      all(part in cluster_body_d1 for part in ('waiting', 'jobs', 'messages')) and 'if folded' not in cluster_body_d1 and
+      'model.messages.take(notices)' in cluster_d1 and 'model.dragHint' in cluster_d1 and '$0.modalKey' in cluster_d1 and
+      'STREQ(key, "TAB") ? GHOST_kKeyTab' in window_mm_d1 and
+      'bridge_actions_build(C, active_tool_id, builder, top, has_view3d);' in toolbar_d1 and
+      toolbar_d1.index('bridge_actions_build(C, active_tool_id') < toolbar_d1.index('if (has_view3d) {\n    bridge_text_object_build'),
+      "R6 DESK-1: the Desktop Interface's cluster is always drawn there, with the way back, keys, Undo, the "
+      "touch setting, jobs, messages, and the waiting operation's ends folded or not")
 
 print('PASS: native shell sources ' + json.dumps(checks))

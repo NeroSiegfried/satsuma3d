@@ -4779,6 +4779,9 @@ void GHOST_ios_window_send_key(GHOST_WindowIOS *window, GHOST_TKey key)
       std::make_unique<GHOST_EventKey>(time, GHOST_kEventKeyDown, window, key, false, text));
   system->pushEvent(
       std::make_unique<GHOST_EventKey>(time, GHOST_kEventKeyUp, window, key, false, nullptr));
+  /* A key the shell pressed (Escape, Tab, Return, an axis) is an action: a latched Shift, Ctrl or
+   * Alt lasts for it (ROUND6 TOUCH-8, DESK-1). */
+  GHOST_ios_sticky_action_ended(window);
 }
 
 void GHOST_ios_window_press_key(GHOST_WindowIOS *window,

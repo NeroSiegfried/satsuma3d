@@ -3218,7 +3218,16 @@ static void bridge_modal_bar_build(
   bridge_modal_hint = hint;
 }
 
-void bridge_actions_build(bContext *C, const char *tool, views::ViewBuilder &builder, const NodeId top)
+/**
+ * The actions row: the waiting operation's bar whenever one waits, in any editor and in either
+ * interface (the Desktop Interface's cluster shows it too, ROUND6 DESK-1); otherwise, with
+ * \a quick_actions (a 3D View is current), the quick actions for the mode, tool and selection.
+ */
+void bridge_actions_build(bContext *C,
+                          const char *tool,
+                          views::ViewBuilder &builder,
+                          const NodeId top,
+                          const bool quick_actions)
 {
   bridge_modal_hint.clear();
   using namespace io::serialize;
@@ -3230,6 +3239,9 @@ void bridge_actions_build(bContext *C, const char *tool, views::ViewBuilder &bui
   wmOperator *waiting_op = constraint_op ? constraint_op : bridge_waiting_operator(win);
   if (waiting_op) {
     bridge_modal_bar_build(C, waiting_op, constraint_op != nullptr, builder, row);
+    return;
+  }
+  if (!quick_actions) {
     return;
   }
   if (false) {
@@ -3581,7 +3593,8 @@ void bridge_toolbar_view_build(bContext *C,
     builder.add(top, name, [&](ViewBuffer &buffer, NodeFields &fields) {
       const char *op_name = STREQ(name, "undo") ? "ED_OT_undo" : "ED_OT_redo";
       fields.label = STREQ(name, "undo") ? IFACE_("Undo") : IFACE_("Redo");
-      fields.enabled = has_view3d && bridge_undo_available(C, op_name);
+      /* In any editor: the Desktop Interface's cluster has Undo and Redo too (ROUND6 DESK-1). */
+      fields.enabled = bridge_undo_available(C, op_name);
       return views::protocol::CreateButtonDirect(
           buffer, views::protocol::ButtonStyle::Normal, op_name);
     });
@@ -3630,12 +3643,14 @@ void bridge_toolbar_view_build(bContext *C,
       return bridge_data(buffer, drag_done);
     });
   }
+  /* The waiting operation's bar in every editor, a 3D View current or not: in the Desktop
+   * Interface, Focus Mode on the UV Editor has none (ROUND6 DESK-1, finding H1). */
+  bridge_actions_build(C, active_tool_id, builder, top, has_view3d);
+  if (!bridge_modal_hint.empty()) {
+    data("modal_hint", std::string_view(bridge_modal_hint));
+  }
   if (has_view3d) {
-    bridge_actions_build(C, active_tool_id, builder, top);
     bridge_text_object_build(C, builder, top);
-    if (!bridge_modal_hint.empty()) {
-      data("modal_hint", std::string_view(bridge_modal_hint));
-    }
   }
 
   if (has_view3d) {

@@ -93,6 +93,7 @@ extern "C" void wm_apple_ios_window_send_key(void *window, const char *key)
                                STREQ(key, "Z")   ? GHOST_kKeyZ :
                                STREQ(key, "ESC") ? GHOST_kKeyEsc :
                                STREQ(key, "RET") ? GHOST_kKeyEnter :
+                               STREQ(key, "TAB") ? GHOST_kKeyTab :
                                                    GHOST_kKeyUnknown;
   if (ghost_key != GHOST_kKeyUnknown) {
     GHOST_ios_window_send_key(ghost_window(window), ghost_key);

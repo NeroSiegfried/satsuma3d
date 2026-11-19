@@ -3467,6 +3467,212 @@ def tick_jobs():
         return None
 
 
+# ROUND6 DESK-1 (H1, H3, C1; decision R6-6): in the Desktop Interface nothing of Blender's ends an
+# operation that only a key or the right button ends, and Focus Mode hides every bar. With Blender's
+# own interface on, each H1 operation is started as its menu starts it, in an editor in Focus Mode
+# (no 3D View on the screen, no top bar): the toolbar view must offer its end (the hint's Done or
+# Cancel, or the bar's Cancel), which the shell's cluster shows whatever Blender's screen is, and
+# Escape, which those buttons send, must leave nothing waiting. Undo must be offered there too. Last,
+# from Focus Mode, the way back to the iPad interface must bring the 3D View back.
+DESK_CASES = [
+    # (editor ui_type, operator, object mode)
+    ("UV", "uv.select_circle", 'EDIT'),
+    ("ShaderNodeTree", "node.select_circle", 'OBJECT'),
+    ("DOPESHEET", "action.select_circle", 'OBJECT'),
+    ("FCURVES", "graph.select_circle", 'OBJECT'),
+    ("CLIP_EDITOR", "clip.select_circle", 'OBJECT'),
+    ("VIEW_3D", "mesh.knife_tool", 'EDIT'),
+]
+desk_state = {}
+
+
+def _desk_area(ui_type):
+    """The area the case runs in: the 3D View for its own operations, the timeline's otherwise."""
+    window = bpy.context.window_manager.windows[0]
+    wanted = 'VIEW_3D' if ui_type == "VIEW_3D" else 'DOPESHEET_EDITOR'
+    for area in window.screen.areas:
+        if area.type == wanted or (wanted == 'DOPESHEET_EDITOR' and area.type in
+                                   ('IMAGE_EDITOR', 'NODE_EDITOR', 'GRAPH_EDITOR', 'CLIP_EDITOR')):
+            return window, area
+    return window, None
+
+
+def _desk_only_area():
+    window = bpy.context.window_manager.windows[0]
+    area = window.screen.areas[0]
+    return window, area, next(r for r in area.regions if r.type == 'WINDOW')
+
+
+def _desk_ends():
+    """What the toolbar view offers to end the waiting operation: the hint's label, the bar's Cancel."""
+    hint, bar = _shows_cancel()
+    return hint, bar
+
+
+def _desk_object():
+    return bpy.context.view_layer.objects.active
+
+
+def _desk_mode(mode):
+    """The cube's mode, set in a 3D View's context where there is one, as Focus Mode may hide it."""
+    found = _view3d()
+    if found:
+        window, area, region = found
+        with bpy.context.temp_override(window=window, area=area, region=region, active_object=_desk_object()):
+            bpy.ops.object.mode_set(mode=mode)
+    else:
+        with bpy.context.temp_override(active_object=_desk_object(), object=_desk_object()):
+            bpy.ops.object.mode_set(mode=mode)
+
+
+def tick_desk():
+    global step
+    try:
+        pump()
+        step += 1
+        problems = report.setdefault("problems", [])
+        cases = report.setdefault("cases", {})
+        if TOUCH_WINDOW is None:
+            problems.append("this build has no WM_native_ui_touch_window_query")
+            finish("error")
+            return None
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            subs["settings"] = subscribe("settings")
+            subs["toolbar"] = subscribe("toolbar")
+            cube = bpy.data.objects["Cube"]
+            bpy.context.view_layer.objects.active = cube
+            cube.select_set(True)
+            # Something to undo, and keys for the Graph Editor's operations to see.
+            cube.keyframe_insert("location", frame=1)
+            cube.location.x += 1.0
+            cube.keyframe_insert("location", frame=20)
+            bpy.ops.ed.undo_push(message="harness keys")
+            return 0.5
+        if step == 2:
+            set_bool(subs["settings"], "desktop", True, 1400)
+            return 1.0
+        if step < 5:
+            return 0.5
+        phase = desk_state.get("phase", "next")
+        if phase == "next":
+            queue = desk_state.setdefault("queue", list(DESK_CASES))
+            if not queue:
+                desk_state["phase"] = "back"
+                return 0.1
+            ui_type, idname, mode = queue.pop(0)
+            desk_state["case"] = (ui_type, idname)
+            if _desk_object().mode != mode:
+                _desk_mode(mode)
+            window, area = _desk_area(ui_type)
+            if area is None:
+                problems.append("DESK-1 %s: no area to run it in" % idname)
+                return 0.1
+            if ui_type != "VIEW_3D":
+                area.ui_type = ui_type
+            region = next(r for r in area.regions if r.type == 'WINDOW')
+            # Focus Mode: every bar hidden, this editor alone on the screen.
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                bpy.ops.screen.screen_full_area(use_hide_panels=True)
+            desk_state["phase"] = "start"
+            return 0.6
+        if phase == "start":
+            ui_type, idname = desk_state["case"]
+            window, area, region = _desk_only_area()
+            entry = cases[idname] = {"editor": area.type, "areas on screen": len(window.screen.areas),
+                                     "3D View on screen": any(a.type == 'VIEW_3D' for a in window.screen.areas)}
+            module, name = idname.split(".")
+            operator = getattr(getattr(bpy.ops, module), name)
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                if not operator.poll():
+                    entry["not started"] = "poll fails here"
+                    desk_state["phase"] = "restore"
+                    return 0.1
+                result = operator('INVOKE_DEFAULT')
+            entry["result"] = sorted(result)
+            if 'RUNNING_MODAL' not in result:
+                problems.append("DESK-1 %s: did not wait (%s)" % (idname, sorted(result)))
+                desk_state["phase"] = "restore"
+                return 0.1
+            desk_state["phase"] = "check"
+            return 0.6
+        if phase == "check":
+            ui_type, idname = desk_state["case"]
+            entry = cases[idname]
+            hint, bar = _desk_ends()
+            entry["offered"] = hint or ("bar's Cancel" if bar else None)
+            entry["undo enabled while it waits"] = _toolbar_node("undo").get("enabled")
+            if not (hint or bar):
+                problems.append("DESK-1 %s: waits in Focus Mode with no end offered" % idname)
+            window, area, region = _desk_only_area()
+            x, y = region.x + region.width // 2, region.y + region.height // 2
+            # What the cluster's Done or Cancel sends.
+            _simulate(window, 'ESC', 'PRESS', x, y)
+            _simulate(window, 'ESC', 'RELEASE', x, y)
+            desk_state["phase"] = "ended"
+            return 0.6
+        if phase == "ended":
+            ui_type, idname = desk_state["case"]
+            entry = cases[idname]
+            hint, bar = _desk_ends()
+            entry["waiting after Escape"] = bool(_touch_window()["modal"] or hint or bar)
+            if entry["waiting after Escape"]:
+                problems.append("DESK-1 %s: still waits after Escape" % idname)
+            desk_state["phase"] = "restore"
+            return 0.1
+        if phase == "restore":
+            window, area, region = _desk_only_area()
+            if len(window.screen.areas) == 1:
+                with bpy.context.temp_override(window=window, area=area, region=region):
+                    bpy.ops.screen.screen_full_area(use_hide_panels=True)
+            if _desk_object().mode != 'OBJECT':
+                _desk_mode('OBJECT')
+            desk_state["phase"] = "next"
+            return 0.6
+        if phase == "back":
+            # Undo is offered with no 3D View on the screen: Focus Mode on the timeline.
+            window, area = _desk_area("DOPESHEET")
+            area.ui_type = "DOPESHEET"
+            region = next(r for r in area.regions if r.type == 'WINDOW')
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                bpy.ops.screen.screen_full_area(use_hide_panels=True)
+            desk_state["phase"] = "undo"
+            return 0.8
+        if phase == "undo":
+            report["undo enabled in Focus Mode on the Dope Sheet"] = _toolbar_node("undo").get("enabled")
+            if not report["undo enabled in Focus Mode on the Dope Sheet"]:
+                problems.append("DESK-1: Undo is not offered with no 3D View on the screen")
+            # The way back, from Focus Mode on an editor that is not a 3D View.
+            set_bool(subs["settings"], "desktop", False, 1401)
+            desk_state["phase"] = "returning"
+            return 0.5
+        if phase == "returning":
+            # The command was taken in this pass; the layout follows on the next ones.
+            desk_state["phase"] = "returned"
+            return 1.0
+        if phase == "returned":
+            window = bpy.context.window_manager.windows[0]
+            report["after the way back"] = [a.type for a in window.screen.areas]
+            if not any(a.type == 'VIEW_3D' for a in window.screen.areas):
+                problems.append("DESK-1: the way back from Focus Mode did not bring the 3D View back")
+            started = [name for name, entry in cases.items() if "offered" in entry]
+            report["started"] = started
+            if len(started) < 4:
+                problems.append("DESK-1: fewer than four H1 operations started; the sweep proves little")
+            finish("done" if not problems else "error")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
+def _toolbar_node(key):
+    top = tree(subs["toolbar"]) or {}
+    return next((n for n in top.get("children", []) if n["key"] == key), {})
+
+
 def _touchstart_enter_for(idname):
     mode, name = _touchstart_mode(idname)
     _touchstart_enter(mode, name)
@@ -3480,5 +3686,5 @@ bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets
                          "tolerance": tick_tolerance, "waiting": tick_waiting,
                          "touchstart": tick_touchstart, "jobs": tick_jobs,
                          "renderprogress": tick_render_progress, "busy": tick_busy,
-                         "renderkeep": tick_render_keep}.get(SCENARIO, tick_actions),
+                         "renderkeep": tick_render_keep, "desk": tick_desk}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

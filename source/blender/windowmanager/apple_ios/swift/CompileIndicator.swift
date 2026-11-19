@@ -131,6 +131,9 @@ private struct JobPill: View {
  * touches; the rest of the column lets them through to the viewport. */
 struct CompileIndicator: View {
   let progress: CompileProgress
+  /** In the Desktop Interface's cluster (ROUND6 DESK-1): the pills alone, hugging them, rather than
+   * a column hung from the window's top over Blender's top bar. */
+  var inCluster = false
 
   var body: some View {
     VStack(spacing: 6) {
@@ -139,10 +142,12 @@ struct CompileIndicator: View {
       ForEach(BlenderJobs.jobs) { job in
         JobPill(job: job)
       }
-      Spacer(minLength: 0)
-        .allowsHitTesting(false)
+      if !inCluster {
+        Spacer(minLength: 0)
+          .allowsHitTesting(false)
+      }
     }
-    .padding(.top, 8)
+    .padding(.top, inCluster ? 0 : 8)
     .animation(UIAccessibility.isReduceMotionEnabled ? nil : .easeOut(duration: 0.2),
                value: BlenderJobs.jobs.map(\.id))
     /* The screen stays on while work runs in front, so the iPad does not lock and send it to the

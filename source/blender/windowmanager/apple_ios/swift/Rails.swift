@@ -3334,6 +3334,9 @@ final class StickyModifierState {
 
 struct StickyModifierKeys: View {
   let model: ShellModel
+  /** Inside the Desktop Interface's cluster (ROUND6 DESK-1), which folds them with itself and gives
+   * them its surface: no fold button and no glass of their own. */
+  var embedded = false
   @State private var pressedAt: [Int: Date] = [:]
   @State private var folded = false
   private static let keys: [(key: String, symbol: String, title: String)] = [
@@ -3351,19 +3354,21 @@ struct StickyModifierKeys: View {
           keyButton(index: index, key: key, name: names[key.key], state: sticky.state(index))
         }
       }
-      Button {
-        withAnimation(.easeOut(duration: 0.18)) { folded.toggle() }
-      } label: {
-        Image(systemName: folded ? "command" : "chevron.left")
-          .font(.system(size: 14, weight: .semibold))
-          .frame(width: 32, height: 44)
-          .contentShape(Rectangle())
+      if !embedded {
+        Button {
+          withAnimation(.easeOut(duration: 0.18)) { folded.toggle() }
+        } label: {
+          Image(systemName: folded ? "command" : "chevron.left")
+            .font(.system(size: 14, weight: .semibold))
+            .frame(width: 32, height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(folded ? "Show Shift, Ctrl and Alt" : "Hide Shift, Ctrl and Alt")
       }
-      .buttonStyle(.plain)
-      .accessibilityLabel(folded ? "Show Shift, Ctrl and Alt" : "Hide Shift, Ctrl and Alt")
     }
-    .padding(4)
-    .panelGlass(in: Capsule())
+    .padding(embedded ? 0 : 4)
+    .panelGlass(embedded ? .none : .regular, in: Capsule())
     .onAppear { sticky.refresh() }
     .onDisappear {
       /* The control went: nothing stays held for Blender. */
