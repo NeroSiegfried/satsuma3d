@@ -197,7 +197,8 @@ class TOPBAR_MT_file(Menu):
 
         sub = layout.row()
         sub.enabled = file_is_writable
-        sub.operator_context = 'EXEC_AREA' if context.blend_data.is_saved else 'INVOKE_AREA'
+        # A document saves through its own route, which Save's invoke takes (ROUND6 SAFE-5).
+        sub.operator_context = 'EXEC_AREA' if context.blend_data.is_saved and not _ipad_app() else 'INVOKE_AREA'
         sub.operator("wm.save_mainfile", text="Save", icon='FILE_TICK')
 
         layout.operator_context = 'INVOKE_AREA'
@@ -205,10 +206,12 @@ class TOPBAR_MT_file(Menu):
         layout.operator_context = 'INVOKE_AREA'
         layout.operator("wm.save_as_mainfile", text="Save Copy...").copy = True
 
-        sub = layout.row()
-        sub.enabled = context.blend_data.is_saved and file_is_writable
-        sub.operator_context = 'EXEC_AREA'
-        sub.operator("wm.save_mainfile", text="Save Incremental").incremental = True
+        # A document keeps no numbered copies beside it: Save As keeps a copy (ROUND6 SAFE-5).
+        if not _ipad_app():
+            sub = layout.row()
+            sub.enabled = context.blend_data.is_saved and file_is_writable
+            sub.operator_context = 'EXEC_AREA'
+            sub.operator("wm.save_mainfile", text="Save Incremental").incremental = True
 
         layout.separator()
 
@@ -317,7 +320,10 @@ class TOPBAR_MT_file_recover(Menu):
     def draw(self, _context):
         layout = self.layout
 
-        layout.operator("wm.recover_last_session", text="Last Session")
+        # On the iPad the last session's file is never written (the app is ended, not quit), and
+        # auto-saves are listed by the documents as Recovered Work (ROUND6 SAFE-5).
+        if not _ipad_app():
+            layout.operator("wm.recover_last_session", text="Last Session")
         layout.operator("wm.recover_auto_save", text="Auto Save...")
 
 

@@ -726,6 +726,9 @@ LOG_KINDS = {
     'panel': 'when side panels opened and closed',
     'device': "this iPad's chip and memory",
     'touch': "the kinds of finger gestures on the Desktop Interface's controls",
+    'launch': "each launch with the app's version, this iPad's model and the memory available",
+    'session': 'whether the last session ended cleanly',
+    'exit': 'why iOS ended the app when it reports it',
 }
 writers = ''.join(path.read_text(encoding='utf-8', errors='replace')
                   for path in (SWIFT.parents[3]).rglob('*') if path.suffix in ('.cc', '.mm', '.swift'))

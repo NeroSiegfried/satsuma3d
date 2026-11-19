@@ -23,6 +23,8 @@ void wm_apple_ios_launcher_open_failed(UIDocument *document, NSString *reason);
 /** A copy of the open document's work, written beside it at `next_to` and opened in its place
  * (ROUND6 SAFE-2: Save a Copy and Work on That). */
 void wm_apple_ios_launcher_adopt_copy(NSURL *copy, NSURL *next_to);
+/** File › Restore Version from Opening (ROUND6 SAFE-5, decision R6-5). */
+void wm_apple_ios_launcher_restore_opening_version();
 /** A check launch's `document …` step, see `Snapshots.swift`; `done` gets what it logged. */
 void wm_apple_ios_document_check_step(NSString *step, void (^done)(NSString *answer));
 

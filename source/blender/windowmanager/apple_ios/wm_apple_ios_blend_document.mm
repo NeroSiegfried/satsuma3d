@@ -26,6 +26,7 @@ bool WM_apple_ios_document_open(bContext *C,
 wmDocumentWrite WM_apple_ios_document_write(
     bContext *C, const char *filepath, bool preview, bool when_idle, std::string &r_error);
 bool WM_apple_ios_document_is_loaded();
+void WM_apple_ios_document_set_aside(bContext *C, const char *why);
 bool WM_apple_ios_document_copy_write(bContext *C, const char *filepath, std::string &r_error);
 std::string WM_apple_ios_document_template_write(bContext *C,
                                                  const char *filepath,
@@ -132,6 +133,11 @@ static void writeFreshCopy(NSString *name, UIViewController *presenter, void (^d
   UIAlertController *_holdAlert;
   /** Why the file could not be opened, in Blender's words, for the launcher. */
   NSString *_openProblem;
+  /** Recovered work not yet taken or declined (ROUND6 SAFE-5): nothing is written meanwhile. */
+  BOOL _recoveryPending;
+  /** When the recovered auto-save was written. */
+  NSDate *_recoveredTime;
+  UIAlertController *_recoveryAlert;
 }
 
 - (void)dealloc
@@ -143,6 +149,8 @@ static void writeFreshCopy(NSString *name, UIViewController *presenter, void (^d
   [_holdReason release];
   [_holdAlert release];
   [_openProblem release];
+  [_recoveredTime release];
+  [_recoveryAlert release];
   [super dealloc];
 }
 
@@ -307,14 +315,16 @@ static void writeFreshCopy(NSString *name, UIViewController *presenter, void (^d
 - (void)saveBusy
 {
   _busy = YES;
-  WM_native_ui_log("document", "save waited five minutes for Blender: busy, not saved yet");
+  WM_native_ui_log("document", "save waited five minutes for the engine: busy, not saved yet");
   if (!_explicitSave) {
     return;
   }
-  [self presentProblem:@"Blender is busy, not saved yet"
-               message:[NSString stringWithFormat:@"“%@” is saved when Blender has finished what "
-                                                  @"it is doing.",
-                                                  self.name]
+  [self presentProblem:[NSString stringWithFormat:@"%@ is busy, not saved yet",
+                                                  wm_apple_ios_app_name()]
+               message:[NSString stringWithFormat:@"“%@” is saved when %@ has finished what it "
+                                                  @"is doing.",
+                                                  self.name,
+                                                  wm_apple_ios_app_name()]
               tryAgain:YES];
 }
 
@@ -385,6 +395,69 @@ static void writeFreshCopy(NSString *name, UIViewController *presenter, void (^d
 /** \} */
 
 /* -------------------------------------------------------------------- */
+/** \name Recovered work (ROUND6 SAFE-5, decision R6-4)
+ * \{ */
+
+- (void)presentRecovered
+{
+  if (!_recoveryPending || _recoveryAlert.presentingViewController) {
+    return;
+  }
+  NSDateFormatter *format = [[[NSDateFormatter alloc] init] autorelease];
+  format.timeStyle = NSDateFormatterShortStyle;
+  format.dateStyle = [NSCalendar.currentCalendar isDateInToday:_recoveredTime] ?
+                         NSDateFormatterNoStyle :
+                         NSDateFormatterMediumStyle;
+  NSString *when = _recoveredTime ? [format stringFromDate:_recoveredTime] : @"the last session";
+  UIAlertController *alert = [UIAlertController
+      alertControllerWithTitle:[NSString stringWithFormat:@"Work from %@ was recovered", when]
+                       message:[NSString stringWithFormat:@"It was not yet saved in “%@” when the "
+                                                          @"app last closed.",
+                                                          self.name]
+                preferredStyle:UIAlertControllerStyleAlert];
+  UIAlertAction *keep = [UIAlertAction
+      actionWithTitle:@"Continue from It"
+                style:UIAlertActionStyleDefault
+              handler:^(UIAlertAction *) {
+                WM_native_ui_log("document", "recovered work: continued from it");
+                _recoveryPending = NO;
+                [self updateChangeCount:UIDocumentChangeDone];
+                [self saveAlongTheWay];
+                if (self.held && !_holdAsked) {
+                  [self presentHold:NO];
+                }
+              }];
+  [alert addAction:keep];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Open as Last Saved"
+                                            style:UIAlertActionStyleDefault
+                                          handler:^(UIAlertAction *) {
+                                            WM_native_ui_log("document",
+                                                             "recovered work: opened as last saved");
+                                            _recoveryPending = NO;
+                                            [self openAsLastSaved:"declined at open"];
+                                          }]];
+  alert.preferredAction = keep;
+  [_recoveryAlert release];
+  _recoveryAlert = [alert retain];
+  WM_native_ui_log("document", [@"recovered work said: " stringByAppendingString:alert.title].UTF8String);
+  [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)openAsLastSaved:(const char *)why
+{
+  /* The work is kept aside as Recovered Work, then the file is read again as saved. */
+  const std::string reason = why;
+  GHOST_ios_engine_perform([reason](blender::bContext *C) {
+    if (C) {
+      blender::WM_apple_ios_document_set_aside(C, reason.c_str());
+    }
+  });
+  [self reopen:YES];
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
 /** \name Held documents (ROUND6 SAFE-2)
  *
  * A file Blender's Save would ask about before overwriting (from a newer Blender, with missing
@@ -406,11 +479,17 @@ static void writeFreshCopy(NSString *name, UIViewController *presenter, void (^d
 
 - (BOOL)needsAnswerBeforeClosing
 {
-  return (self.held || self.readOnly) && !_discard && (_blenderModified || _recovered);
+  return ((self.held || self.readOnly) && !_discard && (_blenderModified || _recovered)) ||
+         _recoveryPending;
 }
 
 - (void)presentHold:(BOOL)closing
 {
+  if (_recoveryPending) {
+    /* First whether the recovered work is wanted at all. */
+    [self presentRecovered];
+    return;
+  }
   if (_holdAlert.presentingViewController) {
     return;
   }
@@ -624,13 +703,20 @@ static const CFTimeInterval document_save_interval = 60.0;
   [super openWithCompletionHandler:^(BOOL success) {
     if (!success) {
       /* Said in the launcher, with Blender's words; the launcher takes files again at once. */
-      wm_apple_ios_launcher_open_failed(self, _openProblem ?: @"Blender could not read this file.");
+      wm_apple_ios_launcher_open_failed(self, _openProblem ?: @"The file could not be read.");
     }
     /* Work recovered from the auto-save goes into the document, as an edit would. */
     if (success && _recovered) {
+      /* Said, with the time, and declinable (ROUND6 SAFE-5, decision R6-4): nothing is written
+       * until the person answers. */
       dispatch_async(dispatch_get_main_queue(), ^{
+        _recoveryPending = YES;
         [self updateChangeCount:UIDocumentChangeDone];
-        [self saveAlongTheWay];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(0.6 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(),
+                       ^{
+                         [self presentRecovered];
+                       });
       });
     }
     if (completionHandler) {
@@ -671,6 +757,11 @@ static const CFTimeInterval document_save_interval = 60.0;
           &timed_out))
   {
     _recovered = opened->recovered;
+    NSDate *recovered_time = opened->recovered_time ?
+                                 [NSDate dateWithTimeIntervalSince1970:double(opened->recovered_time)] :
+                                 nil;
+    [_recoveredTime release];
+    _recoveredTime = [recovered_time retain];
     blender::wmDocumentOpened hold = *opened;
     /* Before the open completes on the main queue, so it is known when the document shows. */
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -679,10 +770,10 @@ static const CFTimeInterval document_save_interval = 60.0;
     return YES;
   }
   /* Blender's own reason, for the launcher to show (ROUND6 SAFE-2): never "corrupt" for all. */
-  NSString *reason = timed_out ? @"Blender was busy for five minutes and did not open the file." :
+  NSString *reason = timed_out ? @"The app was busy for five minutes and did not open the file." :
                                  [NSString stringWithUTF8String:opened->error.c_str()];
   if (!reason.length) {
-    reason = @"Blender could not read this file.";
+    reason = @"The file could not be read.";
   }
   [_openProblem release];
   _openProblem = [reason copy];
@@ -723,7 +814,7 @@ static const CFTimeInterval document_save_interval = 60.0;
   });
   struct Result {
     blender::wmDocumentWrite outcome = blender::wmDocumentWrite::Failed;
-    std::string error = "Blender was not ready to write the file.";
+    std::string error = "The file could not be written yet.";
   };
   auto result = std::make_shared<Result>();
   bool timed_out = false;
@@ -752,7 +843,7 @@ static const CFTimeInterval document_save_interval = 60.0;
   NSString *reason = nil;
   if (timed_out) {
     outcome = @"busy";
-    reason = @"Blender is busy, not saved yet.";
+    reason = @"Busy, not saved yet.";
   }
   else if (result->outcome == blender::wmDocumentWrite::Refused) {
     outcome = @"refused";
@@ -786,7 +877,7 @@ static const CFTimeInterval document_save_interval = 60.0;
 {
   /* Refused: nothing loaded is the document's to save, see #_refused. Closed without saving, as
    * the person chose. Held or read-only: not written until the person answers (ROUND6 SAFE-2). */
-  if (_refused || _discard || self.held || self.readOnly) {
+  if (_refused || _discard || self.held || self.readOnly || _recoveryPending) {
     return NO;
   }
   return _blenderModified || _previewStale || [super hasUnsavedChanges];
@@ -832,6 +923,26 @@ static const CFTimeInterval document_save_interval = 60.0;
                                             style:UIAlertActionStyleCancel
                                           handler:nil]];
   WM_native_ui_log("document", "refusal shown: Save a Copy, Reopen Document, Not Now");
+  [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)revertAsked
+{
+  /* Blender's own question (ROUND6 SAFE-5): Revert asks first. */
+  UIAlertController *alert = [UIAlertController
+      alertControllerWithTitle:@"Revert to the Saved File"
+                       message:@"Any unsaved changes will be lost. They are kept as Recovered "
+                               @"Work in the documents."
+                preferredStyle:UIAlertControllerStyleAlert];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Revert"
+                                            style:UIAlertActionStyleDestructive
+                                          handler:^(UIAlertAction *) {
+                                            [self openAsLastSaved:"revert"];
+                                          }]];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                            style:UIAlertActionStyleCancel
+                                          handler:nil]];
+  WM_native_ui_log("document", "revert: asked");
   [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
 }
 
@@ -924,14 +1035,14 @@ static void writeFreshCopy(NSString *name, UIViewController *presenter, void (^d
                                                   error:nil];
     NSURL *copy = [NSURL fileURLWithPath:[folder stringByAppendingPathComponent:name]];
     const std::string path = copy.path.UTF8String;
-    auto error = std::make_shared<std::string>("Blender was not ready to write the copy.");
+    auto error = std::make_shared<std::string>("The copy could not be written yet.");
     bool timed_out = false;
     const bool written = engine_wait(
         [path, error](blender::bContext *C) {
           return blender::WM_apple_ios_document_copy_write(C, path.c_str(), *error);
         },
         &timed_out);
-    NSString *reason = timed_out ? @"Blender is busy. Try again when it has finished." :
+    NSString *reason = timed_out ? @"Busy. Try again when the current work has finished." :
                        written   ? nil :
                                    [NSString stringWithUTF8String:error->c_str()];
     dispatch_async(dispatch_get_main_queue(), ^{

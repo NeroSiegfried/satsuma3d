@@ -2421,6 +2421,10 @@ void WM_autosave_write(wmWindowManager *wm, Main *bmain)
   /* Error reporting into console. */
   BlendFileWriteParams params{};
   BLO_write_file(bmain, filepath, fileflags, &params, nullptr);
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* Which file this auto-save belongs to, by its size and date (ROUND6 SAFE-5). */
+  wm_apple_ios_autosave_written(BKE_main_blendfile_path(bmain), filepath);
+#endif
 
   /* Restart auto-save timer. */
   wm_autosave_timer_end(wm);
@@ -3664,11 +3668,14 @@ static wmOperatorStatus wm_recover_last_session_invoke(bContext *C,
                                                        const wmEvent * /*event*/)
 {
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
-  /* The last session's file opens as its own document (ROUND5 9D.2). */
+  /* iOS ends the app rather than quitting it, so the last session's file is never written: the
+   * menus do not offer this (ROUND6 SAFE-5); run anyway, it shows Recovered Work. */
   {
     char filepath[FILE_MAX];
     BLI_path_join(filepath, sizeof(filepath), BKE_tempdir_base(), BLENDER_QUIT_FILE);
-    if (WM_apple_ios_document_command(C, wmDocumentCommand::Open, filepath)) {
+    if (WM_apple_ios_document_command(
+            C, BLI_exists(filepath) ? wmDocumentCommand::Open : wmDocumentCommand::Recover, filepath))
+    {
       return OPERATOR_CANCELLED;
     }
   }
@@ -3745,7 +3752,11 @@ static wmOperatorStatus wm_recover_auto_save_invoke(bContext *C,
   if (RNA_struct_property_is_set(op->ptr, "filepath")) {
     RNA_string_get(op->ptr, "filepath", filepath);
   }
-  if (WM_apple_ios_document_command(C, wmDocumentCommand::Open, filepath)) {
+  /* Without a path, the documents' Recovered Work list: the system's picker cannot reach the
+   * auto-save folder (ROUND6 SAFE-5). With one, it is imported into the documents and opened. */
+  if (WM_apple_ios_document_command(
+          C, filepath[0] ? wmDocumentCommand::Open : wmDocumentCommand::Recover, filepath))
+  {
     return OPERATOR_CANCELLED;
   }
 #endif

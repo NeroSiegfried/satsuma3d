@@ -515,6 +515,11 @@ struct DocumentToolbar: ToolbarContent {
     Section {
       Button("Save As…", systemImage: "doc.on.doc") { commands.saveDocumentAs() }
       Button("Save as Template…", systemImage: "square.on.square") { commands.saveAsTemplate() }
+      /* The file as it was when it was opened (ROUND6 SAFE-5): documents save themselves, so
+       * this is the way back from a mistake found later. */
+      Button("Restore Version from Opening…", systemImage: "clock.arrow.circlepath") {
+        wm_apple_ios_restore_opening_version()
+      }
     }
     /* Blender's own Import and Export menus, so every format it and its add-ons support is
      * listed. Their file browsers open the system's document picker. */

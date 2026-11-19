@@ -338,6 +338,11 @@ extern "C" void wm_apple_ios_share_document_file(UIViewController *presenter,
   wm_apple_ios_document_file_now(presenter, done);
 }
 
+extern "C" void wm_apple_ios_restore_opening_version()
+{
+  wm_apple_ios_launcher_restore_opening_version();
+}
+
 extern "C" NSString *wm_apple_ios_document_status()
 {
   WMIOSBlendDocument *document = (WMIOSBlendDocument *)wm_apple_ios_launcher_document();

@@ -42,6 +42,8 @@ enum class wmDocumentCommand : int8_t {
    * written first, so the document continues from it.
    */
   Reload,
+  /** Recovered Work: the auto-saves Blender kept, listed by the documents (ROUND6 SAFE-5). */
+  Recover,
 };
 
 /**
@@ -63,6 +65,8 @@ enum class wmDocumentWrite : int8_t {
 struct wmDocumentOpened {
   /** The document's auto-save was newer and opened instead: work it has yet to save. */
   bool recovered = false;
+  /** When that auto-save was written (seconds since 1970), for "Work from 14:32 was recovered". */
+  int64_t recovered_time = 0;
   /**
    * Why the document is not written until the person answers once: what Blender's Save asks
    * before overwriting, see #BKE_main_needs_overwrite_confirm. Empty when nothing. `hold_title`

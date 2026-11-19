@@ -80,6 +80,8 @@ wm_apple_ios_blend_document.mm | internal key: folder name in Application Suppor
 wm_apple_ios_blend_document.mm | internal key: key in the template manifest (Blender version a template needs) | minimumBlender
 wm_apple_ios_launcher.mm | internal key: Blender's own folder in Application Support, where the engine keeps its files | Blender
 wm_apple_ios_launcher.mm | internal key: stored bookmark key | BlenderOpenDocument
+wm_apple_ios_launcher.mm | internal key: stored session marker (ROUND6 SAFE-4) | BlenderSessionMarker
+wm_apple_ios_launcher.mm | internal key: stored count of ends while opening (ROUND6 SAFE-4) | BlenderSessionOpeningEnds
 wm_apple_ios_launcher.mm | internal key: notification name | BlenderSceneInactive
 wm_apple_ios_launcher.mm | internal key: notification name | BlenderTemplatePresentation
 wm_apple_ios_launcher.mm | file type: the document type is "Blender File" | Create Blender File
@@ -111,3 +113,4 @@ artwork ICON_BLENDER source/blender/windowmanager/intern/wm_window_csd_draw.cc |
 artwork ICON_BLENDER scripts/startup/bl_ui/space_topbar.py | not on the iPad: desktop Blender's application menu; the iPad's carries ICON_SATSUMA_GLYPH | icon = 'SATSUMA_GLYPH' if _ipad_app() else 'BLENDER'
 artwork ICON_BLENDER scripts/startup/bl_ui/space_userpref.py | credit: Preferences › Add-ons marks the add-ons made by Blender ("Official") | 'OFFICIAL': 'BLENDER',
 artwork ICON_BLENDER scripts/addons_core/bl_pkg/bl_extension_ui.py | credit: Preferences › Add-ons marks the add-ons that come with Blender ("Core") | 'BLENDER',  # `ADDON_TYPE_LEGACY_CORE`.
+artwork ICON_BLENDER source/blender/windowmanager/apple_ios/wm_apple_ios_launcher.mm | file type: not an icon, the .blend file header's magic, read by a check launch's `raise` step (ROUND6 SAFE-2) | if (data.length > 17 && memcmp(bytes, "BLENDER", 7) == 0) {

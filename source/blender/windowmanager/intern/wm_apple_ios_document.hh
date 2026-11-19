@@ -46,6 +46,10 @@ ImBuf *wm_apple_ios_thumb_frame_all(const bContext *C,
 bool wm_apple_ios_autosave_location(const char *blendfile_path, char filepath[FILE_MAX]);
 /** Remove the auto-save of a document, once its work is saved. */
 void wm_apple_ios_autosave_remove(const char *blendfile_path);
+/** Note the document file's size and date beside the auto-save just written (ROUND6 SAFE-5). */
+void wm_apple_ios_autosave_written(const char *blendfile_path, const char *autosave);
+/** Rename the document's auto-save aside as recovered work, listed by the documents. */
+bool wm_apple_ios_autosave_set_aside(const char *blendfile_path, const char *why);
 /**
  * An auto-save newer than the document holds changes that were never saved, because Blender was
  * closed or another file was opened: opening the document continues from it.

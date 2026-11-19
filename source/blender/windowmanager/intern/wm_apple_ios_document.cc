@@ -207,20 +207,86 @@ bool wm_apple_ios_autosave_location(const char *blendfile_path, char filepath[FI
   return true;
 }
 
+/**
+ * Beside each auto-save, the size and date the document's file had when it was written (ROUND6
+ * SAFE-5): an auto-save belongs to that file only, not to another file put at the same path.
+ */
+static std::string autosave_source_path(const char *autosave)
+{
+  return std::string(autosave) + ".source";
+}
+
+void wm_apple_ios_autosave_written(const char *blendfile_path, const char *autosave)
+{
+  BLI_stat_t file_stat;
+  FILE *file = BLI_fopen(autosave_source_path(autosave).c_str(), "w");
+  if (file == nullptr) {
+    return;
+  }
+  if (blendfile_path && blendfile_path[0] && BLI_stat(blendfile_path, &file_stat) == 0) {
+    fprintf(file, "%lld %lld\n", (long long)file_stat.st_size, (long long)file_stat.st_mtime);
+  }
+  fclose(file);
+}
+
 void wm_apple_ios_autosave_remove(const char *blendfile_path)
 {
   char filepath[FILE_MAX];
   if (wm_apple_ios_autosave_location(blendfile_path, filepath) && BLI_exists(filepath)) {
     BLI_delete(filepath, false, false);
   }
+  BLI_delete(autosave_source_path(filepath).c_str(), false, false);
+}
+
+bool wm_apple_ios_autosave_set_aside(const char *blendfile_path, const char *why)
+{
+  char autosave[FILE_MAX];
+  if (!wm_apple_ios_autosave_location(blendfile_path, autosave) || !BLI_exists(autosave)) {
+    return false;
+  }
+  /* Renamed, not deleted: listed by the documents as Recovered Work, and no longer continued
+   * from when the document opens (ROUND6 SAFE-5, decision R6-4). */
+  const std::time_t now = std::time(nullptr);
+  std::tm local = {};
+  localtime_r(&now, &local);
+  char stamp[32];
+  std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &local);
+  std::string aside(autosave);
+  aside.replace(aside.size() - strlen("_autosave.blend"),
+                strlen("_autosave.blend"),
+                std::string("_recovered_") + stamp + ".blend");
+  const bool moved = BLI_rename_overwrite(autosave, aside.c_str()) == 0;
+  BLI_delete(autosave_source_path(autosave).c_str(), false, false);
+  WM_native_ui_session_log(
+      "document",
+      fmt::format("auto-save {} ({}): {}", moved ? "set aside" : "could not be set aside", why,
+                  BLI_path_basename(aside.c_str()))
+          .c_str());
+  return moved;
 }
 
 bool wm_apple_ios_autosave_newer(const char *filepath, char r_autosave[FILE_MAX])
 {
   BLI_stat_t autosave_stat, file_stat;
-  return wm_apple_ios_autosave_location(filepath, r_autosave) &&
-         BLI_stat(r_autosave, &autosave_stat) == 0 && BLI_stat(filepath, &file_stat) == 0 &&
-         autosave_stat.st_mtime > file_stat.st_mtime;
+  if (!(wm_apple_ios_autosave_location(filepath, r_autosave) &&
+        BLI_stat(r_autosave, &autosave_stat) == 0 && BLI_stat(filepath, &file_stat) == 0 &&
+        autosave_stat.st_mtime > file_stat.st_mtime))
+  {
+    return false;
+  }
+  /* The file it was written beside must still be there, unchanged: a file put at the same path
+   * since (restored on a Mac, replaced in Files) is not overwritten with an old auto-save. */
+  if (FILE *source = BLI_fopen(autosave_source_path(r_autosave).c_str(), "r")) {
+    long long size = -1, mtime = -1;
+    const int read = fscanf(source, "%lld %lld", &size, &mtime);
+    fclose(source);
+    if (read == 2 && (size != (long long)file_stat.st_size || mtime != (long long)file_stat.st_mtime))
+    {
+      wm_apple_ios_autosave_set_aside(filepath, "the file was replaced since it was written");
+      return false;
+    }
+  }
+  return true;
 }
 
 bool wm_apple_ios_file_write(bContext *C,
@@ -260,7 +326,8 @@ bool wm_apple_ios_file_write(bContext *C,
   return write.success;
 }
 
-/** Auto-saves of documents left alone for a month are not worth keeping. */
+/** Auto-saves of documents left alone for a month are not worth keeping, nor recovered work set
+ * aside a month ago; each is named in the log. */
 static void wm_autosave_prune()
 {
   const std::optional<std::string> folder = BKE_appdir_folder_id(BLENDER_USER_DATAFILES,
@@ -272,10 +339,17 @@ static void wm_autosave_prune()
   const uint count = BLI_filelist_dir_contents(folder->c_str(), &entries);
   const int64_t month_ago = int64_t(time(nullptr)) - 30 * 24 * 60 * 60;
   for (uint i = 0; i < count; i++) {
-    if (!S_ISDIR(entries[i].type) && StringRef(entries[i].relname).endswith("_autosave.blend") &&
-        entries[i].s.st_mtime < month_ago)
+    const StringRef name = entries[i].relname;
+    if (!S_ISDIR(entries[i].type) &&
+        (name.endswith("_autosave.blend") || name.find("_recovered_") != StringRef::not_found) &&
+        name.endswith(".blend") && entries[i].s.st_mtime < month_ago)
     {
       BLI_delete(entries[i].path, false, false);
+      BLI_delete(autosave_source_path(entries[i].path).c_str(), false, false);
+      WM_native_ui_session_log("document",
+                               fmt::format("auto-save older than 30 days removed: {}",
+                                           entries[i].relname)
+                                   .c_str());
     }
   }
   BLI_filelist_free(entries, count);
@@ -442,6 +516,20 @@ bool WM_apple_ios_document_is_loaded()
   return false;
 }
 
+void WM_apple_ios_document_set_aside(bContext *C, const char *why)
+{
+  if (document_path.empty()) {
+    return;
+  }
+  /* The work as it is now goes into the auto-save first, so what is set aside is all of it. */
+  wmWindowManager *wm = CTX_wm_manager(C);
+  Main *bmain = CTX_data_main(C);
+  if (wm && bmain && WM_apple_ios_document_is_loaded() && (!wm->file_saved || bmain->recovered)) {
+    WM_autosave_write(wm, bmain);
+  }
+  wm_apple_ios_autosave_set_aside(document_path.c_str(), why);
+}
+
 void WM_apple_ios_factory_preferences(bContext *C)
 {
   WM_native_ui_session_log("launch", "factory preferences, add-ons off, for this session");
@@ -498,7 +586,7 @@ bool WM_apple_ios_document_open(bContext *C,
         break;
       }
     }
-    r_opened.error = error.empty() ? std::string("Blender could not read this file.") : error;
+    r_opened.error = error.empty() ? std::string("The file could not be read.") : error;
   }
   else {
     /* What a file loaded with warnings says, as Blender's status bar would. */
@@ -515,6 +603,13 @@ bool WM_apple_ios_document_open(bContext *C,
   BKE_reports_free(&reports);
   /* Opening continues from the auto-save when it is newer, see #wm_apple_ios_autosave_newer. */
   r_opened.recovered = success && CTX_data_main(C)->recovered;
+  if (r_opened.recovered) {
+    char autosave[FILE_MAX];
+    BLI_stat_t autosave_stat;
+    if (wm_apple_ios_autosave_location(filepath, autosave) && BLI_stat(autosave, &autosave_stat) == 0) {
+      r_opened.recovered_time = int64_t(autosave_stat.st_mtime);
+    }
+  }
   if (success) {
     document_read = WM_file_read_count();
     /* As Blender holds it, to know a later read of the same file, see
@@ -549,7 +644,7 @@ static std::string write_reason(const ReportList &reports)
       warning = report.message;
     }
   }
-  return warning.empty() ? std::string(RPT_("Blender could not write the file.")) : warning;
+  return warning.empty() ? std::string(RPT_("The file could not be written.")) : warning;
 }
 
 /**
@@ -679,6 +774,8 @@ static const char *document_command_name(const wmDocumentCommand command)
       return "quit";
     case wmDocumentCommand::Reload:
       return "reload with scripts";
+    case wmDocumentCommand::Recover:
+      return "recovered work";
   }
   return "?";
 }
@@ -699,11 +796,8 @@ bool WM_apple_ios_document_command(bContext * /*C*/,
                                            BLI_path_basename(value.c_str()) :
                                            value.c_str())
                                .c_str());
-  if (command == wmDocumentCommand::Revert && !document_path.empty()) {
-    /* What was saved, not the work since: opening the document would continue from its newer
-     * auto-save, see #wm_apple_ios_autosave_newer. */
-    wm_apple_ios_autosave_remove(document_path.c_str());
-  }
+  /* Revert asks first, in the launcher, and then sets the auto-save aside rather than deleting
+   * it, see #WM_apple_ios_document_set_aside (ROUND6 SAFE-5). */
   WM_apple_ios_launcher_document_command(command, value);
   return true;
 }

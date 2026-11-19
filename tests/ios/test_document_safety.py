@@ -18,6 +18,10 @@ Sweeps of the iPad document's sources, one per class, so the next gap fails loud
 - SAFE-4: whatever opens a document at launch passes the session marker first, every path that
   opens a document sets it, and the log is kept where iOS keeps it, dated, within a second.
 
+- SAFE-5: every Recover, Revert and Save Incremental item Blender's File menu shows either has
+  the iPad's route or is absent there; recovered work is said and declinable; nothing recovered
+  or dropped is opened in place inside the app.
+
 Read from the sources, so it runs on any Mac without a build:
 `python3 -m unittest tests/ios/test_document_safety.py`.
 """
@@ -282,6 +286,82 @@ class UncleanEndIsSaidTest(unittest.TestCase):
             self.assertIn(needed, diagnostics)
         cmake = (ROOT / 'source/creator/CMakeLists.txt').read_text(encoding='utf-8')
         self.assertIn('apple_ios/swift/SessionDiagnostics.swift', cmake)
+
+
+# Blender's File menu items of the class, and what each does on the iPad (ROUND6 SAFE-5).
+FILE_ITEMS = {
+    'wm.revert_mainfile': 'routed: Blender\'s question, then the work set aside as Recovered Work',
+    'wm.recover_last_session': 'absent on the iPad: quit.blend is never written there',
+    'wm.recover_auto_save': 'routed: the documents\' Recovered Work list',
+    'wm.save_mainfile incremental': 'absent on the iPad: a document keeps no numbered copies',
+}
+
+
+class RecoveryIsShownTest(unittest.TestCase):
+    """SAFE-5: recovery is shown, Revert asks, dead commands go."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.document = BDOC.read_text(encoding='utf-8')
+        cls.launcher = LAUNCH.read_text(encoding='utf-8')
+        cls.doc = DOC.read_text(encoding='utf-8')
+        cls.menu = (ROOT / 'scripts/startup/bl_ui/space_topbar.py').read_text(encoding='utf-8')
+
+    def test_every_file_menu_item_works_or_is_absent(self):
+        found = set()
+        for match in re.finditer(r'operator\("(wm\.(?:recover_\w+|revert_mainfile|save_mainfile))"[^\n]*', self.menu):
+            name = match.group(1)
+            if name == 'wm.save_mainfile':
+                if 'incremental' not in match.group(0):
+                    continue
+                name += ' incremental'
+            found.add(name)
+            if FILE_ITEMS.get(name, '').startswith('absent'):
+                self.assertIn('if not _ipad_app():', self.menu[max(0, match.start() - 400):match.start()],
+                              "%s is offered on the iPad, where it cannot work" % name)
+        self.assertEqual(sorted(found - set(FILE_ITEMS)), [], "A new Recover, Revert or incremental "
+                                                               "item: list what it does on the iPad")
+        self.assertEqual(sorted(set(FILE_ITEMS) - found), [], "Listed but no longer in the menu")
+        launcher_commands = body_of(self.launcher, '- (void)documentCommand:(blender::wmDocumentCommand)command')
+        self.assertIn('[document revertAsked]', launcher_commands)
+        self.assertIn('[self presentRecoveredWork:presenter]', launcher_commands)
+
+    def test_revert_asks_and_keeps_the_work(self):
+        asked = body_of(self.document, '- (void)revertAsked')
+        self.assertIn('Any unsaved changes will be lost.', asked)
+        aside = body_of(self.document, '- (void)openAsLastSaved:(const char *)why')
+        self.assertLess(aside.index('WM_apple_ios_document_set_aside('), aside.index('[self reopen:YES]'))
+        command = body_of(self.doc, 'bool WM_apple_ios_document_command(')
+        self.assertNotIn('wm_apple_ios_autosave_remove', command, "Revert deletes the auto-save")
+
+    def test_recovered_work_is_said_and_declinable(self):
+        opened = body_of(self.document, '- (void)openWithCompletionHandler:')
+        self.assertIn('[self presentRecovered]', opened)
+        self.assertNotIn('saveAlongTheWay', opened, "Recovered work is saved before it was taken")
+        self.assertIn('_recoveryPending', body_of(self.document, '- (BOOL)hasUnsavedChanges'))
+        said = body_of(self.document, '- (void)presentRecovered')
+        for words in ('Continue from It', 'Open as Last Saved', 'Work from %@ was recovered'):
+            self.assertIn(words, said)
+
+    def test_an_auto_save_belongs_to_its_file(self):
+        newer = body_of(self.doc, 'bool wm_apple_ios_autosave_newer(')
+        self.assertIn('autosave_source_path(r_autosave)', newer)
+        files = (WM / 'intern/wm_files.cc').read_text(encoding='utf-8')
+        write = body_of(files, 'void WM_autosave_write(wmWindowManager *wm, Main *bmain)')
+        self.assertIn('wm_apple_ios_autosave_written(', write)
+
+    def test_nothing_opens_in_place_inside_the_app(self):
+        commands = body_of(self.launcher, '- (void)documentCommand:(blender::wmDocumentCommand)command')
+        open_case = commands[commands.index('case wmDocumentCommand::Open:'):]
+        self.assertLess(open_case.index('launcherInsideApp(url)'), open_case.index('[self openDocumentAtURL:url]'))
+        listed = body_of(self.launcher, '- (void)presentRecoveredWork:(UIViewController *)presenter')
+        self.assertIn('importAndOpen:item', listed)
+
+    def test_a_version_from_opening_is_kept(self):
+        self.assertIn('COPYFILE_CLONE', body_of(self.launcher, 'static void launcherKeepOpeningVersion('))
+        self.assertIn('launcherKeepOpeningVersion(self.document.fileURL)', body_of(self.launcher, '- (void)documentDidOpen'))
+        top_bar = (APPLE / 'swift/TopBar.swift').read_text(encoding='utf-8')
+        self.assertIn('wm_apple_ios_restore_opening_version()', top_bar)
 
 
 if __name__ == '__main__':

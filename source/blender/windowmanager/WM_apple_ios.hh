@@ -109,6 +109,9 @@ bool WM_apple_ios_document_reload_with_scripts(bContext *C);
 /** Start without add-ons and saved preferences, for this session (ROUND6 SAFE-4): offered after
  * the app ended twice in a row while a document was opening. */
 void WM_apple_ios_factory_preferences(bContext *C);
+/** The open document's auto-save, with the work as it is now, set aside as Recovered Work: for
+ * Revert, Open as Last Saved and Restore Version from Opening (ROUND6 SAFE-5). */
+void WM_apple_ios_document_set_aside(bContext *C, const char *why);
 /** Write what Blender has loaded to `filepath` as a copy, for Save a Copy: the document and its
  * auto-save are left as they are. */
 bool WM_apple_ios_document_copy_write(bContext *C, const char *filepath, std::string &r_error);

@@ -110,6 +110,9 @@ void wm_apple_ios_share_document_file(UIViewController *_Nullable presenter,
 /** What the header says about the open document while it is not saved, or nil (ROUND6 SAFE-1,
  * SAFE-2); tapping it says why again, with what can be done. */
 NSString *_Nullable wm_apple_ios_document_status(void);
+/** File › Restore Version from Opening (ROUND6 SAFE-5): asks, then goes back to the file as it
+ * was when the document opened. */
+void wm_apple_ios_restore_opening_version(void);
 void wm_apple_ios_document_status_tapped(void);
 /** A check launch's `document …` snapshot step (ROUND5 9D.5). */
 void wm_apple_ios_document_check(NSString *_Nonnull step,

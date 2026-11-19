@@ -49,6 +49,9 @@
  * Without Saving when `closing`); and Save a Copy and Work on That. */
 - (void)answerHold:(int)answer closing:(BOOL)closing;
 - (void)saveCopyAndWorkOnIt;
+/** Revert, as File › Revert asks for it: Blender's question first, then the work set aside as
+ * Recovered Work and the file read again (ROUND6 SAFE-5). */
+- (void)revertAsked;
 @end
 
 /**

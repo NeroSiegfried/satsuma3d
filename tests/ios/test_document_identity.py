@@ -200,8 +200,10 @@ class DocumentIdentityTest(unittest.TestCase):
             self.assertIsNotNone(invoke, idname)
             body = self.bodies[invoke]
             self.assertIn(IOS_BRANCH, body, "%s's invoke has no iOS branch" % idname)
-            self.assertIn('WM_apple_ios_document_command(C, wmDocumentCommand::%s' % command, body,
-                          "%s's invoke does not take the document's route (%s)" % (idname, command))
+            # The command may be chosen in place (Open with a path, else Recovered Work: ROUND6
+            # SAFE-5), but it is the document's route either way.
+            self.assertRegex(body, r'WM_apple_ios_document_command\(\s*C,[^;]*wmDocumentCommand::%s\b' % command,
+                             "%s's invoke does not take the document's route (%s)" % (idname, command))
 
     def test_guarded_functions_route_first(self):
         for name, command in GUARDED.items():

@@ -100,6 +100,8 @@ enum SessionLogShare {
     + "the steps of developer checks, the gestures on the navigation gizmo, when side panels opened and closed, "
     + "this iPad's chip and memory, the kinds of finger gestures on the Desktop Interface's controls, "
     + "input that arrived while a sheet was open, on the sheet or behind it, "
+    + "each launch with the app's version, this iPad's model and the memory available, "
+    + "whether the last session ended cleanly, why iOS ended the app when it reports it, "
     + "and a mark at most once a minute while the app is in use. It can include "
     + "the names of your files and objects. It stays on this iPad unless you share it."
 

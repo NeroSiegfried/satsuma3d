@@ -4,6 +4,7 @@
 #import "wm_apple_ios_launcher.hh"
 #import "wm_apple_ios_blend_document.hh"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#include <copyfile.h>
 
 #include "GHOST_IOSRuntime.hh"
 #include "WM_apple_ios.hh"
@@ -375,6 +376,25 @@ static void launcherCheckOutputRemove()
   }
 }
 
+/** Whether \a url is inside the app's own folder but not its Documents (Application Support, the
+ * temporary folder): a place the person cannot see, or that iOS empties (ROUND6 SAFE-5). */
+static BOOL launcherInsideApp(NSURL *url)
+{
+  NSString *path = url.URLByStandardizingPath.URLByResolvingSymlinksInPath.path;
+  NSString *home = [NSURL fileURLWithPath:NSHomeDirectory()].URLByResolvingSymlinksInPath.path;
+  NSString *documents = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory
+                                                             inDomains:NSUserDomainMask]
+                            .firstObject.URLByResolvingSymlinksInPath.path;
+  NSString *temporary = [NSURL fileURLWithPath:NSTemporaryDirectory()]
+                            .URLByResolvingSymlinksInPath.path;
+  const BOOL in_home = home.length && [path hasPrefix:[home stringByAppendingString:@"/"]];
+  const BOOL in_temporary = temporary.length &&
+                            [path hasPrefix:[temporary stringByAppendingString:@"/"]];
+  const BOOL in_documents = documents.length &&
+                            [path hasPrefix:[documents stringByAppendingString:@"/"]];
+  return (in_home || in_temporary) && !in_documents;
+}
+
 /** Whether \a url is the check's own copy (or anything else in its folder). */
 static BOOL launcherIsScratch(NSURL *url)
 {
@@ -423,6 +443,9 @@ static NSURL *launcherScratchCreate()
 - (void)openDocumentAtURL:(NSURL *)url;
 - (void)openFailed:(UIDocument *)document reason:(NSString *)reason;
 - (void)adoptCopy:(NSURL *)copy nextTo:(NSURL *)next_to;
+- (void)importAndOpen:(NSURL *)source name:(NSString *)name;
+- (void)presentRecoveredWork:(UIViewController *)presenter;
+- (void)restoreOpeningVersion;
 - (void)documentCommand:(blender::wmDocumentCommand)command argument:(NSString *)argument;
 - (void)templatePickerDismissed;
 - (void)chooseTemplate:(void (^)(NSString *app_template))completion;
@@ -547,6 +570,20 @@ static NSURL *launcher_pending_url = nil;
     UIBarButtonItem *item = [[[UIBarButtonItem alloc] initWithPrimaryAction:about] autorelease];
     item.accessibilityLabel = about.title;
     browser.additionalTrailingNavigationBarButtonItems = @[ item ];
+  }
+  /* Recovered Work (ROUND6 SAFE-5): the auto-saves Blender kept, beside About. */
+  {
+    __block WMIOSLauncherController *launcher = self;
+    UIAction *recovered = [UIAction actionWithTitle:@"Recovered Work"
+                                              image:[UIImage systemImageNamed:@"clock.arrow.circlepath"]
+                                         identifier:nil
+                                            handler:^(__kindof UIAction *) {
+                                              [launcher presentRecoveredWork:nil];
+                                            }];
+    UIBarButtonItem *item = [[[UIBarButtonItem alloc] initWithPrimaryAction:recovered] autorelease];
+    item.accessibilityLabel = recovered.title;
+    browser.additionalTrailingNavigationBarButtonItems =
+        [browser.additionalTrailingNavigationBarButtonItems ?: @[] arrayByAddingObject:item];
   }
   launch.browserViewController = browser;
   launcherStyle(launch);
@@ -1067,6 +1104,291 @@ static NSURL *launcherMoveToDocuments(NSURL *source)
         }];
 }
 
+/* -------------------------------------------------------------------- */
+/** \name Recovered Work and the version from opening (ROUND6 SAFE-5)
+ * \{ */
+
+/** A copy of `source` named `name`, imported into the documents by the browser and opened. */
+- (void)importAndOpen:(NSURL *)source name:(NSString *)name
+{
+  NSFileManager *files = NSFileManager.defaultManager;
+  NSURL *folder = [NSURL
+      fileURLWithPath:[NSTemporaryDirectory()
+                          stringByAppendingPathComponent:NSUUID.UUID.UUIDString]];
+  NSURL *copy = [folder URLByAppendingPathComponent:name];
+  if (![files createDirectoryAtURL:folder withIntermediateDirectories:YES attributes:nil error:nil] ||
+      ![files copyItemAtURL:source toURL:copy error:nil])
+  {
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:@"Could Not Open"
+                         message:[NSString stringWithFormat:@"“%@” could not be copied into your "
+                                                            @"documents.",
+                                                            name]
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                              style:UIAlertActionStyleDefault
+                                            handler:nil]];
+    [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+    return;
+  }
+  [self adoptCopy:copy nextTo:nil];
+}
+
+/** The auto-saves Blender kept, newest first: those of documents still being worked on
+ * (`…_autosave.blend`) and work set aside (`…_recovered_<time>.blend`). */
+static NSArray<NSURL *> *launcherRecoveredWork()
+{
+  NSFileManager *files = NSFileManager.defaultManager;
+  NSURL *support = [files URLsForDirectory:NSApplicationSupportDirectory
+                                 inDomains:NSUserDomainMask]
+                       .firstObject;
+  NSURL *blender = [support URLByAppendingPathComponent:@"Blender" isDirectory:YES];
+  NSMutableArray<NSURL *> *found = [NSMutableArray array];
+  for (NSURL *version in [files contentsOfDirectoryAtURL:blender
+                              includingPropertiesForKeys:nil
+                                                 options:0
+                                                   error:nil])
+  {
+    NSURL *autosave = [version URLByAppendingPathComponent:@"datafiles/autosave" isDirectory:YES];
+    for (NSURL *item in [files contentsOfDirectoryAtURL:autosave
+                             includingPropertiesForKeys:@[ NSURLContentModificationDateKey ]
+                                                options:0
+                                                  error:nil])
+    {
+      NSString *name = item.lastPathComponent;
+      if ([item.pathExtension isEqualToString:@"blend"] &&
+          ![name hasPrefix:launcher_scratch_name] &&
+          ([name hasSuffix:@"_autosave.blend"] || [name containsString:@"_recovered_"]))
+      {
+        [found addObject:item];
+      }
+    }
+  }
+  [found sortUsingComparator:^NSComparisonResult(NSURL *a, NSURL *b) {
+    NSDate *da = nil, *db = nil;
+    [a getResourceValue:&da forKey:NSURLContentModificationDateKey error:nil];
+    [b getResourceValue:&db forKey:NSURLContentModificationDateKey error:nil];
+    return [db compare:da];
+  }];
+  return found;
+}
+
+/** The document's name an auto-save was kept for: `Name_1a2b3c4d_autosave.blend` → `Name`. */
+static NSString *launcherRecoveredName(NSURL *item)
+{
+  NSString *name = item.URLByDeletingPathExtension.lastPathComponent;
+  NSRange marker = [name rangeOfString:@"_[0-9a-f]{8}_(autosave|recovered_.*)$"
+                               options:NSRegularExpressionSearch];
+  return marker.location == NSNotFound ? name : [name substringToIndex:marker.location];
+}
+
+/** Recovered Work: the auto-saves listed, one opened as a new document in the person's
+ * documents. Replaces File › Recover › Auto Save, whose picker cannot reach them. */
+- (void)presentRecoveredWork:(UIViewController *)presenter
+{
+  NSArray<NSURL *> *items = launcherRecoveredWork();
+  presenter = presenter ?: wm_apple_ios_top_presenter();
+  WM_native_ui_log("document",
+                   [NSString stringWithFormat:@"recovered work listed: %lu", (unsigned long)items.count]
+                       .UTF8String);
+  NSDateFormatter *format = [[[NSDateFormatter alloc] init] autorelease];
+  format.dateStyle = NSDateFormatterMediumStyle;
+  format.timeStyle = NSDateFormatterShortStyle;
+  UIAlertController *list = [UIAlertController
+      alertControllerWithTitle:@"Recovered Work"
+                       message:items.count ? @"Work kept by the app that was not saved in its document. "
+                                             @"Opened as a new document in your documents." :
+                                             @"There is no recovered work."
+                preferredStyle:UIAlertControllerStyleAlert];
+  for (NSURL *item in [items subarrayWithRange:NSMakeRange(0, MIN(items.count, NSUInteger(12)))]) {
+    NSDate *date = nil;
+    [item getResourceValue:&date forKey:NSURLContentModificationDateKey error:nil];
+    NSString *name = launcherRecoveredName(item);
+    NSString *title = [NSString stringWithFormat:@"%@ — %@", name, [format stringFromDate:date] ?: @"?"];
+    format.dateFormat = @"yyyy-MM-dd HH.mm";
+    NSString *file = [NSString stringWithFormat:@"%@ (recovered %@).blend", name,
+                                                [format stringFromDate:date] ?: @""];
+    format.dateStyle = NSDateFormatterMediumStyle;
+    format.timeStyle = NSDateFormatterShortStyle;
+    [list addAction:[UIAlertAction actionWithTitle:title
+                                             style:UIAlertActionStyleDefault
+                                           handler:^(UIAlertAction *) {
+                                             WM_native_ui_log("document",
+                                                              [@"recovered work opened: "
+                                                                  stringByAppendingString:file]
+                                                                  .UTF8String);
+                                             [self importAndOpen:item name:file];
+                                           }]];
+  }
+  [list addAction:[UIAlertAction actionWithTitle:items.count ? @"Cancel" : @"OK"
+                                            style:UIAlertActionStyleCancel
+                                          handler:nil]];
+  [presenter presentViewController:list animated:YES completion:nil];
+}
+
+/** Where a document's version from opening is kept: one per document, by its path inside the
+ * app's folder, as its auto-save is (decision R6-5). */
+static NSURL *launcherOpeningVersion(NSURL *document)
+{
+  NSFileManager *files = NSFileManager.defaultManager;
+  NSURL *support = [files URLsForDirectory:NSApplicationSupportDirectory
+                                 inDomains:NSUserDomainMask]
+                       .firstObject;
+  NSURL *folder = [support URLByAppendingPathComponent:@"Versions" isDirectory:YES];
+  [files createDirectoryAtURL:folder withIntermediateDirectories:YES attributes:nil error:nil];
+  NSString *path = document.URLByStandardizingPath.path ?: @"";
+  NSString *home = NSHomeDirectory().lastPathComponent;
+  const NSRange inside = home.length ? [path rangeOfString:home] : NSMakeRange(NSNotFound, 0);
+  if (inside.location != NSNotFound) {
+    path = [path substringFromIndex:NSMaxRange(inside)];
+  }
+  uint32_t hash = 2166136261u;
+  for (const char *c = path.UTF8String; c && *c; c++) {
+    hash = (hash ^ uint8_t(*c)) * 16777619u;
+  }
+  return [folder URLByAppendingPathComponent:[NSString stringWithFormat:@"%08x.blend", hash]];
+}
+
+/** The file as it is when it opens, kept as an APFS clone, which costs no space until the
+ * document changes (decision R6-5). */
+static void launcherKeepOpeningVersion(NSURL *document)
+{
+  NSURL *version = launcherOpeningVersion(document);
+  [NSFileManager.defaultManager removeItemAtURL:version error:nil];
+  const BOOL accessing = [document startAccessingSecurityScopedResource];
+  const int result = copyfile(document.path.fileSystemRepresentation,
+                              version.path.fileSystemRepresentation,
+                              nullptr,
+                              COPYFILE_CLONE);
+  if (accessing) {
+    [document stopAccessingSecurityScopedResource];
+  }
+  if (result == 0) {
+    [NSFileManager.defaultManager setAttributes:@{NSFileModificationDate : [NSDate date]}
+                                   ofItemAtPath:version.path
+                                          error:nil];
+  }
+  WM_native_ui_log("document", result == 0 ? "version from opening kept" :
+                                             "version from opening could not be kept");
+}
+
+/** File › Restore Version from Opening (decision R6-5). */
+- (void)restoreOpeningVersion
+{
+  WMIOSBlendDocument *document = [self.document isKindOfClass:WMIOSBlendDocument.class] ?
+                                     (WMIOSBlendDocument *)self.document :
+                                     nil;
+  NSURL *version = document ? launcherOpeningVersion(document.fileURL) : nil;
+  NSDate *date = nil;
+  [version getResourceValue:&date forKey:NSURLContentModificationDateKey error:nil];
+  UIViewController *presenter = wm_apple_ios_top_presenter();
+  if (!version || ![NSFileManager.defaultManager fileExistsAtPath:version.path]) {
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:@"No Version from Opening"
+                         message:@"This document has no earlier version kept."
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                              style:UIAlertActionStyleDefault
+                                            handler:nil]];
+    [presenter presentViewController:alert animated:YES completion:nil];
+    return;
+  }
+  NSDateFormatter *format = [[[NSDateFormatter alloc] init] autorelease];
+  format.dateStyle = NSDateFormatterMediumStyle;
+  format.timeStyle = NSDateFormatterShortStyle;
+  UIAlertController *alert = [UIAlertController
+      alertControllerWithTitle:@"Restore Version from Opening"
+                       message:[NSString stringWithFormat:@"“%@” goes back to how it was when it "
+                                                          @"was opened (%@). The work since is "
+                                                          @"kept as Recovered Work.",
+                                                          document.fileURL.lastPathComponent,
+                                                          [format stringFromDate:date]]
+                preferredStyle:UIAlertControllerStyleAlert];
+  [alert addAction:[UIAlertAction
+                       actionWithTitle:@"Restore"
+                                 style:UIAlertActionStyleDestructive
+                               handler:^(UIAlertAction *) {
+                                 GHOST_ios_engine_perform([](blender::bContext *C) {
+                                   if (C) {
+                                     blender::WM_apple_ios_document_set_aside(
+                                         C, "restore version from opening");
+                                   }
+                                 });
+                                 [document retain];
+                                 NSURL *target_url = [document.fileURL retain];
+                                 /* Off the main queue: the document, as the file's presenter,
+                                  * may save first, which needs the main queue. */
+                                 dispatch_async(
+                                     dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                                       NSError *error = nil;
+                                       __block BOOL replaced = NO;
+                                       NSFileCoordinator *coordinator = [[[NSFileCoordinator alloc]
+                                           initWithFilePresenter:nil] autorelease];
+                                       [coordinator
+                                           coordinateWritingItemAtURL:target_url
+                                                              options:
+                                                                  NSFileCoordinatorWritingForReplacing
+                                                                error:&error
+                                                           byAccessor:^(NSURL *target) {
+                                                             NSFileManager *files =
+                                                                 NSFileManager.defaultManager;
+                                                             NSURL *staged = [version
+                                                                 URLByAppendingPathExtension:
+                                                                     @"restore"];
+                                                             [files removeItemAtURL:staged
+                                                                              error:nil];
+                                                             replaced =
+                                                                 [files copyItemAtURL:version
+                                                                                toURL:staged
+                                                                                error:nil] &&
+                                                                 [files replaceItemAtURL:target
+                                                                           withItemAtURL:staged
+                                                                          backupItemName:nil
+                                                                                 options:0
+                                                                        resultingItemURL:nil
+                                                                                   error:nil];
+                                                           }];
+                                       NSString *problem = [error.localizedDescription copy];
+                                       dispatch_async(dispatch_get_main_queue(), ^{
+                                         WM_native_ui_log(
+                                             "document",
+                                             replaced ? "restored the version from opening" :
+                                                        "could not restore the version from opening");
+                                         if (replaced) {
+                                           [document reopen:YES];
+                                         }
+                                         else {
+                                           UIAlertController *failed = [UIAlertController
+                                               alertControllerWithTitle:@"Could Not Restore"
+                                                                message:problem ?:
+                                                                            @"The document could "
+                                                                            @"not be replaced."
+                                                         preferredStyle:
+                                                             UIAlertControllerStyleAlert];
+                                           [failed addAction:[UIAlertAction
+                                                                 actionWithTitle:@"OK"
+                                                                           style:
+                                                                               UIAlertActionStyleDefault
+                                                                         handler:nil]];
+                                           [wm_apple_ios_top_presenter()
+                                               presentViewController:failed
+                                                            animated:YES
+                                                          completion:nil];
+                                         }
+                                         [problem release];
+                                         [document release];
+                                         [target_url release];
+                                       });
+                                     });
+                               }]];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                            style:UIAlertActionStyleCancel
+                                          handler:nil]];
+  [presenter presentViewController:alert animated:YES completion:nil];
+}
+
+/** \} */
+
 /** Present Blender's templates; `completion` gets the chosen one, or nil. */
 - (void)chooseTemplate:(void (^)(NSString *app_template))completion
 {
@@ -1140,6 +1462,10 @@ static NSURL *launcherMoveToDocuments(NSURL *source)
   /* A check's copy is never continued in: the next launch opens the person's document. */
   if (bookmark && !_scratch) {
     [NSUserDefaults.standardUserDefaults setObject:bookmark forKey:launcher_open_document_key];
+  }
+  /* The file as it opened, to go back to (ROUND6 SAFE-5, decision R6-5). */
+  if (!_scratch || launcherIsScratch(self.document.fileURL)) {
+    launcherKeepOpeningVersion(self.document.fileURL);
   }
   /* Blender has loaded the file: show it. Its first frames are part of opening: two seconds on,
    * the session marker says open (ROUND6 SAFE-4). */
@@ -1368,6 +1694,15 @@ static NSString *launcherTemplateForAppTemplate(NSString *app_template)
                              .UTF8String);
         break;
       }
+      if ([NSFileManager.defaultManager fileExistsAtPath:url.path] && launcherInsideApp(url) &&
+          !launcherIsScratch(url))
+      {
+        /* Recovered and dropped files are never opened in place, inside folders the person
+         * cannot see or iOS empties: imported into the documents first (ROUND6 SAFE-5). */
+        WM_native_ui_log("document", "open: inside the app, imported into the documents first");
+        [self importAndOpen:url name:url.lastPathComponent];
+        break;
+      }
       if (![NSFileManager.defaultManager fileExistsAtPath:url.path]) {
         WM_native_ui_log("document", "open: no such file");
         UIAlertController *alert = [UIAlertController
@@ -1385,7 +1720,11 @@ static NSString *launcherTemplateForAppTemplate(NSString *app_template)
       break;
     }
     case wmDocumentCommand::Revert:
-      [document reopen:YES];
+      /* Blender's question first; the work is set aside, not deleted (ROUND6 SAFE-5). */
+      [document revertAsked];
+      break;
+    case wmDocumentCommand::Recover:
+      [self presentRecoveredWork:presenter];
       break;
     case wmDocumentCommand::Save:
       [document saveNow];
@@ -1515,6 +1854,11 @@ void wm_apple_ios_launcher_open_failed(UIDocument *document, NSString *reason)
     [document release];
     [reason release];
   });
+}
+
+void wm_apple_ios_launcher_restore_opening_version()
+{
+  [launcher_controller restoreOpeningVersion];
 }
 
 void wm_apple_ios_launcher_adopt_copy(NSURL *copy, NSURL *next_to)
