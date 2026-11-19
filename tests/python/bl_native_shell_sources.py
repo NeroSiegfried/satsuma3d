@@ -1553,4 +1553,21 @@ check('if model.viewportReady && model.desktop {' in window_d1 and 'controlsShow
       "R6 DESK-1: the Desktop Interface's cluster is always drawn there, with the way back, keys, Undo, the "
       "touch setting, jobs, messages, and the waiting operation's ends folded or not")
 
+# ROUND6 DESK-2 (H4, A5; decision R6-7): in Blender's own interface a hold that ends without moving
+# is a right-click there; a hold that moves is the control's drag. The hold presses nothing; the lift
+# sends the right button at where the finger began; a finger's button released there ends a latched
+# Shift, Ctrl or Alt, as on the tool. The harness scenario `hold` places every right-button item and
+# opens a menu at each kind of interface place.
+hold_d2 = objc_method(ghost_r6, '- (void)interfaceHoldPress')
+ended_d2 = objc_method(ghost_r6, '- (void)interfaceTouchEnded:(CGPoint)point time:(CFTimeInterval)time')
+moved_d2 = objc_method(ghost_r6, '- (void)interfaceTouchMoved:(NSArray<NSValue *> *)samples time:(CFTimeInterval)time')
+right_d2 = objc_method(ghost_r6, '- (void)rightClickInterface')
+buttons_d2 = objc_method(ghost_r6, '- (void)sendPointerButtons:(UIEventButtonMask)buttons')
+check('pressInterface' not in hold_d2 and 'interface_state = IOS_INTERFACE_HELD;' in hold_d2 and
+      'state == IOS_INTERFACE_HELD' in ended_d2 and '[self rightClickInterface];' in ended_d2 and
+      'UIEventButtonMaskSecondary' in right_d2 and 'interface_start' in right_d2 and
+      moved_d2.index('IOS_INTERFACE_HELD') < moved_d2.index('[self pressInterface];') and
+      'GHOST_ios_sticky_action_ended(window);' in buttons_d2,
+      "R6 DESK-2: a hold on Blender's interface is a right-click if it lifts there, the control's drag if it moves")
+
 print('PASS: native shell sources ' + json.dumps(checks))

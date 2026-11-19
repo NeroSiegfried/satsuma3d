@@ -7503,6 +7503,23 @@ extern "C" bool WM_native_ui_touch_query(const int x,
 }
 
 /**
+ * The kind of place (#NativeTouchKind) a region of an editor is for a finger, by their RNA
+ * identifiers (`PROPERTIES`, `WINDOW`), for the Mac harness's `hold` scenario (ROUND6 DESK-2): a
+ * key map's right-button items are reached by a hold where this says interface. -1 for an
+ * identifier that names nothing.
+ */
+extern "C" int WM_native_ui_test_touch_kind(const char *space_name, const char *region_name)
+{
+  int space = 0, region = 0;
+  if (!RNA_enum_value_from_identifier(rna_enum_space_type_items, space_name, &space) ||
+      !RNA_enum_value_from_identifier(rna_enum_region_type_items, region_name, &region))
+  {
+    return -1;
+  }
+  return int(bridge_touch_region_kind(eSpace_Type(space), eRegion_Type(region)));
+}
+
+/**
  * The first window's state for a finger landing (ROUND6 TOUCH-1, TOUCH-2), for the Mac harness's
  * `fingers` scenario: \a r_values gets whether an operator waits, whether a gizmo's handle is
  * highlighted, and Blender's cursor in GHOST's client pixels. False before the first pass.

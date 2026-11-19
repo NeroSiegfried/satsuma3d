@@ -66,8 +66,8 @@
  * - `touch <x> <y>|@<WHERE>[#<type>[:last]] tap|what|hold [<dx> <dy>]|drag <dx> <dy> [flick]`: a
  *   finger on Blender's own
  *   interface at that point of the window, in points (ROUND5 13B): it enters where a finger's touch
- *   on interface does and is told apart the same way (a tap; a hold, then a drag if given; a drag
- *   over 0.3 s, ended still or as a flick). `what` only logs what Blender says is there. It proves
+ *   on interface does and is told apart the same way (a tap; a hold, then a drag if given, or alone
+ *   a right-click, ROUND6 DESK-2; a drag over 0.3 s, ended still or as a flick). `what` only logs what Blender says is there. It proves
  *   the telling-apart and Blender's answers, not UIKit's delivery;
  * - `mark <text>`: a line in the log, to count what a group of steps wrote (ROUND5 10A);
  * - `document <step>`: the document checks of ROUND5 9D.5, in the scratch document only and on

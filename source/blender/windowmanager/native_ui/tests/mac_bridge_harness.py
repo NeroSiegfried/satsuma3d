@@ -3673,6 +3673,135 @@ def _toolbar_node(key):
     return next((n for n in top.get("children", []) if n["key"] == key), {})
 
 
+# ROUND6 DESK-2 (H4, A5; decision R6-7): in Blender's own interface a hold that ends without moving
+# is a right-click there. The class: every key-map item on the right button. Each is placed by the
+# kind of place its region is for a finger (the map's own rule): interface, where a hold reaches it,
+# or a canvas, whose editor's header menus carry the same commands (H4); a region the rule does not
+# place fails. Then, with Blender's own interface on, the right-click GHOST sends after a hold (a
+# finger's right button at the point) must open a menu at each kind of interface place: a number
+# field, a header's empty space, a workspace tab, a header's button, an Outliner row and an area's
+# edge.
+TOUCH_KIND = getattr(lib, "WM_native_ui_test_touch_kind", None)
+if TOUCH_KIND is not None:
+    TOUCH_KIND.restype = ctypes.c_int
+    TOUCH_KIND.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+hold_state = {}
+
+
+def _menu_open():
+    return any(where == "MENU" for where, kind, _t, _r in _touch_map() if kind == "zone")
+
+
+def _right_click(window, x, y):
+    _simulate(window, 'MOUSEMOVE', 'NOTHING', x, y)
+    _simulate(window, 'RIGHTMOUSE', 'PRESS', x, y)
+    _simulate(window, 'RIGHTMOUSE', 'RELEASE', x, y)
+
+
+def _hold_places():
+    rows = _touch_map()
+    buttons = [(where, int(kind), rect) for where, kind, _t, rect in rows if kind != "zone"]
+    zones = {where: rect for where, kind, _t, rect in rows if kind == "zone"}
+    places = []
+    numbers = [r for w, k, r in buttons if w == "PROPERTIES WINDOW" and k == BUTTON_NUM]
+    if numbers:
+        places.append(("a number field (Properties)", _centre(numbers[0])))
+    # A header's empty space (its own menu: show, hide, flip). A panel's header has a menu only in a
+    # region with category tabs, as on the desktop.
+    bar = zones.get("VIEW_3D HEADER")
+    if bar:
+        header_buttons = [r for w, k, r in buttons if w == "VIEW_3D HEADER"]
+        y = (bar[1] + bar[3]) / 2
+        for x in range(bar[2] - 4, bar[0], -4):
+            if not any(r[0] - 4 <= x <= r[2] + 4 for r in header_buttons):
+                places.append(("a header's empty space (3D View)", (x, y)))
+                break
+    tabs = [r for w, k, r in buttons if w == "TOPBAR HEADER" and k == BUTTON_TAB]
+    if tabs:
+        places.append(("a workspace tab", _centre(tabs[-1])))
+    header = [r for w, k, r in buttons if w == "VIEW_3D HEADER"]
+    if header:
+        places.append(("a header's button (3D View)", _centre(header[0])))
+    outliner = zones.get("OUTLINER WINDOW")
+    if outliner:
+        places.append(("an Outliner row", (outliner[0] + 60, outliner[3] - 12)))
+        # The edge between the Outliner and Properties, below it.
+        places.append(("the edge between the Outliner and Properties", ((outliner[0] + outliner[2]) / 2, outliner[1] - 1)))
+    return places
+
+
+def tick_hold():
+    global step
+    try:
+        pump()
+        step += 1
+        problems = report.setdefault("problems", [])
+        if TOUCH is None or TOUCH_KIND is None:
+            problems.append("this build has no touch map or WM_native_ui_test_touch_kind")
+            finish("error")
+            return None
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            subs["settings"] = subscribe("settings")
+            # The class: every right-button item, placed by its region's kind for a finger.
+            kinds = {1: "3D View", 2: "canvas", 3: "interface"}
+            placed, unplaced = {}, []
+            for keymap in bpy.context.window_manager.keyconfigs.active.keymaps:
+                for item in keymap.keymap_items:
+                    if item.type != 'RIGHTMOUSE' or not item.active or item.map_type != 'MOUSE':
+                        continue
+                    kind = TOUCH_KIND(keymap.space_type.encode(), keymap.region_type.encode())
+                    entry = "%s: %s" % (keymap.name, item.idname)
+                    if kind in kinds:
+                        placed.setdefault(kinds[kind], []).append(entry)
+                    elif keymap.region_type == 'WINDOW' and keymap.space_type == 'EMPTY':
+                        # Window and screen key maps: where the pointer is decides, any place.
+                        placed.setdefault("any place", []).append(entry)
+                    else:
+                        unplaced.append("%s (%s %s)" % (entry, keymap.space_type, keymap.region_type))
+            report["right-button items by place"] = {key: len(value) for key, value in placed.items()}
+            report["right-button items on canvases (their header menus, H4)"] = sorted(placed.get("canvas", []))
+            for entry in unplaced:
+                problems.append("DESK-2: a right-button item in a region no rule places: %s" % entry)
+            if len(placed.get("interface", [])) < 5:
+                problems.append("DESK-2: fewer than five right-button items found on interface; the sweep proves little")
+            return 0.5
+        if step == 2:
+            set_bool(subs["settings"], "desktop", True, 1500)
+            return 1.0
+        if step < 5:
+            return 0.5
+        window = bpy.context.window_manager.windows[0]
+        if "places" not in hold_state:
+            hold_state["places"] = _hold_places()
+            hold_state["results"] = report.setdefault("menus", {})
+            if len(hold_state["places"]) < 6:
+                problems.append("DESK-2: only %d of the six kinds of place found" % len(hold_state["places"]))
+        current = hold_state.pop("current", None)
+        if current:
+            opened = _menu_open()
+            hold_state["results"][current] = "menu" if opened else "nothing"
+            if not opened:
+                problems.append("DESK-2: a right-click on %s opened no menu" % current)
+            _simulate(window, 'ESC', 'PRESS', 4, 4)
+            _simulate(window, 'ESC', 'RELEASE', 4, 4)
+            return 0.5
+        if hold_state["places"]:
+            name, (x, y) = hold_state["places"].pop(0)
+            if _menu_open():
+                problems.append("DESK-2: a menu was still open before %s" % name)
+            _right_click(window, x, y)
+            hold_state["current"] = name
+            return 0.6
+        finish("done" if not problems else "error")
+        return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
 def _touchstart_enter_for(idname):
     mode, name = _touchstart_mode(idname)
     _touchstart_enter(mode, name)
@@ -3686,5 +3815,5 @@ bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets
                          "tolerance": tick_tolerance, "waiting": tick_waiting,
                          "touchstart": tick_touchstart, "jobs": tick_jobs,
                          "renderprogress": tick_render_progress, "busy": tick_busy,
-                         "renderkeep": tick_render_keep, "desk": tick_desk}.get(SCENARIO, tick_actions),
+                         "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

@@ -31,7 +31,7 @@ def main():
     parser.add_argument("--flatbuffers-python", required=True,
                         help="A directory holding the `flatbuffers` Python package")
     parser.add_argument("--scenario", default="actions", choices=("actions", "tabs", "menus", "mirror", "reveal", "knife", "precision", "material",
-                                 "extensions", "keys", "insets", "touch", "numinput", "render", "fingers", "undo", "tolerance", "waiting", "touchstart", "jobs", "renderprogress", "busy", "renderkeep", "desk"),
+                                 "extensions", "keys", "insets", "touch", "numinput", "render", "fingers", "undo", "tolerance", "waiting", "touchstart", "jobs", "renderprogress", "busy", "renderkeep", "desk", "hold"),
                         help="`actions`: the palette, long press and radial. `tabs`: every Properties tab in every mode")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory() as directory:
@@ -50,7 +50,7 @@ def main():
             env["BLENDER_SYSTEM_EXTENSIONS"] = root
             env["BLENDER_USER_RESOURCES"] = os.path.join(directory, "user")
             extra = ["--offline-mode"]
-        if args.scenario in ("fingers", "undo", "tolerance", "waiting", "touchstart", "desk"):
+        if args.scenario in ("fingers", "undo", "tolerance", "waiting", "touchstart", "desk", "hold"):
             # Events made by the scenario, as a finger's would arrive (ROUND6 TOUCH).
             extra = ["--enable-event-simulate"]
         subprocess.run([args.blender, "--factory-startup", *extra, "--python", os.path.join(HERE, "mac_bridge_harness.py"),

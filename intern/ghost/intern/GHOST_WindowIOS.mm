@@ -1941,6 +1941,12 @@ static GHOST_TButton pointer_button(int index)
                                                           pointer_finger ?
                                                               [self fingerTabletData] :
                                                               GHOST_TABLET_DATA_NONE));
+    if (pointer_finger && !(buttons & mask)) {
+      /* A finger's click or right-click on Blender's interface is an action: a latched Shift, Ctrl
+       * or Alt lasts for it, as for one on the tool (ROUND6 TOUCH-8; the interface's path missed
+       * it, found with DESK-2). */
+      GHOST_ios_sticky_action_ended(window);
+    }
   }
   pointer_buttons = buttons;
 }
@@ -2142,8 +2148,11 @@ static NSString *ios_navigation_part_name(const int part)
  *   sent as a trackpad's two fingers send it, from where it began, running on after a flick;
  * - past 10 pt otherwise (across the scrolling, or on a control that takes that direction): the
  *   press at where it began, the moves and the release, as a mouse's;
- * - held still for the hold's time: the press, and what follows is the control's (a panel moved
- *   by its header, a tool's fly-out).
+ * - held still for the hold's time, then moved: the press, and what follows is the control's (a
+ *   panel moved by its header, a tool's fly-out, a row or a colour dragged away, ROUND6 DESK-4);
+ * - held still for the hold's time and lifted without moving: a right-click there (ROUND6 DESK-2,
+ *   decision R6-7), so every context menu Blender has is reached: a property's drivers, keying sets
+ *   and overrides, the Outliner's, a workspace tab's, a header's, an area edge's.
  *
  * Blender says what is under the point (#GHOST_IOSNativeInterface::touch_at). The Pencil stays a
  * pointer everywhere (T6).
@@ -2158,6 +2167,9 @@ enum {
   IOS_INTERFACE_PENDING = 0,
   IOS_INTERFACE_SCROLLING = 1,
   IOS_INTERFACE_PRESSED = 2,
+  /** Held still for the hold's time: a right-click if it lifts there, the control's drag if it
+   * moves (ROUND6 DESK-2). */
+  IOS_INTERFACE_HELD = 3,
 };
 
 /** Blender's answer about a point of the view, in its points. */
@@ -2301,8 +2313,28 @@ enum {
     [self endInterfaceTouch:YES];
     return;
   }
-  [self pressInterface];
+  /* Nothing is pressed yet: lifted here, it is a right-click; moved, the control's drag (ROUND6
+   * DESK-2). A tick says the hold was felt. */
+  interface_state = IOS_INTERFACE_HELD;
+#if !defined(APPLE_TARGET_VISIONOS)
+  if (!interface_scripted) {
+    UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc]
+        initWithStyle:UIImpactFeedbackStyleLight];
+    [feedback impactOccurred];
+    [feedback release];
+  }
+#endif
   [self noteInterfaceGesture:@"hold"];
+}
+
+/** A right-click at where the finger began: Blender opens the context menu that is there, as a
+ * mouse's right button would (ROUND6 DESK-2, decision R6-7). */
+- (void)rightClickInterface
+{
+  [self sendPointerMove:interface_start];
+  [self sendPointerButtons:UIEventButtonMaskSecondary];
+  [self sendPointerButtons:0];
+  [self noteInterfaceGesture:@"right-click"];
 }
 
 /** The touch on interface is over: \a cancelled releases what it pressed and runs nothing on. */
@@ -2361,7 +2393,18 @@ enum {
                                      (point.y - interface_last.y) / dt);
   }
   interface_time = time;
-  if (interface_state == IOS_INTERFACE_PENDING) {
+  if (interface_state == IOS_INTERFACE_HELD) {
+    /* Moved after the hold: the control's drag, from where it began (ROUND6 DESK-2, DESK-4). */
+    const CGPoint travel = CGPointMake(point.x - interface_start.x, point.y - interface_start.y);
+    if (hypot(travel.x, travel.y) > ios_interface_slop) {
+      [self pressInterface];
+      [self noteInterfaceGesture:@"hold, drag"];
+      for (NSValue *sample in samples) {
+        [self sendPointerMove:sample.CGPointValue];
+      }
+    }
+  }
+  else if (interface_state == IOS_INTERFACE_PENDING) {
     const CGPoint travel = CGPointMake(point.x - interface_start.x, point.y - interface_start.y);
     if (hypot(travel.x, travel.y) <= ios_interface_slop) {
       return;
@@ -2405,6 +2448,10 @@ enum {
     [self sendPointerButtons:UIEventButtonMaskPrimary];
     [self sendPointerButtons:0];
     [self noteInterfaceGesture:@"tap"];
+  }
+  else if (state == IOS_INTERFACE_HELD) {
+    /* Held and lifted without moving: a right-click there (ROUND6 DESK-2). */
+    [self rightClickInterface];
   }
   else if (state == IOS_INTERFACE_PRESSED) {
     [self sendPointerMove:point];
