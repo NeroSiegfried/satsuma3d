@@ -2298,8 +2298,11 @@ void redo_write(bContext *C, PanelsData &data, ViewBuilder &builder)
   if (op) {
     write_operator(
         writer, false, [&](Layout &layout) { redo_draw(C, layout); }, [&]() {
+          /* Held here: `fields.label` is a view, and the name a temporary (found by clang's
+           * dangling-assignment warning in the 5.3 clone, `10592fe7415`). */
+          const std::string operator_name = WM_operatortype_name(op->type, op->ptr);
           return builder.top(data.identity, [&](Buffer &buffer, NodeFields &fields) {
-            fields.label = WM_operatortype_name(op->type, op->ptr);
+            fields.label = operator_name;
             return protocol::CreateOperatorDirect(buffer,
                                                   op->type->idname,
                                                   nullptr,
