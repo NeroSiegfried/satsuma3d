@@ -276,6 +276,11 @@ class SCENE_PT_audio(SceneButtonsPanel, Panel):
     bl_label = "Audio"
     bl_options = {'DEFAULT_CLOSED'}
 
+    @classmethod
+    def poll(cls, context):
+        # This build may have no sound (Audaspace off, as on the iPad): its controls are not offered.
+        return bpy.app.build_options.audaspace
+
     def draw(self, context):
         layout = self.layout
         layout.use_property_split = True

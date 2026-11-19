@@ -1180,8 +1180,52 @@ static intptr_t wm_operator_register_active_id(const wmWindowManager *wm)
   return -1;
 }
 
+/**
+ * What this build cannot do is not offered (ROUND6 FILES-6, decision R6-13): an operator whose
+ * backend is compiled out, or that the platform cannot carry out, fails its poll with the reason,
+ * so every button, menu item and search entry is greyed and says why, instead of asking for a
+ * file and then failing, or finishing having done nothing. One table, by build option and
+ * platform; `tests/ios/test_build_capabilities.py` fails on an operator whose `exec` reports
+ * "Compiled without" or returns without work in a build without its option, that is not here.
+ */
+static const char *wm_operator_unavailable(const wmOperatorType *ot)
+{
+  static const struct {
+    const char *idname;
+    const char *reason;
+  } unavailable[] = {
+#ifndef WITH_AUDASPACE
+      /* UNAVAILABLE WITH_AUDASPACE */
+      {"SOUND_OT_open", N_("This build has no sound")},
+      {"SOUND_OT_open_mono", N_("This build has no sound")},
+      {"SOUND_OT_mixdown", N_("This build has no sound")},
+      {"GRAPH_OT_sound_to_samples", N_("This build has no sound")},
+      {"SEQUENCER_OT_sound_strip_add", N_("This build has no sound")},
+      {"OBJECT_OT_speaker_add", N_("This build has no sound")},
+#endif
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+      /* UNAVAILABLE APPLE_TARGET_IOS: the system clipboard takes text here (GHOST_SystemIOS). */
+      {"IMAGE_OT_clipboard_copy", N_("Images cannot be copied to the clipboard on iPad")},
+#endif
+      {nullptr, nullptr},
+  };
+  if (unavailable[0].idname == nullptr) {
+    return nullptr;
+  }
+  for (int i = 0; unavailable[i].idname; i++) {
+    if (STREQ(ot->idname, unavailable[i].idname)) {
+      return unavailable[i].reason;
+    }
+  }
+  return nullptr;
+}
+
 bool WM_operator_poll(bContext *C, wmOperatorType *ot)
 {
+  if (const char *reason = wm_operator_unavailable(ot)) {
+    CTX_wm_operator_poll_msg_set(C, TIP_(reason));
+    return false;
+  }
 
   for (wmOperatorTypeMacro &otmacro : ot->macro) {
     wmOperatorType *ot_macro = WM_operatortype_find(otmacro.idname, false);

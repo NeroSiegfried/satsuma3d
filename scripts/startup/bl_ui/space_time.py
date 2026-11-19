@@ -232,9 +232,11 @@ class TIME_PT_playback(TimelinePanelButtons, Panel):
         scene = context.scene if not is_sequencer else context.sequencer_scene
 
         layout.prop(scene, "sync_mode", text="Sync")
-        col = layout.column(heading="Audio")
-        col.prop(scene, "use_audio_scrub", text="Scrubbing")
-        col.prop(scene, "use_audio")
+        # This build may have no sound (Audaspace off, as on the iPad): its controls are not offered.
+        if bpy.app.build_options.audaspace:
+            col = layout.column(heading="Audio")
+            col.prop(scene, "use_audio_scrub", text="Scrubbing")
+            col.prop(scene, "use_audio")
 
         col = layout.column(heading="Playback")
         col.prop(scene, "lock_frame_selection_to_range", text="Limit to Frame Range")

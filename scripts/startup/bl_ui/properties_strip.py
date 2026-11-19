@@ -602,6 +602,9 @@ class STRIP_PT_scene_sound(StripButtonsPanel, Panel):
 
     @classmethod
     def poll(cls, context):
+        # This build may have no sound (Audaspace off, as on the iPad): its controls are not offered.
+        if not bpy.app.build_options.audaspace:
+            return False
         strip = context.active_strip
         if not strip:
             return False
@@ -822,6 +825,9 @@ class STRIP_PT_adjust_sound(StripButtonsPanel, Panel):
 
     @classmethod
     def poll(cls, context):
+        # This build may have no sound (Audaspace off, as on the iPad): its controls are not offered.
+        if not bpy.app.build_options.audaspace:
+            return False
         strip = context.active_strip
         if not strip:
             return False

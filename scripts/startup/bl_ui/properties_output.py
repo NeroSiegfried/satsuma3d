@@ -629,6 +629,9 @@ class RENDER_PT_encoding_audio(RenderOutputButtonsPanel, Panel):
 
     @classmethod
     def poll(cls, context):
+        # This build may have no sound (Audaspace off, as on the iPad): its controls are not offered.
+        if not bpy.app.build_options.audaspace:
+            return False
         rd = context.scene.render
         return rd.image_settings.file_format in {'FFMPEG', 'XVID', 'H264', 'THEORA'}
 

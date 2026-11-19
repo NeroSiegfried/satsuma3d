@@ -684,6 +684,11 @@ class USERPREF_PT_system_sound(SystemPanel, CenterAlignMixIn, Panel):
     bl_label = "Sound"
     bl_options = {'DEFAULT_CLOSED'}
 
+    @classmethod
+    def poll(cls, context):
+        # This build may have no sound (Audaspace off, as on the iPad): its controls are not offered.
+        return bpy.app.build_options.audaspace
+
     def draw_centered(self, context, layout):
         prefs = context.preferences
         system = prefs.system

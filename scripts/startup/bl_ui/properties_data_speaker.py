@@ -17,7 +17,8 @@ class DataButtonsPanel:
     @classmethod
     def poll(cls, context):
         engine = context.engine
-        return context.speaker and (engine in cls.COMPAT_ENGINES)
+        # This build may have no sound (Audaspace off, as on the iPad): its controls are not offered.
+        return bpy.app.build_options.audaspace and context.speaker and (engine in cls.COMPAT_ENGINES)
 
 
 class DATA_PT_context_speaker(DataButtonsPanel, Panel):
