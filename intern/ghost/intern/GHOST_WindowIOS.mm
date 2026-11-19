@@ -3641,6 +3641,13 @@ static bool ios_momentum_stopped(const CGPoint velocity)
     /* Set an initial distance value. */
     CGFloat point_distance = [sender getScaledDistance:window];
     [sender setCachedDistance:point_distance];
+    /* Over Blender's interface two fingers scroll, as a trackpad's do, and never zoom the panels,
+     * which only Home would set back (ROUND6 DESK-4, finding H15). A canvas and the 3D View zoom. */
+    zoom_place = [self touchAnswerAt:[sender locationInView:window->getView()]].place;
+  }
+  else if (sender.state == UIGestureRecognizerStateChanged && zoom_place == GHOST_kIOSPlaceInterface)
+  {
+    /* Nothing: see above. */
   }
   else if (sender.state == UIGestureRecognizerStateChanged) {
 

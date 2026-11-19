@@ -350,6 +350,16 @@ void ED_screens_init(bContext *C, Main *bmain, wmWindowManager *wm);
  * Only for edge lines between areas.
  */
 void ED_screen_draw_edges(wmWindow *win);
+/**
+ * Where a press takes an edge between areas, as #screen_geom_find_active_scredge has them: one
+ * rectangle a movable edge, in window coordinates, the screen's then the global areas', into
+ * \a r_rects (at most \a rects_max); how many. For a finger's map of what it meets (ROUND6 DESK-4,
+ * finding H9). None while edges are locked.
+ */
+int ED_screen_edges_touch_rects(const wmWindow *win,
+                                const bScreen *screen,
+                                rcti *r_rects,
+                                int rects_max);
 
 /**
  * Make this screen usable.

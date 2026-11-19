@@ -1601,4 +1601,36 @@ check('GHOST_kKeyTextEdit' in change_d3 and 'onscreen_keyboard_active' in change
       'wm_apple_ios_window_key_input(model.window, 2)' in cluster_d1 + (SWIFT / 'DesktopCluster.swift').read_text(encoding='utf-8'),
       "R6 DESK-3: fields send text as it changes and clear the keyboard; key-taking editors get a keyboard of keys")
 
+# ROUND6 DESK-4 (H8, H9, H11, H15, C12): Stage 13's contract amended. A tap in any canvas presses,
+# whatever the touch setting (Pencil Only's tap is a click wherever it lands, TOUCH-1); lists of rows
+# are interface. The map asks Blender's own order: action zones (every type of `ED_screen_types.hh`
+# placed), the edges between areas, a region's scroll-bars and time scrub, then the region; each of
+# those the control's both ways. What Blender drags away (rows, previews, swatches) takes no drag:
+# the drag begins after a hold. A finger's pinch over interface zooms nothing. A finger on interface
+# is a finger's (TOUCH-4's distances). The harness scenario `touch` checks each place and editor.
+screen_types_d4 = (ROOT / 'source/blender/editors/include/ED_screen_types.hh').read_text(encoding='utf-8')
+azones_d4 = screen_types_d4[screen_types_d4.index('/** Action-Zone Type: #AZone.type */'):]
+azones_d4 = re.findall(r'\n  (AZONE_\w+)', azones_d4[:azones_d4.index('};')])
+names_d4 = bridge_text[bridge_text.index('static const char *bridge_touch_action_zone_name('):]
+names_d4 = names_d4[:names_d4.index('\n}\n')]
+update_d4 = bridge_text[bridge_text.index('static void bridge_touch_zones_update(wmWindowManager *wm)\n{'):]
+update_d4 = update_d4[:update_d4.index('\n}\n')]
+tap_d4 = objc_method(ghost_r6, '- (void)handleTap:(GHOSTUITapGestureRecognizer *)sender\n{')
+zoom_d4 = objc_method(ghost_r6, '- (void)handleZoom:(GHOSTUIPinchGestureRecognizer *)sender')
+takes_d4 = touch_source[touch_source.index('TouchTakes button_type_touch_takes('):]
+takes_d4 = takes_d4[:takes_d4.index('\n}\n')]
+rows_d4 = takes_d4[takes_d4.index('case ButtonType::ListRow:'):]
+check(len(azones_d4) >= 5 and all('case %s:' % name in names_d4 for name in azones_d4) and
+      'default:' not in names_d4 and
+      0 < update_d4.index('area->actionzones') < update_d4.index('ED_screen_edges_touch_rects(') <
+      update_d4.index('bridge_touch_region_places_add(') < update_d4.index('bridge_touch_zone_add(zones, win, area, region)') and
+      'view2d_scroller_window_rects(' in bridge_text and 'ED_time_scrub_event_in_region_poll' in bridge_text and
+      'draggable' not in takes_d4 and rows_d4[rows_d4.index('return'):].startswith('return TouchTakes::None;'),
+      "R6 DESK-4: the map asks Blender's order, every action zone placed (%s); rows drag after a hold" % azones_d4)
+check('touchAnswerAt' not in tap_d4 and 'place' not in tap_d4 and
+      'zoom_place == GHOST_kIOSPlaceInterface' in zoom_d4 and
+      'static constexpr CGFloat ios_interface_slop = 10.0;' in ghost_r6 and
+      '[self fingerTabletData]' in objc_method(ghost_r6, '- (void)sendPointerButtons:(UIEventButtonMask)buttons'),
+      "R6 DESK-4: a tap presses in every canvas, a pinch over interface zooms nothing, a finger's distances")
+
 print('PASS: native shell sources ' + json.dumps(checks))

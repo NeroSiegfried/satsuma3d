@@ -450,6 +450,13 @@ char view2d_mouse_in_scrollers_ex(const ARegion *region,
                                   int *r_scroll) ATTR_NONNULL(1, 2, 3, 4);
 char view2d_mouse_in_scrollers(const ARegion *region, const View2D *v2d, const int xy[2])
     ATTR_NONNULL(1, 2, 3);
+/**
+ * The scroll-bars #view2d_mouse_in_scrollers_ex answers for, in window coordinates: \a r_hor and
+ * \a r_vert are emptied where the region has none now. For a finger's map of what it meets
+ * (ROUND6 DESK-4, finding H9).
+ */
+void view2d_scroller_window_rects(const ARegion *region, rcti *r_hor, rcti *r_vert)
+    ATTR_NONNULL(1, 2, 3);
 char view2d_rect_in_scrollers_ex(const ARegion *region,
                                  const View2D *v2d,
                                  const rcti *rect,

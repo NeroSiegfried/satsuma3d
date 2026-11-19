@@ -2744,9 +2744,9 @@ Button *region_but_find_rect_over(const ARegion *region, const rcti *rect_px);
 /** Which directions a control takes a finger's drag for itself (ROUND5 13A, decision 84). */
 enum class TouchTakes : int8_t { None = 0, X = 1, Y = 2, Both = 3 };
 /** For each kind of button, by a closed list (`interface_touch.cc`): numbers, sliders and text
- * take x; scrollbars, colour pickers, curves, colour bands, grips and the like take both; a row of
- * a list or a tree, or a preview, both when \a draggable; the rest none. */
-TouchTakes button_type_touch_takes(ButtonType type, bool draggable);
+ * take x; scrollbars, colour pickers, curves, colour bands, grips and the like take both; the rest
+ * none, rows and previews that drag away included: those are dragged after a hold (ROUND6 DESK-4). */
+TouchTakes button_type_touch_takes(ButtonType type);
 const char *touch_takes_name(TouchTakes takes);
 /** #TouchButton::type of a panel's header, which is no button. */
 #define TOUCH_PANEL_HEADER (-2)

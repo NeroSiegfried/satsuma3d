@@ -80,6 +80,7 @@
 #include "ED_object.hh"
 #include "ED_screen.hh"
 #include "ED_sequencer.hh"
+#include "ED_time_scrub_ui.hh"
 #include "ED_transform.hh"
 #include "ED_undo.hh"
 #include "ED_view3d.hh"
@@ -7292,6 +7293,91 @@ static void bridge_touch_zone_add(std::vector<BridgeTouchZone> &zones,
   zones.push_back(std::move(zone));
 }
 
+/** #ui::TouchButton::type of a place Blender's screen takes before any region: no button. */
+constexpr int8_t BRIDGE_TOUCH_SCREEN_PLACE = -3;
+
+/**
+ * What a press on an action zone does, named for the session log and the checks, or null where a
+ * press does nothing (ROUND6 DESK-4, finding H9). Each type of `ED_screen_types.hh` is placed here:
+ * the sources sweep fails on a new one.
+ */
+static const char *bridge_touch_action_zone_name(const int type)
+{
+  switch (type) {
+    /* Split, join, swap by its drag. */
+    case AZONE_AREA:
+      return "AREA CORNER";
+    /* A region's edge, which resizes it, or a hidden region's tab, which shows it. */
+    case AZONE_REGION:
+      return "REGION EDGE";
+    case AZONE_REGION_QUAD:
+      return "QUAD VIEW CENTRE";
+    /* None on the iPad, whose cluster has the way back (ROUND6 DESK-1); placed for a Mac build. */
+    case AZONE_FULLSCREEN:
+      return "FOCUS MODE CORNER";
+    /* Shows the scroll-bars as a pointer nears: no press of its own. */
+    case AZONE_REGION_SCROLL:
+      return nullptr;
+  }
+  return nullptr;
+}
+
+/**
+ * A place Blender takes a press on before the region under it, \a rect in window pixels: the
+ * control's, both ways (an area's corner or edge, a region's edge, a scroll-bar, the time scrub), so
+ * a finger's drag there is a press and its moves, a hold a right-click (ROUND6 DESK-4, H9).
+ */
+static void bridge_touch_place_add(std::vector<BridgeTouchZone> &zones,
+                                   const wmWindow &win,
+                                   const rcti &rect,
+                                   std::string where)
+{
+  if (BLI_rcti_is_empty(&rect)) {
+    return;
+  }
+  BridgeTouchZone zone;
+  zone.ghost_window = win.runtime->ghostwin;
+  zone.window_height = win.sizey;
+  zone.pixel_size = static_cast<GHOST_IWindow *>(win.runtime->ghostwin)->getNativePixelSize();
+  zone.rect = rect;
+  zone.kind = NativeTouchKind::Interface;
+  zone.buttons.push_back({rect, ui::TouchTakes::Both, BRIDGE_TOUCH_SCREEN_PLACE});
+  zone.where = std::move(where);
+  zones.push_back(std::move(zone));
+}
+
+/** A region's own places before it, in Blender's order: its scroll-bars, then the time scrub of an
+ * animation editor (ROUND6 DESK-4, H9). */
+static void bridge_touch_region_places_add(std::vector<BridgeTouchZone> &zones,
+                                           const wmWindow &win,
+                                           const ScrArea &area,
+                                           const ARegion &region)
+{
+  if (region.runtime == nullptr || !region.runtime->visible || (region.flag & RGN_FLAG_HIDDEN) ||
+      region.winx <= 1 || region.winy <= 1)
+  {
+    return;
+  }
+  const char *space_name = "";
+  const char *region_name = "";
+  RNA_enum_identifier(rna_enum_space_type_items, area.spacetype, &space_name);
+  RNA_enum_identifier(rna_enum_region_type_items, region.regiontype, &region_name);
+  const std::string where = std::string(space_name) + " " + region_name;
+  rcti horizontal, vertical;
+  ui::view2d_scroller_window_rects(&region, &horizontal, &vertical);
+  bridge_touch_place_add(zones, win, vertical, where + " SCROLLBAR");
+  bridge_touch_place_add(zones, win, horizontal, where + " SCROLLBAR");
+  for (const wmEventHandler &handler : region.runtime->handlers) {
+    if (handler.type == WM_HANDLER_TYPE_KEYMAP && handler.poll == ED_time_scrub_event_in_region_poll)
+    {
+      rcti scrub = region.winrct;
+      scrub.ymin = scrub.ymax - int(UI_TIME_SCRUB_MARGIN_Y);
+      bridge_touch_place_add(zones, win, scrub, where + " TIME SCRUB");
+      break;
+    }
+  }
+}
+
 static void bridge_touch_zones_update(wmWindowManager *wm)
 {
   std::vector<BridgeTouchZone> zones;
@@ -7308,10 +7394,27 @@ static void bridge_touch_zones_update(wmWindowManager *wm)
     for (int i = popups.size() - 1; i >= 0; i--) {
       bridge_touch_zone_add(zones, win, nullptr, *popups[i]);
     }
+    /* What the screen takes before any region (ROUND6 DESK-4, finding H9), in Blender's own order:
+     * the action zones, then the edges between areas. */
+    ED_screen_areas_iter (&win, screen, area) {
+      const char *space_name = "";
+      RNA_enum_identifier(rna_enum_space_type_items, area->spacetype, &space_name);
+      for (const AZone &action_zone : area->actionzones) {
+        if (const char *name = bridge_touch_action_zone_name(action_zone.type)) {
+          bridge_touch_place_add(zones, win, action_zone.rect, std::string(space_name) + " " + name);
+        }
+      }
+    }
+    rcti edges[64];
+    const int edges_len = ED_screen_edges_touch_rects(&win, screen, edges, int(std::size(edges)));
+    for (int i = 0; i < edges_len; i++) {
+      bridge_touch_place_add(zones, win, edges[i], "AREA EDGE");
+    }
     ED_screen_areas_iter (&win, screen, area) {
       for (const bool overlap : {true, false}) {
         for (const ARegion &region : area->regionbase) {
           if (bool(region.overlap) == overlap) {
+            bridge_touch_region_places_add(zones, win, *area, region);
             bridge_touch_zone_add(zones, win, area, region);
           }
         }

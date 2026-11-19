@@ -131,6 +131,66 @@ ScrEdge *screen_geom_find_active_scredge(const wmWindow *win,
   return se;
 }
 
+/** The edges of \a area_map a press within \a safety takes, as
+ * #screen_geom_area_map_find_active_scredge tests them. */
+static void screen_geom_area_map_edge_rects(const ScrAreaMap *area_map,
+                                            const rcti *bounds_rect,
+                                            int safety,
+                                            rcti *r_rects,
+                                            const int rects_max,
+                                            int *r_len)
+{
+  CLAMP_MIN(safety, 2);
+  for (ScrEdge &se : area_map->edgebase) {
+    const bool horizontal = screen_geom_edge_is_horizontal(&se);
+    if (horizontal ? !((se.v1->vec.y > bounds_rect->ymin) &&
+                       (se.v1->vec.y < (bounds_rect->ymax - 1))) :
+                     !((se.v1->vec.x > bounds_rect->xmin) &&
+                       (se.v1->vec.x < (bounds_rect->xmax - 1))))
+    {
+      continue;
+    }
+    rcti rect;
+    if (horizontal) {
+      BLI_rcti_init(&rect,
+                    std::min(se.v1->vec.x, se.v2->vec.x),
+                    std::max(se.v1->vec.x, se.v2->vec.x),
+                    se.v1->vec.y - safety,
+                    se.v1->vec.y + safety);
+    }
+    else {
+      BLI_rcti_init(&rect,
+                    se.v1->vec.x - safety,
+                    se.v1->vec.x + safety,
+                    std::min(se.v1->vec.y, se.v2->vec.y),
+                    std::max(se.v1->vec.y, se.v2->vec.y));
+    }
+    if (*r_len < rects_max) {
+      r_rects[(*r_len)++] = rect;
+    }
+  }
+}
+
+int ED_screen_edges_touch_rects(const wmWindow *win,
+                                const bScreen *screen,
+                                rcti *r_rects,
+                                const int rects_max)
+{
+  int len = 0;
+  if (U.app_flag & USER_APP_LOCK_EDGE_RESIZE) {
+    return len;
+  }
+  rcti screen_rect;
+  WM_window_screen_rect_calc(win, &screen_rect);
+  screen_geom_area_map_edge_rects(
+      AREAMAP_FROM_SCREEN(screen), &screen_rect, BORDERPADDING, r_rects, rects_max, &len);
+  rcti win_rect;
+  WM_window_rect_calc(win, &win_rect);
+  screen_geom_area_map_edge_rects(
+      &win->global_areas, &win_rect, int(BORDERPADDING_GLOBAL), r_rects, rects_max, &len);
+  return len;
+}
+
 /**
  * A single pass for moving all screen vertices to fit into \a screen_rect.
  * \return true if another pass should be run.

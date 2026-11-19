@@ -33,7 +33,7 @@ namespace blender::ui {
 #  pragma GCC diagnostic error "-Wswitch"
 #endif
 
-TouchTakes button_type_touch_takes(const ButtonType type, const bool draggable)
+TouchTakes button_type_touch_takes(const ButtonType type)
 {
   /* The list is closed: no `default`, so a new button type fails the build until it is placed
    * (ROUND5 13A.3). */
@@ -60,13 +60,12 @@ TouchTakes button_type_touch_takes(const ButtonType type, const bool draggable)
     case ButtonType::Grip:
     case ButtonType::NodeSocket:
       return TouchTakes::Both;
-    /* A row of a list or a tree, or a preview, takes a drag only when it can be dragged away. */
+    /* Pressed, not dragged: a drag on them scrolls where the region scrolls. What Blender drags
+     * away (a list's or a tree's row, a preview, a colour swatch, a data-block) is dragged after a
+     * hold, so a scroll that begins on it is never taken for a drag (ROUND6 DESK-4, C12). */
     case ButtonType::ListRow:
     case ButtonType::ViewItem:
     case ButtonType::PreviewTile:
-      return draggable ? TouchTakes::Both : TouchTakes::None;
-    /* Pressed, not dragged: a drag on them scrolls where the region scrolls. A colour swatch is
-     * pressed to open its picker (dragging it away as on the desktop needs the hold). */
     case ButtonType::But:
     case ButtonType::Row:
     case ButtonType::Menu:
@@ -155,7 +154,7 @@ void region_touch_buttons(const ARegion *region, Vector<TouchButton> &r_buttons)
         continue;
       }
       r_buttons.append({rect,
-                        button_type_touch_takes(but->type, button_drag_is_draggable(but.get())),
+                        button_type_touch_takes(but->type),
                         int8_t(but->type)});
     }
   }

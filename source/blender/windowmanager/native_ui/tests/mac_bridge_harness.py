@@ -2071,7 +2071,30 @@ def _centre(rect):
     return ((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0)
 
 
+def _point_answering(rect, where):
+    """A point of \a rect where the map answers \a where: places overlap (a corner over an edge, the
+    time scrub over its region), and the map answers the one Blender would take first."""
+    for fy in (0.5, 0.3, 0.7, 0.15, 0.85):
+        for fx in (0.5, 0.3, 0.7, 0.15, 0.85):
+            point = (rect[0] + (rect[2] - rect[0]) * fx, rect[1] + (rect[3] - rect[1]) * fy)
+            if _touch(*point)["where"] == where:
+                return point
+    return _centre(rect)
+
+
 touch_state = {}
+# `ButtonType::ListRow`'s value (UI_interface_c.hh).
+BUTTON_LISTROW = 30
+# ROUND6 DESK-4 (H8): each editor's main region as a finger meets it. Lists of rows are interface (a
+# drag scrolls, a tap presses), as is text; what is drawn on, panned or zoomed is a canvas.
+TOUCH_EDITORS = [
+    ("OUTLINER", "interface"), ("FILES", "interface"), ("SPREADSHEET", "interface"), ("INFO", "interface"),
+    ("TEXT_EDITOR", "interface"), ("CONSOLE", "interface"), ("PROPERTIES", "interface"),
+    ("PREFERENCES", "interface"),
+    ("UV", "canvas"), ("IMAGE_EDITOR", "canvas"), ("ShaderNodeTree", "canvas"), ("DOPESHEET", "canvas"),
+    ("FCURVES", "canvas"), ("NLA_EDITOR", "canvas"), ("SEQUENCE_EDITOR", "canvas"), ("CLIP_EDITOR", "canvas"),
+    ("VIEW_3D", "3D View"),
+]
 
 
 def tick_touch():
@@ -2155,7 +2178,7 @@ def tick_touch():
                 expect("the top bar's last workspace tab", _centre(tabs[-1]), "interface", takes="none")
             timeline = zones.get("DOPESHEET_EDITOR WINDOW")
             if timeline:
-                expect("the timeline (a canvas)", _centre(timeline), "canvas")
+                expect("the timeline (a canvas)", _point_answering(timeline, "DOPESHEET_EDITOR WINDOW"), "canvas")
             # Properties scrolls along y exactly when its content is longer than the region.
             _window = _view3d()[0]
             area = next(a for a in _window.screen.areas if a.type == 'PROPERTIES')
@@ -2178,7 +2201,9 @@ def tick_touch():
             cube = bpy.data.objects["Cube"]
             bpy.context.view_layer.objects.active = cube
             for index in range(12):
-                cube.modifiers.new("Bevel %d" % index, 'BEVEL')
+                # Panels as long as twelve Bevels', without evaluating twelve stacked Bevels (100 to
+                # 135 s on this Mac, which stopped the scenario at its 300 s limit).
+                cube.modifiers.new("Bevel %d" % index, 'BEVEL').show_viewport = False
             area = next(a for a in _window.screen.areas if a.type == 'PROPERTIES')
             area.spaces[0].context = 'MODIFIER'
             for _a in _window.screen.areas:
@@ -2189,6 +2214,64 @@ def tick_touch():
                    "interface", scroll=("y", True))
             expect("Properties on Modifiers, not wider than the region", _centre(zones["PROPERTIES WINDOW"]),
                    "interface", scroll=("x", False))
+            # ROUND6 DESK-4 (H9): what the screen takes before a region, in Blender's order, each the
+            # control's both ways: an area's corner, an edge between areas, a region's edge, a
+            # scroll-bar, the time scrub.
+            places = {}
+            for where, rect in zones.items():
+                for suffix in (" AREA CORNER", "AREA EDGE", " REGION EDGE", " SCROLLBAR", " TIME SCRUB"):
+                    # One of each that the map answers as itself somewhere: an area's corner may
+                    # cover a small region's edge, as it takes the press first in Blender too.
+                    if where.endswith(suffix) and suffix not in places and \
+                            _touch(*_point_answering(rect, where))["where"] == where:
+                        places[suffix] = (where, rect)
+            report["screen places"] = sorted(where for where in zones if any(
+                where.endswith(suffix) for suffix in (" AREA CORNER", "AREA EDGE", " REGION EDGE", " SCROLLBAR", " TIME SCRUB")))
+            for suffix in (" AREA CORNER", "AREA EDGE", " REGION EDGE", " SCROLLBAR", " TIME SCRUB"):
+                if suffix not in places:
+                    problems.append("DESK-4: no%s in the map" % suffix)
+                    continue
+                where, rect = places[suffix]
+                answer = expect("DESK-4: %s" % where, _point_answering(rect, where), "interface", takes="both")
+                if answer["where"] != where:
+                    problems.append("DESK-4: %s answers as %s: a region before it" % (where, answer["where"]))
+            # Material slots: a list whose rows Blender drags away.
+            properties_area = next(a for a in _view3d()[0].screen.areas if a.type == 'PROPERTIES')
+            properties_area.spaces[0].context = 'MATERIAL'
+            properties_area.tag_redraw()
+            return 0.8
+        if step == 9:
+            # A row Blender drags away takes no drag: a scroll begins there, the drag after a hold.
+            rows = [rect for where, kind, _k, rect in buttons if kind in (BUTTON_LISTROW, 35, 48)]
+            report["list rows in the map"] = len(rows)
+            report["Properties' button types on Material"] = sorted({kind for where, kind, _k, _r in buttons
+                                                                    if where == "PROPERTIES WINDOW"})
+            if not rows:
+                # Not every layout shows one; the closed list says what rows take (sources sweep).
+                report["no list row, preview or view item in the map"] = True
+            for rect in rows[:1]:
+                expect("DESK-4: a list's row (material slots)", _centre(rect), "interface", takes="none")
+            # ROUND6 DESK-4 (H8): every editor's main region is placed, row lists as interface.
+            touch_state["editors"] = list(TOUCH_EDITORS)
+            touch_state["area"] = next(a for a in _view3d()[0].screen.areas if a.type == 'DOPESHEET_EDITOR')
+            return 0.1
+        editors = touch_state.get("editors")
+        if editors is not None:
+            area = touch_state["area"]
+            if "checking" in touch_state:
+                ui_type, kind = touch_state.pop("checking")
+                region = next(r for r in area.regions if r.type == 'WINDOW')
+                rect = (region.x, region.y, region.x + region.width, region.y + region.height)
+                answer = expect("DESK-4: %s's main region" % ui_type,
+                                _point_answering(rect, "%s WINDOW" % area.type), kind)
+                cases["DESK-4: %s's main region" % ui_type]["ui_type"] = ui_type
+            if editors:
+                ui_type, kind = editors.pop(0)
+                area.ui_type = ui_type
+                area.tag_redraw()
+                touch_state["checking"] = (ui_type, kind)
+                return 0.5
+            area.ui_type = 'TIMELINE'
             finish("done" if not problems else "error")
             return None
     except Exception:

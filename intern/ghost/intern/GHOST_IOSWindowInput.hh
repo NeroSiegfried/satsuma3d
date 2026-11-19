@@ -297,6 +297,9 @@ typedef struct UserInputEvent {
   bool navigation_from_orbit;
   /* The pinch or twist lost its second finger: the next one starts it afresh, not jumping. */
   bool zoom_restart;
+  /* What a pinch began over (a #GHOST_IOSPlace): over Blender's interface it zooms nothing, the
+   * fingers scroll it (ROUND6 DESK-4, H15). */
+  int zoom_place;
   bool rotation_restart;
 
   /* Keyboard handling. */

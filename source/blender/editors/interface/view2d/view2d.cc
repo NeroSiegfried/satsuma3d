@@ -2042,6 +2042,22 @@ char view2d_rect_in_scrollers_ex(const ARegion *region,
   return 0;
 }
 
+void view2d_scroller_window_rects(const ARegion *region, rcti *r_hor, rcti *r_vert)
+{
+  const View2D *v2d = &region->v2d;
+  const int scroll = view2d_scroll_mapped(v2d->scroll);
+  BLI_rcti_init(r_hor, 0, -1, 0, -1);
+  BLI_rcti_init(r_vert, 0, -1, 0, -1);
+  if (scroll & V2D_SCROLL_HORIZONTAL) {
+    *r_hor = v2d->hor;
+    BLI_rcti_translate(r_hor, region->winrct.xmin, region->winrct.ymin);
+  }
+  if (scroll & V2D_SCROLL_VERTICAL) {
+    *r_vert = v2d->vert;
+    BLI_rcti_translate(r_vert, region->winrct.xmin, region->winrct.ymin);
+  }
+}
+
 char view2d_mouse_in_scrollers(const ARegion *region, const View2D *v2d, const int xy[2])
 {
   int scroll_dummy = 0;
