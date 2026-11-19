@@ -1123,6 +1123,11 @@ static NSString *launcherTemplateForAppTemplate(NSString *app_template)
     case wmDocumentCommand::SaveAs:
       wm_apple_ios_document_save_as(presenter);
       break;
+    case wmDocumentCommand::Reload:
+      /* Allow Execution (ROUND6 SAFE-3): the document again with its scripts, continuing from the
+       * auto-save Blender has just written. */
+      [document reopen:NO];
+      break;
     case wmDocumentCommand::Quit:
       /* As ‹ does: the document saves and closes, the documents show. The app stays. */
       if (wm_apple_ios_launcher_can_show_documents()) {

@@ -79,6 +79,41 @@ EXEC_CALLS = {
         'document object (the backstop does not see it: a write, not a read)',
 }
 
+# Every function in the operator files and the document that runs an operator in the exec
+# context, whatever names it (a string, or an operator type held in a variable, which the
+# string sweep above cannot see: the trust prompt's reload was one, ROUND6 SAFE-3).
+EXEC_SITES = {
+    ('wm_files.cc', 'wm_homefile_read_after_dialog_callback'):
+        'after the close-file dialog of read_homefile\'s invoke, which routes before it on iOS',
+    ('wm_files.cc', 'wm_recover_last_session_after_dialog_callback'):
+        'after the close-file dialog of recover_last_session\'s invoke, which routes before it',
+    ('wm_files.cc', 'wm_block_autorun_warning_reload_with_scripts'):
+        'saves the preferences only; the reload is wm_test_autorun_revert_action_exec',
+    ('wm_files.cc', 'wm_block_autorun_warning_enable_scripts'):
+        'saves the preferences only',
+    ('wm_files.cc', 'wm_test_autorun_revert_action_exec'):
+        'the trust prompt\'s reload: goes through the document first on iOS (ROUND6 SAFE-3)',
+    ('wm_files.cc', 'save_file_overwrite_confirm'):
+        'the overwrite dialog\'s Save, reached from save_mainfile\'s invoke, which routes before it',
+    ('wm_files.cc', 'wm_block_file_close_save'):
+        'the close-file dialog\'s Save, reached from invokes that route before it on iOS',
+    ('wm_operators.cc', 'doc_view_manual_ui_context_exec'):
+        'opens the manual; no file is read or written',
+    ('wm_apple_ios_document.cc', 'wm_document_operator'):
+        'the document\'s own open (readFromURL), which records what it loaded',
+}
+
+# Every caller of wm_file_read_opwrap, with what a read by its exec (past the front door) does
+# to the document: the document's own path is adopted, another path refused (ROUND6 SAFE-3).
+READ_SITES = {
+    'wm_open_mainfile__open': 'open_mainfile\'s exec: the document\'s own open, or a script\'s '
+                              'open: of its own path adopted, of another path refused',
+    'wm_revert_mainfile_exec': 'revert_mainfile\'s exec reads Blender\'s own path, the document\'s: '
+                               'adopted',
+    'WM_file_recover_last_session': 'quit.blend, another path: refused',
+    'wm_recover_auto_save_exec': 'an auto-save, another path: refused',
+}
+
 IOS_BRANCH = '#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS'
 
 
@@ -254,6 +289,47 @@ class DocumentIdentityTest(unittest.TestCase):
                     found.add((str(path.relative_to(ROOT)), match.group(1)))
         unknown = sorted(found - set(EXEC_CALLS))
         self.assertEqual(unknown, [], "These run a file command's exec directly, past the front door")
+
+
+    def test_every_exec_call_is_known(self):
+        found = set()
+        for path in OPERATOR_FILES + [WM / 'intern/wm_apple_ios_document.cc']:
+            for name, body in functions(path.read_text(encoding='utf-8')).items():
+                if re.search(r'WM_operator_\w*call\w*\((?:[^;])*?ExecDefault', body, re.S):
+                    found.add((path.name, name))
+        unknown = sorted(found - set(EXEC_SITES))
+        self.assertEqual(unknown, [], "These run an operator's exec, past the front door: list them "
+                                      "with what they do to the document")
+        self.assertEqual(sorted(set(EXEC_SITES) - found), [], "Listed but no longer found")
+
+    def test_every_read_by_exec_is_known(self):
+        files = self.sources[WM / 'intern/wm_files.cc']
+        found = {name for name, body in functions(files).items() if 'wm_file_read_opwrap(' in body}
+        self.assertEqual(sorted(found - set(READ_SITES)), [], "A new way to read a file by exec")
+        self.assertEqual(sorted(set(READ_SITES) - found), [], "Listed but no longer found")
+
+    def test_the_trust_prompt_reloads_through_the_document(self):
+        files = self.sources[WM / 'intern/wm_files.cc']
+        body = functions(files)['wm_test_autorun_revert_action_exec']
+        self.assertTrue(body.lstrip().startswith(IOS_BRANCH),
+                        "The trust prompt's reload reads the file before the document is asked")
+        self.assertIn('WM_apple_ios_document_reload_with_scripts(C)', body[:body.index('#endif')])
+        doc = functions((WM / 'intern/wm_apple_ios_document.cc').read_text(encoding='utf-8'))
+        reload = doc['WM_apple_ios_document_reload_with_scripts']
+        self.assertLess(reload.index('WM_autosave_write('), reload.index('wmDocumentCommand::Reload'),
+                        "The work since the save is dropped: the auto-save must be written first")
+        self.assertIn('RNA_boolean_set(&props, "use_scripts", true);',
+                      doc['WM_apple_ios_document_open'], "The reopen must run the scripts")
+
+    def test_a_read_of_the_documents_own_file_is_adopted(self):
+        doc = functions((WM / 'intern/wm_apple_ios_document.cc').read_text(encoding='utf-8'))
+        loaded = doc['WM_apple_ios_document_is_loaded']
+        # Same path by exec: adopted, so a save is written.
+        self.assertRegex(loaded, r'BLI_path_cmp\(BKE_main_blendfile_path\(G_MAIN\), document_path\.c_str\(\)\) == 0\)\s*'
+                                 r'\{\s*document_read = WM_file_read_count\(\);')
+        # Another path by exec: still refused.
+        self.assertTrue(loaded.rstrip().endswith('return false;'))
+        self.assertIn('return wmDocumentWrite::Refused;', doc['WM_apple_ios_document_write'])
 
 
 if __name__ == '__main__':

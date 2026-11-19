@@ -97,8 +97,15 @@ bool WM_apple_ios_document_open(bContext *C,
  * #wmDocumentWrite::Failed: `r_error` has Blender's reason (ROUND6 SAFE-1). */
 wmDocumentWrite WM_apple_ios_document_write(
     bContext *C, const char *filepath, bool preview, bool when_idle, std::string &r_error);
-/** Whether what Blender has loaded is the file the document opened, see #WM_file_read_count. */
+/** Whether what Blender has loaded is the file the document opened, see #WM_file_read_count; a
+ * read of the document's own file again is adopted (ROUND6 SAFE-3). */
 bool WM_apple_ios_document_is_loaded();
+/**
+ * The trust prompt's reload with scripts, through the document (ROUND6 SAFE-3): Blender's
+ * auto-save written first so no work is dropped, then the document reopened with its scripts on.
+ * False outside a document window, where Blender reloads by itself.
+ */
+bool WM_apple_ios_document_reload_with_scripts(bContext *C);
 /** Write what Blender has loaded to `filepath` as a copy, for Save a Copy: the document and its
  * auto-save are left as they are. */
 bool WM_apple_ios_document_copy_write(bContext *C, const char *filepath, std::string &r_error);

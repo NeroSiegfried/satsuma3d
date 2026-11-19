@@ -36,6 +36,12 @@ enum class wmDocumentCommand : int8_t {
   SaveAs,
   /** The document saved and closed, back to the documents. Never an exit. */
   Quit,
+  /**
+   * The document again with its scripts allowed, keeping the work since it was saved: the trust
+   * prompt's Allow Execution, which reloads the file (ROUND6 SAFE-3). Blender's auto-save is
+   * written first, so the document continues from it.
+   */
+  Reload,
 };
 
 /**

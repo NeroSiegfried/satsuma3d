@@ -4504,6 +4504,15 @@ void wm_test_autorun_revert_action_set(wmOperatorType *ot, PointerRNA *ptr)
 
 void wm_test_autorun_revert_action_exec(bContext *C)
 {
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* In a document window the reload goes through the document, as Revert does (ROUND6 SAFE-3):
+   * reading the file here, by `exec`, would count as another file loaded and every later save
+   * would be refused; and it would drop the work since the document was saved. */
+  if (WM_apple_ios_document_reload_with_scripts(C)) {
+    wm_test_autorun_revert_action_set(nullptr, nullptr);
+    return;
+  }
+#endif
   wmOperatorType *ot = wm_test_autorun_revert_action_data.ot;
   PointerRNA *ptr = wm_test_autorun_revert_action_data.ptr;
 

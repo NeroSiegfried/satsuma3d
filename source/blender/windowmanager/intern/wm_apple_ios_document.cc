@@ -417,10 +417,46 @@ static void document_hold(const Main *bmain, const char *filepath, wmDocumentOpe
  */
 static uint64_t document_read = UINT64_MAX;
 static std::string document_path;
+/** The next open of the document runs its scripts: Allow Execution's reload (ROUND6 SAFE-3). */
+static bool document_open_with_scripts = false;
 
 bool WM_apple_ios_document_is_loaded()
 {
-  return document_read != UINT64_MAX && document_read == WM_file_read_count();
+  if (document_read == UINT64_MAX) {
+    return false;
+  }
+  if (document_read == WM_file_read_count()) {
+    return true;
+  }
+  /* Blender read the document's own file again by itself, through an operator's `exec` (a
+   * script's `revert_mainfile()`, `open_mainfile()` of the same path): what is loaded is the
+   * document's, so it is adopted, not refused as another file (ROUND6 SAFE-3). Another path is
+   * still refused. */
+  if (!document_path.empty() && G_MAIN &&
+      BLI_path_cmp(BKE_main_blendfile_path(G_MAIN), document_path.c_str()) == 0)
+  {
+    document_read = WM_file_read_count();
+    WM_native_ui_session_log("document", "Blender read the document's own file again: adopted");
+    return true;
+  }
+  return false;
+}
+
+bool WM_apple_ios_document_reload_with_scripts(bContext *C)
+{
+  if (G.background || document_path.empty() || !WM_apple_ios_document_is_loaded()) {
+    return false;
+  }
+  /* The work since the document was saved, and recovered work, goes into Blender's auto-save
+   * first: the reopen continues from it, see #wm_apple_ios_autosave_newer. Reading the file
+   * itself, as Blender's own reload does, would drop it. */
+  wmWindowManager *wm = CTX_wm_manager(C);
+  Main *bmain = CTX_data_main(C);
+  if (wm && bmain && (!wm->file_saved || bmain->recovered)) {
+    WM_autosave_write(wm, bmain);
+  }
+  document_open_with_scripts = true;
+  return WM_apple_ios_document_command(C, wmDocumentCommand::Reload, "");
 }
 
 bool WM_apple_ios_document_open(bContext *C,
@@ -438,6 +474,10 @@ bool WM_apple_ios_document_open(bContext *C,
   if (template_document) {
     RNA_boolean_set(&props, "use_scripts", false);
   }
+  else if (document_open_with_scripts) {
+    RNA_boolean_set(&props, "use_scripts", true);
+  }
+  document_open_with_scripts = false;
   ReportList reports;
   BKE_reports_init(&reports, RPT_STORE);
   const bool success = wm_document_operator(C, "WM_OT_open_mainfile", &props, &reports);
@@ -470,7 +510,9 @@ bool WM_apple_ios_document_open(bContext *C,
   r_opened.recovered = success && CTX_data_main(C)->recovered;
   if (success) {
     document_read = WM_file_read_count();
-    document_path = filepath;
+    /* As Blender holds it, to know a later read of the same file, see
+     * #WM_apple_ios_document_is_loaded. */
+    document_path = BKE_main_blendfile_path(CTX_data_main(C));
     document_hold(CTX_data_main(C), filepath, r_opened);
   }
   WM_native_ui_session_log(
@@ -628,6 +670,8 @@ static const char *document_command_name(const wmDocumentCommand command)
       return "save as";
     case wmDocumentCommand::Quit:
       return "quit";
+    case wmDocumentCommand::Reload:
+      return "reload with scripts";
   }
   return "?";
 }
