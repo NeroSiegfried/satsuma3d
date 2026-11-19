@@ -328,6 +328,39 @@ if(WITH_PYTHON)
   endif()
 endif()
 
+if(WITH_APPLE_CROSSPLATFORM)
+  # The iPad app carries no OpenSSL (ROUND5 8M, decision 94). The prebuilt Python builds `_ssl` and
+  # `_hashlib` in, and they are all that link `libssl` and `libcrypto`; link a copy of the library
+  # without them, derived here into the build directory (a build product: nothing is committed).
+  # `hashlib` then uses Python's own hashes; `import ssl` raises `ImportError`.
+  # `release/ios/check_no_encryption_library.py` proves the result on the built program.
+  option(WITH_PLATYPUS_PYTHON_OPENSSL
+    "iPad: link Python's _ssl and _hashlib, and with them OpenSSL (build 1's library)" OFF)
+  if(WITH_PYTHON AND NOT WITH_PLATYPUS_PYTHON_OPENSSL)
+    set(_platypus_python_config "${LIBDIR}/python/lib/python${PYTHON_VERSION}/config-${PYTHON_VERSION}-arm64-iphoneos")
+    set(_platypus_derive "${CMAKE_SOURCE_DIR}/release/ios/derive_python_without_openssl.py")
+    execute_process(
+      COMMAND "${PYTHON_EXECUTABLE}" -B -I "${_platypus_derive}"
+        "${PYTHON_LIBRARY}" "${_platypus_python_config}/config.c" "${PYTHON_INCLUDE_DIR}"
+        "${CMAKE_BINARY_DIR}/python_without_openssl"
+        --sysroot "${CMAKE_OSX_SYSROOT}" --minimum "${CMAKE_OSX_DEPLOYMENT_TARGET}"
+      RESULT_VARIABLE _platypus_result
+    )
+    if(NOT _platypus_result EQUAL 0)
+      message(FATAL_ERROR
+        "Could not derive Python without OpenSSL (see above). Configure with "
+        "-DWITH_PLATYPUS_PYTHON_OPENSSL=ON to link the prebuilt library and OpenSSL instead.")
+    endif()
+    set(PYTHON_LIBRARIES "${CMAKE_BINARY_DIR}/python_without_openssl/libpython${PYTHON_VERSION}.a")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+      "${PYTHON_LIBRARY}" "${_platypus_python_config}/config.c" "${_platypus_derive}")
+    message(STATUS "Python without OpenSSL: ${PYTHON_LIBRARIES}")
+    unset(_platypus_python_config)
+    unset(_platypus_derive)
+    unset(_platypus_result)
+  endif()
+endif()
+
 if(WITH_FFTW3)
   set(FFTW3_ROOT_DIR ${LIBDIR}/fftw3)
   find_package(Fftw3)

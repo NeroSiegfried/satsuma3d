@@ -591,9 +591,16 @@ else()
     # Otherwise will see Python linking issues during linking in Xcode about missing SSL etc.
     # TODO: This doesn't feel like the right place for this,
     #       libypthon should be built without needing sub dependencies during linking.
-    set(IOS_PYTHON_STATIC_LIBS
-      ${LIBDIR}/ssl/lib/libssl.a
-      ${LIBDIR}/ssl/lib/libcrypto.a
+    # OpenSSL only with Python's `_ssl` and `_hashlib` (`WITH_PLATYPUS_PYTHON_OPENSSL`, off for the
+    # iPad: ROUND5 8M, `platform_apple.cmake`).
+    set(IOS_PYTHON_STATIC_LIBS)
+    if(WITH_PLATYPUS_PYTHON_OPENSSL)
+      list(APPEND IOS_PYTHON_STATIC_LIBS
+        ${LIBDIR}/ssl/lib/libssl.a
+        ${LIBDIR}/ssl/lib/libcrypto.a
+      )
+    endif()
+    list(APPEND IOS_PYTHON_STATIC_LIBS
       ${LIBDIR}/ffi/lib/libffi.a
       ${LIBDIR}/sqlite/lib/libsqlite3.a
       ${LIBDIR}/lzma/lib/liblzma.a

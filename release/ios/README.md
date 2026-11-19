@@ -72,7 +72,8 @@ address, team, identity, profile). The script, logging each step to `<build dir>
 6. runs `prepare_testflight.py --without-plugins` with both sets of replacements: every library becomes a framework, each Python
    module gets its `.fwork` marker, each framework whose binary uses a required reason API gets
    a privacy manifest, any app extension is left out (decision 36), and
-   the layout is checked (`check_prepared`);
+   the layout is checked (`check_prepared`); then writes the encryption key from
+   `check_no_encryption_library.py` (see "Encryption" below);
 7. checks the prepared app: its identity in `Info.plist` (id, name, version, build, source
    address and commit, iPad only, minimum OS), the icon and glyphs in `Assets.car`
    (`check_icons`), `required_reason_apis.py`, and
@@ -85,6 +86,20 @@ address, team, identity, profile). The script, logging each step to `<build dir>
 
 Uploading is a separate step on the owner's word; the script has no upload code path, and a test
 holds that.
+
+**Encryption** (ROUND5 8M, decisions 94–95). OpenSSL reached the app only through two built-in
+modules of the prebuilt `libpython3.13.a`, `_ssl` and `_hashlib`. The iPad build links a copy of
+that library without them, which `derive_python_without_openssl.py` makes at configure time in the
+build directory (`<build>/python_without_openssl/`; checked, never committed), and no longer links
+`libssl.a` or `libcrypto.a`. `hashlib` then uses Python's own MD5, SHA-1, SHA-2, SHA-3 and BLAKE2
+(`pbkdf2_hmac` and `scrypt` are gone), `hmac` its own code, `import ssl` raises `ImportError`, and an
+`https` request fails with `URLError` ("unknown url type"). `check_no_encryption_library.py <app>`
+reads the main program and every library with `nm` and for OpenSSL's version text and says
+`no encryption library` or `encryption library present`. `build_testflight.sh` writes
+`ITSAppUsesNonExemptEncryption` = false exactly when it passes and leaves the key out when it
+fails; `upload_testflight.sh` prints both and refuses when they disagree. `-DWITH_PLATYPUS_PYTHON_OPENSSL=ON`
+(`PYTHON_OPENSSL=ON` in the settings) links the library and OpenSSL again, as build 1 did; desktop
+builds do not have the option.
 
 **Uploading** (ROUND5 8L, L4) is `upload_testflight.sh [<settings>]`. It reads the archive and the
 exported `.ipa` that `build_testflight.sh` made, prints the app, version, build number, source
@@ -177,7 +192,9 @@ xcrun devicectl device copy from --device UDID --domain-type appDataContainer --
 ```
 
 The report's `success` is true when NumPy imports from all its frameworks, OpenImageDenoise
-initialises, a scene saves and renders, and the default cube exports to glTF. Everything the
+initialises, a scene saves and renders, the default cube exports to glTF, and (ROUND5 8M) the
+hashes give known digests without OpenSSL, `ssl` and `_hashlib` are absent, and the cube goes out to
+FBX and back in. Everything the
 test writes stays in the app's `tmp/testflight-check/`; it saves a copy, so the recent-files
 list is untouched. Validate on an iPadOS 27.0 device before inviting testers.
 

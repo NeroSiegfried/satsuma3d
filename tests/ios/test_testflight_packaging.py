@@ -363,13 +363,21 @@ class BuildScriptTest(unittest.TestCase):
             return subprocess.run(['bash', str(self.SCRIPT), str(path)], capture_output=True, text=True,
                                   timeout=60)
 
-    def test_encryption_left_to_app_store_connect(self):
-        """Decision 92 (gate G10): the tester build drops `ITSAppUsesNonExemptEncryption`, so App
-        Store Connect asks at upload; its check fails if the key is there. The development build's
-        template keeps it."""
+    def test_encryption_key_follows_the_check(self):
+        """ROUND5 8M, E4 (decision 95): the tester build's key is written from the check of the
+        prepared program: false when it finds no encryption library, absent when it finds one, and
+        the identity check holds the pair. Nothing else writes the key. E5: one setting brings the
+        library back. The development build's template keeps its key."""
         text = self.SCRIPT.read_text()
+        self.assertIn('"$release/check_no_encryption_library.py" "$prepared"', text)
         self.assertIn("Delete :ITSAppUsesNonExemptEncryption' \"$prepared/Info.plist\"", text)
-        self.assertIn("if 'ITSAppUsesNonExemptEncryption' in info:", text)
+        self.assertIn("0) encryption=none\n       /usr/libexec/PlistBuddy -c 'Add :ITSAppUsesNonExemptEncryption bool false'", text)
+        self.assertIn('1) encryption=present ;;', text)
+        self.assertIn('*) fail_log encryption ;;', text)
+        self.assertEqual(text.count('ITSAppUsesNonExemptEncryption bool'), 1)
+        self.assertIn("if (encryption, key) not in (('none', False), ('present', 'absent')):", text)
+        self.assertIn('PYTHON_OPENSSL=OFF', text)
+        self.assertIn('-DWITH_PLATYPUS_PYTHON_OPENSSL="$PYTHON_OPENSSL"', text)
         template = plistlib.loads((self.SCRIPT.parent / 'Blender.app/Info.plist').read_bytes())
         self.assertIs(template.get('ITSAppUsesNonExemptEncryption'), False)
 
@@ -380,6 +388,172 @@ class BuildScriptTest(unittest.TestCase):
         result = self.run_with('SOURCE_URL=\n')
         self.assertEqual(result.returncode, 1)
         self.assertIn('must name its source', result.stderr)
+
+
+def ios_program(path, source, *arguments):
+    """Compile a small iOS arm64 program."""
+    sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    source_path = path.with_name(path.name + '.c')
+    source_path.write_text(source)
+    subprocess.run(['xcrun', '--sdk', 'iphoneos', 'clang', '-arch', 'arm64', '-isysroot', sdk,
+                    '-miphoneos-version-min=27.0', str(source_path), *map(str, arguments), '-o', str(path)],
+                   check=True, capture_output=True)
+    source_path.unlink()
+    return path
+
+
+LIBDIR = Path(__file__).resolve().parents[2] / 'lib/ios_arm64'
+PLAIN_PROGRAM = 'int main(void) { return 0; }\n'
+# The same program, linked against the prebuilt OpenSSL the way the stock app was.
+OPENSSL_PROGRAM = ('const char *OpenSSL_version(int);\n'
+                   'int main(void) { return OpenSSL_version(0)[0] == 0; }\n')
+
+
+@unittest.skipUnless(sys.platform == 'darwin', 'Requires the iPhoneOS SDK')
+class EncryptionCheckTest(unittest.TestCase):
+    """ROUND5 8M, E1: `check_no_encryption_library.py` tells a program with OpenSSL from one without."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def verdict(self, path):
+        result = subprocess.run([sys.executable, '-B', str(Path(__file__).resolve().parents[2] /
+                                 'release/ios/check_no_encryption_library.py'), str(path)],
+                                capture_output=True, text=True)
+        return result.returncode, result.stdout.strip().splitlines()[-1]
+
+    def test_with_and_without_the_library(self):
+        crypto = LIBDIR / 'ssl/lib/libcrypto.a'
+        if not crypto.is_file():
+            self.skipTest('No prebuilt OpenSSL at ' + str(crypto))
+        with_library = ios_program(self.root / 'with', OPENSSL_PROGRAM, crypto)
+        without = ios_program(self.root / 'without', PLAIN_PROGRAM)
+        self.assertEqual(self.verdict(without), (0, f'no encryption library: {without}'))
+        status, line = self.verdict(with_library)
+        self.assertEqual((status, line), (1, f'encryption library present: {with_library}'))
+
+    def test_app_and_its_frameworks(self):
+        crypto = LIBDIR / 'ssl/lib/libcrypto.a'
+        if not crypto.is_file():
+            self.skipTest('No prebuilt OpenSSL at ' + str(crypto))
+        app = self.root / 'Example.app'
+        ios_program(app / 'Example', PLAIN_PROGRAM)
+        (app / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleExecutable': 'Example'}))
+        self.assertEqual(self.verdict(app)[0], 0)
+        # A library in a framework that carries it counts too.
+        ios_program(app / 'Frameworks/Crypto.framework/Crypto', OPENSSL_PROGRAM, crypto)
+        self.assertEqual(self.verdict(app)[0], 1)
+
+    def test_version_string_alone(self):
+        program = ios_program(self.root / 'text', 'const char *v = "OpenSSL 3.5.2 5 Aug 2025";\n'
+                              'int main(void) { return v[0] == 0; }\n')
+        self.assertEqual(self.verdict(program)[0], 1)
+
+    def test_unreadable_is_never_a_pass(self):
+        self.assertEqual(self.verdict(self.root / 'missing')[0], 2)
+        (self.root / 'Empty.app').mkdir()
+        self.assertEqual(self.verdict(self.root / 'Empty.app')[0], 2)
+        (self.root / 'text').write_text('not a program')
+        self.assertEqual(self.verdict(self.root / 'text')[0], 2)
+
+
+@unittest.skipUnless(sys.platform == 'darwin', 'Requires the iPhoneOS SDK')
+class DerivePythonTest(unittest.TestCase):
+    """ROUND5 8M, M1: Python's library without `_ssl` and `_hashlib`, derived at build time."""
+    ROOT = Path(__file__).resolve().parents[2]
+    PYTHON = LIBDIR / 'python'
+    CONFIG = PYTHON / 'lib/python3.13/config-3.13-arm64-iphoneos/config.c'
+
+    def setUp(self):
+        if not (self.PYTHON / 'lib/libpython3.13.a').is_file():
+            self.skipTest('No prebuilt iOS Python')
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
+
+    def derive(self, library, config, output):
+        return subprocess.run([sys.executable, '-B', str(self.ROOT / 'release/ios/derive_python_without_openssl.py'),
+                               str(library), str(config), str(self.PYTHON / 'include/python3.13'), str(output),
+                               '--sysroot', self.sdk, '--minimum', '27.0'], capture_output=True, text=True)
+
+    def members(self, library):
+        return subprocess.check_output(['ar', 't', str(library)], text=True).splitlines()
+
+    def test_the_prebuilt_library(self):
+        """The real library: the two members gone, the module table without them, nothing of
+        OpenSSL left; run again, it is left alone."""
+        output = self.root / 'out'
+        result = self.derive(self.PYTHON / 'lib/libpython3.13.a', self.CONFIG, output)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        derived = output / 'libpython3.13.a'
+        members = self.members(derived)
+        self.assertNotIn('_ssl.o', members)
+        self.assertNotIn('_hashopenssl.o', members)
+        for member in ('md5module.o', 'sha1module.o', 'sha2module.o', 'sha3module.o', 'blake2module.o',
+                       'config.o'):
+            self.assertIn(member, members)
+        self.assertEqual(len(members) + 2, len(self.members(self.PYTHON / 'lib/libpython3.13.a')))
+        symbols = subprocess.check_output(['nm', '-A', '-g', str(derived)], text=True, stderr=subprocess.DEVNULL)
+        self.assertNotIn('_PyInit__ssl', symbols)
+        self.assertNotIn('_PyInit__hashlib', symbols)
+        self.assertIn('_PyInit__sha2', symbols)
+        self.assertFalse(re.search(r' U _(SSL|EVP|OPENSSL|CRYPTO|X509)_', symbols))
+        built = subprocess.check_output(['otool', '-l', str(derived)], text=True)
+        self.assertIn('minos 27.0', built)
+        modified = derived.stat().st_mtime_ns
+        again = self.derive(self.PYTHON / 'lib/libpython3.13.a', self.CONFIG, output)
+        self.assertIn('up to date', again.stdout)
+        self.assertEqual(derived.stat().st_mtime_ns, modified)
+
+    def test_refuses_a_table_it_does_not_know(self):
+        config = self.root / 'config.c'
+        config.write_text(self.CONFIG.read_text().replace('    {"_ssl", PyInit__ssl},\n', ''))
+        result = self.derive(self.PYTHON / 'lib/libpython3.13.a', config, self.root / 'out')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('does not declare and list _ssl exactly once', result.stderr)
+        self.assertFalse((self.root / 'out/libpython3.13.a').exists())
+
+    def test_refuses_another_user_of_the_modules(self):
+        """A member other than `config.o` that needs what the two define: refused, not stubbed."""
+        objects = self.root / 'objects'
+        objects.mkdir()
+        sources = {
+            '_ssl.o': 'void *SSL_new(void *); void *PyInit__ssl(void) { return SSL_new(0); }',
+            '_hashopenssl.o': 'void *EVP_MD_fetch(void); void *PyInit__hashlib(void) { return EVP_MD_fetch(); }',
+            'config.o': 'void *PyInit__ssl(void); void *PyInit__hashlib(void);'
+                        'void *table[] = {PyInit__ssl, PyInit__hashlib};',
+            'other.o': 'void *PyInit__ssl(void); void *other(void) { return PyInit__ssl(); }',
+        }
+        for name, source in sources.items():
+            (objects / (name + '.c')).write_text(source)
+            subprocess.run(['xcrun', '--sdk', 'iphoneos', 'clang', '-arch', 'arm64', '-isysroot', self.sdk,
+                            '-c', name + '.c', '-o', name], cwd=objects, check=True, capture_output=True)
+        library = self.root / 'libpython3.13.a'
+        subprocess.run(['xcrun', 'ar', 'rcs', str(library), *sources], cwd=objects, check=True)
+        result = self.derive(library, self.CONFIG, self.root / 'out')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("members other than config.o use what", result.stderr)
+        self.assertIn('other.o', result.stderr)
+
+    def test_the_build_links_it(self):
+        """E5: the option is off for the iPad, and OpenSSL is linked only when it is on."""
+        platform = (self.ROOT / 'build_files/cmake/platform/platform_apple.cmake').read_text()
+        self.assertIn('option(WITH_PLATYPUS_PYTHON_OPENSSL', platform)
+        self.assertIn("and with them OpenSSL (build 1's library)\" OFF)", platform)
+        self.assertIn('if(WITH_PYTHON AND NOT WITH_PLATYPUS_PYTHON_OPENSSL)', platform)
+        self.assertIn('set(PYTHON_LIBRARIES "${CMAKE_BINARY_DIR}/python_without_openssl/', platform)
+        # Inside the iOS block only: desktop builds are not touched.
+        start = platform.index('if(WITH_APPLE_CROSSPLATFORM)\n  # The iPad app carries no OpenSSL')
+        self.assertLess(start, platform.index('option(WITH_PLATYPUS_PYTHON_OPENSSL'))
+        creator = (self.ROOT / 'source/creator/CMakeLists.txt').read_text()
+        guarded = creator[creator.index('if(WITH_PLATYPUS_PYTHON_OPENSSL)'):]
+        self.assertLess(guarded.index('libssl.a'), guarded.index('endif()'))
+        self.assertEqual(creator.count('libssl.a'), 1)
+        self.assertEqual(creator.count('libcrypto.a'), 1)
 
 
 class UploadScriptTest(unittest.TestCase):
@@ -397,6 +571,8 @@ class UploadScriptTest(unittest.TestCase):
         script = self.repo / 'release/ios/upload_testflight.sh'
         script.parent.mkdir(parents=True)
         script.write_text(self.SCRIPT.read_text())
+        check = 'check_no_encryption_library.py'
+        (script.parent / check).write_text((self.SCRIPT.parent / check).read_text())
         self.git('init', '-q', '-b', 'ipad/main')
         self.git('add', '.')
         self.git('commit', '-q', '-m', 'one')
@@ -409,8 +585,9 @@ class UploadScriptTest(unittest.TestCase):
         app.mkdir(parents=True)
         self.info = {'CFBundleIdentifier': 'app.example', 'CFBundleShortVersionString': '0.1.0',
                      'CFBundleVersion': '3', 'CFBundleDisplayName': 'Example',
-                     'SatsumaSourceCommit': self.commit}
+                     'SatsumaSourceCommit': self.commit, 'ITSAppUsesNonExemptEncryption': False}
         self.app = app
+        ios_program(app / 'Blender', PLAIN_PROGRAM)
         self.write_info()
         (self.build / 'export').mkdir()
         (self.build / 'export/Example.ipa').write_bytes(b'')
@@ -445,8 +622,36 @@ class UploadScriptTest(unittest.TestCase):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
         for text in ('app.example', '0.1.0', 'build      3', self.commit, 'source     on github/ipad/main',
-                     'ITSAppUsesNonExemptEncryption  (absent)', 'Nothing sent', '--upload-build 3'):
+                     'ITSAppUsesNonExemptEncryption  false', 'encryption check  no encryption library',
+                     'Nothing sent', '--upload-build 3'):
             self.assertIn(text, result.stdout)
+
+    def test_key_and_check_agree(self):
+        """ROUND5 8M, E4: false with no library, absent with one; anything else is refused."""
+        del self.info['ITSAppUsesNonExemptEncryption']
+        self.write_info()
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('no encryption library in the program, but ITSAppUsesNonExemptEncryption is (absent)',
+                      result.stdout)
+        crypto = LIBDIR / 'ssl/lib/libcrypto.a'
+        if not crypto.is_file():
+            self.skipTest('No prebuilt OpenSSL at ' + str(crypto))
+        ios_program(self.app / 'Blender', OPENSSL_PROGRAM, crypto)
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('ITSAppUsesNonExemptEncryption  (absent)', result.stdout)
+        self.assertIn('encryption check  encryption library present', result.stdout)
+        self.info['ITSAppUsesNonExemptEncryption'] = False
+        self.write_info()
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('the program carries an encryption library, but ITSAppUsesNonExemptEncryption is false',
+                      result.stdout)
+        (self.app / 'Blender').unlink()
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('the encryption check could not read the program', result.stdout)
 
     def test_refuses_a_wrong_build_number(self):
         for number in ('2', '30', ''):
@@ -572,6 +777,17 @@ class IdentityTest(unittest.TestCase):
         if not (app / 'Info.plist').is_file():
             self.skipTest('No installed iPad app at ' + str(app))
         check_artwork(app)
+        self.assertEqual(self.encryption_check(app / 'Blender'), self.expected_check(app))
+
+    def encryption_check(self, path):
+        """ROUND5 8M, E1: the check's exit status on a built program (0: none, 1: present)."""
+        return subprocess.run([sys.executable, '-B', str(self.ROOT / 'release/ios/check_no_encryption_library.py'),
+                               str(path)], capture_output=True, text=True).returncode
+
+    def expected_check(self, app):
+        """0 unless the build directory the app came from links OpenSSL (`WITH_PLATYPUS_PYTHON_OPENSSL`)."""
+        build = next(parent for parent in app.parents if (parent / 'CMakeCache.txt').is_file())
+        return 1 if 'WITH_PLATYPUS_PYTHON_OPENSSL:BOOL=ON' in (build / 'CMakeCache.txt').read_text() else 0
 
     def test_prepared_apps(self):
         """ROUND5 8F.2: the prepared apps beside the checkout, when there are any: the development
@@ -590,10 +806,13 @@ class IdentityTest(unittest.TestCase):
                 numpy = sorted((app / 'Frameworks').glob('numpy.*.framework'))
                 self.assertEqual(len(numpy), 19)
                 self.assertEqual(len(list(app.rglob('*.fwork'))), len(numpy))
+                status = self.encryption_check(app)
+                self.assertEqual(status, self.expected_check(app))
                 if 'build_ios_testflight' in app.parts:
-                    # Decision 92: the tester build lets App Store Connect ask about encryption.
+                    # ROUND5 8M, E4: the key is false exactly when the check finds no library.
                     info = plistlib.loads((app / 'Info.plist').read_bytes())
-                    self.assertNotIn('ITSAppUsesNonExemptEncryption', info)
+                    self.assertEqual(info.get('ITSAppUsesNonExemptEncryption', 'absent'),
+                                     False if status == 0 else 'absent')
 
 
 if __name__ == '__main__':

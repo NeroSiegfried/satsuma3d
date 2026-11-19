@@ -10,9 +10,12 @@
 #
 # Takes the archive `build_testflight.sh` made (`<build dir>/Satsuma3D.xcarchive`, with its exported
 # `.ipa` beside it, so the export has run) and prints what it would send: the app, its version,
-# build number, source commit and the encryption key. Then it checks:
+# build number, source commit, the encryption key and the verdict of `check_no_encryption_library.py`
+# on the archived app. Then it checks:
 #
 # - the archive's bundle id, version and build number are the settings' (`testflight.env`);
+# - the key and the verdict agree (ROUND5 8M, E4): `ITSAppUsesNonExemptEncryption` false with no
+#   encryption library, no key with one; anything else, or a program the check cannot read, refuses;
 # - the commit the app names (`SatsumaSourceCommit`) is in this checkout and is on the `github`
 #   remote's `ipad/main` (read with `git ls-remote`; nothing is fetched): every tester's build has
 #   its exact source published (the GPL; PLAN §3, decision 89);
@@ -100,12 +103,22 @@ main() {
   echo "  commit     $commit"
   echo "  archive    $archive"
   echo "  package    $ipa"
-  echo "  ITSAppUsesNonExemptEncryption  $encryption  (gate G10: the owner's answer)"
+  echo "  ITSAppUsesNonExemptEncryption  $encryption"
+  local check_status=0 verdict
+  verdict="$(python3 -B "$checkout/release/ios/check_no_encryption_library.py" "$app" 2>&1)" || check_status=$?
+  verdict="$(echo "$verdict" | tail -1 | sed "s|: $app\$||")"
+  echo "  encryption check  $verdict"
 
   local problems=()
   [ "$bundle_id" = "$BUNDLE_ID" ] || problems+=("the archive's bundle id is $bundle_id, the settings say $BUNDLE_ID")
   [ "$version" = "$MARKETING_VERSION" ] || problems+=("the archive's version is $version, the settings say $MARKETING_VERSION")
   [ "$build" = "$BUILD_NUMBER" ] || problems+=("the archive's build is $build, the settings say $BUILD_NUMBER")
+  case "$check_status:$encryption" in
+    0:false|1:"(absent)") ;;
+    0:*) problems+=("no encryption library in the program, but ITSAppUsesNonExemptEncryption is $encryption (expected false)") ;;
+    1:*) problems+=("the program carries an encryption library, but ITSAppUsesNonExemptEncryption is $encryption (expected absent)") ;;
+    *) problems+=("the encryption check could not read the program: $verdict") ;;
+  esac
 
   local tag="testers/$version-$build"
   if ! git -C "$checkout" cat-file -e "$commit^{commit}" 2>/dev/null; then

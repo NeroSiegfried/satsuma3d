@@ -13,7 +13,8 @@
 #   3. stage      `cmake --install`: the complete app at <build-dir>/bin/Blender.app
 #   4. numpy      NumPy's modules rebuilt and relinked as dynamic libraries (`build_numpy_ios.sh`)
 #   5. oidn       OpenImageDenoise rebuilt to find its device module as a framework (`build_oidn_ios.sh`)
-#   6. prepare    every library a framework, without app extensions (`prepare_testflight.py`)
+#   6. prepare    every library a framework, without app extensions (`prepare_testflight.py`);
+#                 the encryption key written from a check of the program (`check_no_encryption_library.py`)
 #   7. checks     identity, layout, privacy manifests, artwork (`test_testflight_packaging.py`)
 #   8. archive    signed `.xcarchive` (`archive_testflight.py`), and
 #   9. export     an App Store `.ipa` on disk (`xcodebuild -exportArchive`, destination `export`)
@@ -47,6 +48,8 @@ main() {
   BUILD_NUMBER=1
   SOURCE_URL=https://github.com/NeroSiegfried/satsuma3d
   MINIMUM_OS=27.0
+  # ROUND5 8M, E5: ON links Python's `_ssl` and `_hashlib` and OpenSSL, as build 1 did.
+  PYTHON_OPENSSL=OFF
   TEAM_ID=
   SIGNING_IDENTITY=
   PROFILE=
@@ -125,6 +128,7 @@ main() {
     -DIOS_SOURCE_URL="$SOURCE_URL" \
     -DWITH_INSTALL_COPYRIGHT=ON -DWITH_OPENAL=OFF \
     -DIOS_THUMBNAIL_EXTENSION=OFF \
+    -DWITH_PLATYPUS_PYTHON_OPENSSL="$PYTHON_OPENSSL" \
     > "$logs/configure.log" 2>&1 || fail_log configure
 
   # 2. Build. Without the thumbnail extension nothing is embedded, so an unsigned build has no
@@ -190,19 +194,29 @@ main() {
      --without-plugins) > "$logs/prepare.log" 2>&1 \
     || fail_log prepare
   tail -1 "$logs/prepare.log"
-  # Encryption (gate G10, decision 92): the app carries OpenSSL (Python's `ssl` and `hashlib`), so
-  # the tester build does not claim `ITSAppUsesNonExemptEncryption` false. Without the key, App
-  # Store Connect asks at upload and the owner answers there. The development build keeps the
-  # template's key. To be settled again before any public release.
+  # Encryption (ROUND5 8M, E4; decision 95): the key follows the program, never a hand. When the
+  # check finds no OpenSSL in the prepared app (the default: Python without `_ssl` and `_hashlib`),
+  # the key says `false` and App Store Connect asks nothing. When it finds it (`PYTHON_OPENSSL=ON`,
+  # build 1's library), the key is left out and App Store Connect asks at upload (decision 92).
+  # A program the check cannot read stops the build.
   /usr/libexec/PlistBuddy -c 'Delete :ITSAppUsesNonExemptEncryption' "$prepared/Info.plist" 2>/dev/null || true
+  local encryption status=0
+  "$python" -B "$release/check_no_encryption_library.py" "$prepared" > "$logs/encryption.log" 2>&1 || status=$?
+  case "$status" in
+    0) encryption=none
+       /usr/libexec/PlistBuddy -c 'Add :ITSAppUsesNonExemptEncryption bool false' "$prepared/Info.plist" ;;
+    1) encryption=present ;;
+    *) fail_log encryption ;;
+  esac
+  echo "  $(tail -1 "$logs/encryption.log" | sed "s|$prepared|the prepared app|")"
 
   # 7. Checks.
   step checks
   "$python" -B - "$prepared" "$BUNDLE_ID" "$PRODUCT_NAME" "$MARKETING_VERSION" "$BUILD_NUMBER" \
-    "$SOURCE_URL" "$MINIMUM_OS" "$commit" <<'PYTHON' || fail "the prepared app's identity is wrong"
+    "$SOURCE_URL" "$MINIMUM_OS" "$commit" "$encryption" <<'PYTHON' || fail "the prepared app's identity is wrong"
 import plistlib, sys
 from pathlib import Path
-app, bundle_id, name, version, build, source, minimum, commit = sys.argv[1:]
+app, bundle_id, name, version, build, source, minimum, commit, encryption = sys.argv[1:]
 info = plistlib.loads((Path(app) / 'Info.plist').read_bytes())
 expected = {
     'CFBundleIdentifier': bundle_id, 'CFBundleName': name, 'CFBundleDisplayName': name,
@@ -213,13 +227,16 @@ expected = {
 }
 wrong = [f'{key} is {info.get(key)!r}, expected {value!r}' for key, value in expected.items()
          if info.get(key) != value]
-if 'ITSAppUsesNonExemptEncryption' in info:
-    wrong.append('ITSAppUsesNonExemptEncryption is present: App Store Connect must ask (decision 92)')
+# ROUND5 8M, E4: false exactly when the check found no encryption library; absent otherwise.
+key = info.get('ITSAppUsesNonExemptEncryption', 'absent')
+if (encryption, key) not in (('none', False), ('present', 'absent')):
+    wrong.append(f'ITSAppUsesNonExemptEncryption is {key!r} but the check says the library is {encryption}')
 if (Path(app) / 'PlugIns').exists():
     wrong.append('the app carries PlugIns (decision 36)')
 for line in wrong:
     print('  ' + line)
 print(f'  identity: {bundle_id} {version} ({build}), source {source} at {commit[:11]}')
+print(f'  encryption: library {encryption}, ITSAppUsesNonExemptEncryption {key}')
 sys.exit(1 if wrong else 0)
 PYTHON
   (cd "$release" && "$python" -B -c 'import sys; from prepare_testflight import check_icons
