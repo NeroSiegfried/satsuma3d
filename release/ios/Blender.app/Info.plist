@@ -41,6 +41,8 @@
 	<dict/>
 	<key>NSCameraUsageDescription</key>
 	<string>Face Control sets the brush from your facial expressions, such as its strength as you open your mouth. Nothing is recorded.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save to Photos adds the render or image you chose to your photo library. Nothing in it is read.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

@@ -386,6 +386,22 @@ class BuildScriptTest(unittest.TestCase):
         example = (self.SCRIPT.parent / 'testflight.env.example').read_text()
         self.assertIn('\nENCRYPTION_CLAIM=ask\n', example)
 
+    def test_every_share_sheet_can_save_to_photos(self):
+        """ROUND6 0.6 (F10): the app's share sheets (renders, the Image Editor, export, the log)
+        offer Save to Photos, which iPadOS hides, or ends the app for, without the reason the app
+        adds to the photo library. The app only adds, so it asks for no more."""
+        template = plistlib.loads((self.SCRIPT.parent / 'Blender.app/Info.plist').read_bytes())
+        reason = template.get('NSPhotoLibraryAddUsageDescription', '')
+        self.assertTrue(reason.strip().endswith('.') and len(reason.split()) >= 6, reason)
+        self.assertNotIn('NSPhotoLibraryUsageDescription', template)
+        swift = Path(__file__).resolve().parents[2] / 'source/blender/windowmanager/apple_ios/swift'
+        sharing = [path.name for path in sorted(swift.glob('*.swift'))
+                   if re.search(r'UIActivityViewController|ShareLink', path.read_text())]
+        self.assertTrue(sharing, 'no share sheet found')
+        for path in sorted(swift.glob('*.swift')):
+            self.assertNotRegex(path.read_text(), r'PHPhotoLibrary|PHPicker|UIImagePickerController',
+                                'reads the photo library, which needs its own reason: ' + path.name)
+
     def test_refuses_a_claim_it_does_not_know(self):
         result = self.run_with('ENCRYPTION_CLAIM=yes\n')
         self.assertEqual(result.returncode, 1)
