@@ -107,6 +107,9 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     NotificationCenter.default.addObserver(self, selector: #selector(templatePresentation(_:)),
                                            name: Notification.Name("BlenderTemplatePresentation"),
                                            object: nil)
+    /* The first Apple Pencil, from the window's input (ROUND6 TOUCH-1). */
+    NotificationCenter.default.addObserver(self, selector: #selector(pencilSeen),
+                                           name: Notification.Name("GHOSTIOSPencilSeen"), object: nil)
     observeScene()
     shell.pullViews()
     NativeViews.shared.checkViews()
@@ -127,6 +130,19 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
 
   @available(*, unavailable)
   required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+  /**
+   * An Apple Pencil touched, hovered or was squeezed (ROUND6 TOUCH-1, decision R6-1). The first
+   * time, while nobody chose what fingers do, fingers stop using the tool and move the view, and
+   * one message says so, with the way to keep them on the tool.
+   */
+  @objc private func pencilSeen() {
+    guard SettingsModel.notePencilSeen() else { return }
+    commands.setFingerUsesTool(false)
+    model.messages.say("Apple Pencil now uses the tool. Fingers move the view; a tap still selects.",
+                       button: "Keep Fingers on Tools", target: "fingers:tool")
+    WM_native_ui_log("touch", "pencil seen: fingers move the view")
+  }
 
   @objc private func snapshotsPublished() {
     let desktop = model.desktop
@@ -224,10 +240,10 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     updateTopBarBottom()
     CheckDocumentBanner.place(in: view, below: model.topBarBottom)
     if !touchSettingsApplied, view.window != nil {
-      /* The iPad's saved Pencil and touch choice; a phone has no Pencil, so its finger starts
-       * with the tool. */
+      /* What fingers do: as chosen, or until someone chooses, the tool until a Pencil is seen
+       * (ROUND6 TOUCH-1); a phone has no Pencil, so its finger uses the tool. */
       touchSettingsApplied = true
-      commands.setFingerUsesTool(UIDevice.current.userInterfaceIdiom == .phone || SwiftSettings.fingerUsesTool)
+      commands.setFingerUsesTool(SwiftSettings.fingerUsesTool)
     }
   }
 

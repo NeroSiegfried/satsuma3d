@@ -2038,7 +2038,96 @@ def tick_touch():
     return 0.3
 
 
+# ROUND6 TOUCH (run with `--enable-event-simulate`, which `mac_bridge_check.py` passes for it): what
+# Blender tells a finger landing in a 3D View besides the place. TOUCH-1: with the Move tool, the
+# cursor put on the object's origin lights up the gizmo's handle there, and the answer says so at
+# that point only; in empty space it does not. TOUCH-2: an operator waiting for a click is said.
+TOUCH_WINDOW = getattr(lib, "WM_native_ui_touch_window_query", None)
+if TOUCH_WINDOW is not None:
+    TOUCH_WINDOW.restype = ctypes.c_bool
+    TOUCH_WINDOW.argtypes = [ctypes.POINTER(ctypes.c_int)]
+fingers_state = {}
+
+
+def _touch_window():
+    values = (ctypes.c_int * 4)()
+    found = TOUCH_WINDOW(values)
+    return {"found": bool(found), "modal": bool(values[0]), "gizmo": bool(values[1]),
+            "cursor": [values[2], values[3]]}
+
+
+def _simulate(window, kind, value, x, y):
+    window.event_simulate(type=kind, value=value, x=int(x), y=int(y))
+
+
+def tick_fingers():
+    global step
+    try:
+        pump()
+        step += 1
+        problems = report.setdefault("problems", [])
+        if TOUCH_WINDOW is None:
+            problems.append("this build has no WM_native_ui_touch_window_query")
+            finish("error")
+            return None
+        window, area, region = _view3d()
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            subs["toolbar"] = subscribe("toolbar")
+            cube = bpy.data.objects["Cube"]
+            bpy.context.view_layer.objects.active = cube
+            cube.select_set(True)
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                bpy.ops.wm.tool_set_by_id(name="builtin.move")
+            return 0.5
+        if step == 2:
+            from bpy_extras import view3d_utils
+            rv3d = area.spaces[0].region_3d
+            origin = view3d_utils.location_3d_to_region_2d(region, rv3d, bpy.data.objects["Cube"].location)
+            fingers_state["origin"] = (region.x + origin.x, region.y + origin.y)
+            _simulate(window, 'MOUSEMOVE', 'NOTHING', *fingers_state["origin"])
+            return 0.6
+        if step == 3:
+            answer = _touch_window()
+            report["on the handle"] = answer
+            if not answer["gizmo"]:
+                problems.append("TOUCH-1: the cursor on the Move gizmo's centre lights no handle in the answer")
+            if answer["modal"]:
+                problems.append("TOUCH-2: an operator is said to wait before any runs")
+            _simulate(window, 'MOUSEMOVE', 'NOTHING', region.x + 12, region.y + 12)
+            return 0.6
+        if step == 4:
+            answer = _touch_window()
+            report["empty space"] = answer
+            if answer["gizmo"]:
+                problems.append("TOUCH-1: empty space is said to be a gizmo's handle")
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                report["translate"] = list(bpy.ops.transform.translate('INVOKE_DEFAULT'))
+            return 0.6
+        if step == 5:
+            answer = _touch_window()
+            report["waiting move"] = answer
+            if not answer["modal"]:
+                problems.append("TOUCH-2: a waiting Move is not said")
+            _simulate(window, 'ESC', 'PRESS', region.x + 12, region.y + 12)
+            _simulate(window, 'ESC', 'RELEASE', region.x + 12, region.y + 12)
+            return 0.6
+        if step == 6:
+            answer = _touch_window()
+            report["after Escape"] = answer
+            if answer["modal"]:
+                problems.append("TOUCH-2: Move is said to wait after Escape ended it")
+            finish("done" if not problems else "error")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
 bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets": tick_insets, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror,
                          "extensions": tick_extensions, "keys": tick_keys,
-                         "numinput": tick_numinput, "render": tick_render}.get(SCENARIO, tick_actions),
+                         "numinput": tick_numinput, "render": tick_render,
+                         "fingers": tick_fingers}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

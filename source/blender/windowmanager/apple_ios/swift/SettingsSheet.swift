@@ -27,7 +27,36 @@ enum TouchInput: String, CaseIterable, Identifiable {
 
 @MainActor
 final class SettingsModel: ObservableObject {
+  /** One finger uses the tool (true) or moves the view (false), once someone chose; absent until
+   * then (ROUND6 TOUCH-1, decision R6-1). Read through #fingerUsesTool, never alone. */
   static let fingerUsesToolKey = "BlenderFingerUsesTool"
+  /** An Apple Pencil touched, hovered or was squeezed on this iPad (`GHOSTIOSPencilSeen`). */
+  static let pencilSeenKey = "PencilSeenOnce"
+
+  /** Whether one finger uses the active tool: as chosen, or until someone chooses, until an Apple
+   * Pencil is seen (ROUND6 TOUCH-1, decision R6-1). A phone has no Pencil: its finger always does. */
+  static var fingerUsesTool: Bool {
+    if UIDevice.current.userInterfaceIdiom == .phone { return true }
+    let defaults = UserDefaults.standard
+    if let chosen = defaults.object(forKey: fingerUsesToolKey) as? Bool { return chosen }
+    return !defaults.bool(forKey: pencilSeenKey)
+  }
+
+  /** Keep a choice of the touch setting, wherever it was made: Settings, the header's One Finger,
+   * the message's Keep Fingers on Tools. */
+  static func chooseFingerUsesTool(_ useTool: Bool) {
+    UserDefaults.standard.set(useTool, forKey: fingerUsesToolKey)
+  }
+
+  /** The first Apple Pencil: noted, and true when fingers stop using the tool because of it,
+   * which happens once, only while nobody has chosen. */
+  static func notePencilSeen() -> Bool {
+    let defaults = UserDefaults.standard
+    guard !defaults.bool(forKey: pencilSeenKey) else { return false }
+    let before = fingerUsesTool
+    defaults.set(true, forKey: pencilSeenKey)
+    return before && !fingerUsesTool
+  }
   static let showQuickActionsKey = "BlenderShowQuickActions"
   /** An operation's settings open by themselves after it runs, as Blender's Adjust Last Operation
    * panel does; viewport moves, selecting and strokes excepted. */
@@ -36,12 +65,26 @@ final class SettingsModel: ObservableObject {
 
   /** Blender's active keymap preset, from the toolbar snapshot. */
   @Published var keymap = "Blender"
-  @Published var touchInput: TouchInput {
-    didSet {
-      guard touchInput != oldValue else { return }
-      UserDefaults.standard.set(touchInput == .pencilAndFingers, forKey: Self.fingerUsesToolKey)
-      fingerUsesToolChanged?(touchInput == .pencilAndFingers)
-    }
+  /** What fingers do now, chosen or not; #choose keeps a choice. */
+  @Published private(set) var touchInput: TouchInput
+  /** Whether someone chose the touch setting, or it still follows the Pencil (R6-1). */
+  var touchChosen: Bool { UserDefaults.standard.object(forKey: Self.fingerUsesToolKey) != nil }
+
+  /** The person picked a touch setting: kept, even when it is what fingers already did, so a
+   * Pencil seen later does not change it. */
+  func choose(_ input: TouchInput) {
+    /* The footer's "Until you choose" goes, even when what fingers do stays the same. */
+    objectWillChange.send()
+    Self.chooseFingerUsesTool(input == .pencilAndFingers)
+    let changed = input != touchInput
+    touchInput = input
+    if changed { fingerUsesToolChanged?(input == .pencilAndFingers) }
+  }
+
+  /** What fingers do now, read again: it may have changed outside Settings. */
+  func reloadTouchInput() {
+    let input: TouchInput = Self.fingerUsesTool ? .pencilAndFingers : .pencilOnly
+    if input != touchInput { touchInput = input }
   }
   @Published var showQuickActions: Bool {
     didSet {
@@ -105,7 +148,7 @@ final class SettingsModel: ObservableObject {
 
   init() {
     let defaults = UserDefaults.standard
-    touchInput = defaults.bool(forKey: Self.fingerUsesToolKey) ? .pencilAndFingers : .pencilOnly
+    touchInput = Self.fingerUsesTool ? .pencilAndFingers : .pencilOnly
     showQuickActions = defaults.object(forKey: Self.showQuickActionsKey) as? Bool ?? true
     hoverHighlight = defaults.object(forKey: Self.hoverHighlightKey) as? Bool ?? true
     leftHanded = defaults.bool(forKey: leftHandedInterfaceKey)
@@ -343,14 +386,14 @@ private struct IPadSettingsPage: View {
     Form {
       Section {
         ChoiceRow(title: "Apple Pencil Only",
-                  detail: "Fingers move the view. Apple Pencil uses the active tool.",
+                  detail: "Fingers move the view, and a tap selects. Apple Pencil uses the active tool.",
                   symbol: "applepencil",
-                  selected: model.touchInput == .pencilOnly) { model.touchInput = .pencilOnly }
+                  selected: model.touchInput == .pencilOnly) { model.choose(.pencilOnly) }
         ChoiceRow(title: "Pencil and Fingers",
                   detail: "One finger uses the active tool. Two fingers orbit and pinch to zoom, three pan.",
                   symbol: "hand.point.up.left",
                   selected: model.touchInput == .pencilAndFingers) {
-          model.touchInput = .pencilAndFingers
+          model.choose(.pencilAndFingers)
         }
         if model.touchInput == .pencilAndFingers {
           Toggle(isOn: $fingerDragsObjects) {
@@ -360,9 +403,14 @@ private struct IPadSettingsPage: View {
       } header: {
         Text("Apple Pencil & Touch")
       } footer: {
-        if model.touchInput == .pencilAndFingers {
-          Text("With Tweak, each finger landing on an object moves it, several at once. Fingers on "
-            + "objects then don't orbit the view.")
+        VStack(alignment: .leading, spacing: 6) {
+          if model.touchInput == .pencilAndFingers {
+            Text("With Tweak, each finger landing on an object moves it, several at once. Fingers on "
+              + "objects then don't orbit the view.")
+          }
+          if !model.touchChosen {
+            Text("Until you choose, fingers use the tool until an Apple Pencil is first used, then move the view.")
+          }
         }
       }
 
@@ -824,10 +872,8 @@ public final class SwiftSettings: NSObject, UIAdaptivePresentationControllerDele
     model.done = { [weak self] in self?.close() }
   }
 
-  /** Whether one finger uses the active tool, as last chosen. */
-  @objc public static var fingerUsesTool: Bool {
-    UserDefaults.standard.bool(forKey: SettingsModel.fingerUsesToolKey)
-  }
+  /** Whether one finger uses the active tool now, see #SettingsModel.fingerUsesTool. */
+  @objc public static var fingerUsesTool: Bool { SettingsModel.fingerUsesTool }
 
   @objc public var fingerUsesToolChanged: ((Bool) -> Void)? {
     get { model.fingerUsesToolChanged }
@@ -841,6 +887,7 @@ public final class SwiftSettings: NSObject, UIAdaptivePresentationControllerDele
     /* Wide enough for the pages beside their list, as in the system's Settings. */
     controller.preferredContentSize = CGSize(width: 860, height: 700)
     controller.presentationController?.delegate = self
+    model.reloadTouchInput()
     sheet = controller
     preferences.setShown(true)
     lists.show(true, tab: preferences.currentTab)

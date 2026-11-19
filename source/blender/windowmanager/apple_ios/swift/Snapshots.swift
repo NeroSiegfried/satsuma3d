@@ -53,6 +53,8 @@
  *   buttons show and hide them (ROUND5 10A); `sample` logs where the shell has the gizmo against where
  *   Blender last drew it, through the slide (ROUND5 14B, 14C);
  * - `fingers tool|navigate`: the touch setting for this launch only, not stored (ROUND5 13);
+ *   `fingers tap <x> <y>`: a finger's tap on the view where fingers move it, the click it sends
+ *   (ROUND6 TOUCH-1), at a point in the window's points;
  * - `motion reduce on|off`: the app's Reduce Motion path without the system setting (ROUND5 14C):
  *   the sidebars' slide and the insets in one step; until the app quits, never saved;
  * - `trait compact on|off`, `trait text <size>|default`: the window's horizontal size class or its
@@ -522,6 +524,15 @@ enum ShellSnapshots {
         /* ROUND5 13: the touch setting for this launch only (Pencil and Fingers: `tool`; Pencil
          * Only: `navigate`), as Settings applies it, without storing it: the owner's setting is
          * read again at the next launch. */
+        if words.first == "tap", words.count >= 3, let x = Double(words[1]), let y = Double(words[2]),
+           let model = ShellModel.current {
+          /* ROUND6 TOUCH-1: a finger's tap where fingers move the view, as the tap recognizer
+           * sends it: a click there. */
+          let taken = wm_apple_ios_window_script_view_tap(model.window, CGPoint(x: x, y: y))
+          WM_native_ui_log("snapshot", "\(step): \(taken ? "clicked" : "not taken (fingers use the tool, or the gate is closed)")")
+          try? await Task.sleep(for: .milliseconds(400))
+          break
+        }
         guard let mode = words.first, ["tool", "navigate"].contains(mode), let model = ShellModel.current else {
           WM_native_ui_log("snapshot", "unknown step: \(step)")
           break

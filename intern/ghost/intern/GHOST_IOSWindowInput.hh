@@ -213,6 +213,13 @@ typedef struct UserInputEvent {
   CGPoint pencil_navigation_start;
   bool last_tap_with_pencil;
   bool finger_tool_enabled;
+  /* Pencil Only (ROUND6 TOUCH-1): a finger that landed alone on a 3D View with no operator waiting
+   * put Blender's cursor there, so a gizmo's handle under it lights up; where it landed, in the
+   * view's points; and whether its drag is that handle's (pressed, the moves, the release) rather
+   * than the orbit. */
+  bool view_finger_hovered;
+  CGPoint view_finger_start;
+  bool view_gizmo_drag;
   /* Fingers moving objects with the Tweak tool, see #GHOST_IOSNativeInterface::finger_tweak_touch,
    * and whether one held an object since the gesture began: navigation waits for all to lift. */
   NSMutableSet<UITouch *> *finger_tweak_touches;

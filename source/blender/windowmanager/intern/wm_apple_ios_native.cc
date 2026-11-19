@@ -233,6 +233,8 @@ bool wm_apple_ios_touch_at(const void *window, const int x, const int y, GHOST_I
   r->scroll_x = answer.scroll_x;
   r->scroll_y = answer.scroll_y;
   r->takes = answer.takes;
+  r->modal = answer.modal;
+  r->gizmo = answer.gizmo;
   STRNCPY(r->where, answer.where);
   return found;
 }

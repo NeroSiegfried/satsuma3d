@@ -76,6 +76,11 @@ struct GHOST_IOSTouchAnswer {
   int takes = GHOST_kIOSTakesNone;
   /** The editor and region, for the session log, such as `PROPERTIES WINDOW` or `MENU`. */
   char where[40] = "";
+  /** An operator waits in the window (ROUND6 TOUCH-2). */
+  bool modal = false;
+  /** Over a 3D View, a gizmo's handle is highlighted under Blender's cursor, which is at the point
+   * (ROUND6 TOUCH-1): a finger's drag from here drags it. */
+  bool gizmo = false;
 };
 
 struct GHOST_IOSNativeInterface {
@@ -211,6 +216,12 @@ void GHOST_ios_window_hold_modifier(GHOST_WindowIOS *window, GHOST_TKey key, boo
 - (BOOL)scriptInterfaceTouch:(int)phase at:(CGPoint)point;
 /** What Blender says is under \a point (the view's points), for a check script's log. */
 - (NSString *)touchDescriptionAt:(CGPoint)point;
+/**
+ * A check script's finger tap on the view where fingers move it (ROUND6 TOUCH-1): the click
+ * #handleTap: sends, at \a point in the view's points. False when fingers use the tool, where a
+ * tap is the finger's own press, or the gate is closed.
+ */
+- (BOOL)scriptViewTap:(CGPoint)point;
 @end
 
 UIWindow<GHOST_IOSInputWindow> *GHOST_ios_window_native(GHOST_WindowIOS *window);

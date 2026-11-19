@@ -241,6 +241,13 @@ struct NativeTouchAnswer {
   int8_t button_type = -1;
   /** The editor and region, for the session log: `PROPERTIES WINDOW`, `TOPBAR HEADER`, `MENU`. */
   char where[40] = "";
+  /** An operator waits in the window, holding a modal handler (ROUND6 TOUCH-2), as of the last
+   * pass of Blender's loop. */
+  bool modal = false;
+  /** Over a 3D View: a gizmo other than the navigation gizmo is highlighted under Blender's
+   * cursor, and the cursor is at the point (ROUND6 TOUCH-1): a finger's drag that begins here
+   * drags the gizmo's handle, whatever the touch setting. */
+  bool gizmo = false;
 };
 /**
  * What a finger meets at \a x, \a y in the GHOST window's client pixels (the window as a

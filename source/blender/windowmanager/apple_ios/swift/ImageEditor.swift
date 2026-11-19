@@ -675,8 +675,11 @@ private struct ImageCanvas: UIViewRepresentable {
   let model: ImageEditorModel
   @Binding var zoom: CGFloat
   var obscured = EdgeInsets()
-  /** Settings' Apple Pencil & Touch, which the viewport follows too. */
-  @AppStorage(SettingsModel.fingerUsesToolKey) private var fingerUsesTool = false
+  /** Settings' Apple Pencil & Touch, which the viewport follows too: as chosen, or until someone
+   * chooses, until a Pencil is seen (ROUND6 TOUCH-1). Both stored values are watched, so a change
+   * redraws; #SettingsModel.fingerUsesTool says what they mean. */
+  @AppStorage(SettingsModel.fingerUsesToolKey) private var fingerChoice: Bool?
+  @AppStorage(SettingsModel.pencilSeenKey) private var pencilSeen = false
 
   func makeUIView(context: Context) -> ImageCanvasView {
     ImageCanvasView()
@@ -700,7 +703,8 @@ private struct ImageCanvas: UIViewRepresentable {
                                  right: obscured.trailing)
     /* Painted as the 3D viewport is, in Texture Paint, with its brush. */
     view.paintable = model.paintable && model.painting
-    view.fingerPaints = fingerUsesTool
+    _ = (fingerChoice, pencilSeen)
+    view.fingerPaints = SettingsModel.fingerUsesTool
     view.brushRadius = CGFloat((model.brush?["radius"] as? NSNumber)?.doubleValue ?? 0)
     view.stroke = { phase, points, zoom in model.stroke(phase, points, zoom: zoom) }
   }

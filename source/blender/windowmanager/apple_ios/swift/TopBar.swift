@@ -31,9 +31,17 @@ final class ShellCommands {
     Self.current = self
   }
 
+  /** What one finger does in this window now, without keeping it as a choice. */
   func setFingerUsesTool(_ useTool: Bool) {
     model.fingerUsesTool = useTool
     wm_apple_ios_window_set_finger_tool(model.window, useTool)
+  }
+
+  /** The person chose what one finger does (the header's One Finger, a message's button): kept, as
+   * Settings keeps it, so Settings, the Image Editor and the next launch agree (ROUND6 TOUCH-1). */
+  func chooseFingerUsesTool(_ useTool: Bool) {
+    SettingsModel.chooseFingerUsesTool(useTool)
+    setFingerUsesTool(useTool)
   }
 
   func setInterfaceHidden(_ hidden: Bool) {
@@ -588,8 +596,8 @@ struct DocumentToolbar: ToolbarContent {
   }
 
   /** More's first part: every item the header's rung has moved out, in the header's order, so
-   * nothing is in two places and nothing is missing; at the last rung also the view, One Finger
-   * and the tool settings, as a phone has no room for them elsewhere. */
+   * nothing is in two places and nothing is missing; at the last rung also the view and the tool
+   * settings, as a phone has no room for them elsewhere; One Finger at every rung. */
   @ViewBuilder
   private var overflowMenu: some View {
     if !shown.editorMenus {
@@ -644,15 +652,18 @@ struct DocumentToolbar: ToolbarContent {
           } label: {
             Label("View", systemImage: "eye")
           }
-          Menu {
-            sidebarToggle("Use Tool", icon: wm_apple_ios_icon("control.finger_tool", "cursorarrow"),
-                          isOn: model.fingerUsesTool) { commands.setFingerUsesTool(true) }
-            sidebarToggle("Orbit View", icon: wm_apple_ios_icon("operator.VIEW3D_OT_rotate", "rotate.3d"),
-                          isOn: !model.fingerUsesTool) { commands.setFingerUsesTool(false) }
-          } label: {
-            Label("One Finger", systemImage: "hand.point.up")
-          }
         }
+      }
+    }
+    /* What one finger does, at every rung (ROUND6 TOUCH-1): the same choice as Settings', kept. */
+    Section {
+      Menu {
+        sidebarToggle("Use Tool", icon: wm_apple_ios_icon("control.finger_tool", "cursorarrow"),
+                      isOn: model.fingerUsesTool) { commands.chooseFingerUsesTool(true) }
+        sidebarToggle("Orbit View", icon: wm_apple_ios_icon("operator.VIEW3D_OT_rotate", "rotate.3d"),
+                      isOn: !model.fingerUsesTool) { commands.chooseFingerUsesTool(false) }
+      } label: {
+        Label("One Finger", systemImage: "hand.point.up")
       }
     }
     Section {

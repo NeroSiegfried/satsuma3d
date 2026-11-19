@@ -100,6 +100,21 @@ static void ios_view_roll(float angle)
   }
 }
 
+/**
+ * An Apple Pencil touched, hovered or was squeezed (ROUND6 TOUCH-1, decision R6-1): the interface
+ * hears of it once a launch, as `GHOSTIOSPencilSeen`, and until someone chose, fingers then move
+ * the view (`SettingsSheet.swift`).
+ */
+static void ios_pencil_seen()
+{
+  static bool posted = false;
+  if (posted) {
+    return;
+  }
+  posted = true;
+  [NSNotificationCenter.defaultCenter postNotificationName:@"GHOSTIOSPencilSeen" object:nil];
+}
+
 static bool ios_finger_tweak_active()
 {
   const GHOST_IOSNativeInterface *native = GHOST_ios_native_interface();
@@ -289,6 +304,7 @@ UIWindow *document_window = nil;
 {
   [self releaseKeys];
   [self releasePointerButtons];
+  [self endViewGizmoDrag:YES];
 #if !defined(APPLE_TARGET_VISIONOS)
   [window->getView() removeInteraction:pointer_interaction];
 #endif
@@ -329,6 +345,7 @@ UIWindow *document_window = nil;
 
 - (void)setFingerToolEnabled:(BOOL)enabled
 {
+  [self endViewGizmoDrag:YES];
   [self cancelPencilStroke];
   [self cancelFingerTweakTouches];
   [self stopOrbitMomentum];
@@ -357,6 +374,8 @@ UIWindow *document_window = nil;
   toolbar = nil;
   last_tap_with_pencil = false;
   finger_tool_enabled = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
+  view_finger_hovered = false;
+  view_gizmo_drag = false;
   [finger_tweak_touches release];
   finger_tweak_touches = [[NSMutableSet alloc] init];
   finger_tweak_held = false;
@@ -1045,6 +1064,9 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
     }
     for (UITouch *touch in event.allTouches) {
       ios_pencil_roll(touch);
+      if (touch.type == UITouchTypePencil) {
+        ios_pencil_seen();
+      }
       if (touch.phase == UITouchPhaseBegan) {
         ios_pencil_hover(false, 0, 0);
         [self stopOrbitMomentum];
@@ -1076,6 +1098,10 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
                                                                  active:finger_tweak])
       {
         continue;
+      }
+      if (touch.type == UITouchTypeDirect && !finger_tool_enabled && touch.phase == UITouchPhaseBegan)
+      {
+        [self viewFingerLanded:touch fingers:fingers];
       }
       if (touch.type != UITouchTypePencil &&
           !(finger_tool_enabled && touch.type == UITouchTypeDirect && fingers <= 1))
@@ -2526,22 +2552,122 @@ static UIBezierPath *pointer_move()
   tablet_data = GHOST_TABLET_DATA_NONE;
 }
 
+/**
+ * A finger's tap when fingers move the view (Pencil Only): a click where it landed, whatever the
+ * touch setting (ROUND6 TOUCH-1, decision R6-1). It selects, places, and answers an operation that
+ * waits for a click. With the tool on fingers the tap is the finger's own press and release, see
+ * #sendEvent:, and this recognizer takes no touch.
+ */
 - (void)handleTap:(GHOSTUITapGestureRecognizer *)sender
 {
-  if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone &&
-      !finger_tool_enabled && sender.state == UIGestureRecognizerStateEnded)
-  {
-    CGPoint point = [sender getScaledTouchPoint:window];
-    tablet_data = GHOST_TABLET_DATA_NONE;
-    UserInputEvent event_info(&point, nullptr, nullptr, false);
-    event_info.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
-    event_info.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_DOWN);
-    event_info.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_UP);
-    [self generateUserInputEvents:event_info];
+  if (!window || finger_tool_enabled || sender.state != UIGestureRecognizerStateEnded) {
+    return;
   }
-  /* Finger taps are reserved for native iPad UI affordances and viewport gestures. Selection and
-   * active-tool execution are handled by Apple Pencil instead. */
-  UNUSED_VARS(sender);
+  [self viewClickAt:[sender locationInView:window->getView()]];
+}
+
+- (BOOL)scriptViewTap:(CGPoint)point
+{
+  if (!window || finger_tool_enabled || [self blockedReason] != nil) {
+    return NO;
+  }
+  [self viewClickAt:point];
+  return YES;
+}
+
+/** A click at \a location (the view's points), as a finger's tap gives it. */
+- (void)viewClickAt:(CGPoint)location
+{
+  CGPoint point = window->scalePointToWindow(location);
+  tablet_data = GHOST_TABLET_DATA_NONE;
+  UserInputEvent event_info(&point, nullptr, nullptr, false);
+  event_info.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
+  event_info.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_DOWN);
+  event_info.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_UP);
+  [self generateUserInputEvents:event_info];
+  view_finger_hovered = false;
+}
+
+/**
+ * Pencil Only (ROUND6 TOUCH-1): a finger landed. Alone, on a 3D View, with no operator waiting
+ * for a click, Blender's cursor goes there, pressing nothing, so the gizmo handle under it lights
+ * up as a pointer's hover would light it; its drag then takes the handle, see #handlePan:. A
+ * waiting operator would follow the cursor, so then nothing is sent.
+ */
+- (void)viewFingerLanded:(UITouch *)touch fingers:(NSUInteger)fingers
+{
+  view_finger_hovered = false;
+  if (fingers != 1 || view_gizmo_drag || touch.view != window->getView() ||
+      ![self touchBeganInBlenderViewport:touch])
+  {
+    return;
+  }
+  const CGPoint location = [touch preciseLocationInView:window->getView()];
+  const GHOST_IOSTouchAnswer answer = [self touchAnswerAt:location];
+  if (answer.place != GHOST_kIOSPlaceView3D || answer.modal) {
+    return;
+  }
+  view_finger_start = location;
+  view_finger_hovered = true;
+  [self sendPointerMove:location];
+}
+
+/** A drag of the gizmo's handle a finger began is over: released, or with \a cancelled, Escape
+ * first, so it puts back what it moved. */
+- (void)endViewGizmoDrag:(BOOL)cancelled
+{
+  if (!view_gizmo_drag) {
+    return;
+  }
+  view_gizmo_drag = false;
+  view_finger_hovered = false;
+  if (!window || !system) {
+    return;
+  }
+  UserInputEvent event_info(nullptr, nullptr, nullptr, false);
+  if (cancelled) {
+    event_info.add_event(UserInputEvent::EventTypes::CANCEL_TOOL);
+  }
+  event_info.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_UP);
+  [self generateUserInputEvents:event_info];
+}
+
+/** Pencil Only: a finger's drag that began on a gizmo's handle drags it (ROUND6 TOUCH-1). True
+ * while it does. */
+- (BOOL)viewGizmoDrag:(GHOSTUIPanGestureRecognizer *)sender
+{
+  if (sender.state == UIGestureRecognizerStateBegan) {
+    [self endViewGizmoDrag:YES];
+    if (!view_finger_hovered || sender.numberOfTouches != 1 ||
+        ![self touchAnswerAt:view_finger_start].gizmo)
+    {
+      view_finger_hovered = false;
+      return NO;
+    }
+    view_gizmo_drag = true;
+    CGPoint start = window->scalePointToWindow(view_finger_start);
+    tablet_data = GHOST_TABLET_DATA_NONE;
+    UserInputEvent down(&start, nullptr, nullptr, false);
+    down.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
+    down.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_DOWN);
+    [self generateUserInputEvents:down];
+  }
+  if (!view_gizmo_drag) {
+    return NO;
+  }
+  if (sender.state == UIGestureRecognizerStateBegan ||
+      sender.state == UIGestureRecognizerStateChanged)
+  {
+    if (sender.numberOfTouches > 1) {
+      /* A second finger: the drag the finger began is abandoned, as a mouse's Escape would. */
+      [self endViewGizmoDrag:YES];
+      return YES;
+    }
+    [self sendPointerMove:[sender locationInView:window->getView()]];
+    return YES;
+  }
+  [self endViewGizmoDrag:sender.state != UIGestureRecognizerStateEnded];
+  return YES;
 }
 
 - (void)handleTap2F:(GHOSTUITapGestureRecognizer *)sender
@@ -2591,8 +2717,12 @@ static UIBezierPath *pointer_move()
 
 - (void)handlePan:(GHOSTUIPanGestureRecognizer *)sender
 {
-  /* With the Pencil on the tool: one finger orbits, two or three pan. */
+  /* With the Pencil on the tool: one finger orbits, two or three pan; a drag that began on a
+   * gizmo's handle drags it (ROUND6 TOUCH-1). */
   if (finger_tool_enabled) {
+    return;
+  }
+  if ([self viewGizmoDrag:sender]) {
     return;
   }
   [self handleNavigationDrag:sender orbitingFingers:1];
@@ -2814,6 +2944,7 @@ static UIBezierPath *pointer_move()
 - (void)applicationWillResignActive:(NSNotification *)notification
 {
   UNUSED_VARS(notification);
+  [self endViewGizmoDrag:YES];
   [self endInterfaceTouch:YES];
   [self stopScrollMomentum];
   [self releaseKeys];
@@ -2927,6 +3058,7 @@ static bool ios_momentum_stopped(const CGPoint velocity)
 
 - (void)handleHover:(GHOSTUIHoverGestureRecognizer *)sender
 {
+  ios_pencil_seen();
   if (!pencil_context_menu.active && (sender.state == UIGestureRecognizerStateBegan ||
                                      sender.state == UIGestureRecognizerStateChanged))
   {
@@ -3085,6 +3217,7 @@ static bool ios_momentum_stopped(const CGPoint velocity)
 - (void)pencilInteraction:(UIPencilInteraction *)interaction
             didReceiveTap:(UIPencilInteractionTap *)tap
 {
+  ios_pencil_seen();
   const UIPencilPreferredAction action = UIPencilInteraction.preferredTapAction;
   if (action != UIPencilPreferredActionIgnore &&
       action != UIPencilPreferredActionRunSystemShortcut)
@@ -3096,6 +3229,7 @@ static bool ios_momentum_stopped(const CGPoint velocity)
 - (void)pencilInteraction:(UIPencilInteraction *)interaction
         didReceiveSqueeze:(UIPencilInteractionSqueeze *)squeeze
 {
+  ios_pencil_seen();
   const UIPencilPreferredAction action = UIPencilInteraction.preferredSqueezeAction;
   ios_squeeze_log([NSString stringWithFormat:@"Squeeze reached Blender: phase %ld, preferred action %ld",
                                              long(squeeze.phase),

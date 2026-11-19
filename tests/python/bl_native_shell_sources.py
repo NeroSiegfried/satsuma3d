@@ -725,7 +725,7 @@ LOG_KINDS = {
     'gizmo': 'the gestures on the navigation gizmo',
     'panel': 'when side panels opened and closed',
     'device': "this iPad's chip and memory",
-    'touch': "the kinds of finger gestures on the Desktop Interface's controls",
+    'touch': "the kinds of finger gestures on the Desktop Interface's controls and what fingers do",
     'launch': "each launch with the app's version, this iPad's model and the memory available",
     'session': 'whether the last session ended cleanly',
     'exit': 'why iOS ended the app when it reports it',
@@ -1088,5 +1088,59 @@ for path in sources():
 check(len(quick_gates) >= 2 and all(kept for _, _, kept in quick_gates),
       "R6 0.7: every use of the Quick Actions setting keeps a waiting operation's Confirm and Cancel (%s)"
       % ['%s:%d' % (name, number) for name, number, kept in quick_gates if not kept])
+
+# ROUND6 TOUCH-1 (A4, E8, X1; decision R6-1): fingers use the tool until an Apple Pencil is seen,
+# and a finger's tap always selects. What fingers do is read in one place, which knows "nobody chose
+# yet"; nothing else reads the stored choice as a plain bool (a missing key read as false was the
+# fault: Pencil Only on an iPad that never saw a Pencil).
+plain_reads = []
+for path in sources():
+    for number, line in enumerate(code_only(path.read_text(encoding='utf-8')).splitlines(), 1):
+        if 'fingerUsesToolKey' in line and path.name not in ('SettingsSheet.swift', 'ImageEditor.swift'):
+            plain_reads.append('%s:%d' % (path.name, number))
+        if re.search(r'bool\(forKey:\s*(SettingsModel\.)?fingerUsesToolKey', line):
+            plain_reads.append('%s:%d' % (path.name, number))
+settings_text = (SWIFT / 'SettingsSheet.swift').read_text(encoding='utf-8')
+image_text = (SWIFT / 'ImageEditor.swift').read_text(encoding='utf-8')
+check(not plain_reads and 'static var fingerUsesTool: Bool {' in settings_text and
+      'defaults.object(forKey: fingerUsesToolKey) as? Bool' in settings_text and
+      '!defaults.bool(forKey: pencilSeenKey)' in settings_text and
+      'private var fingerChoice: Bool?' in image_text and 'view.fingerPaints = SettingsModel.fingerUsesTool' in image_text,
+      "R6 TOUCH-1: what fingers do is read in one place that knows nobody chose (%s)" % plain_reads)
+# Every place a person picks the touch setting keeps it: Settings' rows, the header's One Finger, a
+# message's Keep Fingers on Tools. `setFingerUsesTool` alone (this launch, not kept) is for the
+# Pencil being seen, the window's first layout and check scripts.
+topbar_text = (SWIFT / 'TopBar.swift').read_text(encoding='utf-8')
+one_finger = topbar_text[topbar_text.index('Label("One Finger"') - 600:topbar_text.index('Label("One Finger"')]
+check('commands.chooseFingerUsesTool(true)' in one_finger and 'commands.chooseFingerUsesTool(false)' in one_finger and
+      'commands.setFingerUsesTool(' not in one_finger and
+      'model.choose(.pencilOnly)' in settings_text and 'model.choose(.pencilAndFingers)' in settings_text and
+      'model.touchInput = .' not in settings_text and
+      'ShellCommands.current?.chooseFingerUsesTool(true)' in (SWIFT / 'ShellModel.swift').read_text(encoding='utf-8'),
+      "R6 TOUCH-1: every choice of what fingers do is kept, wherever it is made")
+# The header's One Finger is in More at every rung, not only the narrowest.
+overflow = topbar_text[topbar_text.index('private var overflowMenu: some View {'):]
+rung_blocks = []
+for m in re.finditer(r'if (?:!shown\.shading \|\| )?model\.headerRung == 0 \{', overflow):
+    rung_blocks.append((m.start(), balanced(overflow, m.end() - 1, '{', '}')))
+label_at = overflow.index('Label("One Finger"')
+check(rung_blocks and not any(start < label_at < end for start, end in rung_blocks),
+      "R6 TOUCH-1: One Finger is offered at every header rung")
+# The Pencil is seen where the window first meets it (a touch, a hover, a squeeze or tap), and the
+# shell hears of it by the one name; a finger's tap on an iPad where fingers move the view clicks.
+ghost_r6 = (ROOT / 'intern/ghost/intern/GHOST_WindowIOS.mm').read_text(encoding='utf-8')
+tap_body = ghost_r6[ghost_r6.index('- (void)handleTap:(GHOSTUITapGestureRecognizer *)sender'):]
+tap_body = tap_body[:tap_body.index('\n}\n')]
+check(ghost_r6.count('ios_pencil_seen();') >= 4 and '@"GHOSTIOSPencilSeen"' in ghost_r6 and
+      'Notification.Name("GHOSTIOSPencilSeen")' in (SWIFT / 'DocumentWindow.swift').read_text(encoding='utf-8') and
+      'UIUserInterfaceIdiomPhone' not in tap_body and 'viewClickAt:' in tap_body,
+      "R6 TOUCH-1: the first Pencil is told to the shell, and a finger's tap clicks on an iPad too")
+# A finger's drag that begins on a gizmo's handle drags it where fingers move the view: the pan asks
+# before it orbits, from where the finger landed, as Blender answers it.
+pan_body = ghost_r6[ghost_r6.index('- (void)handlePan:(GHOSTUIPanGestureRecognizer *)sender'):]
+pan_body = pan_body[:pan_body.index('\n}\n')]
+check(0 < pan_body.find('viewGizmoDrag:') < pan_body.find('handleNavigationDrag:') and
+      '[self touchAnswerAt:view_finger_start].gizmo' in ghost_r6 and 'r_answer->gizmo =' in bridge_text,
+      "R6 TOUCH-1: a finger's drag from a gizmo's handle drags it before the view would orbit")
 
 print('PASS: native shell sources ' + json.dumps(checks))

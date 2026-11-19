@@ -269,6 +269,11 @@ extern "C" bool wm_apple_ios_window_navigation_drawn(void *window,
   return true;
 }
 
+extern "C" bool wm_apple_ios_window_script_view_tap(void *window, const CGPoint point)
+{
+  return window && [GHOST_ios_window_native(ghost_window(window)) scriptViewTap:point];
+}
+
 extern "C" bool wm_apple_ios_window_script_touch(void *window, const int phase, const CGPoint point)
 {
   return window && [GHOST_ios_window_native(ghost_window(window)) scriptInterfaceTouch:phase

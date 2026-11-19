@@ -220,6 +220,10 @@ final class ShellModel {
     else if target.hasPrefix("action:") {
       send(target, .invoke)
     }
+    else if target == "fingers:tool" {
+      /* A message's Keep Fingers on Tools (ROUND6 TOUCH-1). */
+      ShellCommands.current?.chooseFingerUsesTool(true)
+    }
   }
   var canUndo: Bool { node("undo")?.enabled ?? false }
   var canRedo: Bool { node("redo")?.enabled ?? false }

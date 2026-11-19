@@ -6501,6 +6501,44 @@ struct BridgeTouchZone {
 static std::mutex bridge_touch_mutex;
 static std::vector<BridgeTouchZone> bridge_touch_zones;
 
+/**
+ * What a finger landing in a window needs to know besides the place (ROUND6 TOUCH-1, TOUCH-2): an
+ * operator is waiting there, and a gizmo other than the navigation gizmo is highlighted under
+ * Blender's cursor, which is at \a cursor (GHOST's client pixels). Noted on each pass of the loop.
+ */
+struct BridgeTouchWindow {
+  const void *ghost_window = nullptr;
+  bool modal = false;
+  bool gizmo = false;
+  int cursor[2] = {0, 0};
+};
+static std::vector<BridgeTouchWindow> bridge_touch_windows;
+
+/** A highlighted gizmo of \a win's 3D Views that is not a navigation gizmo's: a handle a finger's
+ * drag can take. */
+static bool bridge_touch_gizmo_highlighted(wmWindow &win, const bScreen &screen)
+{
+  ED_screen_areas_iter (&win, &screen, area) {
+    if (area->spacetype != SPACE_VIEW3D) {
+      continue;
+    }
+    for (ARegion &region : area->regionbase) {
+      if (region.regiontype != RGN_TYPE_WINDOW || region.runtime == nullptr ||
+          region.runtime->gizmo_map == nullptr)
+      {
+        continue;
+      }
+      const wmGizmo *gz = wm_gizmomap_highlight_get(region.runtime->gizmo_map);
+      if (gz && gz->parent_gzgroup && gz->parent_gzgroup->type &&
+          !StringRef(gz->parent_gzgroup->type->idname).endswith("GGT_navigate"))
+      {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 static bool bridge_touch_zone_has(const BridgeTouchZone &zone, const int xy[2])
 {
   if (!BLI_rcti_isect_pt_v(&zone.rect, xy)) {
@@ -6620,8 +6658,53 @@ static void bridge_touch_zones_update(wmWindowManager *wm)
       }
     }
   }
+  std::vector<BridgeTouchWindow> windows;
+  for (wmWindow &win : wm->windows) {
+    const bScreen *screen = WM_window_get_active_screen(&win);
+    if (screen == nullptr || win.runtime->ghostwin == nullptr) {
+      continue;
+    }
+    BridgeTouchWindow state;
+    state.ghost_window = win.runtime->ghostwin;
+    for (wmEventHandler &handler : win.runtime->modalhandlers) {
+      if (handler.type == WM_HANDLER_TYPE_OP &&
+          !reinterpret_cast<wmEventHandler_Op &>(handler).is_fileselect)
+      {
+        state.modal = true;
+        break;
+      }
+    }
+    state.gizmo = bridge_touch_gizmo_highlighted(win, *screen);
+    if (win.runtime->eventstate) {
+      state.cursor[0] = win.runtime->eventstate->xy[0];
+      state.cursor[1] = win.runtime->eventstate->xy[1];
+      wm_cursor_position_to_ghost_client_coords(&win, &state.cursor[0], &state.cursor[1]);
+    }
+    windows.push_back(state);
+  }
   std::lock_guard lock(bridge_touch_mutex);
   bridge_touch_zones = std::move(zones);
+  bridge_touch_windows = std::move(windows);
+}
+
+/** The window's state as a finger lands at \a x, \a y (GHOST's client pixels), see
+ * #BridgeTouchWindow. Under #bridge_touch_mutex. */
+static void bridge_touch_window_answer(const void *ghost_window,
+                                       const int x,
+                                       const int y,
+                                       NativeTouchAnswer *r_answer)
+{
+  for (const BridgeTouchWindow &state : bridge_touch_windows) {
+    if (state.ghost_window != ghost_window) {
+      continue;
+    }
+    r_answer->modal = state.modal;
+    /* The cursor was put where the finger landed: within a pixel or two of it, the rounding of
+     * the way there and back. */
+    r_answer->gizmo = r_answer->kind == NativeTouchKind::View3D && state.gizmo &&
+                      abs(state.cursor[0] - x) <= 2 && abs(state.cursor[1] - y) <= 2;
+    return;
+  }
 }
 
 static bool bridge_touch_answer(const std::vector<BridgeTouchZone> &zones,
@@ -6671,7 +6754,9 @@ bool WM_native_ui_touch_at(const void *ghost_window,
     /* GHOST's client pixels to Blender's window pixels, as #wm_cursor_position_from_ghost_client_coords. */
     const int xy[2] = {int(x * zone.pixel_size),
                        int(((zone.window_height - 1) - y) * zone.pixel_size)};
-    return bridge_touch_answer(bridge_touch_zones, ghost_window, xy, r_answer);
+    const bool found = bridge_touch_answer(bridge_touch_zones, ghost_window, xy, r_answer);
+    bridge_touch_window_answer(ghost_window, x, y, r_answer);
+    return found;
   }
   return false;
 }
@@ -6746,6 +6831,25 @@ extern "C" bool WM_native_ui_touch_query(const int x,
   r_values[5] = answer.button_type;
   BLI_strncpy(r_where, answer.where, size_t(where_size));
   return found;
+}
+
+/**
+ * The first window's state for a finger landing (ROUND6 TOUCH-1, TOUCH-2), for the Mac harness's
+ * `fingers` scenario: \a r_values gets whether an operator waits, whether a gizmo's handle is
+ * highlighted, and Blender's cursor in GHOST's client pixels. False before the first pass.
+ */
+extern "C" bool WM_native_ui_touch_window_query(int r_values[4])
+{
+  std::lock_guard lock(bridge_touch_mutex);
+  if (bridge_touch_windows.empty()) {
+    return false;
+  }
+  const BridgeTouchWindow &state = bridge_touch_windows.front();
+  r_values[0] = state.modal;
+  r_values[1] = state.gizmo;
+  r_values[2] = state.cursor[0];
+  r_values[3] = state.cursor[1];
+  return true;
 }
 
 /**
