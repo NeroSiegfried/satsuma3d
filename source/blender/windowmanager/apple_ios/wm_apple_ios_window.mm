@@ -274,6 +274,21 @@ extern "C" bool wm_apple_ios_window_script_view_tap(void *window, const CGPoint 
   return window && [GHOST_ios_window_native(ghost_window(window)) scriptViewTap:point];
 }
 
+extern "C" void wm_apple_ios_window_hold_took_touch(void *window)
+{
+  if (window) {
+    [GHOST_ios_window_native(ghost_window(window)) holdTookTouch];
+  }
+}
+
+extern "C" bool wm_apple_ios_window_script_tool_finger(void *window,
+                                                       const int phase,
+                                                       const CGPoint point)
+{
+  return window && [GHOST_ios_window_native(ghost_window(window)) scriptToolFinger:phase
+                                                                               at:point];
+}
+
 extern "C" bool wm_apple_ios_window_script_touch(void *window, const int phase, const CGPoint point)
 {
   return window && [GHOST_ios_window_native(ghost_window(window)) scriptInterfaceTouch:phase

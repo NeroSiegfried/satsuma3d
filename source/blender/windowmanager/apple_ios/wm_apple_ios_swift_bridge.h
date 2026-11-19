@@ -80,6 +80,12 @@ bool wm_apple_ios_window_navigation_drawn(void *_Nullable window,
 bool wm_apple_ios_window_script_touch(void *_Nullable window, int phase, CGPoint point);
 /** A check script's finger tap on the view where fingers move it (ROUND6 TOUCH-1). */
 bool wm_apple_ios_window_script_view_tap(void *_Nullable window, CGPoint point);
+/** The shell's hold on the view took the touch for its menu: the finger presses nothing more
+ * (ROUND6 TOUCH-2). */
+void wm_apple_ios_window_hold_took_touch(void *_Nullable window);
+/** A check script's finger on the tool (ROUND6 TOUCH-2): \a phase 0 lands, 1 moves, 2 lifts, 3 a
+ * second finger lands. */
+bool wm_apple_ios_window_script_tool_finger(void *_Nullable window, int phase, CGPoint point);
 /** Where a check script finds a place to touch (ROUND5 13B): the centre of the region \a where
  * (`TOPBAR HEADER`, `PROPERTIES WINDOW`) with \a button_type -1, or of its first (\a last: last)
  * button of that `ButtonType`, in the window's points. False when there is none. */

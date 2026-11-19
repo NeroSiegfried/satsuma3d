@@ -222,6 +222,17 @@ void GHOST_ios_window_hold_modifier(GHOST_WindowIOS *window, GHOST_TKey key, boo
  * tap is the finger's own press, or the gate is closed.
  */
 - (BOOL)scriptViewTap:(CGPoint)point;
+/**
+ * The shell's hold on the view took the touch for its menu (ROUND6 TOUCH-2): what the finger began
+ * ends without pressing anything more, and its lifting is no click.
+ */
+- (void)holdTookTouch;
+/**
+ * A check script's finger on the tool (ROUND6 TOUCH-2), entering where a finger's touch does when
+ * fingers use the tool: \a phase 0 lands, 1 moves, 2 lifts, at \a point in the view's points; 3
+ * is a second finger landing. False when fingers move the view, or the gate is closed.
+ */
+- (BOOL)scriptToolFinger:(int)phase at:(CGPoint)point;
 @end
 
 UIWindow<GHOST_IOSInputWindow> *GHOST_ios_window_native(GHOST_WindowIOS *window);

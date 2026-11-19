@@ -55,6 +55,8 @@
  * - `fingers tool|navigate`: the touch setting for this launch only, not stored (ROUND5 13);
  *   `fingers tap <x> <y>`: a finger's tap on the view where fingers move it, the click it sends
  *   (ROUND6 TOUCH-1), at a point in the window's points;
+ * - `finger <x> <y> down|move|up`, `finger second`: a finger on the tool where fingers use it, as
+ *   it lands, moves and lifts, and a second finger landing (ROUND6 TOUCH-2);
  * - `motion reduce on|off`: the app's Reduce Motion path without the system setting (ROUND5 14C):
  *   the sidebars' slide and the insets in one step; until the app quits, never saved;
  * - `trait compact on|off`, `trait text <size>|default`: the window's horizontal size class or its
@@ -520,6 +522,24 @@ enum ShellSnapshots {
         }
         _ = wm_apple_ios_window_script_touch(window, 2, CGPoint(x: x + travel.x, y: y + travel.y))
         try? await Task.sleep(for: .milliseconds(parts.contains("flick") ? 1500 : 600))
+      case "finger":
+        /* ROUND6 TOUCH-2: a finger on the tool, as fingers use it: `finger <x> <y> down|move|up`
+         * and `finger second`, a second finger landing (navigation). */
+        guard let model = ShellModel.current else { break }
+        if words.first == "second" {
+          let taken = wm_apple_ios_window_script_tool_finger(model.window, 3, .zero)
+          WM_native_ui_log("snapshot", "\(step): \(taken ? "taken" : "not taken")")
+          try? await Task.sleep(for: .milliseconds(300))
+          break
+        }
+        let phases = ["down": Int32(0), "move": 1, "up": 2]
+        guard words.count >= 3, let x = Double(words[0]), let y = Double(words[1]), let phase = phases[words[2]] else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        let taken = wm_apple_ios_window_script_tool_finger(model.window, phase, CGPoint(x: x, y: y))
+        WM_native_ui_log("snapshot", "\(step): \(taken ? "taken" : "not taken (fingers move the view, or the gate is closed)")")
+        try? await Task.sleep(for: .milliseconds(phase == 1 ? 50 : 300))
       case "fingers":
         /* ROUND5 13: the touch setting for this launch only (Pencil and Fingers: `tool`; Pencil
          * Only: `navigate`), as Settings applies it, without storing it: the owner's setting is

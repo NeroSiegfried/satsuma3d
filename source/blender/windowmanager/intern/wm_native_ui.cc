@@ -6853,6 +6853,51 @@ extern "C" bool WM_native_ui_touch_window_query(int r_values[4])
 }
 
 /**
+ * The class ROUND6 TOUCH-2 is about, for the Mac harness's `fingers` scenario and a device script:
+ * every operator whose modal key map (as the person has it) cancels on Escape and also answers the
+ * left button, as lines `<idname>|<key map name>`. A second finger's Escape would throw such an
+ * operator's work away. The text is the caller's to free with `free`.
+ */
+extern "C" char *WM_native_ui_escape_cancel_operators()
+{
+  std::string text;
+  wmWindowManager *wm = static_cast<wmWindowManager *>(G_MAIN->wm.first);
+  for (wmOperatorType *ot : WM_operatortypes_registered_get()) {
+    if (ot->modalkeymap == nullptr || wm == nullptr) {
+      continue;
+    }
+    wmKeyMap *keymap = WM_keymap_active(wm, ot->modalkeymap);
+    const EnumPropertyItem *items = keymap ?
+                                        static_cast<const EnumPropertyItem *>(keymap->modal_items) :
+                                        nullptr;
+    if (items == nullptr) {
+      continue;
+    }
+    int cancel = -1;
+    for (const EnumPropertyItem *item = items; item->identifier; item++) {
+      if (STREQ(item->identifier, "CANCEL")) {
+        cancel = item->value;
+        break;
+      }
+    }
+    bool escape = false, left = false;
+    for (const wmKeyMapItem &kmi : keymap->items) {
+      if (kmi.flag & KMI_INACTIVE) {
+        continue;
+      }
+      escape |= kmi.type == EVT_ESCKEY && kmi.propvalue == cancel;
+      left |= kmi.type == LEFTMOUSE;
+    }
+    if (escape && left) {
+      text += std::string(ot->idname) + "|" + keymap->idname + "\n";
+    }
+  }
+  char *result = static_cast<char *>(malloc(text.size() + 1));
+  memcpy(result, text.c_str(), text.size() + 1);
+  return result;
+}
+
+/**
  * Every interactive button of the first window's map, as lines `<where>|<type>|<takes>|xmin ymin
  * xmax ymax`, for the harness to find a number field or a panel's place (ROUND5 13A, check 2).
  * The text is the caller's to free with `free`.

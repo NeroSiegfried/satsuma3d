@@ -376,6 +376,14 @@ UIWindow *document_window = nil;
   finger_tool_enabled = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
   view_finger_hovered = false;
   view_gizmo_drag = false;
+  finger_pending = false;
+  finger_scripted = false;
+  finger_landed_modal = false;
+  finger_drag_owned = false;
+  pencil_touch_is_pencil = false;
+  pencil_lifted_at = 0.0;
+  [palm_touches release];
+  palm_touches = [[NSMutableSet alloc] init];
   [finger_tweak_touches release];
   finger_tweak_touches = [[NSMutableSet alloc] init];
   finger_tweak_held = false;
@@ -724,6 +732,10 @@ UIWindow *document_window = nil;
   if (touch == navigation_button_touch) {
     return NO;
   }
+  /* The palm under a Pencil takes no part (ROUND6 TOUCH-2). */
+  if ([palm_touches containsObject:touch]) {
+    return NO;
+  }
   /* A finger on Blender's interface is told apart by the window (ROUND5 13B): no one-finger
    * navigation or tap takes it, nor any finger of a gesture that began there. Two-finger
    * recognizers do, and scroll there as a trackpad's two fingers do. */
@@ -907,11 +919,179 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
     pencil_gizmo_orbit = false;
     [self navigationGizmoDrag:3 at:CGPointZero translation:CGPointZero velocity:CGPointZero];
   }
+  if (pencil_touch_is_pencil) {
+    pencil_lifted_at = CACurrentMediaTime();
+  }
   pencil_button_active = false;
   pencil_navigation_pending = false;
   current_pencil_touch = nil;
+  pencil_touch_is_pencil = false;
+  finger_pending = false;
+  finger_scripted = false;
+  finger_drag_owned = false;
   tablet_data = GHOST_TABLET_DATA_NONE;
 }
+
+/* -------------------------------------------------------------------- */
+/** \name A finger on the tool (ROUND6 TOUCH-2)
+ *
+ * With Pencil and Fingers a finger is the tool, but nothing is pressed until the touch is told
+ * apart, as on Blender's interface (ROUND5 13B.1): moved past the slop, it is the press where it
+ * began and then the moves; lifted inside it, a click there; a second finger first, nothing at all:
+ * it is navigation. A second finger after the press undoes with Escape only a drag of the tool's
+ * own (no operator was waiting as the finger landed): an operation that lives across touches, as
+ * the knife's cut, a polyline or a waiting move, keeps what it has and only the press is withdrawn.
+ * \{ */
+
+/** How far a finger on the tool moves before it is a drag, in the view's points. */
+static constexpr CGFloat ios_finger_slop = 10.0;
+/** How long after a Pencil lifts a finger landing is still taken for the palm. */
+static constexpr CFTimeInterval ios_palm_seconds = 0.5;
+
+- (void)fingerToolBegan:(CGPoint)location
+{
+  finger_pending = true;
+  finger_start = location;
+  finger_landed_modal = [self touchAnswerAt:location].modal;
+  finger_drag_owned = false;
+  pencil_button_active = false;
+  tablet_data = GHOST_TABLET_DATA_NONE;
+}
+
+/** The finger is a drag: the press where it began. */
+- (void)fingerToolPress
+{
+  finger_pending = false;
+  pencil_button_active = true;
+  finger_drag_owned = !finger_landed_modal;
+  tablet_data = GHOST_TABLET_DATA_NONE;
+  CGPoint start = window->scalePointToWindow(finger_start);
+  UserInputEvent down(&start, nullptr, nullptr, true);
+  down.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
+  down.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_DOWN);
+  [self generateUserInputEvents:down];
+}
+
+/** The finger moved through \a samples (the view's points, the last the newest). */
+- (void)fingerToolMoved:(NSArray<NSValue *> *)samples
+{
+  if (finger_pending) {
+    const CGPoint point = samples.lastObject.CGPointValue;
+    if (hypot(point.x - finger_start.x, point.y - finger_start.y) <= ios_finger_slop) {
+      return;
+    }
+    [self fingerToolPress];
+  }
+  if (!pencil_button_active) {
+    return;
+  }
+  for (NSValue *sample in samples) {
+    CGPoint point = sample.CGPointValue;
+    point = window->scalePointToWindow(point);
+    UserInputEvent move(&point, nullptr, nullptr, true);
+    move.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
+    [self generateUserInputEvents:move];
+  }
+}
+
+/** The finger lifted at \a location: a click where it began if it never moved, else the release. */
+- (void)fingerToolEnded:(CGPoint)location
+{
+  if (finger_pending) {
+    CGPoint start = window->scalePointToWindow(finger_start);
+    UserInputEvent click(&start, nullptr, nullptr, true);
+    click.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
+    click.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_DOWN);
+    click.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_UP);
+    [self generateUserInputEvents:click];
+  }
+  else if (pencil_button_active) {
+    CGPoint point = window->scalePointToWindow(location);
+    UserInputEvent up(&point, nullptr, nullptr, true);
+    up.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
+    up.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_UP);
+    [self generateUserInputEvents:up];
+  }
+  pencil_button_active = false;
+  finger_pending = false;
+  finger_scripted = false;
+  finger_drag_owned = false;
+  current_pencil_touch = nil;
+  tablet_data = GHOST_TABLET_DATA_NONE;
+}
+
+/** A second finger landed while one was on the tool: the gesture is navigation. */
+- (void)fingerToolSecondFinger
+{
+  if (finger_pending) {
+    /* Nothing was sent: nothing to take back. */
+    finger_pending = false;
+    finger_scripted = false;
+    current_pencil_touch = nil;
+    return;
+  }
+  if (!pencil_button_active) {
+    return;
+  }
+  if (finger_drag_owned) {
+    /* A drag of the tool's own, such as a box being drawn: abandoned, as Escape abandons it. */
+    [self cancelPencilStroke];
+    return;
+  }
+  /* An operation that was waiting keeps what it has: only the press is withdrawn. */
+  UserInputEvent up(nullptr, nullptr, nullptr, true);
+  up.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_UP);
+  [self generateUserInputEvents:up];
+  pencil_button_active = false;
+  finger_scripted = false;
+  finger_drag_owned = false;
+  current_pencil_touch = nil;
+  tablet_data = GHOST_TABLET_DATA_NONE;
+}
+
+/** The shell's hold took the touch for its menu: what the finger began ends, pressing nothing
+ * more (no click when it lifts), and a tap under way is not one. */
+- (void)holdTookTouch
+{
+  [self cancelPencilStroke];
+  view_finger_hovered = false;
+  tap_gesture_recognizer.enabled = NO;
+  tap_gesture_recognizer.enabled = YES;
+}
+
+- (BOOL)scriptToolFinger:(int)phase at:(CGPoint)point
+{
+  if (!window || !finger_tool_enabled || [self blockedReason] != nil) {
+    return NO;
+  }
+  switch (phase) {
+    case 0:
+      [self cancelPencilStroke];
+      finger_scripted = true;
+      [self fingerToolBegan:point];
+      return YES;
+    case 1:
+      if (!finger_scripted) {
+        return NO;
+      }
+      [self fingerToolMoved:@[ [NSValue valueWithCGPoint:point] ]];
+      return YES;
+    case 2:
+      if (!finger_scripted) {
+        return NO;
+      }
+      [self fingerToolEnded:point];
+      return YES;
+    default:
+      if (!finger_scripted) {
+        return NO;
+      }
+      [self fingerToolSecondFinger];
+      return YES;
+  }
+}
+
+/** \} */
 
 /**
  * With the Tweak tool, a finger landing in the viewport moves the object under it, see
@@ -1032,18 +1212,28 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
     }
   }
   if (event.type == UIEventTypeTouches) {
+    /* The palm (ROUND6 TOUCH-2): a finger landing while the Pencil is down, or just after it
+     * lifted, is kept from the tool, the interface and navigation alike. */
+    const bool pencil_down = current_pencil_touch != nil && pencil_touch_is_pencil;
+    for (UITouch *touch in event.allTouches) {
+      if (touch.type == UITouchTypeDirect && touch.phase == UITouchPhaseBegan &&
+          (pencil_down || CACurrentMediaTime() - pencil_lifted_at < ios_palm_seconds))
+      {
+        [palm_touches addObject:touch];
+      }
+    }
     NSUInteger fingers = 0;
     for (UITouch *touch in event.allTouches) {
       if (touch.type == UITouchTypeDirect && touch.phase != UITouchPhaseEnded &&
           touch.phase != UITouchPhaseCancelled && touch != navigation_button_touch &&
-          [self touchBeganInBlenderViewport:touch])
+          ![palm_touches containsObject:touch] && [self touchBeganInBlenderViewport:touch])
       {
         fingers++;
       }
     }
-    /* Hand the sequence to two-finger navigation without committing a partial tool drag. */
-    if (fingers > 1 && current_pencil_touch.type == UITouchTypeDirect) {
-      [self cancelPencilStroke];
+    /* Hand the sequence to two-finger navigation without throwing work away (ROUND6 TOUCH-2). */
+    if (fingers > 1 && current_pencil_touch != nil && !pencil_touch_is_pencil) {
+      [self fingerToolSecondFinger];
     }
     const bool finger_tweak = finger_tool_enabled && ios_finger_tweak_active();
     [self updateFingerTweakHeld:event];
@@ -1063,6 +1253,12 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
       }
     }
     for (UITouch *touch in event.allTouches) {
+      if ([palm_touches containsObject:touch]) {
+        if (touch.phase == UITouchPhaseEnded || touch.phase == UITouchPhaseCancelled) {
+          [palm_touches removeObject:touch];
+        }
+        continue;
+      }
       ios_pencil_roll(touch);
       if (touch.type == UITouchTypePencil) {
         ios_pencil_seen();
@@ -1115,6 +1311,36 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
         continue;
       }
 
+      /* A finger on the tool is told apart before it presses (ROUND6 TOUCH-2). */
+      if (touch.type == UITouchTypeDirect) {
+        if (touch.phase == UITouchPhaseBegan) {
+          if (touch != current_pencil_touch && [self touchBeganInBlenderViewport:touch]) {
+            [self cancelPencilStroke];
+            ios_navigation_hover(false);
+            current_pencil_touch = touch;
+            pencil_touch_is_pencil = false;
+            [self fingerToolBegan:[touch preciseLocationInView:window->getView()]];
+          }
+        }
+        else if (touch == current_pencil_touch) {
+          if (touch.phase == UITouchPhaseMoved) {
+            NSMutableArray<NSValue *> *samples = [NSMutableArray array];
+            NSArray<UITouch *> *coalesced = [event coalescedTouchesForTouch:touch];
+            for (UITouch *sample in coalesced.count ? coalesced : @[ touch ]) {
+              [samples addObject:[NSValue valueWithCGPoint:[sample preciseLocationInView:window->getView()]]];
+            }
+            [self fingerToolMoved:samples];
+          }
+          else if (touch.phase == UITouchPhaseEnded) {
+            [self fingerToolEnded:[touch preciseLocationInView:window->getView()]];
+          }
+          else if (touch.phase == UITouchPhaseCancelled) {
+            [self cancelPencilStroke];
+          }
+        }
+        continue;
+      }
+
       switch (touch.phase) {
         case UITouchPhaseBegan:
           if (touch == current_pencil_touch || ![self touchBeganInBlenderViewport:touch]) {
@@ -1123,6 +1349,7 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
           [self cancelPencilStroke];
           ios_navigation_hover(false);
           current_pencil_touch = touch;
+          pencil_touch_is_pencil = true;
           /* Only the navigation hotspot waits to distinguish a tap from a hold.
            * Viewport tools still receive Pencil-down immediately. */
           pencil_navigation_pending = [touch.view.accessibilityIdentifier
@@ -1204,6 +1431,8 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
                                            CGPointZero)];
             pencil_navigation_pending = false;
             current_pencil_touch = nil;
+            pencil_touch_is_pencil = false;
+            pencil_lifted_at = CACurrentMediaTime();
             tablet_data = GHOST_TABLET_DATA_NONE;
             break;
           }
@@ -1218,6 +1447,8 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
             pencil_button_active = false;
             pencil_navigation_pending = false;
             current_pencil_touch = nil;
+            pencil_touch_is_pencil = false;
+            pencil_lifted_at = CACurrentMediaTime();
             tablet_data = GHOST_TABLET_DATA_NONE;
           }
           break;

@@ -220,6 +220,22 @@ typedef struct UserInputEvent {
   bool view_finger_hovered;
   CGPoint view_finger_start;
   bool view_gizmo_drag;
+  /* Pencil and Fingers (ROUND6 TOUCH-2): the finger on the tool presses nothing until it is told
+   * apart (moved past the slop: the press where it began, then the moves; lifted inside it: a
+   * click; a second finger first: nothing, it is navigation). Where it began, in the view's points;
+   * whether an operator was already waiting as it landed; whether its press began a drag of the
+   * tool's own (only that is undone with Escape when a second finger lands). A check script's
+   * `finger` step holds the state instead of a touch. */
+  bool finger_pending;
+  bool finger_scripted;
+  CGPoint finger_start;
+  bool finger_landed_modal;
+  bool finger_drag_owned;
+  /* The current tool touch is the Pencil's, and when a Pencil last lifted: a palm's touches,
+   * landing while it is down or just after, are kept from everything (ROUND6 TOUCH-2). */
+  bool pencil_touch_is_pencil;
+  CFTimeInterval pencil_lifted_at;
+  NSMutableSet<UITouch *> *palm_touches;
   /* Fingers moving objects with the Tweak tool, see #GHOST_IOSNativeInterface::finger_tweak_touch,
    * and whether one held an object since the gesture began: navigation waits for all to lift. */
   NSMutableSet<UITouch *> *finger_tweak_touches;

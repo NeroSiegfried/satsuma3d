@@ -2047,6 +2047,7 @@ if TOUCH_WINDOW is not None:
     TOUCH_WINDOW.restype = ctypes.c_bool
     TOUCH_WINDOW.argtypes = [ctypes.POINTER(ctypes.c_int)]
 fingers_state = {}
+ESCAPE_OPS = getattr(lib, "WM_native_ui_escape_cancel_operators", None)
 
 
 def _touch_window():
@@ -2117,8 +2118,75 @@ def tick_fingers():
             report["after Escape"] = answer
             if answer["modal"]:
                 problems.append("TOUCH-2: Move is said to wait after Escape ended it")
-            finish("done" if not problems else "error")
-            return None
+            # TOUCH-2's class: every operator whose modal key map cancels on Escape and answers the
+            # left button. Each that starts here from a timer, in the mode its name suggests, must be
+            # said to wait as it runs (the window then withdraws a press without Escape), and end.
+            ESCAPE_OPS.restype = ctypes.c_void_p
+            pointer = ESCAPE_OPS()
+            text = ctypes.string_at(pointer).decode()
+            lib.free(ctypes.c_void_p(pointer))
+            members = [line.split("|") for line in text.splitlines() if line]
+            report["escape class"] = len(members)
+            names = {idname for idname, _keymap in members}
+            for needed in ("MESH_OT_knife_tool", "TRANSFORM_OT_translate"):
+                if needed not in names:
+                    problems.append("TOUCH-2: %s is missing from the Escape class" % needed)
+            fingers_state["queue"] = sorted(names)
+            fingers_state["started"], fingers_state["not started"] = [], {}
+            return 0.3
+        queue = fingers_state.get("queue")
+        if queue is None:
+            return 0.3
+        current = fingers_state.get("current")
+        if current:
+            answer = _touch_window()
+            if not answer["modal"]:
+                problems.append("TOUCH-2: %s runs and is not said to wait" % current)
+            _simulate(window, 'ESC', 'PRESS', region.x + 12, region.y + 12)
+            _simulate(window, 'ESC', 'RELEASE', region.x + 12, region.y + 12)
+            fingers_state["current"] = None
+            fingers_state["ending"] = current
+            return 0.4
+        ending = fingers_state.pop("ending", None)
+        if ending and _touch_window()["modal"]:
+            # Not every member ends on Escape alone (a confirm step, a popup): ended by the harness.
+            fingers_state["not started"].setdefault("still running after Escape", []).append(ending)
+            _simulate(window, 'RIGHTMOUSE', 'PRESS', region.x + 12, region.y + 12)
+            _simulate(window, 'RIGHTMOUSE', 'RELEASE', region.x + 12, region.y + 12)
+            return 0.4
+        while queue:
+            idname = queue.pop(0)
+            module, name = idname.split("_OT_")
+            operator = getattr(getattr(bpy.ops, module.lower()), name)
+            mode = 'OBJECT'
+            if module in ("MESH",):
+                mode = 'EDIT'
+            elif module in ("SCULPT", "PAINT"):
+                mode = 'SCULPT'
+            if bpy.context.object and bpy.context.object.mode != mode:
+                bpy.ops.object.mode_set(mode=mode)
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                if not operator.poll():
+                    fingers_state["not started"].setdefault("poll fails here", []).append(idname)
+                    continue
+                try:
+                    result = operator('INVOKE_DEFAULT')
+                except Exception as error:
+                    fingers_state["not started"].setdefault("refused", []).append("%s: %s" % (idname, str(error).splitlines()[0][:80]))
+                    continue
+            if 'RUNNING_MODAL' in result:
+                fingers_state["started"].append(idname)
+                fingers_state["current"] = idname
+                return 0.4
+            fingers_state["not started"].setdefault("did not wait", []).append(idname)
+        if bpy.context.object and bpy.context.object.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        report["escape class started"] = fingers_state["started"]
+        report["escape class not started"] = fingers_state["not started"]
+        if len(fingers_state["started"]) < 3:
+            problems.append("TOUCH-2: fewer than three of the Escape class started; the sweep proves little")
+        finish("done" if not problems else "error")
+        return None
     except Exception:
         report["error"] = traceback.format_exc()
         finish("error")

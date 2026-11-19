@@ -608,6 +608,8 @@ extension DocumentController: UIGestureRecognizerDelegate {
   @objc private func contextMenuPress(_ press: UILongPressGestureRecognizer) {
     /* Blender's own interface has its own context menus. */
     guard press.state == .began, !model.desktop else { return }
+    /* The finger pressed nothing yet, and its lifting is no click (ROUND6 TOUCH-2). */
+    wm_apple_ios_window_hold_took_touch(model.window)
     let point = press.location(in: metalView)
     let menu = wm_apple_ios_context_menu()
     guard !menu.children.isEmpty else { return }

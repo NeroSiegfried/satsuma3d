@@ -1143,4 +1143,29 @@ check(0 < pan_body.find('viewGizmoDrag:') < pan_body.find('handleNavigationDrag:
       '[self touchAnswerAt:view_finger_start].gizmo' in ghost_r6 and 'r_answer->gizmo =' in bridge_text,
       "R6 TOUCH-1: a finger's drag from a gizmo's handle drags it before the view would orbit")
 
+# ROUND6 TOUCH-2 (A1, E1): a second finger never throws work away. A finger on the tool presses
+# nothing as it lands; a second finger before the press sends nothing; after it, Escape only for a
+# drag of the tool's own; the palm under a Pencil takes no part; the shell's hold ends the finger.
+def objc_method(text, signature):
+    body = text[text.index(signature):]
+    return body[:body.index('\n}\n')]
+
+
+began = objc_method(ghost_r6, '- (void)fingerToolBegan:(CGPoint)location')
+second = objc_method(ghost_r6, '- (void)fingerToolSecondFinger')
+send_event_r6 = objc_method(ghost_r6, '- (void)sendEvent:(UIEvent *)event')
+check('generateUserInputEvents' not in began and 'touchAnswerAt:location].modal' in began,
+      "R6 TOUCH-2: a finger on the tool presses nothing as it lands, and notes whether an operator waits")
+owned_at = second.find('if (finger_drag_owned)')
+check(0 < second.find('if (finger_pending)') < owned_at < second.find('[self cancelPencilStroke];') and
+      'CANCEL_TOOL' not in second and 'finger_drag_owned = !finger_landed_modal;' in ghost_r6,
+      "R6 TOUCH-2: a second finger sends Escape only for a drag the finger began with nothing waiting")
+check('[self fingerToolSecondFinger];' in send_event_r6 and
+      'current_pencil_touch.type == UITouchTypeDirect) {\n      [self cancelPencilStroke];' not in send_event_r6 and
+      send_event_r6.find('[palm_touches addObject:touch]') < send_event_r6.find('handleNavigationButtonTouch:') and
+      'if ([palm_touches containsObject:touch]) {\n    return NO;' in ghost_r6,
+      "R6 TOUCH-2: the second finger goes through the one rule, and the palm is kept from everything first")
+check('wm_apple_ios_window_hold_took_touch(model.window)' in (SWIFT / 'DocumentWindow.swift').read_text(encoding='utf-8'),
+      "R6 TOUCH-2: the shell's hold ends what the finger began, so no click follows the menu")
+
 print('PASS: native shell sources ' + json.dumps(checks))
