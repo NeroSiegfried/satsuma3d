@@ -4,8 +4,14 @@
 
 /** \file
  * Files dragged in from other apps drop on the viewport where they land, as on a Mac: images,
- * models, .blend files and anything else Blender opens. Each is copied into a folder of its own,
- * so its path stays valid for as long as the document refers to it.
+ * models, .blend files and anything else Blender opens.
+ *
+ * Where a dropped file is kept (ROUND6 FILES-5, decision R6-14): what Blender can pack (images,
+ * fonts, models, whose textures are images) is copied into the app's temporary folder and packed
+ * into the document as it is next written, so the document holds it wherever it goes. What
+ * Blender reads by its path and cannot pack (movies, sounds, caches, a .blend to link) is kept in
+ * "Brought In" in the app's own documents, which Files shows and backups keep. The hidden
+ * "Dropped Files" folder is no longer used.
  */
 
 import SwiftUI
@@ -32,13 +38,14 @@ struct FileDrop: DropDelegate {
 
   func performDrop(info: DropInfo) -> Bool {
     let providers = info.itemProviders(for: [.data, .image])
-    guard let folder = Self.dropFolder(), !providers.isEmpty else { return false }
+    guard !providers.isEmpty else { return false }
+    let stamp = Self.dropStamp()
     let point = info.location
     let window = model.window
     Task {
       var paths: [String] = []
       for (index, provider) in providers.enumerated() {
-        if let path = await Self.copy(provider, index: index, into: folder) { paths.append(path) }
+        if let path = await Self.copy(provider, index: index, stamp: stamp) { paths.append(path) }
       }
       await MainActor.run {
         if paths.isEmpty { Haptics.error() }
@@ -48,16 +55,34 @@ struct FileDrop: DropDelegate {
     return true
   }
 
-  /** A new folder per drop, so files of the same name never replace each other. */
-  private static func dropFolder() -> URL? {
-    let files = FileManager.default
-    guard let support = try? files.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                       appropriateFor: nil, create: true) else { return nil }
+  /** One name per drop, so files of the same name never replace each other. */
+  private static func dropStamp() -> String {
     let format = DateFormatter()
     format.dateFormat = "yyyy-MM-dd HH.mm.ss"
-    let name = "\(format.string(from: Date())) \(UUID().uuidString.prefix(8))"
-    let folder = support.appending(path: "Dropped Files", directoryHint: .isDirectory)
-      .appending(path: name, directoryHint: .isDirectory)
+    return "\(format.string(from: Date())) \(UUID().uuidString.prefix(8))"
+  }
+
+  /** Files Blender reads by their path and cannot pack into the document. */
+  static func keptByPath(_ type: UTType) -> Bool {
+    if type.conforms(to: .movie) || type.conforms(to: .audio) { return true }
+    let ext = type.preferredFilenameExtension?.lowercased() ?? ""
+    return ["abc", "vdb", "usd", "usda", "usdc", "usdz", "blend", "mov", "mp4", "mkv", "avi",
+            "webm"].contains(ext)
+  }
+
+  /** The drop's folder for a file of `type`: the app's temporary folder for what is packed, "Brought
+   * In" in the app's documents for what is read by its path. */
+  private static func dropFolder(for type: UTType, stamp: String) -> URL? {
+    let files = FileManager.default
+    let base: URL
+    if keptByPath(type) {
+      guard let documents = try? files.url(for: .documentDirectory, in: .userDomainMask,
+                                           appropriateFor: nil, create: true) else { return nil }
+      base = documents.appending(path: "Brought In", directoryHint: .isDirectory)
+    } else {
+      base = files.temporaryDirectory.appending(path: "Dropped", directoryHint: .isDirectory)
+    }
+    let folder = base.appending(path: stamp, directoryHint: .isDirectory)
     return (try? files.createDirectory(at: folder, withIntermediateDirectories: true)) != nil ? folder : nil
   }
 
@@ -72,14 +97,14 @@ struct FileDrop: DropDelegate {
     return name
   }
 
-  /** Copy one item into `folder`, returning its path, or nil when it offers nothing Blender
-   * could open. */
-  private static func copy(_ provider: NSItemProvider, index: Int, into folder: URL) async -> String? {
+  /** Copy one item into its drop folder, returning its path, or nil when it offers nothing
+   * Blender could open. */
+  private static func copy(_ provider: NSItemProvider, index: Int, stamp: String) async -> String? {
     let types = provider.registeredTypeIdentifiers.compactMap { UTType($0) }
     if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
       for readable in readableImages {
         if let type = types.first(where: { $0.conforms(to: readable) }) {
-          return await copyFile(provider, type: type, index: index, into: folder)
+          return await copyFile(provider, type: type, index: index, stamp: stamp)
         }
       }
       if provider.canLoadObject(ofClass: UIImage.self) {
@@ -87,6 +112,7 @@ struct FileDrop: DropDelegate {
           _ = provider.loadObject(ofClass: UIImage.self) { object, _ in done.resume(returning: object as? UIImage) }
         }
         let name = fileName((provider.suggestedName as NSString?)?.deletingPathExtension, .png, index)
+        guard let folder = dropFolder(for: .png, stamp: stamp) else { return nil }
         let target = folder.appending(path: name)
         guard let png = image?.pngData(), (try? png.write(to: target)) != nil else { return nil }
         return target.path
@@ -94,10 +120,11 @@ struct FileDrop: DropDelegate {
     }
     /* Any other file (models, .blend, fonts, ...): copied as it is. */
     guard let type = types.first(where: { $0.conforms(to: .data) && !$0.conforms(to: .url) }) else { return nil }
-    return await copyFile(provider, type: type, index: index, into: folder)
+    return await copyFile(provider, type: type, index: index, stamp: stamp)
   }
 
-  private static func copyFile(_ provider: NSItemProvider, type: UTType, index: Int, into folder: URL) async -> String? {
+  private static func copyFile(_ provider: NSItemProvider, type: UTType, index: Int, stamp: String) async -> String? {
+    guard let folder = dropFolder(for: type, stamp: stamp) else { return nil }
     let suggested = provider.suggestedName
     return await withCheckedContinuation { done in
       _ = provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in

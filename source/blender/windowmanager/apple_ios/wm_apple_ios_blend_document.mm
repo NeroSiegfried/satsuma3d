@@ -15,6 +15,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -35,7 +36,9 @@ std::string WM_apple_ios_document_template_write(bContext *C,
                                                  const char *filepath,
                                                  const char *preview,
                                                  std::string &attribution);
-/* Implemented in wm_apple_ios_document.cc (ROUND6 FILES-3). */
+/* Implemented in wm_apple_ios_document.cc (ROUND6 FILES-3, FILES-5). */
+std::string WM_apple_ios_document_external(bContext *C);
+int WM_apple_ios_document_pack_external(bContext *C);
 std::vector<std::string> WM_apple_ios_document_neighbours_reload(
     bContext *C, const std::vector<std::string> &unreadable);
 }  // namespace blender
@@ -77,6 +80,12 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work, bool *r_t
 }
 
 static void writeFreshCopy(NSString *name, UIViewController *presenter, void (^done)(NSURL *url));
+@class WMIOSBlendDocument;
+static void wm_apple_ios_document_file_now_go(WMIOSBlendDocument *document,
+                                              NSURL *documentURL,
+                                              NSString *name,
+                                              UIViewController *presenter,
+                                              void (^finish)(NSURL *));
 
 /** One folder pick, for the folder beside a document (ROUND6 FILES-3). */
 @interface WMIOSFolderGrant : NSObject <UIDocumentPickerDelegate>
@@ -1278,6 +1287,98 @@ void wm_apple_ios_document_file_now(UIViewController *presenter, void (^done)(NS
   [document retain];
   [finish retain];
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    /* Files it reads from outside itself would be missing from a copy sent elsewhere: offer to
+     * include them first, as desktop's Pack Resources (ROUND6 FILES-5). */
+    auto external = std::make_shared<std::string>();
+    engine_wait([external](blender::bContext *C) {
+      *external = blender::WM_apple_ios_document_external(C);
+      return true;
+    });
+    int packable = 0, unpackable = 0;
+    char first[1024] = "";
+    sscanf(external->c_str(), "%d %d %1023[^\n]", &packable, &unpackable, first);
+    if (packable + unpackable > 0) {
+      NSString *example = [NSString stringWithUTF8String:first] ?: @"";
+      dispatch_async(dispatch_get_main_queue(), ^{
+        void (^go)(BOOL) = ^(BOOL include) {
+          dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            if (include) {
+              engine_wait([](blender::bContext *C) {
+                blender::WM_apple_ios_document_pack_external(C);
+                return true;
+              });
+            }
+            wm_apple_ios_document_file_now_go(document, documentURL, name, presenter, finish);
+          });
+        };
+        NSString *count = packable + unpackable == 1 ?
+                              @"1 file" :
+                              [NSString stringWithFormat:@"%d files", packable + unpackable];
+        NSMutableString *message = [NSMutableString
+            stringWithFormat:@"“%@” reads %@ from outside itself, such as “%@”. A copy sent "
+                             @"elsewhere would miss them.",
+                             name,
+                             count,
+                             example];
+        if (unpackable > 0) {
+          [message appendFormat:@" %d of them (movies, sequences, caches or linked libraries) "
+                                @"cannot be included and stay outside.",
+                                unpackable];
+        }
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"Include External Files?"
+                             message:message
+                      preferredStyle:UIAlertControllerStyleAlert];
+        if (packable > 0) {
+          UIAlertAction *include = [UIAlertAction actionWithTitle:@"Include External Files"
+                                                            style:UIAlertActionStyleDefault
+                                                          handler:^(UIAlertAction *) {
+                                                            go(YES);
+                                                          }];
+          [alert addAction:include];
+          alert.preferredAction = include;
+        }
+        [alert addAction:[UIAlertAction actionWithTitle:@"Send Without Them"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction *) {
+                                                  go(NO);
+                                                }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                                  style:UIAlertActionStyleCancel
+                                                handler:^(UIAlertAction *) {
+                                                  WM_native_ui_log("document",
+                                                                   "include external files: "
+                                                                   "cancelled");
+                                                  finish(nil);
+                                                  [presenter release];
+                                                  [document release];
+                                                  [finish release];
+                                                }]];
+        WM_native_ui_log("document",
+                         [NSString stringWithFormat:@"include external files asked: %d, %d not "
+                                                    @"packable",
+                                                    packable + unpackable,
+                                                    unpackable]
+                             .UTF8String);
+        [presenter ?: wm_apple_ios_top_presenter() presentViewController:alert
+                                                                animated:YES
+                                                              completion:nil];
+      });
+      return;
+    }
+    wm_apple_ios_document_file_now_go(document, documentURL, name, presenter, finish);
+  });
+}
+
+/** The rest of #wm_apple_ios_document_file_now, off the main queue, once external files are
+ * answered for. Releases what that retained. */
+static void wm_apple_ios_document_file_now_go(WMIOSBlendDocument *document,
+                                              NSURL *documentURL,
+                                              NSString *name,
+                                              UIViewController *presenter,
+                                              void (^finish)(NSURL *))
+{
+  {
     /* What is loaded is the document's: save it, then hand on the file, as Files apps do. Not the
      * document's (refused, ROUND5 9D.1): what is loaded exists nowhere on disk, so write it as a
      * copy and hand on that, leaving the document as it is. The same when the save fails (ROUND6
@@ -1312,7 +1413,7 @@ void wm_apple_ios_document_file_now(UIViewController *presenter, void (^done)(NS
       finish(copy);
       release_all();
     });
-  });
+  }
 }
 
 void wm_apple_ios_document_save_as(UIViewController *presenter)

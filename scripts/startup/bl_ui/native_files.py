@@ -2,7 +2,15 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-"""Link and Append for the iPad (ROUND6 FILES-4, finding F9).
+"""Files brought into a document on the iPad (ROUND6 FILES-4, FILES-5).
+
+What is brought in (ROUND6 FILES-5, finding F4, decision R6-14): a file from outside the
+document's folder, dropped, picked with the system picker, or loaded by a script, is packed into
+the document as it is next written (`pack_brought_in`, run by the document's write), as images
+opened in the Image Editor and fonts always were. Share and Save As offer to include the rest
+(`external_files`, `pack_external`).
+
+Link and Append for the iPad (ROUND6 FILES-4, finding F9).
 
 Desktop browses inside a `.blend` with its own File Browser, which reads folders itself: in the
 iPad's sandbox it can list only the app's own folder. Here it is two steps: the system picker for
@@ -126,6 +134,95 @@ def run(path, mode, plural, names, options=None, id_session_uid=0):
         props = {key: value for key, value in props.items() if key not in {"do_reuse_local_id", "clear_asset_data"}}
     return operator('EXEC_DEFAULT', directory=directory, files=files, filename=names[0],
                     filepath=directory + names[0], **props)
+
+
+def _absolute(path, id_data):
+    library = getattr(id_data, "library", None)
+    return os.path.normpath(bpy.path.abspath(path, library=library))
+
+
+def _inside(path, folder):
+    return bool(folder) and (path == folder or path.startswith(folder.rstrip(os.sep) + os.sep))
+
+
+def _packable():
+    """The data-blocks Blender can pack, with their file, not packed yet and the file's own."""
+    for image in bpy.data.images:
+        if (image.library is None and image.packed_file is None and image.filepath and
+                image.source in {'FILE', 'TILED'}):
+            yield image, _absolute(image.filepath, image)
+    for font in bpy.data.fonts:
+        if font.library is None and font.packed_file is None and font.filepath not in {"", "<builtin>"}:
+            yield font, _absolute(font.filepath, font)
+    for volume in bpy.data.volumes:
+        if volume.library is None and volume.packed_file is None and volume.filepath and \
+                hasattr(volume, "pack"):
+            yield volume, _absolute(volume.filepath, volume)
+
+
+def _unpackable():
+    """Files Blender reads by their path and cannot pack: movies, image sequences, movie clips,
+    caches, sounds, linked libraries."""
+    for image in bpy.data.images:
+        if image.library is None and image.packed_file is None and image.filepath and \
+                image.source in {'MOVIE', 'SEQUENCE'}:
+            yield image, _absolute(image.filepath, image)
+    for collection in (bpy.data.movieclips, bpy.data.cache_files, bpy.data.sounds):
+        for id_data in collection:
+            if id_data.library is None and getattr(id_data, "packed_file", None) is None and \
+                    id_data.filepath:
+                yield id_data, _absolute(id_data.filepath, id_data)
+    for library in bpy.data.libraries:
+        if library.packed_file is None and library.filepath:
+            yield library, _absolute(library.filepath, library)
+
+
+def _document_folder():
+    path = bpy.data.filepath
+    return os.path.dirname(os.path.normpath(path)) if path else ""
+
+
+def pack_brought_in():
+    """Pack every file a data-block reads from outside the document's folder (R6-14). Returns the
+    names packed. Files that cannot be read are left as they are (FILES-3 asks for them)."""
+    folder = _document_folder()
+    if not folder:
+        return []
+    packed = []
+    for id_data, path in list(_packable()):
+        if _inside(path, folder) or not os.path.isfile(path):
+            continue
+        try:
+            id_data.pack()
+        except RuntimeError as error:
+            print("Could not pack %s: %s" % (id_data.name, error))
+            continue
+        packed.append(id_data.name)
+    return packed
+
+
+def external_files():
+    """What a copy of the document sent elsewhere would miss: (packable, unpackable) file names."""
+    packable = sorted({os.path.basename(path) for _id, path in _packable()})
+    unpackable = sorted({os.path.basename(path) for _id, path in _unpackable()})
+    return packable, unpackable
+
+
+def external_summary():
+    """"packable unpackable first-name" for the document's Share and Save As."""
+    packable, unpackable = external_files()
+    first = (packable or unpackable or [""])[0]
+    return "%d %d %s" % (len(packable), len(unpackable), first)
+
+
+def pack_external():
+    """Include External Files: pack everything Blender can pack, as Pack Resources does."""
+    count = 0
+    for id_data, path in list(_packable()):
+        if os.path.isfile(path):
+            id_data.pack()
+            count += 1
+    return count
 
 
 class WM_PG_native_library_item(PropertyGroup):

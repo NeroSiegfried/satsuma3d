@@ -291,6 +291,11 @@ add_blender_test(
 )
 
 add_blender_test(
+  script_native_brought_in
+  --python ${CMAKE_CURRENT_LIST_DIR}/bl_native_brought_in.py
+)
+
+add_blender_test(
   script_native_shell_sources
   --python ${CMAKE_CURRENT_LIST_DIR}/bl_native_shell_sources.py
 )

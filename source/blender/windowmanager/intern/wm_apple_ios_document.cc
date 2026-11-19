@@ -600,6 +600,8 @@ static void document_hold(const Main *bmain, const char *filepath, wmDocumentOpe
  * a document opens from its own path, from iCloud through a coordinated read or from its newer
  * auto-save, and each of these loads one file the same way.
  */
+/** Files brought in from outside the document's folder, packed (ROUND6 FILES-5). */
+int WM_apple_ios_document_pack_brought_in(bContext *C);
 /** Files beside the document that cannot be read, see below (ROUND6 FILES-3). */
 std::vector<std::string> WM_apple_ios_document_unreadable(Main *bmain, std::string &r_folder);
 
@@ -960,6 +962,65 @@ std::vector<std::string> WM_apple_ios_document_neighbours_reload(
 
 /** \} */
 
+int WM_apple_ios_document_pack_brought_in(bContext *C)
+{
+  intptr_t packed = 0;
+#  ifdef WITH_PYTHON
+  const char *imports[] = {"bl_ui", "bl_ui.native_files", nullptr};
+  if (!BPY_run_string_as_intptr(
+          C, imports, "len(bl_ui.native_files.pack_brought_in())", nullptr, &packed))
+  {
+    WM_native_ui_session_log("document", "brought-in files: could not be packed (Python failed)");
+    return 0;
+  }
+  if (packed > 0) {
+    WM_native_ui_session_log(
+        "document", fmt::format("brought-in files: {} packed into the document", packed).c_str());
+  }
+#  else
+  UNUSED_VARS(C);
+#  endif
+  return int(packed);
+}
+
+std::string WM_apple_ios_document_external(bContext *C)
+{
+#  ifdef WITH_PYTHON
+  const char *imports[] = {"bl_ui", "bl_ui.native_files", nullptr};
+  char *summary = nullptr;
+  if (BPY_run_string_as_string(
+          C, imports, "bl_ui.native_files.external_summary()", nullptr, &summary) &&
+      summary)
+  {
+    std::string result = summary;
+    MEM_delete(summary);
+    return result;
+  }
+#  else
+  UNUSED_VARS(C);
+#  endif
+  return "0 0 ";
+}
+
+int WM_apple_ios_document_pack_external(bContext *C)
+{
+  intptr_t packed = 0;
+#  ifdef WITH_PYTHON
+  const char *imports[] = {"bl_ui", "bl_ui.native_files", nullptr};
+  if (BPY_run_string_as_intptr(
+          C, imports, "bl_ui.native_files.pack_external()", nullptr, &packed) &&
+      packed > 0)
+  {
+    WM_file_tag_modified();
+  }
+  WM_native_ui_session_log(
+      "document", fmt::format("include external files: {} packed", packed).c_str());
+#  else
+  UNUSED_VARS(C);
+#  endif
+  return int(packed);
+}
+
 /**
  * The reason Blender gave for a write it could not make: its first error, else its first warning.
  * Blender's own words, which the document shows; never dropped unread (ROUND6 SAFE-1).
@@ -1001,6 +1062,10 @@ static bool wm_document_write(bContext *C,
       wm_window_make_drawable(wm, win);
     }
   }
+  /* One rule for what is brought in (ROUND6 FILES-5, decision R6-14): a file a data-block reads
+   * from outside the document's folder (dropped, picked, loaded by a script) is packed into it,
+   * so the document never depends on a copy the app keeps or on a grant another device lacks. */
+  WM_apple_ios_document_pack_brought_in(C);
   /* Painted images are kept in the document, as Pack does: it saves itself, with no moment to
    * save them on their own, and their pixels would otherwise be lost. */
   for (Image &image : CTX_data_main(C)->images) {
