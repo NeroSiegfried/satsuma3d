@@ -210,7 +210,6 @@ bool hidden_from_menu_bar(bContext *C, Button &but)
       "TOPBAR_MT_file_open_recent",
       "TOPBAR_MT_file_recover",
       "TOPBAR_MT_file_previews",
-      "TOPBAR_MT_file_external_data",
       "TOPBAR_MT_file_defaults",
       "INFO_MT_area",
   };
@@ -336,7 +335,10 @@ void project(bContext *C,
     if (!writer) {
       continue;
     }
-    if (ELEM(root, "TOPBAR_MT_editor_menus", "VIEW3D_MT_editor_menus") && hidden_from_menu_bar(C, but)) {
+    /* Blender's File menu, which Search walks, hides what the menu bar hides (ROUND6 FILES-7). */
+    if (ELEM(root, "TOPBAR_MT_editor_menus", "VIEW3D_MT_editor_menus", "TOPBAR_MT_file") &&
+        hidden_from_menu_bar(C, but))
+    {
       continue;
     }
     if (ELEM(but.type, ButtonType::Sepr, ButtonType::SeprLine)) {
@@ -596,7 +598,12 @@ bool menu_can_show(bContext *C, const StringRef idname)
                          "VIEW3D_MT_add",
                          /* The Share menu's Import and Export. */
                          "TOPBAR_MT_file_import",
-                         "TOPBAR_MT_file_export") ||
+                         "TOPBAR_MT_file_export",
+                         /* The shell's File menu's housekeeping, and Search's walk of Blender's
+                          * File menu (ROUND6 FILES-7). */
+                         "TOPBAR_MT_file",
+                         "TOPBAR_MT_file_external_data",
+                         "TOPBAR_MT_file_cleanup") ||
                     (context_id && idname == context_id) ||
                     /* A Properties tab's menus are drawn in a Properties editor of their own, see
                      * #in_properties_tab, and checked as the viewport's. */

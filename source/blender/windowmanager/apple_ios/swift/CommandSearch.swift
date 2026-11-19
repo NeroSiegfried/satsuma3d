@@ -77,8 +77,9 @@ final class CommandSearch {
         roots += header.filter { $0.submenu }.map { ($0.route, $0.title) }
       }
       roots.append((BlenderMenus.contextRoute, "Context Menu"))
-      roots.append((BlenderMenus.route("TOPBAR_MT_file_import"), "File › Import"))
-      roots.append((BlenderMenus.route("TOPBAR_MT_file_export"), "File › Export"))
+      /* Blender's File menu, its Import, Export and housekeeping with it (ROUND6 FILES-7); what
+       * the menu bar hides it hides too. */
+      roots.append((BlenderMenus.route("TOPBAR_MT_file"), "File"))
       var queue = roots.map { ($0.route, $0.path, 1) }
       var seen = Set<String>()
       while !queue.isEmpty {

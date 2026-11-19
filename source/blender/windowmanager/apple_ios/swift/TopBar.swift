@@ -416,6 +416,8 @@ struct DocumentToolbar: ToolbarContent {
       .prefetchingBlenderMenu(EditorMenus.route)
       .prefetchingBlenderMenu(Self.importRoute)
       .prefetchingBlenderMenu(Self.exportRoute)
+      .prefetchingBlenderMenu(Self.externalDataRoute)
+      .prefetchingBlenderMenu(Self.cleanUpRoute)
       .modifier(MorePopovers(model: model, shell: shell, shading: !shown.shading, toolSettings: model.compact))
       .accessibilityIdentifier("blender.actions")
   }
@@ -515,6 +517,8 @@ struct DocumentToolbar: ToolbarContent {
 
   static let importRoute = BlenderMenus.route("TOPBAR_MT_file_import")
   static let exportRoute = BlenderMenus.route("TOPBAR_MT_file_export")
+  static let externalDataRoute = BlenderMenus.route("TOPBAR_MT_file_external_data")
+  static let cleanUpRoute = BlenderMenus.route("TOPBAR_MT_file_cleanup")
 
   /** File, where a desktop user looks for it: saving a copy, and Blender's own Import and Export.
    * Documents save themselves, so there is no Save; going back to the documents keeps the work. */
@@ -540,6 +544,16 @@ struct DocumentToolbar: ToolbarContent {
     Section {
       Menu { BlenderMenuItems(route: Self.importRoute) } label: { blenderLabel("Import", "IMPORT") }
       Menu { BlenderMenuItems(route: Self.exportRoute) } label: { blenderLabel("Export", "EXPORT") }
+      Button("Export All Collections", systemImage: "square.and.arrow.up.on.square") {
+        Operators.run("WM_OT_collection_export_all")
+      }
+    }
+    /* The File menu's housekeeping, Blender's own (ROUND6 FILES-7): packing and paths, missing
+     * files, purging unused data, and going back to the file as last saved. */
+    Section {
+      Menu { BlenderMenuItems(route: Self.externalDataRoute) } label: { Text("External Data") }
+      Menu { BlenderMenuItems(route: Self.cleanUpRoute) } label: { Text("Clean Up") }
+      Button("Revert", systemImage: "arrow.counterclockwise") { Operators.run("WM_OT_revert_mainfile") }
     }
   }
 
@@ -548,6 +562,8 @@ struct DocumentToolbar: ToolbarContent {
     Menu { fileMenu } label: { Text("File") }
       .prefetchingBlenderMenu(Self.importRoute)
       .prefetchingBlenderMenu(Self.exportRoute)
+      .prefetchingBlenderMenu(Self.externalDataRoute)
+      .prefetchingBlenderMenu(Self.cleanUpRoute)
       .accessibilityIdentifier("blender.file")
   }
 
