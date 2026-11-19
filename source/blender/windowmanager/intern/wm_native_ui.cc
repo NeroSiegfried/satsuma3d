@@ -24,6 +24,7 @@
 #include "BKE_library.hh"
 #include "BKE_lib_id.hh"
 #include "BKE_main.hh"
+#include "BKE_object.hh"
 #include "BKE_packedFile.hh"
 #include "BKE_paint.hh"
 #include "BKE_preferences.h"
@@ -2563,6 +2564,16 @@ void bridge_transform_build(const Scene *scene,
 {
   if (!scene || !scene->toolsettings) {
     return;
+  }
+  /* The modes whose header has Transform Orientation and Pivot Point, as `draw_xform_template`
+   * decides: Object Mode, the edit modes, Pose Mode and Weight Paint on a posed armature. The shell
+   * shows its row of transform settings by this, not by mode names of its own (R6 E5). */
+  if (mode == CTX_MODE_OBJECT || mode <= CTX_MODE_EDIT_POINTCLOUD || mode == CTX_MODE_POSE ||
+      (mode == CTX_MODE_PAINT_WEIGHT && ob && BKE_object_pose_armature_get(ob)))
+  {
+    builder.add(top, "transform_settings", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      return bridge_data(buffer, true);
+    });
   }
   const ToolSettings *settings = scene->toolsettings;
   const auto choice = [&](const char *key,

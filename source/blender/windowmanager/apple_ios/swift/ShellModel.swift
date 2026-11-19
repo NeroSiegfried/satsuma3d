@@ -362,6 +362,9 @@ final class ShellModel {
   var shading: String { text("shading") ?? "solid" }
   /** In mesh edit mode: `VERT`, `EDGE` or `FACE`. */
   var meshSelectMode: String { node("select_mode")?.choice?.value ?? "VERT" }
+  /** Whether the mode's header has Transform Orientation and Pivot Point in Blender: Object Mode,
+   * the edit modes, Pose Mode, Weight Paint on a posed armature. Blender decides, not mode names. */
+  var hasTransformSettings: Bool { flag("transform_settings") }
   /** Transform orientation, pivot, snapping and proportional editing, and the mode's mirror axes,
    * by name: `mirror_axes` the axes there are and `mirror` those on, as letters. */
   var transformSettings: [String: String] {

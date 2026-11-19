@@ -1034,4 +1034,42 @@ detach = detach[:detach.index('\n}\n')]
 check('[original_text release];' in detach,
       "R6 0.1: the text Cancel puts back is released when Blender's window goes")
 
+# ROUND6 0.4 (E5): the shell compares Blender's context mode (`ShellModel.mode`, from
+# `CTX_data_mode_string`) only with strings Blender gives it. "pose" for Pose Mode's "posemode", and
+# a prefix "edit_" no mode has, kept Pose Mode's transform settings away for good. Every literal
+# compared with the mode, listed with it, or used as its prefix or suffix is one of Blender's.
+context_source = (ROOT / 'source/blender/blenkernel/intern/context.cc').read_text(encoding='utf-8')
+mode_table = context_source[context_source.index('static const char *data_mode_strings[] = {'):]
+mode_strings = set(re.findall(r'"(\w+)"', mode_table[:mode_table.index('};')]))
+check(len(mode_strings) >= 27 and {'posemode', 'objectmode', 'mesh_edit'} <= mode_strings,
+      "R6 0.4: Blender's context mode strings read (%d)" % len(mode_strings))
+mode_expr = r'(?:\b(?:model|self|\$0|shell\.model)\.mode|\bcontextMode)\b'
+mode_uses, wrong_modes = 0, []
+for path in sources():
+    text = path.read_text(encoding='utf-8')
+    text = re.sub(r'//[^\n]*', '', text)
+    found = []
+    found += [(m.start(), [m.group(1)]) for m in re.finditer(mode_expr + r'\s*[!=]=\s*"([^"]*)"', text)]
+    found += [(m.start(), [m.group(1)]) for m in re.finditer(r'"([^"]*)"\s*[!=]=\s*' + mode_expr, text)]
+    found += [(m.start(), re.findall(r'"([^"]*)"', m.group(1)))
+              for m in re.finditer(r'\[([^\[\]]*)\]\.contains\(' + mode_expr + r'\)', text)]
+    for m in re.finditer(mode_expr + r'\.has(Prefix|Suffix)\("([^"]*)"\)', text):
+        affix = m.group(2)
+        matched = [mode for mode in mode_strings
+                   if (mode.startswith(affix) if m.group(1) == 'Prefix' else mode.endswith(affix))]
+        found.append((m.start(), [] if matched else [m.group(0)]))
+        mode_uses += 1
+    for start, literals in found:
+        mode_uses += len(literals)
+        wrong_modes += ['%s:%d %s' % (path.name, text.count('\n', 0, start) + 1, literal)
+                        for literal in literals if literal not in mode_strings]
+check(mode_uses >= 5 and not wrong_modes,
+      "R6 0.4: every string the shell compares with Blender's mode is one Blender gives (%d uses; %s)"
+      % (mode_uses, wrong_modes))
+row_text = (SWIFT / 'ToolSettingsRow.swift').read_text(encoding='utf-8')
+check('model.hasTransformSettings' in row_text and 'flag("transform_settings")' in
+      (SWIFT / 'ShellModel.swift').read_text(encoding='utf-8') and
+      'builder.add(top, "transform_settings"' in bridge_text,
+      "R6 0.4: the row of transform settings shows where Blender says the mode has them")
+
 print('PASS: native shell sources ' + json.dumps(checks))

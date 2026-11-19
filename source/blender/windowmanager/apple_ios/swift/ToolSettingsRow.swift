@@ -28,11 +28,8 @@ struct ToolSettingsRow: View {
 
   private var glass: Bool { style == ShellStyle.glass.rawValue }
 
-  /** The modes whose header has the transform settings in Blender. */
-  private var transformMode: Bool {
-    model.mode == "objectmode" || model.mode.hasPrefix("edit_") || model.mode.hasSuffix("_edit") ||
-      model.mode == "pose"
-  }
+  /** The modes whose header has the transform settings in Blender, as Blender says (R6 E5). */
+  private var transformMode: Bool { model.hasTransformSettings }
 
   private var modeSettings: Bool {
     MirrorToggles.available(model) || model.transformSettings["automerge"] != nil
