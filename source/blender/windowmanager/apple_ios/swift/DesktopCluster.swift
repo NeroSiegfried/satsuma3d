@@ -107,6 +107,8 @@ struct DesktopCluster: View {
   let dragChanged: (DragGesture.Value) -> Void
   let dragEnded: (DragGesture.Value) -> Void
   @AppStorage(DesktopClusterLayer.foldedKey) private var folded = false
+  /** The keyboard that types into Blender as keys shows (ROUND6 DESK-3). */
+  @State private var keyboardShown = false
 
   /** Blender's regions: a dark grey with a darker outline, light text, a little rounding. */
   private static let surface = RoundedRectangle(cornerRadius: ShellStyle.radius, style: .continuous)
@@ -128,6 +130,9 @@ struct DesktopCluster: View {
     }
     .environment(\.colorScheme, .dark)
     .animation(UIAccessibility.isReduceMotionEnabled ? nil : .easeOut(duration: 0.18), value: folded)
+    .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GHOSTIOSKeyInputChanged"))) { _ in
+      keyboardShown = wm_apple_ios_window_key_input_shown(model.window)
+    }
     .accessibilityElement(children: .contain)
     .accessibilityIdentifier("blender.desktop-cluster")
   }
@@ -160,6 +165,7 @@ struct DesktopCluster: View {
           key("Esc", text: "Esc", identifier: "esc") { wm_apple_ios_window_send_key(model.window, "ESC") }
           key("Tab", text: "Tab", identifier: "tab") { wm_apple_ios_window_send_key(model.window, "TAB") }
           key("Return", symbol: "return", identifier: "return") { wm_apple_ios_window_send_key(model.window, "RET") }
+          keyboardKey
           divider
           fingerMenu
           moreMenu
@@ -226,6 +232,29 @@ struct DesktopCluster: View {
     .help(title)
     .accessibilityLabel(title)
     .accessibilityIdentifier("blender.desktop-cluster.\(identifier)")
+  }
+
+  /** The keyboard, typing into whatever Blender's pointer is over as a keyboard's keys do (ROUND6
+   * DESK-3): a typed value in a waiting operation, a key to capture, the Text Editor or the
+   * Console, which also raise it by themselves when tapped. */
+  private var keyboardKey: some View {
+    Button {
+      Haptics.selection()
+      wm_apple_ios_window_key_input(model.window, 2)
+      keyboardShown = wm_apple_ios_window_key_input_shown(model.window)
+    } label: {
+      Image(systemName: keyboardShown ? "keyboard.chevron.compact.down" : "keyboard")
+        .font(.system(size: 16, weight: .medium))
+        .foregroundStyle(ShellStyle.text)
+        .frame(minWidth: 40, minHeight: 44)
+        .background(keyboardShown ? ShellStyle.selection : Color.clear, in: Self.surface)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(DesktopClusterKeyStyle())
+    .help("Keyboard")
+    .accessibilityLabel("Keyboard")
+    .accessibilityValue(keyboardShown ? "Shown" : "Hidden")
+    .accessibilityIdentifier("blender.desktop-cluster.keyboard")
   }
 
   /** What one finger does, the same choice as Settings' and the iPad header's (ROUND6 TOUCH-1, H8):

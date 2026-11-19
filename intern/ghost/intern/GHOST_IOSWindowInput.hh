@@ -300,9 +300,17 @@ typedef struct UserInputEvent {
   bool rotation_restart;
 
   /* Keyboard handling. */
-  /** Text is edited by Blender from hardware key events, not in #text_field. */
-  bool hardware_text_edit;
   UITextField *text_field;
+  /** Where Blender's field is, in the window: #text_field lies there, or above the keyboard. */
+  CGRect text_field_place;
+  /** The software keyboard's frame in the window, empty while none shows. */
+  CGRect keyboard_frame;
+  /* The software keyboard that types into Blender as key events (ROUND6 DESK-3): its view, which
+   * becomes the first responder, and who wants it: what was pressed takes text from keys, or the
+   * shell's button keeps it. */
+  UIView *key_input_view;
+  bool key_input_focus;
+  bool key_input_kept;
   NSString *original_text;
   bool onscreen_keyboard_active;
   /** A copy of the edited text, which Blender reads after the text field is cleared. */

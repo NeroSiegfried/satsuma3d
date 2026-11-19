@@ -204,6 +204,27 @@ void GHOST_ios_sticky_action_ended(GHOST_WindowIOS *window);
 /** Two bits each for Shift, Ctrl, Alt: 0 off, 1 held, 2 latched, 3 locked. */
 uint32_t GHOST_ios_sticky_modifiers();
 
+/** What asks for the keyboard that types into Blender as key events (ROUND6 DESK-3). */
+enum {
+  /** What was pressed takes no typed text from keys (anymore). */
+  GHOST_kKeyInputFocusOff = 0,
+  /** What was pressed takes typed text from keys: the Text Editor, the Console, a key capture. */
+  GHOST_kKeyInputFocusOn = 1,
+  /** The shell's keyboard button: shown, or let go. */
+  GHOST_kKeyInputToggle = 2,
+  /** Let go, whoever asked. */
+  GHOST_kKeyInputRelease = 3,
+};
+/**
+ * The software keyboard as key events, as a hardware keyboard sends them (ROUND6 DESK-3, findings
+ * A6, H6, D6): a request from the `GHOST_kKeyInput` list. Shown while what was pressed takes text
+ * from keys and no hardware keyboard is attached, or while the shell's button keeps it. From any
+ * thread.
+ */
+void GHOST_ios_window_key_input(GHOST_WindowIOS *window, int request);
+/** Whether that keyboard shows now. On the main thread. */
+bool GHOST_ios_window_key_input_shown(GHOST_WindowIOS *window);
+
 #ifdef __OBJC__
 #  import <UIKit/UIKit.h>
 

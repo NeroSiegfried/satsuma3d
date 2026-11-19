@@ -100,6 +100,18 @@ extern "C" void wm_apple_ios_window_send_key(void *window, const char *key)
   }
 }
 
+extern "C" void wm_apple_ios_window_key_input(void *window, const int request)
+{
+  if (window) {
+    GHOST_ios_window_key_input(ghost_window(window), request);
+  }
+}
+
+extern "C" bool wm_apple_ios_window_key_input_shown(void *window)
+{
+  return window && GHOST_ios_window_key_input_shown(ghost_window(window));
+}
+
 /** A key by Blender's event type name, as the key-map names it: `U`, `F2`, `SPACE`, `ONE`. */
 static GHOST_TKey ghost_key_from_name(const char *name)
 {

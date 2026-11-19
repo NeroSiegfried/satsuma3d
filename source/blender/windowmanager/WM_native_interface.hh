@@ -119,6 +119,13 @@ struct wmNativeInterface {
    * Apple Pencil. Paint cursors and the circle select outline show only then.
    */
   bool (*pointer_hovering)() = nullptr;
+  /**
+   * Whether what was pressed takes typed text from keys rather than from a text field (ROUND6
+   * DESK-3): an editor whose key map has an active `TEXTINPUT` item that would run there (the Text
+   * Editor, the Python Console, a text object, a sequencer text strip), or a button waiting for a
+   * key to capture. A screen without a keyboard raises one that sends key events while it does.
+   */
+  void (*text_input_focus)(wmWindow *win, bool takes_text) = nullptr;
   /** Absolute pointer presses (a Pencil landing) activate the gizmo under them directly. */
   bool direct_gizmo_press = false;
   /** Gizmos show no tooltips, as nothing hovers long over them. */

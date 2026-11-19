@@ -4752,6 +4752,59 @@ static eHandlerActionFlag wm_event_do_handlers_area_regions(bContext *C,
   return wm_event_do_region_handlers(C, event, region_hovered);
 }
 
+/**
+ * Whether \a region (current in \a C) takes typed text from keys now (ROUND6 DESK-3, findings A6,
+ * H6, D6): one of its key maps that would answer there has an active `TEXTINPUT` item whose
+ * operator would run. The class is Blender's own list, the key maps: the Text Editor, the Python
+ * Console, a text object in Edit Mode, a sequencer text strip being edited.
+ */
+static bool wm_region_takes_text(bContext *C, wmWindowManager *wm, wmWindow *win, ARegion *region)
+{
+  if (region == nullptr || region->runtime == nullptr) {
+    return false;
+  }
+  for (wmEventHandler &handler_base : region->runtime->handlers) {
+    if (handler_base.type != WM_HANDLER_TYPE_KEYMAP) {
+      continue;
+    }
+    wmEventHandler_KeymapResult km_result;
+    WM_event_get_keymaps_from_handler(
+        wm, win, reinterpret_cast<wmEventHandler_Keymap *>(&handler_base), &km_result);
+    for (int i = 0; i < km_result.keymaps_len; i++) {
+      wmKeyMap *keymap = km_result.keymaps[i];
+      if (keymap == nullptr || !WM_keymap_poll(C, keymap)) {
+        continue;
+      }
+      for (wmKeyMapItem &kmi : keymap->items) {
+        if ((kmi.flag & KMI_INACTIVE) || WM_userdef_event_map(kmi.type) != KM_TEXTINPUT) {
+          continue;
+        }
+        wmOperatorType *ot = WM_operatortype_find(kmi.idname, true);
+        if (ot && WM_operator_poll(C, ot)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * A press in \a win: tell the platform whether what was pressed takes typed text from keys, so a
+ * screen without a keyboard can raise one that sends key events (ROUND6 DESK-3). Once per press,
+ * with the area and region under it current.
+ */
+static void wm_event_text_input_focus_note(bContext *C, wmWindowManager *wm, wmWindow *win, const wmEvent *event)
+{
+  const wmNativeInterface *native = WM_native_interface();
+  if (native == nullptr || native->text_input_focus == nullptr || event->type != LEFTMOUSE ||
+      event->val != KM_PRESS)
+  {
+    return;
+  }
+  native->text_input_focus(win, wm_region_takes_text(C, wm, win, CTX_wm_region(C)));
+}
+
 void wm_event_do_handlers(bContext *C)
 {
   wmWindowManager *wm = CTX_wm_manager(C);
@@ -4861,6 +4914,7 @@ void wm_event_do_handlers(bContext *C)
       /* We let modal handlers get active area/region, also wm_paintcursor_test needs it. */
       CTX_wm_area_set(C, area_event_inside(C, event->xy));
       CTX_wm_region_set(C, region_event_inside(C, event->xy));
+      wm_event_text_input_focus_note(C, wm, &win, event);
 
       /* MVC demands to not draw in event handlers...
        * but we need to leave it for GPU selecting etc. */

@@ -299,9 +299,216 @@ UIWindow *document_window = nil;
 }
 @end
 
+/* -------------------------------------------------------------------- */
+/** \name The software keyboard as keys (ROUND6 DESK-3, findings A6, H6, D6)
+ *
+ * Blender's Text Editor, Python Console, text objects, typed values in a waiting operation and its
+ * key-capture buttons take text from key events, not from a text field. The software keyboard is
+ * raised for them by a view that takes its typing and sends each character as the key a hardware
+ * keyboard would send, with its text (`utf8_buf`), as #handleKeyboardEvent:keyWindow: does; Return,
+ * Tab and Backspace as those keys. Above the keyboard: Esc, Tab, the arrows and Done.
+ * \{ */
+
+@interface GHOSTUIWindow ()
+- (void)typeKey:(GHOST_TKey)key text:(const char *)utf8;
+- (void)typeText:(NSString *)text;
+- (void)keyInputRequest:(int)request;
+- (bool)keyInputShown;
+- (void)keyInputUpdate;
+- (void)liftTextField;
+- (void)handleCancelButton;
+- (void)pushKey:(GHOST_TKey)key down:(bool)down repeat:(bool)repeat utf8:(const char *)utf8;
+- (void)storeKeyboardString:(NSString *)text;
+@end
+
+/** Takes the software keyboard's typing for Blender, see #GHOSTUIWindow.typeText:. */
+@interface GHOSTKeyInputView : UIView <UIKeyInput>
+@property(nonatomic, assign) GHOSTUIWindow *owner;
+@end
+
+@implementation GHOSTKeyInputView {
+  UIToolbar *accessory_;
+}
+
+- (void)dealloc
+{
+  [accessory_ release];
+  [super dealloc];
+}
+
+- (BOOL)canBecomeFirstResponder
+{
+  return YES;
+}
+
+/* Backspace always reaches Blender, which holds the text. */
+- (BOOL)hasText
+{
+  return YES;
+}
+
+- (void)insertText:(NSString *)text
+{
+  [self.owner typeText:text];
+}
+
+- (void)deleteBackward
+{
+  [self.owner typeKey:GHOST_kKeyBackSpace text:nullptr];
+}
+
+/* Typed as written: Blender's code and names are not prose. */
+- (UITextAutocorrectionType)autocorrectionType
+{
+  return UITextAutocorrectionTypeNo;
+}
+- (UITextAutocapitalizationType)autocapitalizationType
+{
+  return UITextAutocapitalizationTypeNone;
+}
+- (UITextSpellCheckingType)spellCheckingType
+{
+  return UITextSpellCheckingTypeNo;
+}
+- (UITextSmartQuotesType)smartQuotesType
+{
+  return UITextSmartQuotesTypeNo;
+}
+- (UITextSmartDashesType)smartDashesType
+{
+  return UITextSmartDashesTypeNo;
+}
+- (UITextSmartInsertDeleteType)smartInsertDeleteType
+{
+  return UITextSmartInsertDeleteTypeNo;
+}
+
+- (UIBarButtonItem *)keyItem:(NSString *)title symbol:(NSString *)symbol action:(SEL)action
+{
+  UIBarButtonItem *item = symbol ? [[UIBarButtonItem alloc]
+                                       initWithImage:[UIImage systemImageNamed:symbol]
+                                               style:UIBarButtonItemStylePlain
+                                              target:self
+                                              action:action] :
+                                   [[UIBarButtonItem alloc] initWithTitle:title
+                                                                    style:UIBarButtonItemStylePlain
+                                                                   target:self
+                                                                   action:action];
+  item.accessibilityLabel = title;
+  return [item autorelease];
+}
+
+/** The keys a software keyboard lacks, above it. */
+- (UIView *)inputAccessoryView
+{
+#if defined(APPLE_TARGET_VISIONOS)
+  return nil;
+#else
+  if (!accessory_) {
+    accessory_ = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, 320, 44)];
+    accessory_.items = @[
+      [self keyItem:@"Esc" symbol:nil action:@selector(escape)],
+      [self keyItem:@"Tab" symbol:nil action:@selector(tab)],
+      [self keyItem:@"Left" symbol:@"arrow.left" action:@selector(left)],
+      [self keyItem:@"Down" symbol:@"arrow.down" action:@selector(down)],
+      [self keyItem:@"Up" symbol:@"arrow.up" action:@selector(up)],
+      [self keyItem:@"Right" symbol:@"arrow.right" action:@selector(right)],
+      [UIBarButtonItem flexibleSpaceItem],
+      [[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                                                     target:self
+                                                     action:@selector(done)] autorelease],
+    ];
+    [accessory_ sizeToFit];
+  }
+  return accessory_;
+#endif
+}
+
+- (void)escape
+{
+  [self.owner typeKey:GHOST_kKeyEsc text:nullptr];
+}
+- (void)tab
+{
+  [self.owner typeKey:GHOST_kKeyTab text:nullptr];
+}
+- (void)left
+{
+  [self.owner typeKey:GHOST_kKeyLeftArrow text:nullptr];
+}
+- (void)down
+{
+  [self.owner typeKey:GHOST_kKeyDownArrow text:nullptr];
+}
+- (void)up
+{
+  [self.owner typeKey:GHOST_kKeyUpArrow text:nullptr];
+}
+- (void)right
+{
+  [self.owner typeKey:GHOST_kKeyRightArrow text:nullptr];
+}
+- (void)done
+{
+  [self.owner keyInputRequest:GHOST_kKeyInputRelease];
+}
+@end
+
+/** The key a US keyboard types \a character with, or none: Blender's numeric input and key
+ * capture read the key, its text editors the text. */
+static GHOST_TKey ios_key_for_character(const unichar character)
+{
+  if (character >= 'a' && character <= 'z') {
+    return GHOST_TKey(GHOST_kKeyA + (character - 'a'));
+  }
+  if (character >= 'A' && character <= 'Z') {
+    return GHOST_TKey(GHOST_kKeyA + (character - 'A'));
+  }
+  if (character >= '0' && character <= '9') {
+    return GHOST_TKey(GHOST_kKey0 + (character - '0'));
+  }
+  switch (character) {
+    case ' ':
+      return GHOST_kKeySpace;
+    case '-':
+      return GHOST_kKeyMinus;
+    case '=':
+      return GHOST_kKeyEqual;
+    case ',':
+      return GHOST_kKeyComma;
+    case '.':
+      return GHOST_kKeyPeriod;
+    case '/':
+      return GHOST_kKeySlash;
+    case ';':
+      return GHOST_kKeySemicolon;
+    case '\'':
+      return GHOST_kKeyQuote;
+    case '[':
+      return GHOST_kKeyLeftBracket;
+    case ']':
+      return GHOST_kKeyRightBracket;
+    case '\\':
+      return GHOST_kKeyBackslash;
+    case '`':
+      return GHOST_kKeyAccentGrave;
+    default:
+      /* Its text alone, as a desktop sends a key it has no name for. */
+      return GHOST_kKeyUnknown;
+  }
+}
+
+/** \} */
+
 @implementation GHOSTUIWindow
 - (void)detachBlender
 {
+  [key_input_view resignFirstResponder];
+  [key_input_view removeFromSuperview];
+  [key_input_view release];
+  key_input_view = nil;
+  key_input_focus = false;
+  key_input_kept = false;
   [self releaseKeys];
   [self releasePointerButtons];
   [self endViewGizmoDrag:YES];
@@ -362,6 +569,11 @@ UIWindow *document_window = nil;
   system = sys;
   window = win;
   text_field = nil;
+  text_field_place = CGRectZero;
+  keyboard_frame = CGRectZero;
+  key_input_view = nil;
+  key_input_focus = false;
+  key_input_kept = false;
   [original_text release];
   original_text = nil;
   onscreen_keyboard_active = false;
@@ -1668,7 +1880,8 @@ static NSString *ios_event_kind(UIEvent *event)
     return false;
   }
   UIResponder *responder = current_first_responder();
-  return ![responder conformsToProtocol:@protocol(UIKeyInput)];
+  /* The keyboard that types as keys is Blender's too: a hardware key goes to Blender as itself. */
+  return responder == key_input_view || ![responder conformsToProtocol:@protocol(UIKeyInput)];
 }
 
 - (void)pushKey:(GHOST_TKey)key down:(bool)down repeat:(bool)repeat utf8:(const char *)utf8
@@ -1729,6 +1942,22 @@ static NSString *ios_event_kind(UIEvent *event)
         key = GHOST_kKeyEsc;
       }
       if (key == GHOST_kKeyUnknown) {
+        continue;
+      }
+      if (onscreen_keyboard_active && key_window &&
+          (key == GHOST_kKeyEsc || key == GHOST_kKeyTab) && [self blockedReason] == nil)
+      {
+        /* A hardware keyboard types into Blender's field through the text field, which takes
+         * neither (ROUND6 DESK-3): Escape cancels the edit, Tab goes on to the next field, as
+         * Blender's own do. */
+        if (key == GHOST_kKeyEsc) {
+          [self handleCancelButton];
+        }
+        else {
+          [self pushKey:GHOST_kKeyTab down:true repeat:false utf8:nullptr];
+          [self pushKey:GHOST_kKeyTab down:false repeat:false utf8:nullptr];
+        }
+        hide_from_uikit = true;
         continue;
       }
       GHOST_TModifierKey modifier;
@@ -3654,13 +3883,12 @@ static bool ios_momentum_stopped(const CGPoint velocity)
     }
     IOS_INPUT_LOG(@"Keyboard Edit change detected %@", text_field.text);
 
-    /* IOS_FIXME - Enabling this will propogate text changes back into the Blender text field
-     as they happen. Since pushing back individual key presses appears to be difficult this
-     might be the best we can do. However this currently causes a segmentation fault if you delete
-     text as the Blender-side string ends up being NULL in some cases. */
-    bool push_edits_back_to_blender = false;
-
-    if (push_edits_back_to_blender) {
+    /* The text as typed so far reaches Blender at once (ROUND6 DESK-3, findings A7, H7): a search
+     * filters as the person types, and a name typed in part is not "Failed to find". Blender reads
+     * it as an owned copy, never a pointer into the field, which once crashed this when the text
+     * was deleted to nothing (R6 A2). */
+    if (onscreen_keyboard_active && window && system) {
+      [self storeKeyboardString:text_field.text ? text_field.text : @""];
       system->pushEvent(std::make_unique<GHOST_EventKey>(system->getMilliSeconds(),
                                                          GHOST_kEventKeyDown,
                                                          window,
@@ -3724,6 +3952,14 @@ static bool ios_momentum_stopped(const CGPoint velocity)
       text_field.inputAccessoryView = toolbar;
     }
 #endif
+
+    /* Opaque over Blender's field, which shows the same text as it is typed (ROUND6 DESK-3): in the
+     * colours of Blender's text field, so the two never show at once. */
+    text_field.backgroundColor = [UIColor colorWithWhite:0.11 alpha:1.0];
+    text_field.layer.cornerRadius = 4.0;
+    text_field.clipsToBounds = YES;
+    text_field.leftView = [[[UIView alloc] initWithFrame:CGRectMake(0, 0, 4, 4)] autorelease];
+    text_field.leftViewMode = UITextFieldViewModeAlways;
 
     [window->rootWindow addSubview:text_field];
 
@@ -3795,8 +4031,9 @@ static bool ios_momentum_stopped(const CGPoint velocity)
                                           displayY:&displayRect.size.height
                                              flipY:false];
 
-  /* Where to display the text on-screen. */
-  text_field.frame = displayRect;
+  /* Where to display the text on-screen: on Blender's field, or above the keyboard. */
+  text_field_place = displayRect;
+  [self liftTextField];
 
   /* Keep the text as it was, for Cancel to put back. Owned: this file is built without ARC, and
    * an autoreleased string would be gone by the time Cancel reads it (R6 A2). */
@@ -3905,15 +4142,43 @@ static bool ios_momentum_stopped(const CGPoint velocity)
                 external_keyboard_connected ? "Connected" : "Disconnected");
 }
 
-/* IOS_FIXME - Not currently used, could be removed. */
+/** Where the keyboard is, so the field typed into is never under it (ROUND6 DESK-3, A7). */
 - (void)keyboardWillChange:(NSNotification *)notification
 {
-
-  CGRect keyboardRect = [notification.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
-  /* Sometimes we see a zero value for the end-frame value, possibly because... timing? */
-  if (keyboardRect.size.width == 0 || keyboardRect.size.height == 0) {
-    keyboardRect = [notification.userInfo[UIKeyboardFrameBeginUserInfoKey] CGRectValue];
+  if ([notification.name isEqualToString:UIKeyboardWillHideNotification]) {
+    keyboard_frame = CGRectZero;
   }
+  else {
+    CGRect keyboardRect = [notification.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+    /* Sometimes we see a zero value for the end-frame value, possibly because... timing? */
+    if (keyboardRect.size.width == 0 || keyboardRect.size.height == 0) {
+      keyboardRect = [notification.userInfo[UIKeyboardFrameBeginUserInfoKey] CGRectValue];
+    }
+    keyboard_frame = self.screen ? [self convertRect:keyboardRect
+                                 fromCoordinateSpace:self.screen.coordinateSpace] :
+                                   keyboardRect;
+  }
+  [self liftTextField];
+}
+
+/**
+ * The field typed into lies on Blender's field, unless the keyboard would cover it: then just
+ * above the keyboard, as wide as it needs, so what is typed can be seen (ROUND6 DESK-3, A7).
+ */
+- (void)liftTextField
+{
+  if (!text_field || !onscreen_keyboard_active || CGRectIsEmpty(text_field_place)) {
+    return;
+  }
+  CGRect frame = text_field_place;
+  const CGRect keyboard = CGRectIntersection(keyboard_frame, self.bounds);
+  if (!CGRectIsEmpty(keyboard) && CGRectGetMaxY(frame) > CGRectGetMinY(keyboard) - 4.0) {
+    frame.size.width = MIN(MAX(frame.size.width, 320.0), self.bounds.size.width - 24.0);
+    frame.size.height = MAX(frame.size.height, 32.0);
+    frame.origin.x = MIN(MAX(frame.origin.x, 12.0), self.bounds.size.width - 12.0 - frame.size.width);
+    frame.origin.y = CGRectGetMinY(keyboard) - 8.0 - frame.size.height;
+  }
+  text_field.frame = frame;
 }
 
 - (const GHOST_TabletData)getTabletData
@@ -3921,24 +4186,139 @@ static bool ios_momentum_stopped(const CGPoint velocity)
   return tablet_data;
 }
 
+/* -------------------------------------------------------------------- */
+/* The software keyboard as keys (ROUND6 DESK-3) */
+
+/** \a key pressed and let go, typing \a utf8, as a hardware keyboard's: to the editor under
+ * Blender's cursor. A latched Shift, Ctrl or Alt lasts for it (TOUCH-8). */
+- (void)typeKey:(GHOST_TKey)key text:(const char *)utf8
+{
+  if (!window || !system || [self blockedReason] != nil) {
+    return;
+  }
+  [self pushKey:key down:true repeat:false utf8:utf8];
+  [self pushKey:key down:false repeat:false utf8:nullptr];
+  GHOST_ios_sticky_action_ended(window);
+}
+
+/** What the software keyboard typed, a character at a time; Return and Tab as their keys. */
+- (void)typeText:(NSString *)text
+{
+  [text enumerateSubstringsInRange:NSMakeRange(0, text.length)
+                           options:NSStringEnumerationByComposedCharacterSequences
+                        usingBlock:^(NSString *character,
+                                     NSRange character_range,
+                                     NSRange enclosing_range,
+                                     BOOL *stop) {
+                          UNUSED_VARS(character_range, enclosing_range, stop);
+                          if ([character isEqualToString:@"\n"] ||
+                              [character isEqualToString:@"\r"])
+                          {
+                            [self typeKey:GHOST_kKeyEnter text:nullptr];
+                            return;
+                          }
+                          if ([character isEqualToString:@"\t"]) {
+                            [self typeKey:GHOST_kKeyTab text:nullptr];
+                            return;
+                          }
+                          char utf8[6] = {0};
+                          const char *bytes = character.UTF8String;
+                          if (bytes == nullptr || strlen(bytes) >= sizeof(utf8)) {
+                            /* Longer than Blender's key text holds (a joined emoji): a desktop
+                             * keyboard cannot type it into Blender either. */
+                            return;
+                          }
+                          strcpy(utf8, bytes);
+                          const GHOST_TKey key = character.length == 1 ?
+                                                     ios_key_for_character(
+                                                         [character characterAtIndex:0]) :
+                                                     GHOST_kKeyUnknown;
+                          [self typeKey:key text:utf8];
+                        }];
+}
+
+/** Who wants the keyboard that types as keys, see the `GHOST_kKeyInput` requests. */
+- (void)keyInputRequest:(int)request
+{
+  switch (request) {
+    case GHOST_kKeyInputFocusOff:
+      key_input_focus = false;
+      break;
+    case GHOST_kKeyInputFocusOn:
+      key_input_focus = true;
+      break;
+    case GHOST_kKeyInputToggle:
+      key_input_kept = ![self keyInputShown];
+      if (!key_input_kept) {
+        key_input_focus = false;
+      }
+      break;
+    default:
+      key_input_kept = false;
+      key_input_focus = false;
+      break;
+  }
+  [self keyInputUpdate];
+}
+
+- (bool)keyInputShown
+{
+  return key_input_view != nil && key_input_view.isFirstResponder;
+}
+
+/** Shown while wanted, unless a field is typed into (it has the keyboard then) or, for what was
+ * pressed, a hardware keyboard types the keys itself. */
+- (void)keyInputUpdate
+{
+  if (!window) {
+    return;
+  }
+  const bool hardware = [GCKeyboard coalescedKeyboard] != nil;
+  const bool wanted = key_input_kept || (key_input_focus && !hardware);
+  const bool shown = [self keyInputShown];
+  if (wanted && !shown && !onscreen_keyboard_active && [self blockedReason] == nil) {
+    if (!key_input_view) {
+      GHOSTKeyInputView *view = [[GHOSTKeyInputView alloc] initWithFrame:CGRectMake(0, 0, 1, 1)];
+      view.owner = self;
+      view.userInteractionEnabled = NO;
+      key_input_view = view;
+      [window->rootWindow addSubview:key_input_view];
+    }
+    [key_input_view becomeFirstResponder];
+  }
+  else if (!wanted && shown) {
+    [key_input_view resignFirstResponder];
+  }
+  if (shown != [self keyInputShown]) {
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"GHOSTIOSKeyInputChanged"
+                                                        object:nil];
+  }
+}
+
 - (GHOST_TSuccess)popupOnscreenKeyboard:(const GHOST_KeyboardProperties &)keyboard_properties
 {
   @synchronized(self) {
     IOS_INPUT_LOG(@"Keyboard popup request received %@", text_field.text);
-    /* With a hardware keyboard Blender edits the text itself from key events, as on the
-     * desktop; #getLastKeyboardString then has nothing to replace it with. */
-    hardware_text_edit = [GCKeyboard coalescedKeyboard] != nil;
-    if (hardware_text_edit) {
-      return GHOST_kSuccess;
-    }
+    /* A hardware keyboard types into the field too, so the system's input methods work (Chinese,
+     * Japanese, Korean, accents by dead keys): it was once kept from the field, and Blender edited
+     * the text from key events without them (ROUND6 DESK-3, A7). */
     [self setupKeyboard:keyboard_properties];
+    /* What Blender reads until the first change is the text it began with. */
+    [self storeKeyboardString:text_field.text];
 
     if (!onscreen_keyboard_active) {
       text_field.userInteractionEnabled = YES;
+      const bool key_input_was_shown = [self keyInputShown];
       if (![text_field becomeFirstResponder]) {
         GHOST_ASSERT(FALSE, "GHOST_SystemIOS::popupOnScreenKeyboard Failed to display keyboard");
       }
       onscreen_keyboard_active = true;
+      [self liftTextField];
+      if (key_input_was_shown) {
+        /* The field took the keyboard from the one that types as keys (ROUND6 DESK-3). */
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"GHOSTIOSKeyInputChanged"
+                                                            object:nil];
+      }
     }
   }
   return GHOST_kSuccess;
@@ -3981,6 +4361,9 @@ static bool ios_momentum_stopped(const CGPoint velocity)
       /* Delete the text field copy of the string */
       text_field.text = nil;
     }
+    /* The keyboard that types as keys comes back if what was pressed still takes text (a Text
+     * Editor's name field was typed into, ROUND6 DESK-3). */
+    [self keyInputUpdate];
   }
   IOS_INPUT_LOG(@"Text field value was %s", text_field_string);
   return GHOST_kSuccess;
@@ -3999,14 +4382,10 @@ static bool ios_momentum_stopped(const CGPoint velocity)
 {
   /* Lock access around keyboard handling events */
   @synchronized(self) {
-    if (hardware_text_edit) {
-      return nullptr;
-    }
-
-    /* Update text string if one exists */
-    if (text_field.text && ![text_field.text isEqualToString:@""]) {
-      /* Save the input to a c-string */
-      [self storeKeyboardString:text_field.text];
+    /* The field's text while it is typed into, also when deleted to nothing (ROUND6 DESK-3);
+     * after, what it held as it closed. */
+    if (onscreen_keyboard_active) {
+      [self storeKeyboardString:text_field.text ? text_field.text : @""];
     }
   }
   return text_field_string;
@@ -4579,11 +4958,15 @@ GHOST_TSuccess GHOST_WindowIOS::hideOnscreenKeyboard()
 const char *GHOST_WindowIOS::getLastKeyboardString()
 {
   GHOSTUIWindow *ghost_rootWindow = (GHOSTUIWindow *)rootWindow;
+  __block bool has_text = false;
   GHOST_ios_main_sync(^{
     const char *text = [ghost_rootWindow getLastKeyboardString];
+    has_text = text != nullptr;
     keyboard_string_ = text ? text : "";
   });
-  return keyboard_string_.c_str();
+  /* Null when nothing was typed into a field: Blender keeps its own text (ROUND6 DESK-3; it was
+   * made "" here, which emptied the field). */
+  return has_text ? keyboard_string_.c_str() : nullptr;
 }
 
 const GHOST_TabletData GHOST_WindowIOS::getTabletData()
@@ -4829,6 +5212,28 @@ void GHOST_ios_window_send_key(GHOST_WindowIOS *window, GHOST_TKey key)
   /* A key the shell pressed (Escape, Tab, Return, an axis) is an action: a latched Shift, Ctrl or
    * Alt lasts for it (ROUND6 TOUCH-8, DESK-1). */
   GHOST_ios_sticky_action_ended(window);
+}
+
+void GHOST_ios_window_key_input(GHOST_WindowIOS *window, const int request)
+{
+  GHOSTUIWindow *ui_window = (GHOSTUIWindow *)window->rootWindow;
+  std::shared_ptr<std::atomic<bool>> alive = window->input_alive;
+  void (^apply)() = ^{
+    if (alive && alive->load()) {
+      [ui_window keyInputRequest:request];
+    }
+  };
+  if (NSThread.isMainThread) {
+    apply();
+  }
+  else {
+    dispatch_async(dispatch_get_main_queue(), apply);
+  }
+}
+
+bool GHOST_ios_window_key_input_shown(GHOST_WindowIOS *window)
+{
+  return [(GHOSTUIWindow *)window->rootWindow keyInputShown];
 }
 
 void GHOST_ios_window_press_key(GHOST_WindowIOS *window,

@@ -3802,6 +3802,158 @@ def tick_hold():
     return 0.3
 
 
+# ROUND6 DESK-3 (A6, H6, D6): typing reaches what Blender takes text from keys for. The class is the
+# key maps' `TEXTINPUT` items; a press in a region tells the platform whether one of its key maps
+# would take typed text there now, and the iPad raises its keyboard that sends key events then.
+# With Blender's own interface on: a press in the Text Editor, the Python Console and a text object
+# in Edit Mode says so, a press in Properties does not; and a line typed as key events, as that
+# keyboard sends them, runs in the Python Console.
+TEXT_FOCUS = getattr(lib, "WM_native_ui_test_text_input_focus", None)
+if TEXT_FOCUS is not None:
+    TEXT_FOCUS.restype = ctypes.c_int
+    TEXT_FOCUS.argtypes = [ctypes.POINTER(ctypes.c_int)]
+typing_state = {}
+# A line as the iPad's keyboard sends it: each character as its key with its text.
+TYPED_KEYS = {" ": "SPACE", "=": "EQUAL", ".": "PERIOD", "-": "MINUS"}
+TYPED_DIGITS = ["ZERO", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE"]
+
+
+def _text_focus():
+    count = ctypes.c_int(0)
+    value = TEXT_FOCUS(ctypes.byref(count))
+    return value, count.value
+
+
+def _type_line(window, x, y, line):
+    for character in line:
+        if character.isdigit():
+            kind = TYPED_DIGITS[int(character)]
+        elif character.isalpha():
+            kind = character.upper()
+        else:
+            kind = TYPED_KEYS[character]
+        window.event_simulate(type=kind, value='PRESS', x=x, y=y, unicode=character)
+        window.event_simulate(type=kind, value='RELEASE', x=x, y=y)
+    window.event_simulate(type='RET', value='PRESS', x=x, y=y)
+    window.event_simulate(type='RET', value='RELEASE', x=x, y=y)
+
+
+def _typing_area(ui_type):
+    window = bpy.context.window_manager.windows[0]
+    if ui_type == 'VIEW_3D':
+        area = next(a for a in window.screen.areas if a.type == 'VIEW_3D')
+    elif ui_type == 'PROPERTIES':
+        area = next(a for a in window.screen.areas if a.type == 'PROPERTIES')
+    else:
+        area = next(a for a in window.screen.areas
+                    if a.type in ('DOPESHEET_EDITOR', 'TEXT_EDITOR', 'CONSOLE', 'SEQUENCE_EDITOR'))
+        area.ui_type = ui_type
+    region = next(r for r in area.regions if r.type == 'WINDOW')
+    return window, area, region
+
+
+def tick_typing():
+    global step
+    try:
+        pump()
+        step += 1
+        problems = report.setdefault("problems", [])
+        if TEXT_FOCUS is None:
+            problems.append("this build has no WM_native_ui_test_text_input_focus")
+            finish("error")
+            return None
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            subs["settings"] = subscribe("settings")
+            # The class: every key map with a `TEXTINPUT` item, by editor and region.
+            items = []
+            for keymap in bpy.context.window_manager.keyconfigs.active.keymaps:
+                for item in keymap.keymap_items:
+                    if item.type == 'TEXTINPUT' and item.active:
+                        items.append("%s (%s %s): %s" % (keymap.name, keymap.space_type, keymap.region_type, item.idname))
+            report["TEXTINPUT items"] = sorted(items)
+            if len(items) < 4:
+                problems.append("DESK-3: fewer than four TEXTINPUT items; the sweep proves little")
+            return 0.5
+        if step == 2:
+            set_bool(subs["settings"], "desktop", True, 1600)
+            return 1.0
+        if step < 5:
+            return 0.5
+        cases = typing_state.setdefault("cases", [
+            ("TEXT_EDITOR", True), ("CONSOLE", True), ("PROPERTIES", False), ("VIEW_3D text object", True),
+            ("SEQUENCE_EDITOR", None),
+        ])
+        current = typing_state.pop("current", None)
+        results = report.setdefault("a press says it takes text", {})
+        if current:
+            name, expected = current
+            value, count = _text_focus()
+            said = None if count == typing_state["count"] else bool(value)
+            results[name] = said
+            if expected is not None and said != expected:
+                problems.append("DESK-3: a press in %s said %s, expected %s" % (name, said, expected))
+            if name == "VIEW_3D text object":
+                _desk_mode('OBJECT')
+            if name == "CONSOLE":
+                # A line typed as key events, as the keyboard sends it, runs.
+                window, area, region = _typing_area("CONSOLE")
+                x, y = region.x + region.width // 2, region.y + region.height // 2
+                _type_line(window, x, y, "x = 40")
+                _type_line(window, x, y, "x")
+                typing_state["console"] = area
+                return 0.8
+            return 0.2
+        if "console" in typing_state:
+            area = typing_state.pop("console")
+            lines = [line.body for line in area.spaces[0].scrollback]
+            report["console scrollback"] = lines[-4:]
+            if "40" not in lines:
+                problems.append("DESK-3: a line typed as key events did not run in the Python Console")
+            return 0.2
+        if not cases:
+            finish("done" if not problems else "error")
+            return None
+        name, expected = cases.pop(0)
+        if name == "TEXT_EDITOR":
+            window, area, region = _typing_area("TEXT_EDITOR")
+            area.spaces[0].text = bpy.data.texts.new("typed")
+        elif name == "VIEW_3D text object":
+            bpy.ops.object.text_add()
+            _desk_mode('EDIT')
+            window, area, region = _typing_area("VIEW_3D")
+        elif name == "SEQUENCE_EDITOR":
+            window, area, region = _typing_area("SEQUENCE_EDITOR")
+            area.spaces[0].view_type = 'PREVIEW'
+            region = next(r for r in area.regions if r.type == 'PREVIEW')
+            scene = bpy.context.scene
+            if scene.sequence_editor is None:
+                scene.sequence_editor_create()
+            strip = scene.sequence_editor.strips.new_effect("typed", 'TEXT', channel=1, frame_start=1, length=20)
+            scene.sequence_editor.active_strip = strip
+            strip.select = True
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                try:
+                    bpy.ops.sequencer.text_edit_mode_toggle()
+                    report["sequencer text editing"] = "on"
+                except Exception as error:
+                    report["sequencer text editing"] = str(error).splitlines()[0][:100]
+        else:
+            window, area, region = _typing_area(name)
+        x, y = region.x + region.width // 2, region.y + region.height // 2
+        typing_state["count"] = _text_focus()[1]
+        _simulate(window, 'MOUSEMOVE', 'NOTHING', x, y)
+        _simulate(window, 'LEFTMOUSE', 'PRESS', x, y)
+        _simulate(window, 'LEFTMOUSE', 'RELEASE', x, y)
+        typing_state["current"] = (name, expected)
+        return 0.5
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
 def _touchstart_enter_for(idname):
     mode, name = _touchstart_mode(idname)
     _touchstart_enter(mode, name)
@@ -3815,5 +3967,5 @@ bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets
                          "tolerance": tick_tolerance, "waiting": tick_waiting,
                          "touchstart": tick_touchstart, "jobs": tick_jobs,
                          "renderprogress": tick_render_progress, "busy": tick_busy,
-                         "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold}.get(SCENARIO, tick_actions),
+                         "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold, "typing": tick_typing}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

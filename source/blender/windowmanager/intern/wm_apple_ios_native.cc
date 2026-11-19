@@ -169,6 +169,21 @@ void drop_unhandled(bContext * /*C*/, const char *name, const int count)
   WM_native_ui_notice(RPT_WARNING, text.c_str());
 }
 
+/**
+ * What was pressed takes typed text from keys, or no longer does (ROUND6 DESK-3): the window raises
+ * or lets go of its keyboard that sends key events. Only in Blender's own interface, where the
+ * Text Editor, the Python Console and its key-capture buttons are; the iPad interface types into a
+ * text object with its own keyboard. From Blender's loop.
+ */
+void text_input_focus(wmWindow *win, const bool takes_text)
+{
+  if (win == nullptr || win->runtime->ghostwin == nullptr) {
+    return;
+  }
+  GHOST_ios_window_key_input(static_cast<GHOST_WindowIOS *>(win->runtime->ghostwin),
+                             takes_text && WM_native_ui_desktop_mode() ? 1 : 0);
+}
+
 /** Two fingers move the view; Blender's own keymaps have no touch gestures. */
 void keyconfig_default_ensure(wmKeyConfig *keyconf)
 {
@@ -190,6 +205,7 @@ wmNativeInterface native_interface_create()
   native.replaces_redo_panel = [] { return !WM_native_ui_desktop_mode(); };
   /* A touch screen with no hover, in either interface (ROUND6 TOUCH-6). */
   native.touch_screen = [] { return true; };
+  native.text_input_focus = text_input_focus;
   native.operator_registered = ui::native_redo_operator_register;
   native.operator_freed = ui::native_redo_operator_free;
   native.redo_cleared = ui::native_redo_operator_clear;

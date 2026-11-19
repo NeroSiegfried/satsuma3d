@@ -74,6 +74,7 @@
 #include "CLG_log.h"
 
 #include "WM_api.hh"
+#include "WM_native_interface.hh"
 #include "WM_types.hh"
 #include "wm_event_system.hh"
 
@@ -4203,15 +4204,25 @@ static int ui_do_but_textedit(
       }
 #if (WITH_APPLE_CROSSPLATFORM)
       case EVT_TEXTEDIT: {
+        /* The software keyboard's field changed (ROUND6 DESK-3, findings A7, H7): its whole text,
+         * as typed so far, so a search filters and a filter applies as the person types, as with
+         * a keyboard's keys. The cursor follows the text's end; live updates only where the button
+         * asks for them, as for key events. */
         if (but) {
           wmWindow *win = data->window;
           const char *keyboard_string = GHOST_ISystem::getSystem()->getKeyboardInput(
               static_cast<GHOST_IWindow *>(win->runtime->ghostwin));
-          if (but->active->text_edit.edit_string) {
-            ui_textedit_string_set(but, but->active->text_edit, keyboard_string);
+          if (keyboard_string && text_edit.edit_string) {
+            ui_textedit_string_set(but, text_edit, keyboard_string);
+            but->pos = int(strlen(text_edit.edit_string));
+            but->selsta = but->selend = but->pos;
+            if (but->ofs > but->pos) {
+              but->ofs = 0;
+            }
+            changed = true;
+            update = (but->flag & BUT_TEXTEDIT_UPDATE) != 0;
           }
-          changed = true;
-          update = true;
+          retval = WM_UI_HANDLER_BREAK;
         }
         break;
       }
@@ -8934,6 +8945,16 @@ static void button_activate_state(bContext *C, Button *but, HandleButtonState st
   else {
     but->flag |= UI_SELECT;
     button_tooltip_timer_remove(C, but);
+  }
+
+  /* A key-capture button waits for a key: a screen without a keyboard raises one that sends keys
+   * while it waits (ROUND6 DESK-3, finding A6). */
+  if (state == BUTTON_STATE_WAIT_KEY_EVENT || data->state == BUTTON_STATE_WAIT_KEY_EVENT) {
+    if (const wmNativeInterface *native = WM_native_interface();
+        native && native->text_input_focus && data->window)
+    {
+      native->text_input_focus(data->window, state == BUTTON_STATE_WAIT_KEY_EVENT);
+    }
   }
 
   /* text editing */

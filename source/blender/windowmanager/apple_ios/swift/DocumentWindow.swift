@@ -209,6 +209,8 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     if desktop { commands.setInterfaceHidden(false) }
     /* No native controls, radial menu or bottom tray over Blender's own interface. */
     wm_apple_ios_window_set_pencil_menu(model.window, desktop ? nil : pencilMenu)
+    /* The keyboard that types as keys belongs to Blender's own interface (ROUND6 DESK-3). */
+    if !desktop { wm_apple_ios_window_key_input(model.window, 3) }
   }
 
   @objc private func templatePresentation(_ notification: Notification) {

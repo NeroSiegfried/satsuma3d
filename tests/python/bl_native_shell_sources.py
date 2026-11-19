@@ -1570,4 +1570,35 @@ check('pressInterface' not in hold_d2 and 'interface_state = IOS_INTERFACE_HELD;
       'GHOST_ios_sticky_action_ended(window);' in buttons_d2,
       "R6 DESK-2: a hold on Blender's interface is a right-click if it lifts there, the control's drag if it moves")
 
+# ROUND6 DESK-3 (A6, A7, H6, H7, D6): typing reaches everything Blender draws. A field's text reaches
+# Blender on every change (null-safe, the cursor at its end, live updates only where the button asks);
+# the field lies above the keyboard when the keyboard would cover it; a hardware keyboard types into
+# the field too (input methods), Escape cancelling and Tab going on. Where what was pressed takes text
+# from keys (the key maps' TEXTINPUT items, or a key capture waiting), a keyboard that sends key events
+# is raised; the cluster's button raises it for anything else. The harness scenario `typing` checks
+# the presses and runs a line in the Python Console.
+change_d3 = objc_method(ghost_r6, '- (void)handleKeyboardEditChange:(UITextField *)text_field')
+popup_d3 = objc_method(ghost_r6, '- (GHOST_TSuccess)popupOnscreenKeyboard:(const GHOST_KeyboardProperties &)keyboard_properties')
+type_d3 = objc_method(ghost_r6, '- (void)typeText:(NSString *)text\n{')
+handlers_d3 = (ROOT / 'source/blender/editors/interface/interface_handlers.cc').read_text(encoding='utf-8')
+textedit_d3 = handlers_d3[handlers_d3.index('      case EVT_TEXTEDIT: {'):]
+textedit_d3 = textedit_d3[:textedit_d3.index('      default: {')]
+events_d3 = (SWIFT.parents[1] / 'intern/wm_event_system.cc').read_text(encoding='utf-8')
+native_d3 = (SWIFT.parents[1] / 'intern/wm_apple_ios_native.cc').read_text(encoding='utf-8')
+check('GHOST_kKeyTextEdit' in change_d3 and 'onscreen_keyboard_active' in change_d3 and
+      'push_edits_back_to_blender' not in ghost_r6 and 'hardware_text_edit' not in ghost_r6 and
+      'return has_text ? keyboard_string_.c_str() : nullptr;' in ghost_r6 and
+      '[self liftTextField];' in popup_d3 and 'keyboard_frame = ' in ghost_r6 and
+      'keyboard_string && text_edit.edit_string' in textedit_d3 and 'BUT_TEXTEDIT_UPDATE' in textedit_d3 and
+      'but->pos = ' in textedit_d3 and
+      '@interface GHOSTKeyInputView : UIView <UIKeyInput>' in ghost_r6 and 'GHOST_kKeyEnter' in type_d3 and
+      'GHOST_kKeyTab' in type_d3 and 'responder == key_input_view ||' in ghost_r6 and
+      '(key == GHOST_kKeyEsc || key == GHOST_kKeyTab)' in ghost_r6 and
+      'wm_event_text_input_focus_note(C, wm, &win, event);' in events_d3 and
+      'KM_TEXTINPUT' in events_d3[events_d3.index('static bool wm_region_takes_text('):] and
+      'native.text_input_focus = text_input_focus;' in native_d3 and
+      'state == BUTTON_STATE_WAIT_KEY_EVENT || data->state == BUTTON_STATE_WAIT_KEY_EVENT' in handlers_d3 and
+      'wm_apple_ios_window_key_input(model.window, 2)' in cluster_d1 + (SWIFT / 'DesktopCluster.swift').read_text(encoding='utf-8'),
+      "R6 DESK-3: fields send text as it changes and clear the keyboard; key-taking editors get a keyboard of keys")
+
 print('PASS: native shell sources ' + json.dumps(checks))

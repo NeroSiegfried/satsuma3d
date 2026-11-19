@@ -28,6 +28,10 @@ NSURL *_Nullable wm_apple_ios_document_url(void);
 bool wm_apple_ios_window_presented_frame(void *_Nullable window);
 CGPoint wm_apple_ios_window_pixels(void *_Nullable window, CGPoint point);
 void wm_apple_ios_window_send_key(void *_Nullable window, const char *_Nonnull key);
+/** The keyboard that types into Blender as key events (ROUND6 DESK-3): \a request 2 shows it, or
+ * lets it go if it shows; 3 lets it go. It also shows by itself for what takes text from keys. */
+void wm_apple_ios_window_key_input(void *_Nullable window, int request);
+bool wm_apple_ios_window_key_input_shown(void *_Nullable window);
 /** A key pressed and let go with the modifiers held, as a keyboard sends it, by Blender's event
  * name (`U`, `F2`, `SPACE`), the pointer at the viewport's middle. False for a key it does not
  * know. */

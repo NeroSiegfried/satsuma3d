@@ -5926,10 +5926,25 @@ bool bridge_menu_popup(bContext *C, const char *menu);
  * what is shown after each command can be checked without a device, its menu popups, so a key's
  * menu is asked for as a key asks for it (the `keys` scenario), and the size of Blender's own
  * interface (the `reveal` scenario). Only where no native interface is installed. */
+/** What the last press said of typed text (ROUND6 DESK-3), for the harness: -1 nothing yet, 0 it
+ * takes none, 1 it takes text from keys; and how many presses said so. */
+static int bridge_test_text_input = -1;
+static int bridge_test_text_input_count = 0;
+
+extern "C" int WM_native_ui_test_text_input_focus(int *r_count)
+{
+  *r_count = bridge_test_text_input_count;
+  return bridge_test_text_input;
+}
+
 extern "C" void WM_native_ui_test_install_hooks()
 {
   static wmNativeInterface hooks;
   if (WM_native_interface() == nullptr) {
+    hooks.text_input_focus = [](wmWindow * /*win*/, const bool takes_text) {
+      bridge_test_text_input = takes_text;
+      bridge_test_text_input_count++;
+    };
     hooks.operator_finished = WM_native_ui_operator_finished;
     hooks.state_changed = WM_native_ui_tag_changed;
     hooks.menu_popup = bridge_menu_popup;
