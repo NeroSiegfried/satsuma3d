@@ -395,6 +395,9 @@ final class ShellModel {
   /** Blender's viewport has shown its first frame. */
   private(set) var viewportReady = false
   private(set) var documentsAvailable = false
+  /** What the header says about the document while it is not saved, such as "Not saved" after a
+   * failed write (ROUND6 SAFE-1); empty when it is saved. */
+  private(set) var documentStatus = ""
 #if os(visionOS)
   /** The window shows, not the launcher: a hidden window's ornaments still show there. */
   private(set) var windowVisible = true
@@ -479,6 +482,7 @@ final class ShellModel {
       viewportReady = true
     }
     set(\.documentsAvailable, wm_apple_ios_documents_available())
+    set(\.documentStatus, wm_apple_ios_document_status() ?? "")
 #if os(visionOS)
     set(\.windowVisible, wm_apple_ios_document_window_visible())
 #endif

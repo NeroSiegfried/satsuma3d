@@ -35,6 +35,7 @@
 #  include "BLI_path_utils.hh"
 #  include "BLI_string.h"
 #  include "BLI_string_ref.hh"
+#  include "BLT_translation.hh"
 #  include "DEG_depsgraph_query.hh"
 #  include "DNA_image_types.h"
 #  include "DNA_object_types.h"
@@ -53,6 +54,7 @@
 #  include "RNA_access.hh"
 #  include "WM_api.hh"
 #  include "WM_apple_ios.hh"
+#  include "WM_document_command.hh"
 #  include "WM_native_interface.hh"
 #  include "WM_native_ui.hh"
 #  include "WM_types.hh"
@@ -362,10 +364,32 @@ bool WM_apple_ios_document_open(bContext *C,
 }
 
 /**
- * Write the open file for a document, with its preview: in the window, as saving from Blender
- * does, which a preview of the 3D View or the scene's camera needs.
+ * The reason Blender gave for a write it could not make: its first error, else its first warning.
+ * Blender's own words, which the document shows; never dropped unread (ROUND6 SAFE-1).
  */
-static bool wm_document_write(bContext *C, const char *filepath, const bool preview)
+static std::string write_reason(const ReportList &reports)
+{
+  std::string warning;
+  for (const Report &report : reports.list) {
+    if (report.type >= RPT_ERROR && report.message && report.message[0]) {
+      return report.message;
+    }
+    if (report.type >= RPT_WARNING && warning.empty() && report.message) {
+      warning = report.message;
+    }
+  }
+  return warning.empty() ? std::string(RPT_("Blender could not write the file.")) : warning;
+}
+
+/**
+ * Write the open file for a document, with its preview: in the window, as saving from Blender
+ * does, which a preview of the 3D View or the scene's camera needs. `r_error`: why it was not
+ * written, in Blender's words.
+ */
+static bool wm_document_write(bContext *C,
+                              const char *filepath,
+                              const bool preview,
+                              std::string &r_error)
 {
   wmWindowManager *wm = CTX_wm_manager(C);
   wmWindow *win = wm ? static_cast<wmWindow *>(wm->windows.first) : nullptr;
@@ -399,26 +423,31 @@ static bool wm_document_write(bContext *C, const char *filepath, const bool prev
       C, filepath, G.fileflags, BLO_WRITE_PATH_REMAP_NONE, true, &reports);
   U.file_preview_type = preview_type;
   preview_frame_all = false;
+  r_error = success ? std::string() : write_reason(reports);
   BKE_reports_free(&reports);
   CTX_wm_window_set(C, win_prev);
+  if (!success) {
+    WM_native_ui_session_log(
+        "document",
+        fmt::format("could not write {}: {}", BLI_path_basename(filepath), r_error).c_str());
+  }
   return success;
 }
 
-bool WM_apple_ios_document_write(bContext *C,
-                                 const char *filepath,
-                                 const bool preview,
-                                 const bool when_idle,
-                                 bool *r_refused)
+wmDocumentWrite WM_apple_ios_document_write(bContext *C,
+                                            const char *filepath,
+                                            const bool preview,
+                                            const bool when_idle,
+                                            std::string &r_error)
 {
-  *r_refused = false;
+  r_error.clear();
   /* The backstop (ROUND5 9D.1, decision 62): Blender has loaded another file since the document
    * opened. Writing would replace the document with it, so nothing is written; the document says
    * so and offers to save a copy of what is loaded. */
   if (!WM_apple_ios_document_is_loaded()) {
-    *r_refused = true;
     WM_native_ui_session_log("document",
                              "write refused: the loaded file is not this document");
-    return false;
+    return wmDocumentWrite::Refused;
   }
   /* Saving along the way waits for a stroke or other modal operator to finish, as Blender's
    * auto-save does: its data is not in a state to write until then. */
@@ -429,7 +458,7 @@ bool WM_apple_ios_document_write(bContext *C,
           if (handler.type == WM_HANDLER_TYPE_OP &&
               reinterpret_cast<wmEventHandler_Op &>(handler).op)
           {
-            return false;
+            return wmDocumentWrite::Deferred;
           }
         }
       }
@@ -437,9 +466,8 @@ bool WM_apple_ios_document_write(bContext *C,
   }
   /* A copy for iOS to move into place: paths stay relative to the document, and the file being
    * replaced keeps no `.blend1` backup, iOS keeps versions of documents itself. */
-  const bool success = wm_document_write(C, filepath, preview);
-  if (!success) {
-    return false;
+  if (!wm_document_write(C, filepath, preview, r_error)) {
+    return wmDocumentWrite::Failed;
   }
   /* The document is saved, as when saving it in Blender. */
   wm_apple_ios_autosave_remove(BKE_main_blendfile_path_from_global());
@@ -449,12 +477,12 @@ bool WM_apple_ios_document_write(bContext *C,
     wm_autosave_timer_begin(wm);
     wm->autosave_scheduled = false;
   }
-  return true;
+  return wmDocumentWrite::Written;
 }
 
-bool WM_apple_ios_document_copy_write(bContext *C, const char *filepath)
+bool WM_apple_ios_document_copy_write(bContext *C, const char *filepath, std::string &r_error)
 {
-  const bool success = wm_document_write(C, filepath, true);
+  const bool success = wm_document_write(C, filepath, true, r_error);
   WM_native_ui_session_log(
       "document",
       fmt::format("{} {}", success ? "copy written" : "copy could not be written",
@@ -587,8 +615,9 @@ std::string WM_apple_ios_document_template_write(bContext *C,
     MEM_delete(credit);
   }
   /* Save a copy without acknowledging or clearing the open document's unsaved work. */
-  if (!wm_document_write(C, filepath, true)) {
-    return "Could not save the template.";
+  std::string write_error;
+  if (!wm_document_write(C, filepath, true, write_error)) {
+    return "Could not save the template: " + write_error;
   }
   ImBuf *image = IMB_thumb_manage(filepath, THB_LARGE, THB_SOURCE_BLEND);
   if (!image) {

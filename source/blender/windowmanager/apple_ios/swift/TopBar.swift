@@ -67,10 +67,12 @@ final class ShellCommands {
   }
 
   func shareDocument() {
-    guard let document = wm_apple_ios_open_document() else { return }
-    /* Share the file as it is now. */
-    document.save(to: document.fileURL, for: .forOverwriting) { [weak self] _ in
-      let activity = UIActivityViewController(activityItems: [document.fileURL], applicationActivities: nil)
+    guard wm_apple_ios_open_document() != nil else { return }
+    /* Share the file as it is now: saved in place, or a fresh copy of the work when the document
+     * cannot be written (ROUND6 SAFE-1), never the file as it was last written. */
+    wm_apple_ios_share_document_file(presenter) { [weak self] url in
+      guard let url else { return }
+      let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
       activity.popoverPresentationController?.sourceView = self?.shareSource
       self?.presenter?.present(activity, animated: true)
     }
@@ -294,6 +296,20 @@ struct DocumentToolbar: ToolbarContent {
 #if !os(visionOS)
       ToolbarSpacer(.fixed, placement: .topBarLeading)
 #endif
+    }
+    if !model.documentStatus.isEmpty {
+      /* The document is not saved: a standing line until a write succeeds or the person answers
+       * (ROUND6 SAFE-1, SAFE-2). Tapping it says why again, with what can be done. */
+      ToolbarItem(placement: .topBarLeading) {
+        Button {
+          wm_apple_ios_document_status_tapped()
+        } label: {
+          Label(model.documentStatus, systemImage: "exclamationmark.triangle.fill")
+            .labelStyle(.titleAndIcon)
+            .foregroundStyle(.orange)
+        }
+          .accessibilityIdentifier("blender.document.status")
+      }
     }
     if shown.fileEdit {
       ToolbarItem(placement: .topBarLeading) {

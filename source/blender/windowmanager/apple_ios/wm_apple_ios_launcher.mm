@@ -804,7 +804,11 @@ static NSURL *launcher_pending_url = nil;
     self.document = document;
     return;
   }
-  /* One file at a time: the current one saves as it closes. */
+  /* One file at a time: the current one saves as it closes, a save the person asked for: its
+   * failure is said (ROUND6 SAFE-1). */
+  if ([previous isKindOfClass:WMIOSBlendDocument.class]) {
+    [(WMIOSBlendDocument *)previous prepareToSaveForPerson:NO];
+  }
   GHOST_ios_document_window_set_visible(false, true);
   [previous closeWithCompletionHandler:^(BOOL success) {
     if (success) {
@@ -819,19 +823,11 @@ static NSURL *launcher_pending_url = nil;
       GHOST_ios_document_window_set_visible(true, true);
     }
     else {
+      /* The failure path said why, with Save a Copy… and Try Again (ROUND6 SAFE-1): stay on the
+       * document, which has not been replaced. */
       self->_opening = NO;
-      UIAlertController *alert = [UIAlertController
-          alertControllerWithTitle:@"Could Not Save Document"
-                           message:
-                               @"The current document could not be saved. It has not been "
-                               @"replaced."
-                    preferredStyle:UIAlertControllerStyleAlert];
-      [alert addAction:[UIAlertAction actionWithTitle:@"OK"
-                                                style:UIAlertActionStyleDefault
-                                              handler:^(UIAlertAction *) {
-                                                GHOST_ios_document_window_set_visible(true, true);
-                                              }]];
-      [self presentViewController:alert animated:YES completion:nil];
+      WM_native_ui_log("document", "open another: the current document could not be saved, kept");
+      GHOST_ios_document_window_set_visible(true, true);
     }
   }];
 }
@@ -1152,19 +1148,32 @@ bool wm_apple_ios_launcher_can_show_documents()
 #endif
 }
 
+/** Close the document, saved or not to be saved, and show the documents. */
+static void launcher_close_document(id sender);
+
 void wm_apple_ios_launcher_show_documents(id sender)
 {
   UIDocument *document = launcher_controller.document;
   if ([document isKindOfClass:WMIOSBlendDocument.class] && document.hasUnsavedChanges) {
-    /* Save first, while Blender's window is still shown for the preview. */
-    [(WMIOSBlendDocument *)document saveChangesWithCompletionHandler:^(BOOL success) {
-      /* Refused (ROUND5 9D.1): its alert offers to save a copy; stay until the person chooses.
-       * Asked again, the document closes, as nothing of it is left to save. */
-      if (!success && ((WMIOSBlendDocument *)document).refused) {
-        return;
-      }
-      wm_apple_ios_launcher_show_documents(sender);
-    }];
+    /* Save first, while Blender's window is still shown for the preview. Never again by itself
+     * (ROUND6 SAFE-1): refused, its alert offers to save a copy (ROUND5 9D.1), and asked again
+     * the document closes, as nothing of it is left to save; failed or busy, the failure path's
+     * alert says why and offers Close Without Saving. */
+    [(WMIOSBlendDocument *)document saveForPerson:YES
+                                       completion:^(BOOL success) {
+                                         if (success) {
+                                           launcher_close_document(sender);
+                                         }
+                                       }];
+    return;
+  }
+  launcher_close_document(sender);
+}
+
+static void launcher_close_document(id sender)
+{
+  UIDocument *document = launcher_controller.document;
+  if (document == nil) {
     return;
   }
   NSURL *url = [[document.fileURL retain] autorelease];
@@ -1234,8 +1243,10 @@ UIViewController *wm_apple_ios_top_presenter()
  * A check launch's `document …` steps (`Snapshots.swift`, ROUND5 9D.5), only in a check launch
  * and only on files in its scratch folder: `copy <name>` (a fresh copy of the General template),
  * `open <name>`, `stat <name>` (size, date and a hash), `list`, `save` (marked edited and saved
- * now), `reopen` (as the refusal's Reopen Document), `back`; `marker`, `check` and
- * `python <code>` run in Blender, see #WM_apple_ios_document_check_step.
+ * now), `reopen` (as the refusal's Reopen Document), `back`; `lock` and `unlock` (the scratch
+ * folder read-only and back, so the document cannot be written: ROUND6 SAFE-1), `status` (what the
+ * header says and the alert shown, if any); `marker`, `check` and `python <code>` run in Blender,
+ * see #WM_apple_ios_document_check_step.
  */
 void wm_apple_ios_document_check_step(NSString *step, void (^done)(NSString *answer))
 {
@@ -1342,6 +1353,21 @@ void wm_apple_ios_document_check_step(NSString *step, void (^done)(NSString *ans
     else {
       say(@"dismiss: nothing presented");
     }
+  }
+  else if ([verb isEqual:@"lock"] || [verb isEqual:@"unlock"]) {
+    /* The folder, not the file: iOS writes beside the file and moves the result into place. */
+    const BOOL lock = [verb isEqual:@"lock"];
+    const BOOL changed = [files setAttributes:@{NSFilePosixPermissions : @(lock ? 0555 : 0755)}
+                                 ofItemAtPath:launcherScratchFolder().path
+                                        error:nil];
+    say([NSString stringWithFormat:@"%@ the scratch folder: %@", verb, changed ? @"done" : @"failed"]);
+  }
+  else if ([verb isEqual:@"status"]) {
+    UIViewController *top = wm_apple_ios_top_presenter();
+    NSString *alert = [top isKindOfClass:UIAlertController.class] ? top.title : nil;
+    say([NSString stringWithFormat:@"status: %@; alert: %@",
+                                   document.status ?: @"saved",
+                                   alert ?: @"none"]);
   }
   else if ([verb isEqual:@"back"]) {
     wm_apple_ios_launcher_show_documents(nil);

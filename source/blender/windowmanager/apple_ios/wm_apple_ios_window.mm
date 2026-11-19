@@ -332,6 +332,26 @@ extern "C" void wm_apple_ios_save_document_as(UIViewController *presenter)
   wm_apple_ios_document_save_as(presenter);
 }
 
+extern "C" void wm_apple_ios_share_document_file(UIViewController *presenter,
+                                                 void (^done)(NSURL *url))
+{
+  wm_apple_ios_document_file_now(presenter, done);
+}
+
+extern "C" NSString *wm_apple_ios_document_status()
+{
+  WMIOSBlendDocument *document = (WMIOSBlendDocument *)wm_apple_ios_launcher_document();
+  return [document isKindOfClass:WMIOSBlendDocument.class] ? document.status : nil;
+}
+
+extern "C" void wm_apple_ios_document_status_tapped()
+{
+  WMIOSBlendDocument *document = (WMIOSBlendDocument *)wm_apple_ios_launcher_document();
+  if ([document isKindOfClass:WMIOSBlendDocument.class]) {
+    [document statusTapped];
+  }
+}
+
 extern "C" void wm_apple_ios_document_check(NSString *step, void (^done)(NSString *answer))
 {
   wm_apple_ios_document_check_step(step, done);

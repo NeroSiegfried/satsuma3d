@@ -25,7 +25,26 @@
 - (void)reopen:(BOOL)revert;
 /** A write was refused, see #WM_apple_ios_document_write: Blender has another file loaded. */
 @property(nonatomic, readonly) BOOL refused;
+/** What the header says about the document while it is not saved (ROUND6 SAFE-1), or nil. */
+@property(nonatomic, readonly) NSString *status;
+/**
+ * A save the person asked for (‹, opening another document): its failure is said every time,
+ * with Close Without Saving when `closing`. `completion` runs once the outcome was said.
+ */
+- (void)saveForPerson:(BOOL)closing completion:(void (^)(BOOL success))completion;
+/** The next save is the person's, as #saveForPerson:completion:, for a save UIKit makes itself,
+ * such as closing. */
+- (void)prepareToSaveForPerson:(BOOL)closing;
+/** The header's status was tapped: say why again, with what can be done. */
+- (void)statusTapped;
 @end
+
+/**
+ * The document's file as it is now, for Save As and Share (ROUND6 SAFE-1): the document saved in
+ * place; or, when that cannot be written (refused, failed), a fresh copy of what Blender has
+ * loaded, written from memory. `done` gets nil when neither could be written, said in an alert.
+ */
+void wm_apple_ios_document_file_now(UIViewController *presenter, void (^done)(NSURL *url));
 
 /**
  * Save As (ROUND5 9D.2, decision 63): the document saved, then a copy exported where the person

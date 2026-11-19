@@ -37,4 +37,19 @@ enum class wmDocumentCommand : int8_t {
   Quit,
 };
 
+/**
+ * How a document's write ended (ROUND6 SAFE-1): every way is said to the person, none of them is
+ * dropped. A write that was put off is not a failure.
+ */
+enum class wmDocumentWrite : int8_t {
+  /** The file was written. */
+  Written,
+  /** Nothing was written: Blender has another file loaded than the document (ROUND5 9D.1). */
+  Refused,
+  /** Not now: a stroke or other modal operator is running, and saving along the way waits. */
+  Deferred,
+  /** Blender could not write the file; its reason comes with it. */
+  Failed,
+};
+
 }  // namespace blender

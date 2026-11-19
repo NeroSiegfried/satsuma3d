@@ -103,6 +103,14 @@ void wm_apple_ios_new_document(UIViewController *_Nonnull presenter);
 /** Save As (ROUND5 9D.2): the document saved and a copy exported, or Save a Copy of what is
  * loaded when it is not the document's, see `wm_apple_ios_blend_document.mm`. */
 void wm_apple_ios_save_document_as(UIViewController *_Nullable presenter);
+/** The document's file as it is now, for Share (ROUND6 SAFE-1): saved in place, or a fresh copy
+ * of what is loaded when that cannot be written; nil after an alert saying why. */
+void wm_apple_ios_share_document_file(UIViewController *_Nullable presenter,
+                                      void (^_Nonnull done)(NSURL *_Nullable url));
+/** What the header says about the open document while it is not saved, or nil (ROUND6 SAFE-1,
+ * SAFE-2); tapping it says why again, with what can be done. */
+NSString *_Nullable wm_apple_ios_document_status(void);
+void wm_apple_ios_document_status_tapped(void);
 /** A check launch's `document …` snapshot step (ROUND5 9D.5). */
 void wm_apple_ios_document_check(NSString *_Nonnull step,
                                  void (^_Nonnull done)(NSString *_Nonnull answer));

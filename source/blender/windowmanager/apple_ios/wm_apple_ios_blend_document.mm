@@ -5,6 +5,7 @@
 
 #include "BKE_blender_version.h"
 #include "GHOST_IOSRuntime.hh"
+#include "WM_document_command.hh"
 #include "WM_native_ui.h"
 #import "wm_apple_ios_launcher.hh"
 
@@ -22,10 +23,10 @@ bool WM_apple_ios_document_open(bContext *C,
                                 const char *filepath,
                                 bool template_document,
                                 bool *r_recovered);
-bool WM_apple_ios_document_write(
-    bContext *C, const char *filepath, bool preview, bool when_idle, bool *r_refused);
+wmDocumentWrite WM_apple_ios_document_write(
+    bContext *C, const char *filepath, bool preview, bool when_idle, std::string &r_error);
 bool WM_apple_ios_document_is_loaded();
-bool WM_apple_ios_document_copy_write(bContext *C, const char *filepath);
+bool WM_apple_ios_document_copy_write(bContext *C, const char *filepath, std::string &r_error);
 std::string WM_apple_ios_document_template_write(bContext *C,
                                                  const char *filepath,
                                                  const char *preview,
@@ -34,10 +35,14 @@ std::string WM_apple_ios_document_template_write(bContext *C,
 
 /**
  * Run `work` on the engine and wait for it. Documents read and write on UIKit's background queues,
- * inside file coordination, and only finish once Blender has.
+ * inside file coordination, and only finish once Blender has. `r_timed_out`: Blender did not get
+ * to it in five minutes, busy rather than failed (ROUND6 SAFE-1).
  */
-static bool engine_wait(std::function<bool(blender::bContext *)> work)
+static bool engine_wait(std::function<bool(blender::bContext *)> work, bool *r_timed_out = nullptr)
 {
+  if (r_timed_out) {
+    *r_timed_out = false;
+  }
   struct Wait {
     std::mutex mutex;
     std::condition_variable condition;
@@ -56,6 +61,9 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work)
   std::unique_lock lock(wait->mutex);
   /* Large scenes take a while; never hold the document's queue forever. */
   if (!wait->condition.wait_for(lock, std::chrono::minutes(5), [&] { return wait->done; })) {
+    if (r_timed_out) {
+      *r_timed_out = true;
+    }
     return false;
   }
   return wait->success;
@@ -85,12 +93,266 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work)
   BOOL _refused;
   /** The refusal was said, once until the document is reopened. */
   BOOL _refusalShown;
+  /**
+   * Why the last write failed, in Blender's words; nil once a write succeeds (ROUND6 SAFE-1). The
+   * header says "Not saved" meanwhile.
+   */
+  NSString *_failure;
+  /** The failure last said in an alert: saving along the way says each cause once. */
+  NSString *_failureShown;
+  /** The last write waited five minutes for Blender and gave up: busy, not failed. */
+  BOOL _busy;
+  /** Saving along the way failed this many times in a row: it waits longer each time. */
+  int _failures;
+  /** The person asked for this save (Save, Try Again, ‹, opening another): its failure is said
+   * every time, not once per cause. */
+  BOOL _explicitSave;
+  /** ‹ waits on this save: its alert offers to close without saving. */
+  BOOL _closeRequested;
+  /** The person chose Close Without Saving: nothing is left to save. */
+  BOOL _discard;
+  /** The outcome of the write in progress was said by #writeContents, not left to #handleError. */
+  BOOL _outcomeSaid;
+  /** The alert of the failure path, while it shows: one at a time. */
+  UIAlertController *_problemAlert;
+}
+
+- (void)dealloc
+{
+  [_failure release];
+  [_failureShown release];
+  [_problemAlert release];
+  [super dealloc];
 }
 
 - (BOOL)refused
 {
   return _refused;
 }
+
+/* -------------------------------------------------------------------- */
+/** \name The failure path (ROUND6 SAFE-1)
+ *
+ * Every write of the document ends in #writeContents or, for what UIKit does around it (moving
+ * the written file into place), in #handleError:userInteractionPermitted:. Both lead here, so
+ * no caller can drop a failure: an alert with Blender's reason and a way on, once per cause for
+ * saving along the way, every time for a save the person asked for; "Not saved" in the header
+ * until a write succeeds.
+ * \{ */
+
+- (NSString *)name
+{
+  return self.fileURL.lastPathComponent ?: @"The document";
+}
+
+- (NSString *)status
+{
+  if (_discard || _refused) {
+    return nil;
+  }
+  if (_failure) {
+    return @"Not saved";
+  }
+  if (_busy) {
+    return @"Not saved yet";
+  }
+  return nil;
+}
+
+- (void)statusTapped
+{
+  if (_failure) {
+    [_failureShown release];
+    _failureShown = nil;
+    _explicitSave = YES;
+    [self saveFailed:[[_failure retain] autorelease]];
+    _explicitSave = NO;
+  }
+  else if (_busy) {
+    [self saveNow];
+  }
+}
+
+/** Whether Save As and Share may save the document in place before handing on its file. */
+- (BOOL)canWriteInPlace
+{
+  return !_refused && !_discard;
+}
+
+- (void)prepareToSaveForPerson:(BOOL)closing
+{
+  _explicitSave = YES;
+  _closeRequested = closing;
+}
+
+- (void)saveForPerson:(BOOL)closing completion:(void (^)(BOOL success))completion
+{
+  [self prepareToSaveForPerson:closing];
+  void (^done)(BOOL) = [[completion copy] autorelease];
+  [self saveChangesWithCompletionHandler:^(BOOL success) {
+    /* After the outcome is said, which #writeContents queued before UIKit finished. */
+    dispatch_async(dispatch_get_main_queue(), ^{
+      _explicitSave = NO;
+      if (done) {
+        done(success);
+      }
+    });
+  }];
+}
+
+- (void)writeSucceeded
+{
+  if (_failure || _busy) {
+    WM_native_ui_log("document", "saved again after a failed save");
+  }
+  [_failure release];
+  _failure = nil;
+  [_failureShown release];
+  _failureShown = nil;
+  _busy = NO;
+  _failures = 0;
+}
+
+- (void)writeOutcome:(NSString *)outcome reason:(NSString *)reason
+{
+  _outcomeSaid = YES;
+  if ([outcome isEqual:@"written"]) {
+    [self writeSucceeded];
+  }
+  else if ([outcome isEqual:@"busy"]) {
+    [self saveBusy];
+  }
+  else if ([outcome isEqual:@"failed"]) {
+    [self saveFailed:reason];
+  }
+  /* Refused: its own alert, see #writeRefused. Deferred: saving along the way waits for the
+   * stroke to end, as Blender's auto-save does; not a failure. */
+}
+
+- (void)handleError:(NSError *)error userInteractionPermitted:(BOOL)userInteractionPermitted
+{
+  /* Never UIKit's silence: what it could not do around a write (moving the file into place, a
+   * vanished or read-only location) is a failure like any other. Opening has its own path. */
+  NSError *problem = [[error retain] autorelease];
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if ([self isOpenProblem:problem]) {
+      return;
+    }
+    if (_outcomeSaid) {
+      _outcomeSaid = NO;
+      return;
+    }
+    NSString *reason = problem.localizedFailureReason ?: problem.localizedDescription;
+    WM_native_ui_log("document", [@"save problem from iOS: " stringByAppendingString:reason ?: @"?"]
+                                     .UTF8String);
+    [self saveFailed:reason];
+  });
+  [self finishedHandlingError:error recovered:NO];
+}
+
+/** An error of reading the file: said where the document opens, not here. */
+- (BOOL)isOpenProblem:(NSError *)error
+{
+  return [error.userInfo[@"WMIOSDocumentOutcome"] isEqual:@"open"];
+}
+
+- (void)saveFailed:(NSString *)reason
+{
+  NSString *text = reason.length ? reason : @"The file could not be written.";
+  [_failure release];
+  _failure = [text copy];
+  _busy = NO;
+  WM_native_ui_log("document", [@"save failed: " stringByAppendingString:text].UTF8String);
+  if (!_explicitSave && [_failureShown isEqual:text]) {
+    /* Said already: saving along the way keeps trying, more slowly, see #saveAlongTheWay. */
+    return;
+  }
+  [_failureShown release];
+  _failureShown = [text copy];
+  [self presentProblem:[NSString stringWithFormat:@"“%@” could not be saved", self.name]
+               message:text
+              tryAgain:YES];
+}
+
+- (void)saveBusy
+{
+  _busy = YES;
+  WM_native_ui_log("document", "save waited five minutes for Blender: busy, not saved yet");
+  if (!_explicitSave) {
+    return;
+  }
+  [self presentProblem:@"Blender is busy, not saved yet"
+               message:[NSString stringWithFormat:@"“%@” is saved when Blender has finished what "
+                                                  @"it is doing.",
+                                                  self.name]
+              tryAgain:YES];
+}
+
+/** The failure path's alert: Save a Copy…, Try Again, Not Now; Close Without Saving when ‹ waits
+ * on it. Never a second over the first. */
+- (void)presentProblem:(NSString *)title message:(NSString *)message tryAgain:(BOOL)try_again
+{
+  if (_problemAlert.presentingViewController) {
+    WM_native_ui_log("document", "save problem: its alert shows already");
+    return;
+  }
+  UIAlertController *alert = [UIAlertController
+      alertControllerWithTitle:title
+                       message:message
+                preferredStyle:UIAlertControllerStyleAlert];
+  const BOOL closing = _closeRequested;
+  [alert addAction:[UIAlertAction actionWithTitle:@"Save a Copy…"
+                                            style:UIAlertActionStyleDefault
+                                          handler:^(UIAlertAction *) {
+                                            _closeRequested = NO;
+                                            wm_apple_ios_document_save_as(nil);
+                                          }]];
+  if (try_again) {
+    [alert addAction:[UIAlertAction actionWithTitle:@"Try Again"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *) {
+                                              if (closing) {
+                                                wm_apple_ios_launcher_show_documents(nil);
+                                              }
+                                              else {
+                                                [self saveNow];
+                                              }
+                                            }]];
+  }
+  if (closing) {
+    [alert addAction:[UIAlertAction actionWithTitle:@"Close Without Saving"
+                                              style:UIAlertActionStyleDestructive
+                                            handler:^(UIAlertAction *) {
+                                              [self closeWithoutSaving];
+                                            }]];
+  }
+  [alert addAction:[UIAlertAction actionWithTitle:@"Not Now"
+                                            style:UIAlertActionStyleCancel
+                                          handler:^(UIAlertAction *) {
+                                            _closeRequested = NO;
+                                          }]];
+  [_problemAlert release];
+  _problemAlert = [alert retain];
+  WM_native_ui_log("document",
+                   [NSString stringWithFormat:@"save problem shown: %@%@", title,
+                                              closing ? @" (with Close Without Saving)" : @""]
+                       .UTF8String);
+  [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)closeWithoutSaving
+{
+  /* Blender's auto-save keeps the work, which the next open offers back. */
+  WM_native_ui_log("document", "closed without saving, as asked");
+  _discard = YES;
+  _closeRequested = NO;
+  _blenderModified = NO;
+  _previewStale = NO;
+  [self updateChangeCount:UIDocumentChangeCleared];
+  wm_apple_ios_launcher_show_documents(nil);
+}
+
+/** \} */
 
 - (void)saveChangesWithCompletionHandler:(void (^)(BOOL success))completionHandler
 {
@@ -138,8 +400,14 @@ static const CFTimeInterval document_save_interval = 60.0;
     return;
   }
   _alongTheWayScheduled = YES;
-  const CFTimeInterval wait = std::max(
-      document_save_delay, document_save_interval - (CACurrentMediaTime() - _lastWrite));
+  /* After a failure, longer each time (two, four, eight minutes, at most ten): its alert said it
+   * once, and the cause rarely goes by itself within a minute. */
+  const CFTimeInterval wait = _failures > 0 ?
+                                  std::min(document_save_interval * (1 << std::min(_failures, 4)),
+                                           600.0) :
+                                  std::max(document_save_delay,
+                                           document_save_interval -
+                                               (CACurrentMediaTime() - _lastWrite));
   dispatch_after(
       dispatch_time(DISPATCH_TIME_NOW, int64_t(wait * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         _alongTheWayScheduled = NO;
@@ -156,10 +424,16 @@ static const CFTimeInterval document_save_interval = 60.0;
         _alongTheWay = YES;
         [super autosaveWithCompletionHandler:^(BOOL success) {
           _saving--;
-          /* Edited since, or Blender was mid-stroke. */
-          if (_blenderModified || !success) {
-            [self saveAlongTheWay];
-          }
+          /* After the outcome is said, which #writeContents queued before UIKit finished. */
+          dispatch_async(dispatch_get_main_queue(), ^{
+            if (!success && (_failure || _busy)) {
+              _failures++;
+            }
+            /* Edited since, Blender was mid-stroke, or the write failed. */
+            if ((_blenderModified || !success) && !_refused && !_discard) {
+              [self saveAlongTheWay];
+            }
+          });
         }];
       });
 }
@@ -245,14 +519,23 @@ static const CFTimeInterval document_save_interval = 60.0;
   /* Rendering the preview needs Blender's window on screen, and the app in front. */
   const bool preview = !along_the_way && !GHOST_ios_app_in_background() &&
                        GHOST_ios_document_window_visible();
-  auto refused = std::make_shared<std::atomic<bool>>(false);
-  if (engine_wait([path, preview, along_the_way, refused](blender::bContext *C) {
-        bool r_refused = false;
-        const bool written = blender::WM_apple_ios_document_write(
-            C, path.c_str(), preview, along_the_way, &r_refused);
-        refused->store(r_refused);
-        return written;
-      }))
+  /* A new write: its outcome is said below, or by #handleError when UIKit fails around it. */
+  dispatch_async(dispatch_get_main_queue(), ^{
+    _outcomeSaid = NO;
+  });
+  struct Result {
+    blender::wmDocumentWrite outcome = blender::wmDocumentWrite::Failed;
+    std::string error = "Blender was not ready to write the file.";
+  };
+  auto result = std::make_shared<Result>();
+  bool timed_out = false;
+  if (engine_wait(
+          [path, preview, along_the_way, result](blender::bContext *C) {
+            result->outcome = blender::WM_apple_ios_document_write(
+                C, path.c_str(), preview, along_the_way, result->error);
+            return result->outcome == blender::wmDocumentWrite::Written;
+          },
+          &timed_out))
   {
     _lastWrite = CACurrentMediaTime();
     _previewStale = !preview;
@@ -261,25 +544,51 @@ static const CFTimeInterval document_save_interval = 60.0;
                                                 along_the_way ? @"along the way" : @"in full",
                                                 preview ? @" with its preview" : @""]
                          .UTF8String);
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [self writeOutcome:@"written" reason:nil];
+    });
     return YES;
   }
-  if (refused->load()) {
+  /* Read only once Blender has finished with it: never after a time-out. */
+  NSString *outcome = @"failed";
+  NSString *reason = nil;
+  if (timed_out) {
+    outcome = @"busy";
+    reason = @"Blender is busy, not saved yet.";
+  }
+  else if (result->outcome == blender::wmDocumentWrite::Refused) {
+    outcome = @"refused";
+    reason = @"Another file is loaded than this document.";
     dispatch_async(dispatch_get_main_queue(), ^{
       [self writeRefused];
     });
   }
+  else if (result->outcome == blender::wmDocumentWrite::Deferred) {
+    outcome = @"deferred";
+    reason = @"Not saved while an operation runs.";
+  }
+  else {
+    reason = [NSString stringWithUTF8String:result->error.c_str()] ?: @"";
+  }
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self writeOutcome:outcome reason:reason];
+  });
   if (outError) {
     *outError = [NSError errorWithDomain:NSCocoaErrorDomain
                                     code:NSFileWriteUnknownError
-                                userInfo:nil];
+                                userInfo:@{
+                                  NSLocalizedFailureReasonErrorKey : reason,
+                                  @"WMIOSDocumentOutcome" : outcome,
+                                }];
   }
   return NO;
 }
 
 - (BOOL)hasUnsavedChanges
 {
-  /* Refused: nothing loaded is the document's to save, see #_refused. */
-  if (_refused) {
+  /* Refused: nothing loaded is the document's to save, see #_refused. Closed without saving, as
+   * the person chose. */
+  if (_refused || _discard) {
     return NO;
   }
   return _blenderModified || _previewStale || [super hasUnsavedChanges];
@@ -346,13 +655,19 @@ static const CFTimeInterval document_save_interval = 60.0;
 
 - (void)saveNow
 {
-  if (!self.hasUnsavedChanges) {
+  if (!self.hasUnsavedChanges && !_failure) {
     WM_native_ui_log("document", "save: nothing changed since it was saved");
     return;
   }
-  [self saveChangesWithCompletionHandler:^(BOOL success) {
-    WM_native_ui_log("document", success ? "saved" : "save failed");
-  }];
+  if (!self.hasUnsavedChanges) {
+    /* Failed before: write again, whatever UIKit counts. */
+    [self updateChangeCount:UIDocumentChangeDone];
+  }
+  /* A failure is said by the failure path, see #saveFailed:. */
+  [self saveForPerson:NO
+           completion:^(BOOL success) {
+             WM_native_ui_log("document", success ? "saved" : "save failed");
+           }];
 }
 
 - (void)setBlenderModified:(BOOL)modified
@@ -385,34 +700,13 @@ static void presentExporter(NSURL *url, UIViewController *presenter)
                                                         completion:nil];
 }
 
-void wm_apple_ios_document_save_as(UIViewController *presenter)
+/** A fresh copy of what Blender has loaded, written from memory into a new temporary folder:
+ * `done` gets it, or nil after an alert with Blender's reason. */
+static void writeFreshCopy(NSString *name, UIViewController *presenter, void (^done)(NSURL *url))
 {
-  WMIOSBlendDocument *document = (WMIOSBlendDocument *)wm_apple_ios_launcher_document();
-  if (![document isKindOfClass:WMIOSBlendDocument.class]) {
-    return;
-  }
   [presenter retain];
-  NSString *name = document.fileURL.lastPathComponent ?: @"Untitled.blend";
-  NSURL *documentURL = [[document.fileURL copy] autorelease];
-  [document retain];
+  void (^finish)(NSURL *) = [done copy];
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-    /* What is loaded is the document's: save it, then export the file, as Files apps do. Not the
-     * document's (refused, ROUND5 9D.1): what is loaded exists nowhere on disk, so write it as a
-     * copy and export that, leaving the document as it is. */
-    const bool own = engine_wait(
-        [](blender::bContext *) { return blender::WM_apple_ios_document_is_loaded(); });
-    if (own) {
-      dispatch_async(dispatch_get_main_queue(), ^{
-        [document saveToURL:documentURL
-              forSaveOperation:UIDocumentSaveForOverwriting
-             completionHandler:^(BOOL) {
-               presentExporter(documentURL, presenter);
-               [presenter release];
-               [document release];
-             }];
-      });
-      return;
-    }
     NSString *folder = [NSTemporaryDirectory()
         stringByAppendingPathComponent:[@"save-copy-" stringByAppendingString:NSUUID.UUID.UUIDString]];
     [NSFileManager.defaultManager createDirectoryAtPath:folder
@@ -421,17 +715,21 @@ void wm_apple_ios_document_save_as(UIViewController *presenter)
                                                   error:nil];
     NSURL *copy = [NSURL fileURLWithPath:[folder stringByAppendingPathComponent:name]];
     const std::string path = copy.path.UTF8String;
-    const bool written = engine_wait([path](blender::bContext *C) {
-      return blender::WM_apple_ios_document_copy_write(C, path.c_str());
-    });
+    auto error = std::make_shared<std::string>("Blender was not ready to write the copy.");
+    bool timed_out = false;
+    const bool written = engine_wait(
+        [path, error](blender::bContext *C) {
+          return blender::WM_apple_ios_document_copy_write(C, path.c_str(), *error);
+        },
+        &timed_out);
+    NSString *reason = timed_out ? @"Blender is busy. Try again when it has finished." :
+                       written   ? nil :
+                                   [NSString stringWithUTF8String:error->c_str()];
     dispatch_async(dispatch_get_main_queue(), ^{
-      if (written) {
-        presentExporter(copy, presenter);
-      }
-      else {
+      if (!written) {
         UIAlertController *alert = [UIAlertController
             alertControllerWithTitle:@"Could Not Save a Copy"
-                             message:@"Check available storage and try again."
+                             message:reason ?: @"Check available storage and try again."
                       preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"OK"
                                                   style:UIAlertActionStyleDefault
@@ -440,9 +738,73 @@ void wm_apple_ios_document_save_as(UIViewController *presenter)
                                                                 animated:YES
                                                               completion:nil];
       }
+      finish(written ? copy : nil);
+      [finish release];
+      [presenter release];
+    });
+  });
+}
+
+void wm_apple_ios_document_file_now(UIViewController *presenter, void (^done)(NSURL *url))
+{
+  WMIOSBlendDocument *document = (WMIOSBlendDocument *)wm_apple_ios_launcher_document();
+  void (^finish)(NSURL *) = [[done copy] autorelease];
+  if (![document isKindOfClass:WMIOSBlendDocument.class]) {
+    WM_native_ui_log("document", "file now: no document open");
+    finish(nil);
+    return;
+  }
+  NSString *name = document.fileURL.lastPathComponent ?: @"Untitled.blend";
+  NSURL *documentURL = [[document.fileURL copy] autorelease];
+  [presenter retain];
+  [document retain];
+  [finish retain];
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    /* What is loaded is the document's: save it, then hand on the file, as Files apps do. Not the
+     * document's (refused, ROUND5 9D.1): what is loaded exists nowhere on disk, so write it as a
+     * copy and hand on that, leaving the document as it is. The same when the save fails (ROUND6
+     * SAFE-1): the document's file is as last written, never the work since. */
+    const bool own = engine_wait(
+        [](blender::bContext *) { return blender::WM_apple_ios_document_is_loaded(); });
+    void (^release_all)(void) = ^{
       [presenter release];
       [document release];
+      [finish release];
+    };
+    if (own && [document canWriteInPlace]) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [document saveToURL:documentURL
+              forSaveOperation:UIDocumentSaveForOverwriting
+             completionHandler:^(BOOL success) {
+               if (success) {
+                 finish(documentURL);
+                 release_all();
+                 return;
+               }
+               WM_native_ui_log("document", "file now: the save failed, a fresh copy instead");
+               writeFreshCopy(name, presenter, ^(NSURL *copy) {
+                 finish(copy);
+                 release_all();
+               });
+             }];
+      });
+      return;
+    }
+    writeFreshCopy(name, presenter, ^(NSURL *copy) {
+      finish(copy);
+      release_all();
     });
+  });
+}
+
+void wm_apple_ios_document_save_as(UIViewController *presenter)
+{
+  [presenter retain];
+  wm_apple_ios_document_file_now(presenter, ^(NSURL *url) {
+    if (url) {
+      presentExporter(url, presenter);
+    }
+    [presenter release];
   });
 }
 

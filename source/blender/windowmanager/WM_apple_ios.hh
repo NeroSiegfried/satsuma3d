@@ -18,6 +18,7 @@ struct Report;
 struct ReportList;
 /** See `WM_document_command.hh`. */
 enum class wmDocumentCommand : int8_t;
+enum class wmDocumentWrite : int8_t;
 
 /* Engine-thread API. UIKit exchanges only owned values and request identifiers. */
 /**
@@ -88,17 +89,18 @@ bool WM_apple_ios_document_open(bContext *C,
  * Write the open file to `filepath`, for iOS to move into place as the saved document. Without
  * `preview` the file stores no preview image, which needs the GPU.
  */
-/** `when_idle`: give up rather than write while a stroke or other modal operator runs.
- * `r_refused`: nothing was written because Blender has another file loaded than the one the
- * document opened (ROUND5 9D, decision 62): writing it would replace the document with that file.
- * The document says so and offers to save a copy. */
-bool WM_apple_ios_document_write(
-    bContext *C, const char *filepath, bool preview, bool when_idle, bool *r_refused);
+/** `when_idle`: put off (#wmDocumentWrite::Deferred) rather than write while a stroke or other
+ * modal operator runs. #wmDocumentWrite::Refused: nothing was written because Blender has another
+ * file loaded than the one the document opened (ROUND5 9D, decision 62): writing it would replace
+ * the document with that file. The document says so and offers to save a copy.
+ * #wmDocumentWrite::Failed: `r_error` has Blender's reason (ROUND6 SAFE-1). */
+wmDocumentWrite WM_apple_ios_document_write(
+    bContext *C, const char *filepath, bool preview, bool when_idle, std::string &r_error);
 /** Whether what Blender has loaded is the file the document opened, see #WM_file_read_count. */
 bool WM_apple_ios_document_is_loaded();
 /** Write what Blender has loaded to `filepath` as a copy, for Save a Copy: the document and its
  * auto-save are left as they are. */
-bool WM_apple_ios_document_copy_write(bContext *C, const char *filepath);
+bool WM_apple_ios_document_copy_write(bContext *C, const char *filepath, std::string &r_error);
 /**
  * The front door (ROUND5 9D, decision 61): a file command run in a document window, from a key, a
  * menu, Search or a button, in either interface, takes the document's route instead of loading or
