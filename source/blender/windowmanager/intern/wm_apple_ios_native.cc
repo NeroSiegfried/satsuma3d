@@ -251,6 +251,7 @@ GHOST_IOSNativeInterface ghost_interface_create()
     WM_native_ui_session_log_flush(true);
     WM_apple_ios_autosave_now(C);
   };
+  native.memory_low = WM_apple_ios_memory_low;
   native.engine_busy = WM_native_ui_engine_busy;
   native.engine_document_held = WM_native_ui_document_held;
   native.finger_point_pixels = wm_event_finger_point_pixels_set;

@@ -138,6 +138,9 @@ static std::vector<std::function<void()>> engine_document_waiting;
 static std::atomic<bool> app_in_background{false};
 /* A render the user started goes on while the app is inactive or in the background. */
 static std::atomic<bool> engine_continues_work{false};
+/* iOS said memory is low (a memory warning, or the memory-pressure source): the engine keeps the
+ * work and frees what can be rebuilt, in the background too (ROUND6 BUSY-5). */
+static std::atomic<bool> engine_memory_low{false};
 
 /* When the engine's current pass began (seconds on the monotonic clock), 0 between passes. UIKit
  * reads it to tell when Blender is held up, such as by compiling shaders. */
@@ -258,6 +261,24 @@ static void run_engine_autosave()
   }
 }
 
+static void memory_low()
+{
+  engine_memory_low.store(true);
+  GHOST_ios_engine_wake();
+}
+
+static void run_engine_memory_low()
+{
+  if (!engine_memory_low.exchange(false)) {
+    return;
+  }
+  if (C && native_interface && native_interface->memory_low) {
+    @autoreleasepool {
+      native_interface->memory_low(C);
+    }
+  }
+}
+
 static void run_engine()
 {
   @autoreleasepool {
@@ -275,12 +296,14 @@ static void run_engine()
          * notification racing the transition into sleep. */
         engine_condition.wait_for(lock, std::chrono::milliseconds(100), [] {
           return engine_active.load() || engine_autosave_requested.load() ||
-                 engine_document_pending.load() || engine_continues_work.load();
+                 engine_document_pending.load() || engine_continues_work.load() ||
+                 engine_memory_low.load();
         });
       }
     }
     /* Runs in the background too: leaving the foreground is when work must be kept. */
     run_engine_autosave();
+    run_engine_memory_low();
     if (engine_document_pending.exchange(false)) {
       const bool was_waiting = !engine_document_waiting.empty();
       for (auto &request : engine_document_requests.take()) {
@@ -450,6 +473,24 @@ void GHOST_ios_unregister_window(UIWindow *window)
                                            selector:@selector(applicationWillTerminate)
                                                name:UIApplicationWillTerminateNotification
                                              object:nil];
+    /* Memory: UIKit's warning, and the system's pressure as it rises, which can come first. Each
+     * asks the engine to keep the work and free what it can (ROUND6 BUSY-5, G10). */
+    [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidReceiveMemoryWarningNotification
+                                                    object:nil
+                                                     queue:nil
+                                                usingBlock:^(NSNotification * /*note*/) {
+                                                  memory_low();
+                                                }];
+    static dispatch_source_t memory_pressure = nullptr;
+    memory_pressure = dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE,
+                                             0,
+                                             DISPATCH_MEMORYPRESSURE_WARN |
+                                                 DISPATCH_MEMORYPRESSURE_CRITICAL,
+                                             dispatch_get_main_queue());
+    dispatch_source_set_event_handler(memory_pressure, ^{
+      memory_low();
+    });
+    dispatch_resume(memory_pressure);
     /* The document launcher shows at once, while Blender starts behind it. Blender's window
      * comes forward once a document is open. */
     self.window = [[[UIWindow alloc] initWithWindowScene:g_window_scene] autorelease];

@@ -730,6 +730,7 @@ LOG_KINDS = {
     'session': 'whether the last session ended cleanly',
     'exit': 'why iOS ended the app when it reports it',
     'render': 'whether a render could go on in the background and why it paused',
+    'memory': 'the memory limits set at launch and what was freed when memory ran low',
 }
 writers = ''.join(path.read_text(encoding='utf-8', errors='replace')
                   for path in (SWIFT.parents[3]).rglob('*') if path.suffix in ('.cc', '.mm', '.swift'))
@@ -1493,5 +1494,28 @@ check('GHOST_ios_engine_continue_work(continues || holding)' in background_b4 an
       'BackgroundRender.shared.needsGPU = status.bool("gpu")' in render_swift and
       'UIApplication.shared.isIdleTimerDisabled = !idle' in pills and 'gpu=needs_gpu(scene)' in render_py,
       "R6 BUSY-4: the background is used only when granted, else the render pauses and goes on; heat pauses it")
+
+# ROUND6 BUSY-5 (G10): until the governor (PLAN M5) exists, the iPad's start-up preferences are an
+# iPad's: undo memory, the cache and the texture size capped from what iOS lets the app use, applied
+# as the preferences load and before the caches take their limits (`tests/ios/test_memory_caps.py`
+# checks the values for each tier). A memory warning or the pressure source writes the auto-save,
+# frees caches and the older undo steps, and says once "Memory is low. Save your work."
+files_b5 = (SWIFT.parents[1] / 'intern/wm_files.cc').read_text(encoding='utf-8')
+userdef_b5 = files_b5[files_b5.index('static void wm_init_userdef(Main *bmain)'):]
+userdef_b5 = userdef_b5[:userdef_b5.index('\n}\n')]
+document_b5 = (SWIFT.parents[1] / 'intern/wm_apple_ios_document.cc').read_text(encoding='utf-8')
+low_b5 = document_b5[document_b5.index('void WM_apple_ios_memory_low(bContext *C)'):]
+low_b5 = low_b5[:low_b5.index('\n}\n')]
+ghost_b5 = (ROOT / 'intern/ghost/intern/GHOST_SystemIOS.mm').read_text(encoding='utf-8')
+check(0 <= userdef_b5.find('WM_apple_ios_memory_defaults();') < userdef_b5.find('MEM_CacheLimiter_set_maximum(') and
+      'memory_caps_apply(caps, U.undomemory, U.memcachelimit, texture_limit);' in document_b5 and
+      'U.glreslimit = short(texture_limit);' in document_b5 and
+      'os_proc_available_memory()' in document_b5 and
+      'WM_apple_ios_autosave_now(C);' in low_b5 and 'BKE_image_free_buffers(' in low_b5 and
+      'BKE_undosys_stack_limit_steps_and_memory(' in low_b5 and '"Memory is low. Save your work."' in low_b5 and
+      'UIApplicationDidReceiveMemoryWarningNotification' in ghost_b5 and 'DISPATCH_SOURCE_TYPE_MEMORYPRESSURE' in ghost_b5 and
+      'native.memory_low = WM_apple_ios_memory_low;' in
+      (SWIFT.parents[1] / 'intern/wm_apple_ios_native.cc').read_text(encoding='utf-8'),
+      "R6 BUSY-5: the iPad's memory limits at start-up; low memory keeps the work and frees what it can")
 
 print('PASS: native shell sources ' + json.dumps(checks))

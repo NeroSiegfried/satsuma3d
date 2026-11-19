@@ -551,6 +551,11 @@ static void wm_init_userdef(Main *bmain)
     SET_FLAG_FROM_TEST(G.f, U.flag & USER_INTERNET_ALLOW, G_FLAG_INTERNET_ALLOW);
   }
 
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+  /* An iPad's limits, not a desktop's, before the caches take theirs (ROUND6 BUSY-5). */
+  WM_apple_ios_memory_defaults();
+#endif
+
   const int64_t cache_limit = int64_t(U.memcachelimit) * 1024 * 1024;
   MEM_CacheLimiter_set_maximum(cache_limit);
   memory_cache::set_approximate_size_limit(cache_limit);

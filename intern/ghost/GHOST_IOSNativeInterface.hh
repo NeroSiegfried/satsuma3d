@@ -90,6 +90,8 @@ struct GHOST_IOSNativeInterface {
   double (*engine_idle_seconds)(blender::bContext *C) = nullptr;
   /** Save unsaved work now: iOS may end the app in the background. */
   void (*autosave_now)(blender::bContext *C) = nullptr;
+  /** iOS says memory is low: keep the work, free what can be rebuilt (ROUND6 BUSY-5). */
+  void (*memory_low)(blender::bContext *C) = nullptr;
   /**
    * Whether a stroke or other operator is running, holding data half changed: work for documents
    * and shortcuts waits for it to end.

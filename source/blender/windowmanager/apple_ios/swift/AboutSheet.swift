@@ -103,6 +103,7 @@ enum SessionLogShare {
     + "each launch with the app's version, this iPad's model and the memory available, "
     + "whether the last session ended cleanly, why iOS ended the app when it reports it, "
     + "whether a render could go on in the background and why it paused, "
+    + "the memory limits set at launch and what was freed when memory ran low, "
     + "and a mark at most once a minute while the app is in use. It can include "
     + "the names of your files and objects. It stays on this iPad unless you share it."
 

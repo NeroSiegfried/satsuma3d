@@ -13,6 +13,8 @@
 
 #  include <cstring>
 #  include <fcntl.h>
+#  include <os/proc.h>
+#  include <sys/sysctl.h>
 #  include <ctime>
 #  include <fmt/format.h>
 #  include <optional>
@@ -29,6 +31,7 @@
 #  include "BKE_main.hh"
 #  include "BKE_object.hh"
 #  include "BKE_report.hh"
+#  include "BKE_undo_system.hh"
 #  include "BLI_fileops.h"
 #  include "BLI_fileops_types.h"
 #  include "BLI_filereader.h"
@@ -37,9 +40,11 @@
 #  include "BLI_math_matrix.hh"
 #  include "BLI_math_vector.h"
 #  include "BLI_math_vector.hh"
+#  include "BLI_memory_cache.hh"
 #  include "BLI_path_utils.hh"
 #  include "BLI_string.h"
 #  include "BLI_string_ref.hh"
+#  include "BLI_time.h"
 #  include "BLT_translation.hh"
 #  include "BLO_core_blend_header.hh"
 #  include "BLO_core_file_reader.hh"
@@ -59,6 +64,7 @@
 #  include "IMB_thumbs.hh"
 #  include "MEM_guardedalloc.h"
 #  include "RNA_access.hh"
+#  include "SEQ_relations.hh"
 #  include "WM_api.hh"
 #  include "WM_apple_ios.hh"
 #  include "WM_document_command.hh"
@@ -73,6 +79,7 @@
 
 #  include "wm.hh"
 #  include "wm_apple_ios_document.hh"
+#  include "wm_apple_ios_memory.hh"
 #  include "wm_files.hh"
 #  include "wm_window.hh"
 
@@ -363,6 +370,95 @@ void WM_apple_ios_autosave_ensure()
     U.savetime = 2;
   }
   wm_autosave_prune();
+}
+
+void WM_apple_ios_memory_defaults()
+{
+  uint64_t physical = 0;
+  size_t size = sizeof(physical);
+  if (sysctlbyname("hw.memsize", &physical, &size, nullptr, 0) != 0) {
+    physical = 0;
+  }
+  const uint64_t available = os_proc_available_memory();
+  const wm::apple_ios::MemoryCaps caps = wm::apple_ios::memory_caps(available, physical);
+  const int undo = U.undomemory, cache = U.memcachelimit, texture = U.glreslimit;
+  int texture_limit = U.glreslimit; /* A `short` in the preferences. */
+  wm::apple_ios::memory_caps_apply(caps, U.undomemory, U.memcachelimit, texture_limit);
+  U.glreslimit = short(texture_limit);
+  WM_native_ui_session_log(
+      "memory",
+      fmt::format("start-up: {} MB available of {} MB; undo memory {} MB (was {}), cache {} MB "
+                  "(was {}), texture limit {} (was {})",
+                  available / (1024 * 1024),
+                  physical / (1024 * 1024),
+                  U.undomemory,
+                  undo,
+                  U.memcachelimit,
+                  cache,
+                  U.glreslimit,
+                  texture)
+          .c_str());
+}
+
+void WM_apple_ios_memory_low(bContext *C)
+{
+  wmWindowManager *wm = CTX_wm_manager(C);
+  Main *bmain = CTX_data_main(C);
+  if (wm == nullptr || bmain == nullptr) {
+    return;
+  }
+  /* The warning and the pressure source often come together: once is enough. */
+  static double last = -100.0;
+  const double now = BLI_time_now_seconds();
+  if (now - last < 10.0) {
+    return;
+  }
+  last = now;
+  /* What is not saved is kept first: iOS may end the app next. */
+  WM_apple_ios_autosave_now(C);
+
+  /* Caches, which fill again as they are needed: the buffers of images read from files and not
+   * changed since, the sequencer's frames, the movie cache and the generic memory cache. Not
+   * while a job runs, which may be reading them (a render's textures). */
+  int images = 0;
+  const bool job_running = WM_jobs_has_running(wm);
+  if (!job_running) {
+    for (Image &image : bmain->images) {
+      if (image.type == IMA_TYPE_IMAGE && image.source != IMA_SRC_GENERATED &&
+          !BKE_image_is_dirty(&image))
+      {
+        BKE_image_free_buffers(&image);
+        images++;
+      }
+    }
+    for (Scene &scene : bmain->scenes) {
+      if (scene.ed) {
+        seq::cache_cleanup(&scene, seq::CacheCleanup::All);
+      }
+    }
+    memory_cache::clear();
+  }
+
+  /* The older half of the undo steps; the newest stay, so the last changes can still be undone. */
+  int steps_kept = -1;
+  if (UndoStack *ustack = wm->runtime->undo_stack) {
+    steps_kept = std::max(1, BLI_listbase_count(&ustack->steps) / 2);
+    BKE_undosys_stack_limit_steps_and_memory(ustack, steps_kept, 0);
+  }
+  WM_native_ui_session_log(
+      "memory",
+      fmt::format("low: auto-save written; {}; undo kept to {} steps",
+                  job_running ? std::string("caches kept while a job runs") :
+                                fmt::format("{} images' buffers and the caches freed", images),
+                  steps_kept)
+          .c_str());
+
+  /* Said once a session: after that it would only nag. */
+  static bool told = false;
+  if (!told) {
+    told = true;
+    WM_native_ui_notice(RPT_WARNING, IFACE_("Memory is low. Save your work."));
+  }
 }
 
 void WM_apple_ios_autosave_now(bContext *C)

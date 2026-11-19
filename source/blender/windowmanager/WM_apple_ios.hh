@@ -76,6 +76,17 @@ void WM_apple_ios_report(wmWindow *win, const Report *report);
 void WM_apple_ios_autosave_ensure();
 /** Write the auto-save now, in any mode, when the app goes to the background. */
 void WM_apple_ios_autosave_now(bContext *C);
+/**
+ * The iPad's memory preferences (ROUND6 BUSY-5, G10): undo memory, the cache and the texture
+ * size capped by shares of what iOS lets the app use, see `wm_apple_ios_memory.hh`. Call as the
+ * preferences load, before the caches take their limits from them.
+ */
+void WM_apple_ios_memory_defaults();
+/**
+ * iOS says memory is low: write the auto-save, free caches and the older undo steps, and say once
+ * a session "Memory is low. Save your work." (ROUND6 BUSY-5, G10).
+ */
+void WM_apple_ios_memory_low(bContext *C);
 /* Documents. UIKit owns them, and Blender reads and writes their files when asked. */
 
 /**
