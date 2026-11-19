@@ -1489,6 +1489,16 @@ class _ExtCmdMixIn:
         for attr in ("exec_command_iter", "exec_command_finish"):
             if getattr(cls, attr) is getattr(_ExtCmdMixIn, attr):
                 raise Exception("Subclass did not define {!r}!".format(attr))
+        # Each of these runs its command in a helper process (`bl_extension_utils`), which the
+        # iPad's sandbox refuses: they fail their poll there, saying why (ROUND6 FILES-9, 8E).
+        own_poll = cls.__dict__.get("poll")
+
+        def poll(cls_, context):
+            from _bpy_internal.platform.sandbox import poll_programs
+            if not poll_programs(cls_):
+                return False
+            return own_poll.__func__(cls_, context) if own_poll is not None else True
+        cls.poll = classmethod(poll)
 
     def exec_command_iter(self, is_modal):
         raise Exception("Subclass must define!")

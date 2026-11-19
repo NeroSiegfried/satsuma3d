@@ -48,22 +48,51 @@ extern "C" void GHOST_ios_document_access_restore()
     return;
   }
   document_access = [[NSMutableDictionary alloc] init];
+  /* Pruned and refreshed as they are resolved (ROUND6 FILES-9, finding F15): one that no longer
+   * resolves (the file or the drive is gone) is dropped, a stale one (moved or renamed) is made
+   * again for where it is now, keyed by its new path. Still resolved at launch, before Blender
+   * reads preference paths (script directories, asset libraries) that need their access. */
   NSDictionary *bookmarks = [NSUserDefaults.standardUserDefaults dictionaryForKey:bookmark_key];
-  for (NSData *data in bookmarks.allValues) {
+  NSMutableDictionary *kept = [NSMutableDictionary dictionary];
+  int dropped = 0, refreshed = 0;
+  for (NSString *key in bookmarks) {
+    NSData *data = bookmarks[key];
     if (![data isKindOfClass:NSData.class]) {
+      dropped++;
       continue;
     }
     BOOL stale = NO;
     NSURL *url = [NSURL URLByResolvingBookmarkData:data
-                                           options:0
+                                           options:NSURLBookmarkResolutionWithoutUI
                                      relativeToURL:nil
                                bookmarkDataIsStale:&stale
                                              error:nil];
-    if (url && [url startAccessingSecurityScopedResource]) {
-      document_access[url.path] = url;
+    if (!url || ![url startAccessingSecurityScopedResource]) {
+      dropped++;
+      continue;
     }
+    document_access[url.path] = url;
+    if (stale) {
+      NSData *fresh = [url bookmarkDataWithOptions:NSURLBookmarkCreationMinimalBookmark
+                    includingResourceValuesForKeys:nil
+                                     relativeToURL:nil
+                                             error:nil];
+      if (fresh) {
+        data = fresh;
+        refreshed++;
+      }
+    }
+    kept[url.path] = data;
+  }
+  if (dropped || refreshed) {
+    [NSUserDefaults.standardUserDefaults setObject:kept forKey:bookmark_key];
+    fprintf(stderr,
+            "Document access: %d bookmarks no longer resolve and were dropped, %d refreshed\n",
+            dropped,
+            refreshed);
   }
 }
+
 
 static void documentRememberAccess(NSArray<NSURL *> *urls)
 {

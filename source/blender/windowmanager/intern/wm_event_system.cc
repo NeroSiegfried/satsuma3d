@@ -1206,6 +1206,8 @@ static const char *wm_operator_unavailable(const wmOperatorType *ot)
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
       /* UNAVAILABLE APPLE_TARGET_IOS: the system clipboard takes text here (GHOST_SystemIOS). */
       {"IMAGE_OT_clipboard_copy", N_("Images cannot be copied to the clipboard on iPad")},
+      /* It prints to a console, which the iPad has not (ROUND6 FILES-9, G12). */
+      {"WM_OT_memory_statistics", N_("Not available on iPad: it writes to a console")},
 #endif
       {nullptr, nullptr},
   };

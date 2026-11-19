@@ -377,8 +377,77 @@ static void wm_autosave_prune()
   BLI_filelist_free(entries, count);
 }
 
+/**
+ * What the app keeps for a while and never needs again (ROUND6 FILES-9, finding F15): Blender's
+ * session folders of earlier launches, which only a clean exit removes and iOS does not give one;
+ * the app's own temporary copies once their day is over (drops, packed at the next write; fresh
+ * copies for Share; images opened in the Image Editor, packed; add-ons being installed). The
+ * current session's folder is never touched.
+ */
+static void wm_temp_prune()
+{
+  const char *base = BKE_tempdir_base();
+  const char *session = BKE_tempdir_session();
+  if (!base || !base[0]) {
+    return;
+  }
+  direntry *entries = nullptr;
+  const uint count = BLI_filelist_dir_contents(base, &entries);
+  const int64_t day_ago = int64_t(time(nullptr)) - 24 * 60 * 60;
+  int sessions = 0, copies = 0;
+  for (uint i = 0; i < count; i++) {
+    const StringRef name = entries[i].relname;
+    if (!S_ISDIR(entries[i].type) || ELEM(name, ".", "..")) {
+      continue;
+    }
+    char path[FILE_MAX];
+    STRNCPY(path, entries[i].path);
+    BLI_path_slash_ensure(path, sizeof(path));
+    if (session && BLI_path_cmp(path, session) == 0) {
+      continue;
+    }
+    if (name.startswith("blender_")) {
+      BLI_delete(entries[i].path, true, true);
+      sessions++;
+      continue;
+    }
+    const bool app_copy = ELEM(name, "Dropped", "OpenedImages", "addon-install") ||
+                          name.startswith("save-copy-");
+    if (!app_copy) {
+      continue;
+    }
+    /* Inside the app's own folders, only what has not changed for a day. */
+    if (name.startswith("save-copy-")) {
+      if (entries[i].s.st_mtime < day_ago) {
+        BLI_delete(entries[i].path, true, true);
+        copies++;
+      }
+      continue;
+    }
+    direntry *items = nullptr;
+    const uint item_count = BLI_filelist_dir_contents(entries[i].path, &items);
+    for (uint j = 0; j < item_count; j++) {
+      if (!ELEM(StringRef(items[j].relname), ".", "..") && items[j].s.st_mtime < day_ago) {
+        BLI_delete(items[j].path, S_ISDIR(items[j].type), true);
+        copies++;
+      }
+    }
+    BLI_filelist_free(items, item_count);
+  }
+  BLI_filelist_free(entries, count);
+  if (sessions || copies) {
+    WM_native_ui_session_log(
+        "document",
+        fmt::format("temporary files: {} earlier sessions' folders and {} old copies removed",
+                    sessions,
+                    copies)
+            .c_str());
+  }
+}
+
 void WM_apple_ios_autosave_ensure()
 {
+  wm_temp_prune();
   /* iOS ends apps without warning, so auto-save is always on. */
   U.flag |= USER_AUTOSAVE;
   if (U.savetime <= 0) {
