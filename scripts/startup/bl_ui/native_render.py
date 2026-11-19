@@ -32,6 +32,7 @@ __all__ = (
     "clear",
     "status",
     "frames_plan",
+    "needs_gpu",
     "viewport_options",
     "viewport_toggle",
 )
@@ -147,6 +148,25 @@ def frames_plan(scene):
                 "frames": {"media_type": 'IMAGE', "file_format": 'PNG', "color_mode": mode, "color_depth": depth}}
     return {"format": image.file_format, "ext": scene.render.file_extension, "movie": False,
             "linear": image.file_format in LINEAR_FORMATS, "frames": None}
+
+
+def needs_gpu(scene, video=False):
+    """Whether rendering `scene` uses the GPU, which iPadOS lets work in the background only when
+    the background task was granted it (ROUND6 BUSY-4, G8): EEVEE, Workbench and any other engine
+    draw with it; Cycles when its device is the GPU and one is set up; the compositor when set to
+    the GPU. A video written from frames (`video`) is the sequencer's work, on the CPU."""
+    render = scene.render
+    if render.use_compositing and render.compositor_device == 'GPU':
+        return True
+    if video:
+        return False
+    if render.engine != 'CYCLES':
+        return True
+    if scene.cycles.device != 'GPU':
+        return False
+    addon = bpy.context.preferences.addons.get("cycles")
+    preferences = addon.preferences if addon else None
+    return bool(preferences and preferences.get_compute_device_type() != 'NONE' and preferences.has_active_device())
 
 
 def _read_manifest(folder):
@@ -466,6 +486,7 @@ def _start(context, animation, folder, resume):
         state="rendering",
         animation=bool(animation),
         phase="frames",
+        gpu=needs_gpu(scene),
         folder=folder,
         frame=scene.frame_start if animation else scene.frame_current,
         total=len(manifest["wanted"]) if animation else 1,
@@ -563,7 +584,7 @@ def _start_video(folder, manifest, movie):
     summary = _frames_summary(folder, manifest)
     del summary["frames"]
     _set_state(**dict(
-        summary, state="rendering", animation=True, phase="video", folder=folder,
+        summary, state="rendering", animation=True, phase="video", folder=folder, gpu=needs_gpu(scene, video=True),
         done=0, total=len(files), resumed=0, quick=bool(quick), fps=fps, width=width, height=height))
     _add_handlers()
     _run(scene, True)

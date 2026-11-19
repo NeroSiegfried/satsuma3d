@@ -729,6 +729,7 @@ LOG_KINDS = {
     'launch': "each launch with the app's version, this iPad's model and the memory available",
     'session': 'whether the last session ended cleanly',
     'exit': 'why iOS ended the app when it reports it',
+    'render': 'whether a render could go on in the background and why it paused',
 }
 writers = ''.join(path.read_text(encoding='utf-8', errors='replace')
                   for path in (SWIFT.parents[3]).rglob('*') if path.suffix in ('.cc', '.mm', '.swift'))
@@ -1477,5 +1478,20 @@ check('AVAssetWriter' not in render_swift and 'BlenderRender.start(' in render_s
       'WM_jobs_has_running(wm)' in bridge_text and
       'def make_video(' in render_py and 'MANIFEST = "Render.json"' in render_py,
       "R6 BUSY-3: renders keep their frames, continue, make videos with FFmpeg, and ask before losing work")
+
+# ROUND6 BUSY-4 (G8): background work asks before it assumes. Blender's loop is kept running in the
+# background only by `BackgroundWork.decide` (task started; the GPU granted for work on the GPU, as
+# Blender's `needs_gpu` says); otherwise the render pauses as the app leaves, holding the loop until
+# the stop has reached Blender, and goes on when the app is back; heat pauses it between frames; the
+# screen stays on while a job runs. `tests/ios/test_background_work.py` checks the table.
+background_b4 = render_swift[render_swift.index('final class BackgroundRender {', render_swift.index('#else\n')):]
+background_b4 = background_b4[:background_b4.index('#endif')]
+check('GHOST_ios_engine_continue_work(continues || holding)' in background_b4 and
+      background_b4.count('GHOST_ios_engine_continue_work(') == 1 and
+      'BackgroundWork.decide(taskStarted: task != nil, gpuGranted: gpuGranted, needsGPU: needsGPU)' in background_b4 and
+      'func appLeft()' in render_swift and 'BackgroundWork.tooWarm(ProcessInfo.processInfo.thermalState)' in render_swift and
+      'BackgroundRender.shared.needsGPU = status.bool("gpu")' in render_swift and
+      'UIApplication.shared.isIdleTimerDisabled = !idle' in pills and 'gpu=needs_gpu(scene)' in render_py,
+      "R6 BUSY-4: the background is used only when granted, else the render pauses and goes on; heat pauses it")
 
 print('PASS: native shell sources ' + json.dumps(checks))

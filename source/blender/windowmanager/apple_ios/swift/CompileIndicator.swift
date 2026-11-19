@@ -145,6 +145,12 @@ struct CompileIndicator: View {
     .padding(.top, 8)
     .animation(UIAccessibility.isReduceMotionEnabled ? nil : .easeOut(duration: 0.2),
                value: BlenderJobs.jobs.map(\.id))
+    /* The screen stays on while work runs in front, so the iPad does not lock and send it to the
+     * background part way (R6 BUSY-4, G8). */
+    .onChange(of: BlenderJobs.jobs.isEmpty, initial: true) { _, idle in
+      UIApplication.shared.isIdleTimerDisabled = !idle
+    }
+    .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
   }
 
   @ViewBuilder

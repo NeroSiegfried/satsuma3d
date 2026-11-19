@@ -305,6 +305,55 @@ scene.camera = camera
 # The temporary scene a video is written from is gone afterwards.
 check(native_render.VIDEO_SCENE not in bpy.data.scenes, "the video's scene is removed after the video")
 
+# -----------------------------------------------------------------------------
+# What needs the GPU in the background (ROUND6 BUSY-4, G8): the engine column of the table
+# `tests/ios/test_background_work.py` decides from. Every engine this build has is classified.
+
+render = scene.render
+render.use_compositing = False
+NEEDS_GPU = {'BLENDER_EEVEE': True, 'BLENDER_EEVEE_NEXT': True, 'BLENDER_WORKBENCH': True}
+for item in render.bl_rna.properties['engine'].enum_items:
+    render.engine = item.identifier
+    if item.identifier == 'CYCLES':
+        continue
+    check(native_render.needs_gpu(scene) is NEEDS_GPU.get(item.identifier, True),
+          "%s draws with the GPU: kept on in the background only with the GPU granted" % item.identifier)
+render.engine = 'CYCLES'
+scene.cycles.device = 'CPU'
+check(native_render.needs_gpu(scene) is False, "Cycles on the CPU needs no GPU in the background")
+scene.cycles.device = 'GPU'
+cycles = bpy.context.preferences.addons["cycles"].preferences
+for device_type in ('NONE', 'METAL'):
+    try:
+        cycles.compute_device_type = device_type
+    except TypeError:
+        continue  # Not built here.
+    cycles.refresh_devices()
+    for device in cycles.devices:
+        device.use = True
+    expected = device_type != 'NONE' and cycles.has_active_device()
+    check(native_render.needs_gpu(scene) is expected,
+          "Cycles set to the GPU with %s devices: needs the GPU %s" % (device_type, expected))
+cycles.compute_device_type = 'NONE'
+render.use_compositing = True
+render.compositor_device = 'GPU'
+check(native_render.needs_gpu(scene) and native_render.needs_gpu(scene, video=True),
+      "a compositor on the GPU needs it, for a video too")
+render.compositor_device = 'CPU'
+check(native_render.needs_gpu(scene, video=True) is False, "a video written from frames needs no GPU")
+render.engine = 'BLENDER_WORKBENCH'
+said = []
+
+
+def note_gpu(*_args):
+    said.append(native_render.status(None).get("gpu"))
+
+
+bpy.app.handlers.render_pre.append(note_gpu)
+run("image", folder("gpu said"))
+bpy.app.handlers.render_pre.remove(note_gpu)
+check(said == [True], "the render's state says whether it needs the GPU: %s" % said)
+
 bpy.app.handlers.render_write.remove(count_written)
 shutil.rmtree(root, ignore_errors=True)
 print("PASS: native render " + json.dumps(checks))

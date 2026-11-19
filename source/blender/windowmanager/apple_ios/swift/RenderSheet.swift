@@ -328,8 +328,11 @@ enum RenderThumbnails {
 /** \name Background rendering
  *
  * A render is a continued processing task: iOS keeps the app running when it leaves the
- * foreground and shows the render's progress, as for a video export. Blender's loop
- * keeps running meanwhile, without drawing, see `GHOST_ios_engine_continue_work`.
+ * foreground and shows the render's progress, as for a video export. Blender's loop keeps running
+ * meanwhile, without drawing, see `GHOST_ios_engine_continue_work` — only once the task has
+ * started, and for work on the GPU only when the task was granted the GPU (R6 BUSY-4, G8, see
+ * `BackgroundWork.decide`). Otherwise the render pauses as the app leaves and goes on when it is
+ * back, see `RenderSession.appLeft`.
  * \{ */
 
 #if os(macOS)
@@ -338,6 +341,10 @@ enum RenderThumbnails {
 final class BackgroundRender {
   static let shared = BackgroundRender()
   var expired: () -> Void = {}
+  var needsGPU = true
+  var taskStarted: Bool { true }
+  var continues: Bool { true }
+  var holding = false
 
   func begin(title: String) {}
   func update(title: String, subtitle: String, fraction: Double) {}
@@ -349,6 +356,10 @@ final class BackgroundRender {
 final class BackgroundRender {
   static let shared = BackgroundRender()
   var expired: () -> Void = {}
+  var needsGPU = true
+  var taskStarted: Bool { true }
+  var continues: Bool { true }
+  var holding = false
 
   func begin(title: String) { GHOST_ios_engine_continue_work(true) }
   func update(title: String, subtitle: String, fraction: Double) {}
@@ -363,11 +374,34 @@ final class BackgroundRender {
   private var registered = false
   private var task: BGContinuedProcessingTask?
   private var pending: String?
+  /** Whether the request waiting to start asked for the GPU, and whether the started one did. */
+  private var pendingGPU = false
+  private var gpuGranted = false
   private var title = ""
   private var subtitle = ""
   private var fraction = 0.0
   /** Called when the system ends the task, or the user stops it from the system's progress. */
   var expired: () -> Void = {}
+  /** The work renders on the GPU, as Blender says; assumed until it has. */
+  var needsGPU = true {
+    didSet { if needsGPU != oldValue { apply() } }
+  }
+  /** Keep Blender's loop running in the background until a pause has reached it. */
+  var holding = false {
+    didSet { if holding != oldValue { apply() } }
+  }
+
+  /** iPadOS started the task (not merely accepted the request). */
+  var taskStarted: Bool { task != nil }
+
+  /** Whether the work may go on with the app in the background. */
+  var continues: Bool {
+    BackgroundWork.decide(taskStarted: task != nil, gpuGranted: gpuGranted, needsGPU: needsGPU) == .continueWork
+  }
+
+  private func apply() {
+    GHOST_ios_engine_continue_work(continues || holding)
+  }
 
   private var permitted: Bool {
     (Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String] ?? [])
@@ -382,12 +416,18 @@ final class BackgroundRender {
   }
 
   func begin(title: String) {
-    GHOST_ios_engine_continue_work(true)
     self.title = title
     subtitle = "Starting…"
     fraction = 0
+    needsGPU = true
+    gpuGranted = false
+    /* Blender's loop is kept running only once the task has started, see #started. */
+    apply()
     register()
-    guard registered else { return }
+    guard registered else {
+      WM_native_ui_log("render", "background task not registered: the render pauses if the app leaves")
+      return
+    }
     let identifier = prefix + "." + UUID().uuidString
     pending = identifier
     let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: title, subtitle: subtitle)
@@ -395,10 +435,24 @@ final class BackgroundRender {
     /* EEVEE and Cycles render on the GPU, which the background only allows when asked for. */
     if BGTaskScheduler.supportedResources.contains(.gpu) {
       request.requiredResources = .gpu
-      if (try? BGTaskScheduler.shared.submit(request)) != nil { return }
+      do {
+        try BGTaskScheduler.shared.submit(request)
+        pendingGPU = true
+        return
+      }
+      catch {
+        WM_native_ui_log("render", "background task with the GPU refused: \(error.localizedDescription)")
+      }
       request.requiredResources = []
     }
-    try? BGTaskScheduler.shared.submit(request)
+    do {
+      try BGTaskScheduler.shared.submit(request)
+      pendingGPU = false
+    }
+    catch {
+      pending = nil
+      WM_native_ui_log("render", "background task refused: \(error.localizedDescription)")
+    }
   }
 
   private func started(_ background: BGTask) {
@@ -408,15 +462,18 @@ final class BackgroundRender {
       return
     }
     task = background
+    gpuGranted = pendingGPU
     background.progress.totalUnitCount = 1000
     background.expirationHandler = { [weak self] in
       DispatchQueue.main.async {
         guard let self, self.task === background else { return }
         self.task = nil
+        self.apply()
         self.expired()
         background.setTaskCompleted(success: false)
       }
     }
+    apply()
     update(title: title, subtitle: subtitle, fraction: fraction)
   }
 
@@ -431,12 +488,14 @@ final class BackgroundRender {
   }
 
   func finish(success: Bool) {
-    GHOST_ios_engine_continue_work(false)
     pending = nil
-    guard let task else { return }
-    self.task = nil
-    task.progress.completedUnitCount = task.progress.totalUnitCount
-    task.setTaskCompleted(success: success)
+    holding = false
+    let finished = task
+    task = nil
+    apply()
+    guard let finished else { return }
+    finished.progress.completedUnitCount = finished.progress.totalUnitCount
+    finished.setTaskCompleted(success: success)
   }
 }
 
@@ -1053,6 +1112,11 @@ struct FilmFrame: View {
  * image, or an animation's frames as they finish, listed from its start. Stop asks first when more
  * than a minute of rendering would be lost; whatever ends a render, the frames it finished stay,
  * to continue from the first missing frame or to make a video of.
+ *
+ * Work pauses rather than going on unseen where it may not (R6 BUSY-4, G8): as the app leaves, when
+ * iPadOS has not started the background task or, for work on the GPU, not granted it the GPU; and
+ * between frames when the iPad is too warm. It goes on from the next frame when the app is back,
+ * or has cooled, and says so.
  */
 @MainActor
 final class RenderSession {
@@ -1061,6 +1125,14 @@ final class RenderSession {
     case still
     case frames
     case video
+  }
+
+  /** Why work paused, to go on by itself (R6 BUSY-4). */
+  private enum Pause: Equatable {
+    /** The app left the foreground and the work could not go on there: why. */
+    case away(String)
+    /** The iPad was too warm after a frame. */
+    case heat
   }
 
   let model = RenderModel()
@@ -1082,6 +1154,12 @@ final class RenderSession {
   /** The system ended the background work: said once the app is back. */
   private var expired = false
   private var cancelSentAgain = false
+  /** Work paused by #pause, its item and kind, to go on from. */
+  private var paused: Pause?
+  private var pausedItem = ""
+  private var pausedWork = Work.still
+  /** The app is in the background. */
+  private var away = false
   /** Shows the renders. */
   var present: () -> Void = {}
   /** Tells why a render could not be completed, or (`title`) why it stopped. */
@@ -1096,8 +1174,11 @@ final class RenderSession {
     model.makeVideo = { [weak self] in self?.makeVideo($0) }
     model.saveFrames = { [weak self] in self?.saveFrames($0) }
     BackgroundRender.shared.expired = { [weak self] in
-      self?.expired = true
-      self?.stop()
+      guard let self, self.model.rendering else { return }
+      self.expired = true
+      /* Blender's loop runs in the background until the stop has reached it. */
+      BackgroundRender.shared.holding = true
+      self.stop()
     }
   }
 
@@ -1165,6 +1246,7 @@ final class RenderSession {
     lastFinished = .now
     expired = false
     cancelSentAgain = false
+    paused = nil
     startedAfter = BlenderRender.status.double("id") ?? 0
     model.animation = work != .still
     model.title = title
@@ -1282,10 +1364,17 @@ final class RenderSession {
     let resumed = Double(status.int("resumed"))
     model.progress = min(1, (Double(done) - resumed + samples) / max(1, total - resumed))
     let video = status.string("phase") == "video"
+    BackgroundRender.shared.needsGPU = status.bool("gpu")
     if done != lastDone, !video {
       lastDone = done
       lastFinished = .now
-      if work == .frames { renderLibrary.updateFrames(itemID, status: status) }
+      if work == .frames {
+        renderLibrary.updateFrames(itemID, status: status)
+        /* Between frames: too warm, it pauses until the iPad has cooled. */
+        if done > status.int("resumed"), done < Int(total), BackgroundWork.tooWarm(ProcessInfo.processInfo.thermalState) {
+          pause(.heat)
+        }
+      }
     }
     switch status.string("phase") {
       case "video":
@@ -1350,6 +1439,19 @@ final class RenderSession {
 
   private func cancelled(_ status: RenderStatus) {
     let wasExpired = expired
+    if let paused {
+      pausedItem = itemID
+      pausedWork = work
+      if work == .frames { keepFrames(status) }
+      else if work == .still { try? FileManager.default.removeItem(at: folder) }
+      end(success: false)
+      if paused == .heat {
+        fail("Rendering paused after \(status.int("done")) of \(status.int("total")) frames: the iPad is too warm. " +
+             "It goes on by itself once the iPad has cooled down.", "Rendering Paused")
+      }
+      resumeIfReady()
+      return
+    }
     switch work {
       case .still:
         try? FileManager.default.removeItem(at: folder)
@@ -1391,6 +1493,64 @@ final class RenderSession {
     fail(message + kept, "Unable to Render")
   }
 
+  /** Stop the work so that it goes on later by itself: the frames finished are kept. */
+  private func pause(_ reason: Pause) {
+    guard model.rendering, !model.stopping else { return }
+    paused = reason
+    if case .away = reason {
+      /* Blender's loop runs in the background until the stop has reached it. */
+      BackgroundRender.shared.holding = true
+    }
+    stop()
+  }
+
+  /** The app left the foreground: work that may not go on there pauses. */
+  func appLeft() {
+    away = true
+    guard model.rendering, !model.stopping, !BackgroundRender.shared.continues else { return }
+    let why = BackgroundRender.shared.taskStarted ?
+      "iPadOS did not allow it to use the GPU in the background" :
+      "iPadOS did not allow it to go on in the background"
+    WM_native_ui_log("render", "paused as the app left: " + why)
+    pause(.away(why))
+  }
+
+  /** The app is back: work paused as it left goes on. */
+  func appReturned() {
+    away = false
+    resumeIfReady()
+  }
+
+  /** The iPad's heat changed: work paused by heat goes on once it has cooled. */
+  func thermalChanged() { resumeIfReady() }
+
+  private func resumeIfReady() {
+    guard let reason = paused, !model.rendering, !away else { return }
+    if reason == .heat, !BackgroundWork.coolEnough(ProcessInfo.processInfo.thermalState) { return }
+    paused = nil
+    let item = renderLibrary.items.first { $0.id == pausedItem }
+    switch pausedWork {
+      case .still:
+        if case let .away(why) = reason {
+          fail("The image stopped rendering when the app left the foreground: \(why). Render it again from the Share menu.",
+               "Rendering Paused")
+        }
+      case .frames:
+        guard let item, item.stopped, let next = item.next else { return }
+        if case let .away(why) = reason {
+          fail("Rendering paused after \(item.frames) of \(item.total ?? item.frames) frames when the app left the " +
+               "foreground: \(why). It goes on from frame \(next).", "Rendering Paused")
+        }
+        continueFrames(item)
+      case .video:
+        guard let item else { return }
+        if case let .away(why) = reason {
+          fail("The video stopped when the app left the foreground: \(why). It is being made again.", "Video Paused")
+        }
+        makeVideo(item)
+    }
+  }
+
   private func show(_ item: RenderItem) {
     model.selection = item.id
     end(success: true)
@@ -1417,6 +1577,21 @@ public final class SwiftRender: NSObject, UIAdaptivePresentationControllerDelega
     session.present = { [weak self] in self?.present() }
     session.fail = { [weak self] in self?.fail($0, title: $1) }
     session.export = { [weak self] in self?.export($0) }
+    /* The app leaving and coming back, and the iPad's heat (R6 BUSY-4). Removed with this object. */
+    let center = NotificationCenter.default
+    center.addObserver(self, selector: #selector(appLeft), name: UIApplication.didEnterBackgroundNotification,
+                       object: nil)
+    center.addObserver(self, selector: #selector(appReturned),
+                       name: UIApplication.willEnterForegroundNotification, object: nil)
+    center.addObserver(self, selector: #selector(thermalChanged), name: ProcessInfo.thermalStateDidChangeNotification,
+                       object: nil)
+  }
+
+  @objc private func appLeft() { session.appLeft() }
+  @objc private func appReturned() { session.appReturned() }
+  /* Posted on any thread. */
+  @objc nonisolated private func thermalChanged() {
+    DispatchQueue.main.async { MainActor.assumeIsolated { self.session.thermalChanged() } }
   }
 
   private func present() {
