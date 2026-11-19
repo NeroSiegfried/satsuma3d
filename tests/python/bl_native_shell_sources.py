@@ -1394,4 +1394,16 @@ check(hover_gates == ['wm_draw.cc'] and 'state->val == KM_PRESS' in shown_body a
       'bridge_cursor_flash(C);' in bridge_text,
       "R6 TOUCH-9: cursors show while a button is down and after a size change, through one rule (%s)" % hover_gates)
 
+# ROUND6 TOUCH-10 (X2): the first launch says how. One guide, under Settings and once at the first
+# launch (never in a check launch), with each gesture the window answers.
+settings_t10 = (SWIFT / 'SettingsSheet.swift').read_text(encoding='utf-8')
+guide = settings_t10[settings_t10.index('struct GestureGuide: View {'):]
+guide = guide[:guide.index('struct GestureGuideSheet')]
+check(all(word in guide for word in ('"One finger"', '"Two fingers"', '"Three fingers"', '"Four fingers"', '"Hold"',
+                                     '"Double tap"', '"Apple Pencil"', 'Tap to undo', 'Tap to redo', '"Search"',
+                                     'Switch to Desktop Interface', 'Return to iPad Interface', '"Shift, Ctrl and Alt"')) and
+      'PLATYPUS_SCRATCH_DOCUMENT' in guide and 'GestureGuide()' in settings_t10 and
+      'GestureGuideSheet()' in window_t8 and 'GestureGuide.due' in window_t8,
+      "R6 TOUCH-10: How to Use names every gesture, in Settings and once at the first launch")
+
 print('PASS: native shell sources ' + json.dumps(checks))

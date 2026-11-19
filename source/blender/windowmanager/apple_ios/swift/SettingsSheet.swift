@@ -755,6 +755,8 @@ struct SettingsView: View {
   static let iPadPage = "IPAD"
   /** About the app, the last page (ROUND5 8C). */
   static let aboutPage = "ABOUT"
+  /** How to Use: the gestures, as the first launch shows them (ROUND6 TOUCH-10). */
+  static let guidePage = "GUIDE"
 
   /** The sections as Blender groups them, between its separators. */
   private var groups: [[PanelTab]] {
@@ -769,7 +771,7 @@ struct SettingsView: View {
   private var selection: Binding<String?> {
     Binding(get: { page }, set: { tab in
       page = tab
-      if let tab, tab != Self.iPadPage, tab != Self.aboutPage { preferences.selectTab(tab) }
+      if let tab, tab != Self.iPadPage, tab != Self.aboutPage, tab != Self.guidePage { preferences.selectTab(tab) }
       lists.show(true, tab: tab ?? "")
     })
   }
@@ -780,6 +782,8 @@ struct SettingsView: View {
         Section {
           Label { Text("iPad") } icon: { SettingsIcon(symbol: "ipad.landscape", color: .blue) }
             .tag(Self.iPadPage)
+          Label { Text("How to Use") } icon: { SettingsIcon(symbol: "hand.tap.fill", color: .orange) }
+            .tag(Self.guidePage)
         }
         if preferences.tabs.isEmpty {
           ProgressView().frame(maxWidth: .infinity)
@@ -814,6 +818,10 @@ struct SettingsView: View {
           else if page == Self.aboutPage {
             AboutPage()
               .navigationTitle("About")
+          }
+          else if page == Self.guidePage {
+            GestureGuide()
+              .navigationTitle("How to Use")
           }
           else {
             Group {
@@ -957,3 +965,92 @@ private struct DesktopInterfaceSection: View {
     .onChange(of: scale) { _, _ in SettingsModel.applyDesktopScale() }
   }
 }
+
+/* -------------------------------------------------------------------- */
+/** \name How to Use (ROUND6 TOUCH-10, finding X2)
+ *
+ * The gestures, what the touch setting does, where the menus and Search are, and how to reach the
+ * Desktop Interface and come back: shown once at the first launch, and here under Settings.
+ * \{ */
+
+struct GestureGuide: View {
+  /** Shown once at the first launch; a check launch, which works in a throwaway copy, never. */
+  static let seenKey = "GestureGuideSeen"
+  static var due: Bool {
+    !UserDefaults.standard.bool(forKey: seenKey) &&
+      ProcessInfo.processInfo.environment["PLATYPUS_SCRATCH_DOCUMENT"] == nil
+  }
+
+  var body: some View {
+    List {
+      Section {
+        row("hand.point.up", "One finger",
+            "Uses the active tool: select, move, sculpt or paint. Once an Apple Pencil touches the screen, the Pencil uses the tool and one finger turns the view; Settings › iPad › Apple Pencil & Touch, or One Finger in the top bar's menu, chooses. A tap selects either way.")
+        row("hand.raised", "Two fingers",
+            "Drag to turn the view (to move it, when one finger turns it); pinch to zoom. Tap to undo.")
+        row("hand.raised.fingers.spread", "Three fingers",
+            "Drag to move the view. Tap to redo.")
+        row("hand.raised.fill", "Four fingers",
+            "Tap to hide or show the controls.")
+        row("hand.tap", "Hold",
+            "Hold a finger still on the view for the context menu: what you can do with what is selected, and Select Menu… for what lies under the finger.")
+        row("hand.tap.fill", "Double tap",
+            "As a double click: on an edge in Edit Mode, it selects its loop.")
+        row("applepencil", "Apple Pencil",
+            "Uses the tool, with pressure and tilt. Squeeze it, or double-tap it, for its menu of commands.")
+      } header: {
+        Text("Gestures")
+      }
+      Section {
+        row("shift", "Shift, Ctrl and Alt",
+            "The three keys at the bottom corner are real keys. Hold one while you tap or drag; tap it for the next action only; tap it twice to keep it on. Each shows what it does with the active tool where there is something to show.")
+        row("checkmark.circle", "Confirm and Cancel",
+            "While a command waits, as a move started from a menu, the bar says what it waits for, with Confirm and Cancel. Where you put your finger is where it starts; lifting confirms.")
+      } header: {
+        Text("Keys and Waiting Commands")
+      }
+      Section {
+        row("menubar.rectangle", "Menus",
+            "The menus of the active mode are in the top bar; the bar along the bottom holds the commands for what is selected.")
+        row("magnifyingglass", "Search",
+            "The magnifying glass in the top bar finds any command by name.")
+        row("macwindow", "Desktop Interface",
+            "More › Switch to Desktop Interface shows the full desktop layout. Window › Return to iPad Interface comes back.")
+      } header: {
+        Text("Finding Commands")
+      }
+    }
+  }
+
+  private func row(_ symbol: String, _ title: String, _ text: String) -> some View {
+    Label {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title).font(.headline)
+        Text(text).font(.subheadline).foregroundStyle(.secondary)
+      }
+    } icon: {
+      Image(systemName: symbol).foregroundStyle(Color.accentColor)
+    }
+    .padding(.vertical, 2)
+  }
+}
+
+/** The first launch's sheet: the guide, and Done. */
+struct GestureGuideSheet: View {
+  @Environment(\.dismiss) private var dismiss
+
+  var body: some View {
+    NavigationStack {
+      GestureGuide()
+        .navigationTitle("How to Use")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+          ToolbarItem(placement: .confirmationAction) {
+            Button("Done") { dismiss() }
+          }
+        }
+    }
+  }
+}
+
+/** \} */

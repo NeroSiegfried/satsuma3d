@@ -954,6 +954,8 @@ public struct DocumentWindow: View {
   @Environment(\.horizontalSizeClass) private var sizeClass
   @Environment(\.colorScheme) private var colorScheme
   @AppStorage(ShellStyle.key) private var interfaceStyle = ShellStyle.blender.rawValue
+  /** How to Use, shown once (ROUND6 TOUCH-10). */
+  @State private var guideShown = false
 
   /** The native controls are hidden in full screen, and over Blender's own interface. */
   private var controlsShown: Bool { !model.desktop && !model.interfaceHidden }
@@ -966,6 +968,15 @@ public struct DocumentWindow: View {
    * they are windows of their own. */
   public var body: some View {
     window
+      /* How to Use, once at the first launch (ROUND6 TOUCH-10); also under Settings. */
+      .sheet(isPresented: $guideShown, onDismiss: {
+        UserDefaults.standard.set(true, forKey: GestureGuide.seenKey)
+      }) {
+        GestureGuideSheet()
+      }
+      .onChange(of: model.viewportReady, initial: true) { _, ready in
+        if ready && GestureGuide.due { guideShown = true }
+      }
       /* Shift, Ctrl and Alt as real keys for a finger, in both interfaces (ROUND6 TOUCH-8). */
       .overlay(alignment: .bottomLeading) {
         if model.viewportReady && (model.desktop || controlsShown) {
