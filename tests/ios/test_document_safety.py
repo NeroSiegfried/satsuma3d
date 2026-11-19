@@ -52,8 +52,9 @@ WRITE_CALLERS = {
         'saving along the way: its failure is said once per cause and it backs off',
     ('wm_apple_ios_blend_document.mm', 'closeWithCompletionHandler:'):
         'the override itself: closing writes through writeContents',
-    ('wm_apple_ios_blend_document.mm', 'wm_apple_ios_document_file_now'):
-        'Save As and Share: on failure a fresh copy is written from memory, never the old file',
+    ('wm_apple_ios_blend_document.mm', 'wm_apple_ios_document_file_now_go'):
+        'Save As and Share, once Include External Files is answered (ROUND6 FILES-5): on failure '
+        'a fresh copy is written from memory, never the old file',
     ('wm_apple_ios_launcher.mm', 'openDocumentAtURL:'):
         'opening another document closes this one, marked as the person\'s save; on failure the '
         'failure path said why and the document stays',
@@ -163,6 +164,9 @@ class SaveFailureIsSaidTest(unittest.TestCase):
 
     def test_save_as_and_share_never_hand_out_the_old_file(self):
         now = body_of(self.document, 'void wm_apple_ios_document_file_now(')
+        # Its second step, once Include External Files is answered (ROUND6 FILES-5).
+        self.assertIn('wm_apple_ios_document_file_now_go(document', now)
+        now = body_of(self.document, 'static void wm_apple_ios_document_file_now_go(WMIOSBlendDocument *document,')
         self.assertRegex(now, r'if \(success\) \{\s*finish\(documentURL\);',
                          "The document's file is handed on only after a successful save")
         self.assertIn('writeFreshCopy(name, presenter', now)
