@@ -318,7 +318,7 @@ final class NativeViews {
     let paramsVector = Self.write(params, &builder)
     let viewOffset = builder.create(string: name)
     let subscribe = Blender_NativeUI_Subscribe.createSubscribe(&builder, viewOffset: viewOffset,
-                                                               paramsVectorOffset: paramsVector, version: view.version)
+                                                               paramsVectorOffset: paramsVector)
     builder.finish(offset: subscribe)
     return builder.sizedByteArray.withUnsafeBufferPointer { bytes in
       WM_native_ui_subscribe(bytes.baseAddress!, bytes.count)
