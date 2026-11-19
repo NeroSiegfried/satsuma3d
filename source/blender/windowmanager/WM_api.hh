@@ -1109,6 +1109,11 @@ wmOperatorStatus WM_operator_call_py(bContext *C,
                                      ReportList *reports,
                                      bool is_undo);
 
+/**
+ * The operator a command waits to run until a click places it ("Input pending", see
+ * #WM_operator_name_call_ptr_with_depends_on_cursor), or null (ROUND6 TOUCH-5).
+ */
+wmOperatorType *WM_event_wait_for_input_operator(const wmWindow *win);
 void WM_operator_name_call_ptr_with_depends_on_cursor(bContext *C,
                                                       wmOperatorType *ot,
                                                       wm::OpCallContext opcontext,

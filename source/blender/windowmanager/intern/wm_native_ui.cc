@@ -293,9 +293,61 @@ wmOperator *bridge_constraint_operator(wmWindow *win)
 }
 
 /**
+ * The modal operators that get no Confirm and Cancel bar, each with why (ROUND6 TOUCH-5, finding
+ * C1): only what has no end to offer there, because the finger or Pencil that drives it ends it as
+ * it lifts, or the hint (#bridge_waiting_hint) offers the Cancel. Matched against the idname as a
+ * prefix, or anywhere with `contains`; a member of a listed family that does wait for more is named
+ * in #bridge_bar_shown_anyway. The harness's `waiting` scenario and the shell's sources test read
+ * this list.
+ */
+struct BridgeBarExclusion {
+  const char *pattern;
+  bool contains;
+  const char *reason;
+};
+static const BridgeBarExclusion bridge_bar_exclusions[] = {
+    {"VIEW3D_OT_", false,
+     "the 3D View's navigation and gestures: a drag that ends as the finger lifts, or a command "
+     "waiting for its drag, whose hint offers Cancel"},
+    {"VIEW2D_OT_", false, "a 2D view's navigation: a drag that ends as the finger lifts"},
+    {"IMAGE_OT_view", false, "the Image Editor's navigation: a drag that ends as the finger lifts"},
+    {"NODE_OT_view", false, "the Node Editor's navigation: a drag that ends as the finger lifts"},
+    {"SCREEN_OT_", false,
+     "dragging Blender's own area and region edges: ends as the finger lifts"},
+    {"GIZMOGROUP_OT_", false, "a gizmo's drag: ends as the finger lifts"},
+    {"stroke", true, "a brush stroke: ends as the finger or Pencil lifts"},
+};
+
+/** Members of the excluded families that wait for more than one drag: they get the bar. */
+static bool bridge_bar_shown_anyway(const StringRef idname)
+{
+  return ELEM(idname, "VIEW3D_OT_walk", "VIEW3D_OT_fly") || idname.find("eyedropper") != StringRef::not_found;
+}
+
+/** Why \a idname gets no bar, or null when it does (ROUND6 TOUCH-5). */
+const char *bridge_bar_excluded(const StringRef idname)
+{
+  if (bridge_bar_shown_anyway(idname)) {
+    return nullptr;
+  }
+  if (idname.startswith("UI_OT_")) {
+    return "a drag of one of Blender's own controls: ends as the finger lifts";
+  }
+  for (const BridgeBarExclusion &exclusion : bridge_bar_exclusions) {
+    if (exclusion.contains ? idname.find(exclusion.pattern) != StringRef::not_found :
+                             idname.startswith(exclusion.pattern))
+    {
+      return exclusion.reason;
+    }
+  }
+  return nullptr;
+}
+
+/**
  * The operation a touch waits on: the first operator heading the window's modal handlers, unless
- * it moves the view, strokes, selects with a gesture or is the interface's own, which a finger
- * already drives and ends.
+ * #bridge_bar_excluded says it has no end to offer, or it is a drag gesture (box, lasso, circle,
+ * line), which ends as the finger lifts and whose wait shows the hint with Cancel. A polyline
+ * gesture waits for several taps and gets the bar (ROUND6 TOUCH-5, finding C1).
  */
 wmOperator *bridge_waiting_operator(wmWindow *win)
 {
@@ -310,18 +362,13 @@ wmOperator *bridge_waiting_operator(wmWindow *win)
     if (op == nullptr || op->type == nullptr) {
       return nullptr;
     }
-    const StringRef idname = op->type->idname;
-    for (const char *prefix : {"VIEW3D_OT_", "VIEW2D_OT_", "SCREEN_OT_", "UI_OT_", "WM_OT_", "GIZMOGROUP_OT_",
-                               "IMAGE_OT_view", "NODE_OT_view"})
-    {
-      if (idname.startswith(prefix)) {
+    if (bridge_bar_excluded(op->type->idname)) {
+      return nullptr;
+    }
+    for (const wmGesture &gesture : win->runtime->gesture) {
+      if (gesture.type != WM_GESTURE_POLYLINE) {
         return nullptr;
       }
-    }
-    if (idname.find("stroke") != StringRef::not_found || idname.find("select") != StringRef::not_found ||
-        idname.find("gesture") != StringRef::not_found)
-    {
-      return nullptr;
     }
     return op;
   }
@@ -329,16 +376,24 @@ wmOperator *bridge_waiting_operator(wmWindow *win)
 }
 
 /**
- * What to do for a command that waits for a drag in the view before it starts, as Box Select does
- * when chosen from the menu bar: there is no pointer to show it, so the iPad says so. Null when
- * nothing waits, or a tool's own drag already runs. `done` says it ends with Done rather than
- * after one drag.
+ * What to do for a command that waits in the view before it starts (ROUND6 TOUCH-5, finding A3):
+ * one state for a command that waits for a click to place it ("Input pending", Rip Vertices, Vertex
+ * Slide, Sample Color, ...) and for every gesture that waits for its drag (Box Select chosen from a
+ * menu, Bisect, a box mask, ...). Null when nothing waits, or a tool's own drag already runs; the
+ * shell shows it with Cancel (Escape), or Done where it ends with one. `done` says it ends with
+ * Done rather than after one drag. Into \a r_text, as it may name the operator.
  */
-static const char *bridge_drag_hint(wmWindow *win, bool *r_done)
+static bool bridge_waiting_hint(wmWindow *win, bool *r_done, std::string &r_text)
 {
   *r_done = false;
   if (win == nullptr) {
-    return nullptr;
+    return false;
+  }
+  /* A command waiting for a click to place it. */
+  if (const wmOperatorType *ot = WM_event_wait_for_input_operator(win)) {
+    r_text = fmt::format(fmt::runtime(IFACE_("Tap where to run {}")),
+                         CTX_IFACE_(ot->translation_context, ot->name));
+    return true;
   }
   static const std::map<std::string_view, const char *> hints = {
       {"VIEW3D_OT_select_box", "Drag across the view to select"},
@@ -354,22 +409,38 @@ static const char *bridge_drag_hint(wmWindow *win, bool *r_done)
       continue;
     }
     const wmOperator *op = reinterpret_cast<wmEventHandler_Op &>(handler_base).op;
-    const auto hint = op ? hints.find(op->type->idname) : hints.end();
-    if (hint == hints.end()) {
+    if (op == nullptr || op->type == nullptr) {
       continue;
     }
+    const auto hint = hints.find(op->type->idname);
     if (STREQ(op->type->idname, "VIEW3D_OT_dolly")) {
-      return hint->second;
+      r_text = IFACE_(hint->second);
+      return true;
     }
-    /* A gesture waiting for its drag, not one a tool started with it. */
+    /* A gesture waiting for its drag, not one a tool started with it. Any operator's: those
+     * without words of their own are named. */
     for (const wmGesture &gesture : win->runtime->gesture) {
-      if (gesture.wait_for_input || STREQ(op->type->idname, "VIEW3D_OT_select_circle")) {
-        *r_done = STREQ(op->type->idname, "VIEW3D_OT_select_circle") && gesture.wait_for_input;
-        return gesture.is_active && !*r_done ? nullptr : hint->second;
+      const bool circle = gesture.type == WM_GESTURE_CIRCLE;
+      /* A straight line waits for its press without `wait_for_input`: not yet active. */
+      const bool waits = gesture.wait_for_input || !gesture.is_active;
+      if (gesture.type == WM_GESTURE_POLYLINE || !(waits || circle)) {
+        continue;
       }
+      if (circle && hint == hints.end() && !gesture.wait_for_input) {
+        continue;
+      }
+      *r_done = circle && gesture.wait_for_input;
+      if (gesture.is_active && !*r_done) {
+        return false;
+      }
+      r_text = hint != hints.end() ?
+                   std::string(IFACE_(hint->second)) :
+                   fmt::format(fmt::runtime(IFACE_("Drag in the view to run {}")),
+                               WM_operatortype_name(op->type, op->ptr));
+      return true;
     }
   }
-  return nullptr;
+  return false;
 }
 
 ScrArea *bridge_find_view3d_area(bScreen *screen)
@@ -3311,10 +3382,11 @@ void bridge_toolbar_view_build(bContext *C,
   /* Moving, turning or scaling: the held buttons are Snap and Precision then. */
   data("transforming", bridge_constraint_operator(CTX_wm_window(C)) != nullptr);
   bool drag_done = false;
-  if (const char *drag_hint = bridge_drag_hint(CTX_wm_window(C), &drag_done)) {
-    /* A command waiting for a drag in the view, and whether it ends with Done. */
+  std::string drag_hint;
+  if (bridge_waiting_hint(CTX_wm_window(C), &drag_done, drag_hint)) {
+    /* A command waiting for a click or a drag in the view, and whether it ends with Done. */
     builder.add(top, "drag_hint", [&](ViewBuffer &buffer, NodeFields &fields) {
-      fields.label = IFACE_(drag_hint);
+      fields.label = drag_hint;
       return bridge_data(buffer, drag_done);
     });
   }
@@ -6725,6 +6797,30 @@ static void bridge_touch_zones_update(wmWindowManager *wm)
       }
     }
   }
+  /* What waits in each window (ROUND6 TOUCH-5): a command for a click, a gesture for its drag, an
+   * operator for its end. These change without a notifier; the toolbar view, which shows the hint
+   * and the bar, is built again when they do. */
+  static std::string waiting_last;
+  std::string waiting;
+  for (wmWindow &win : wm->windows) {
+    waiting += std::to_string(uintptr_t(WM_event_wait_for_input_operator(&win))) + ":";
+    for (const wmGesture &gesture : win.runtime->gesture) {
+      waiting += std::to_string(int(gesture.type)) + (gesture.wait_for_input ? "w" : "") +
+                 (gesture.is_active ? "a" : "") + ",";
+    }
+    for (wmEventHandler &handler : win.runtime->modalhandlers) {
+      if (handler.type == WM_HANDLER_TYPE_OP) {
+        waiting += std::to_string(uintptr_t(reinterpret_cast<wmEventHandler_Op &>(handler).op));
+        break;
+      }
+    }
+    waiting += ";";
+  }
+  if (waiting != waiting_last) {
+    waiting_last = std::move(waiting);
+    views::view_type_dirty("toolbar");
+  }
+
   std::vector<BridgeTouchWindow> windows;
   for (wmWindow &win : wm->windows) {
     const bScreen *screen = WM_window_get_active_screen(&win);
@@ -6969,6 +7065,50 @@ extern "C" char *WM_native_ui_escape_cancel_operators()
 extern "C" void WM_native_ui_test_simulate_finger(const float point_pixels)
 {
   WM_event_simulate_finger(point_pixels);
+}
+
+/**
+ * The commands that wait for a click to place them when run from a menu (ROUND6 TOUCH-5, finding
+ * A3): every operator type that depends on the cursor, as lines of idnames, for the Mac harness's
+ * `waiting` scenario. The text is the caller's to free with `free`.
+ */
+extern "C" char *WM_native_ui_test_cursor_operators()
+{
+  std::string text;
+  for (wmOperatorType *ot : WM_operatortypes_registered_get()) {
+    if ((ot->flag & OPTYPE_DEPENDS_ON_CURSOR) || ot->depends_on_cursor) {
+      text += std::string(ot->idname) + "\n";
+    }
+  }
+  char *result = static_cast<char *>(malloc(text.size() + 1));
+  memcpy(result, text.c_str(), text.size() + 1);
+  return result;
+}
+
+/** Run \a idname as a native menu item runs it, in the 3D View, for the harness (ROUND6 TOUCH-5):
+ * a command that depends on the cursor waits for a click. False when it cannot run here. */
+extern "C" bool WM_native_ui_test_menu_call(bContext *C, const char *idname)
+{
+  wmOperatorType *ot = WM_operatortype_find(idname, false);
+  if (ot == nullptr) {
+    return false;
+  }
+  const BridgeContextStore context_store = bridge_context_push_view3d(C);
+  bool ran = false;
+  if (WM_operator_poll_context(C, ot, wm::OpCallContext::InvokeRegionWin)) {
+    WM_operator_name_call_ptr_with_depends_on_cursor(
+        C, ot, wm::OpCallContext::InvokeRegionWin, nullptr, nullptr, "");
+    ran = true;
+  }
+  bridge_context_pop(C, context_store);
+  return ran;
+}
+
+/** Why the bar leaves out \a idname, or an empty text (ROUND6 TOUCH-5), for the harness. */
+extern "C" const char *WM_native_ui_test_bar_excluded(const char *idname)
+{
+  const char *reason = bridge_bar_excluded(idname);
+  return reason ? reason : "";
 }
 
 /**

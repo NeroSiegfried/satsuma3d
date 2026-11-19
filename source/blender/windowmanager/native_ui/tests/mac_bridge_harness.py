@@ -2408,9 +2408,145 @@ def tick_tolerance():
     return 0.3
 
 
+# ROUND6 TOUCH-5 (A3, C1): a waiting operation always shows itself and can always be ended. Every
+# command that depends on the cursor, run as a native menu item runs it, and every operator of
+# TOUCH-2's class (modal, ends on Escape), started from a timer in its mode, must show Cancel: the
+# toolbar's `drag_hint` (the shell's hint with Cancel) or the actions row's `modal:cancel` (the bar),
+# unless the bar's exclusion list names why it has no end to offer. Escape (what Cancel sends) must
+# then leave nothing waiting.
+WAIT_LIST = getattr(lib, "WM_native_ui_test_cursor_operators", None)
+MENU_CALL = getattr(lib, "WM_native_ui_test_menu_call", None)
+BAR_EXCLUDED = getattr(lib, "WM_native_ui_test_bar_excluded", None)
+if MENU_CALL is not None:
+    WAIT_LIST.restype = ctypes.c_void_p
+    MENU_CALL.restype = ctypes.c_bool
+    MENU_CALL.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    BAR_EXCLUDED.restype = ctypes.c_char_p
+    BAR_EXCLUDED.argtypes = [ctypes.c_char_p]
+waiting_state = {}
+
+
+def _shows_cancel():
+    top = tree(subs["toolbar"]) or {}
+    children = top.get("children", [])
+    hint = next((n for n in children if n["key"] == "drag_hint"), None)
+    row = next((n for n in children if n["key"] == "actions"), {})
+    bar = any(n["key"] == "modal:cancel" for n in row.get("children", []))
+    return (hint.get("label") if hint else None), bar
+
+
+def _mode_for(idname):
+    module = idname.split("_OT_")[0]
+    if module in ("MESH",):
+        return 'EDIT'
+    if module in ("SCULPT", "PAINT"):
+        return 'SCULPT'
+    return 'OBJECT'
+
+
+def tick_waiting():
+    global step
+    try:
+        pump()
+        step += 1
+        problems = report.setdefault("problems", [])
+        if MENU_CALL is None or ESCAPE_OPS is None:
+            problems.append("this build has no TOUCH-5 test functions")
+            finish("error")
+            return None
+        window, area, region = _view3d()
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            subs["toolbar"] = subscribe("toolbar")
+            pointer = WAIT_LIST()
+            cursor = [line for line in ctypes.string_at(pointer).decode().splitlines() if line]
+            lib.free(ctypes.c_void_p(pointer))
+            ESCAPE_OPS.restype = ctypes.c_void_p
+            pointer = ESCAPE_OPS()
+            modal = [line.split("|")[0] for line in ctypes.string_at(pointer).decode().splitlines() if line]
+            lib.free(ctypes.c_void_p(pointer))
+            report["cursor commands"] = len(cursor)
+            waiting_state["queue"] = [("menu", name) for name in sorted(cursor)] + \
+                [("modal", name) for name in sorted(set(modal) - set(cursor))]
+            waiting_state.update(shown={}, excluded={}, not_started={})
+            return 0.5
+        current = waiting_state.get("current")
+        if current:
+            kind, idname = current
+            hint, bar = _shows_cancel()
+            if hint or bar:
+                waiting_state["shown"][idname] = hint or "bar"
+            else:
+                reason = BAR_EXCLUDED(idname.encode()).decode()
+                if reason:
+                    waiting_state["excluded"][idname] = reason
+                else:
+                    problems.append("TOUCH-5: %s waits with no Cancel shown" % idname)
+            _simulate(window, 'ESC', 'PRESS', region.x + 12, region.y + 12)
+            _simulate(window, 'ESC', 'RELEASE', region.x + 12, region.y + 12)
+            waiting_state["current"] = None
+            waiting_state["ending"] = idname
+            return 0.4
+        ending = waiting_state.pop("ending", None)
+        if ending:
+            hint, bar = _shows_cancel()
+            still = _touch_window()["modal"] if TOUCH_WINDOW else False
+            if hint or still:
+                waiting_state["not_started"].setdefault("still waiting after Escape", []).append(ending)
+                _simulate(window, 'RIGHTMOUSE', 'PRESS', region.x + 12, region.y + 12)
+                _simulate(window, 'RIGHTMOUSE', 'RELEASE', region.x + 12, region.y + 12)
+                return 0.4
+        queue = waiting_state["queue"]
+        while queue:
+            kind, idname = queue.pop(0)
+            mode = _mode_for(idname)
+            if bpy.context.object and bpy.context.object.mode != mode:
+                bpy.ops.object.mode_set(mode=mode)
+            if kind == "menu":
+                if not MENU_CALL(bpy.context.as_pointer(), idname.encode()):
+                    waiting_state["not_started"].setdefault("poll fails here", []).append(idname)
+                    continue
+                waiting_state["current"] = (kind, idname)
+                return 0.5
+            module, name = idname.split("_OT_")
+            operator = getattr(getattr(bpy.ops, module.lower()), name)
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                if not operator.poll():
+                    waiting_state["not_started"].setdefault("poll fails here", []).append(idname)
+                    continue
+                try:
+                    result = operator('INVOKE_DEFAULT')
+                except Exception as error:
+                    waiting_state["not_started"].setdefault("refused", []).append(
+                        "%s: %s" % (idname, str(error).splitlines()[0][:80]))
+                    continue
+            if 'RUNNING_MODAL' not in result:
+                waiting_state["not_started"].setdefault("did not wait", []).append(idname)
+                continue
+            waiting_state["current"] = (kind, idname)
+            return 0.5
+        if bpy.context.object and bpy.context.object.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        report["shown with Cancel"] = waiting_state["shown"]
+        report["excluded, with why"] = waiting_state["excluded"]
+        report["not started"] = waiting_state["not_started"]
+        if len(waiting_state["shown"]) < 10:
+            problems.append("TOUCH-5: fewer than ten waiting operations were seen; the sweep proves little")
+        for needed in ("VIEW3D_OT_walk", "VIEW3D_OT_fly", "MESH_OT_rip"):
+            if needed not in waiting_state["shown"]:
+                problems.append("TOUCH-5: %s did not show Cancel" % needed)
+        finish("done" if not problems else "error")
+        return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
 bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets": tick_insets, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror,
                          "extensions": tick_extensions, "keys": tick_keys,
                          "numinput": tick_numinput, "render": tick_render,
                          "fingers": tick_fingers, "undo": tick_undo,
-                         "tolerance": tick_tolerance}.get(SCENARIO, tick_actions),
+                         "tolerance": tick_tolerance, "waiting": tick_waiting}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

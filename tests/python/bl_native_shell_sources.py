@@ -1238,4 +1238,24 @@ check('"Select Menu…"' in (SWIFT / 'DocumentWindow.swift').read_text(encoding=
       'startswith("select_menu:")' in bridge_text and 'RNA_boolean_set(&props, "enumerate", true);' in bridge_text,
       "R6 TOUCH-4: the long-press menu has Select Menu…, the list of what is under the finger")
 
+# ROUND6 TOUCH-5 (A3, C1): a waiting operation always shows itself and can always be ended. The bar
+# leaves out only a listed family, each with why; no name test hides polyline gestures, Walk, Fly or
+# Adjust; a command waiting for a click and every gesture waiting for its drag have one hint with
+# Cancel; two fingers' navigation passes a command waiting for a click.
+waiting_body = bridge_text[bridge_text.index('wmOperator *bridge_waiting_operator(wmWindow *win)'):]
+waiting_body = waiting_body[:waiting_body.index('\n}\n')]
+exclusions = bridge_text[bridge_text.index('static const BridgeBarExclusion bridge_bar_exclusions[] = {'):]
+exclusions = exclusions[:exclusions.index('};')]
+rows = re.findall(r'\{"([^"]+)",\s*(?:true|false),\s*"([^"]*)', exclusions)
+check(len(rows) >= 5 and all(reason for _pattern, reason in rows) and
+      'find("select")' not in waiting_body and 'find("gesture")' not in waiting_body and
+      '"WM_OT_"' not in exclusions and 'bridge_bar_excluded(op->type->idname)' in waiting_body and
+      'WM_GESTURE_POLYLINE' in waiting_body,
+      "R6 TOUCH-5: the bar leaves out only a listed family, each with why (%d)" % len(rows))
+check('WM_event_wait_for_input_operator(win)' in bridge_text and 'bridge_waiting_hint(' in bridge_text and
+      'bridge_drag_hint(' not in bridge_text,
+      "R6 TOUCH-5: one waiting state for a click and for a drag, shown with Cancel")
+check('ui_handler_wait_for_input &&\n            (ISMOUSE_GESTURE(event->type) || event->type == NDOF_MOTION)' in system_text,
+      "R6 TOUCH-5: two fingers navigate while a command waits for a click")
+
 print('PASS: native shell sources ' + json.dumps(checks))

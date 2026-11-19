@@ -2189,6 +2189,23 @@ static int ui_handler_wait_for_input(bContext *C, const wmEvent *event, void *us
   return WM_UI_HANDLER_CONTINUE;
 }
 
+wmOperatorType *WM_event_wait_for_input_operator(const wmWindow *win)
+{
+  if (win == nullptr) {
+    return nullptr;
+  }
+  for (const wmEventHandler &handler_base : win->runtime->modalhandlers) {
+    if (handler_base.type != WM_HANDLER_TYPE_UI) {
+      continue;
+    }
+    const wmEventHandler_UI &handler = reinterpret_cast<const wmEventHandler_UI &>(handler_base);
+    if (handler.handle_fn == ui_handler_wait_for_input && handler.user_data) {
+      return static_cast<const OperatorWaitForInput *>(handler.user_data)->optype_params.optype;
+    }
+  }
+  return nullptr;
+}
+
 void WM_operator_name_call_ptr_with_depends_on_cursor(bContext *C,
                                                       wmOperatorType *ot,
                                                       wm::OpCallContext opcontext,
@@ -3625,7 +3642,21 @@ static eHandlerActionFlag wm_handlers_do_intern(bContext *C,
 
       /* Modal+blocking handler_base. */
       if (handler_base->flag & WM_HANDLER_BLOCKING) {
+#ifdef WITH_NATIVE_UI
+        /* A command waiting for a click lets the view be navigated meanwhile, as a touch screen
+         * has nothing else to move it with (ROUND6 TOUCH-5): two fingers' orbit, pan and zoom
+         * pass on to the view. */
+        const bool navigation_passes =
+            handler_base->type == WM_HANDLER_TYPE_UI &&
+            reinterpret_cast<wmEventHandler_UI *>(handler_base)->handle_fn ==
+                ui_handler_wait_for_input &&
+            (ISMOUSE_GESTURE(event->type) || event->type == NDOF_MOTION);
+        if (!navigation_passes) {
+          action |= WM_HANDLER_BREAK;
+        }
+#else
         action |= WM_HANDLER_BREAK;
+#endif
       }
 
       /* Handle all types here. */
