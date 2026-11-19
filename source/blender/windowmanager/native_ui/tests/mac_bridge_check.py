@@ -56,7 +56,11 @@ def main():
         subprocess.run([args.blender, "--factory-startup", *extra, "--python", os.path.join(HERE, "mac_bridge_harness.py"),
                         "--", directory, report, args.scenario,
                         os.path.join(HERE, "..", "..", "..", "..", "..", "release", "ios", "branding_allowed.txt"),
-                        os.path.join(HERE, "..", "..", "..", "..", "..", "release", "ios", "key_stand_ins.txt")],
+                        os.path.join(HERE, "..", "..", "..", "..", "..", "release", "ios", "key_stand_ins.txt"),
+                        # After Blender's own arguments, for AppKit: no "reopen windows?" alert after
+                        # an earlier run crashed. That alert is modal and stalled every run at
+                        # startup, before the first step (seen 2026-11-19 from about 16:15).
+                        "-ApplePersistenceIgnoreState", "YES"],
                        check=True, timeout=300, env=env)
         with open(report) as f:
             result = json.load(f)
