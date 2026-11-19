@@ -33,8 +33,8 @@ enum GHOST_IOSTouchPhase {
   GHOST_kIOSTouchCancelled,
 };
 
-/** A part of a navigation gizmo, see #GHOST_IOSNativeInterface::navigation_part_at. The same
- * values as Blender's `NavigationGizmoPart`. */
+/** A part of a navigation gizmo, see #GHOST_IOSNativeInterface::touch_at. The same values as
+ * Blender's `NavigationGizmoPart`. */
 enum GHOST_IOSNavigationPart {
   GHOST_kIOSNavigationNone = 0,
   GHOST_kIOSNavigationAxes,
@@ -43,6 +43,39 @@ enum GHOST_IOSNavigationPart {
   GHOST_kIOSNavigationCamera,
   GHOST_kIOSNavigationProjection,
   GHOST_kIOSNavigationCameraLock,
+};
+
+/** What kind of place a touch begins on, see #GHOST_IOSNativeInterface::touch_at. The same values
+ * as Blender's `NativeTouchKind`. */
+enum GHOST_IOSPlace {
+  GHOST_kIOSPlaceNothing = 0,
+  GHOST_kIOSPlaceView3D,
+  GHOST_kIOSPlaceCanvas,
+  GHOST_kIOSPlaceInterface,
+  GHOST_kIOSPlaceNavigation,
+};
+
+/** Which directions the control under a touch takes a drag for itself: bits 1 x, 2 y. */
+enum GHOST_IOSTakes {
+  GHOST_kIOSTakesNone = 0,
+  GHOST_kIOSTakesX = 1,
+  GHOST_kIOSTakesY = 2,
+  GHOST_kIOSTakesBoth = 3,
+};
+
+/** Blender's answer about a point, see #GHOST_IOSNativeInterface::touch_at (ROUND5 13A). */
+struct GHOST_IOSTouchAnswer {
+  /** A #GHOST_IOSPlace. */
+  int place = GHOST_kIOSPlaceNothing;
+  /** On a navigation gizmo: a #GHOST_IOSNavigationPart. */
+  int navigation_part = GHOST_kIOSNavigationNone;
+  /** Whether what is under the point scrolls along x and along y now. */
+  bool scroll_x = false;
+  bool scroll_y = false;
+  /** A #GHOST_IOSTakes. */
+  int takes = GHOST_kIOSTakesNone;
+  /** The editor and region, for the session log, such as `PROPERTIES WINDOW` or `MENU`. */
+  char where[40] = "";
 };
 
 struct GHOST_IOSNativeInterface {
@@ -82,11 +115,13 @@ struct GHOST_IOSNativeInterface {
   int (*finger_tweak_holding)(bool *r_landing) = nullptr;
 
   /**
-   * Which part of a navigation gizmo lies at \a x, \a y, in \a window's client pixels (the
-   * window as a `GHOST_IWindow *`), as Blender last drew it: a #GHOST_IOSNavigationPart. A finger
-   * or the Pencil that begins on one is given to Blender as a pointer (ROUND5 12D).
+   * What lies at \a x, \a y, in \a window's client pixels (the window as a `GHOST_IWindow *`), as
+   * Blender last drew it (ROUND5 13A, decision 84): a navigation gizmo's part (a finger or the
+   * Pencil that begins on one is given to Blender as a pointer, 12D), a 3D View, another canvas
+   * or Blender's interface; for interface, whether it scrolls now and what the control there takes
+   * for itself. False before the window is drawn.
    */
-  int (*navigation_part_at)(const void *window, int x, int y) = nullptr;
+  bool (*touch_at)(const void *window, int x, int y, GHOST_IOSTouchAnswer *r_answer) = nullptr;
 
   /** `UIViewController *`: the first window's content, before a document opens. */
   void *(*launcher_controller)() = nullptr;
@@ -168,6 +203,14 @@ void GHOST_ios_window_hold_modifier(GHOST_WindowIOS *window, GHOST_TKey key, boo
  * Whether it was taken: at its beginning, only on a part, and the input gate may refuse it.
  */
 - (BOOL)navigationButtonTouch:(int)phase at:(CGPoint)point;
+/**
+ * A check script's finger on Blender's interface (ROUND5 13B, check 3), entering where a finger's
+ * touch on interface does: \a phase 0 lands, 1 moves, 2 lifts, 3 is cancelled, at \a point in the
+ * view's points. False when, as it lands, the point is not interface or the gate is closed.
+ */
+- (BOOL)scriptInterfaceTouch:(int)phase at:(CGPoint)point;
+/** What Blender says is under \a point (the view's points), for a check script's log. */
+- (NSString *)touchDescriptionAt:(CGPoint)point;
 @end
 
 UIWindow<GHOST_IOSInputWindow> *GHOST_ios_window_native(GHOST_WindowIOS *window);

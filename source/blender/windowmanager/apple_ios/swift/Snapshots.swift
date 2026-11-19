@@ -52,12 +52,19 @@
  * - `sidebar properties|outliner open|close [sample]`: Properties or the Outliner, as the header's
  *   buttons show and hide them (ROUND5 10A); `sample` logs where the shell has the gizmo against where
  *   Blender last drew it, through the slide (ROUND5 14B, 14C);
+ * - `fingers tool|navigate`: the touch setting for this launch only, not stored (ROUND5 13);
  * - `motion reduce on|off`: the app's Reduce Motion path without the system setting (ROUND5 14C):
  *   the sidebars' slide and the insets in one step; until the app quits, never saved;
  * - `trait compact on|off`, `trait text <size>|default`: the window's horizontal size class or its
  *   text size (a `UIContentSizeCategory` name's end, such as `extraExtraLarge` or
  *   `accessibilityLarge`), as trait overrides of this launch's window (ROUND5 14C): the window's
  *   size and the owner's settings are not touched;
+ * - `touch <x> <y>|@<WHERE>[#<type>[:last]] tap|what|hold [<dx> <dy>]|drag <dx> <dy> [flick]`: a
+ *   finger on Blender's own
+ *   interface at that point of the window, in points (ROUND5 13B): it enters where a finger's touch
+ *   on interface does and is told apart the same way (a tap; a hold, then a drag if given; a drag
+ *   over 0.3 s, ended still or as a flick). `what` only logs what Blender says is there. It proves
+ *   the telling-apart and Blender's answers, not UIKit's delivery;
  * - `mark <text>`: a line in the log, to count what a group of steps wrote (ROUND5 10A);
  * - `document <step>`: the document checks of ROUND5 9D.5, in the scratch document only and on
  *   files in its folder: `copy <name>`, `open <name>`, `stat <name>`, `list`, `save`, `reopen`,
@@ -464,6 +471,64 @@ enum ShellSnapshots {
         else {
           try? await Task.sleep(for: .seconds(1))
         }
+      case "touch":
+        var parts = step.split(separator: " ").map(String.init)
+        /* `@<WHERE>[#<button type>[:last]]` in place of `<x> <y>`: the place Blender's map has, with
+         * `+` for the space in its name (`@TOPBAR+HEADER#16:last`, `@PROPERTIES+WINDOW#6`). */
+        if let place = parts.first, place.hasPrefix("@"), let window = ShellModel.current?.window {
+          let spec = place.dropFirst().split(separator: "#", maxSplits: 1).map(String.init)
+          let kind = spec.count > 1 ? spec[1].split(separator: ":").map(String.init) : []
+          var found = CGPoint.zero
+          let region = spec[0].replacingOccurrences(of: "+", with: " ")
+          guard wm_apple_ios_window_touch_find(window, region, Int32(kind.first ?? "") ?? -1,
+                                               kind.last == "last", &found) else {
+            WM_native_ui_log("snapshot", "touch \(step): \(place) not found")
+            break
+          }
+          parts.replaceSubrange(0...0, with: [String(Double(found.x)), String(Double(found.y))])
+        }
+        guard parts.count >= 3, let x = Double(parts[0]), let y = Double(parts[1]),
+              let window = ShellModel.current?.window else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        let point = CGPoint(x: x, y: y)
+        let action = parts[2]
+        let numbers = parts.dropFirst(3).compactMap(Double.init)
+        let travel = numbers.count >= 2 ? CGPoint(x: numbers[0], y: numbers[1]) : .zero
+        WM_native_ui_log("snapshot", "touch \(step): \(wm_apple_ios_window_touch_description(window, point))")
+        if action == "what" { break }
+        guard ["tap", "hold", "drag"].contains(action) else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        guard wm_apple_ios_window_script_touch(window, 0, point) else {
+          WM_native_ui_log("snapshot", "touch \(step): not taken (not interface, or the gate is closed)")
+          break
+        }
+        if action == "hold" { try? await Task.sleep(for: .milliseconds(500)) }
+        if action == "tap" { try? await Task.sleep(for: .milliseconds(60)) }
+        if travel != .zero {
+          for index in 1...12 {
+            try? await Task.sleep(for: .milliseconds(25))
+            let fraction = Double(index) / 12
+            _ = wm_apple_ios_window_script_touch(window, 1, CGPoint(x: x + travel.x * fraction, y: y + travel.y * fraction))
+          }
+          if !parts.contains("flick") { try? await Task.sleep(for: .milliseconds(150)) }
+        }
+        _ = wm_apple_ios_window_script_touch(window, 2, CGPoint(x: x + travel.x, y: y + travel.y))
+        try? await Task.sleep(for: .milliseconds(parts.contains("flick") ? 1500 : 600))
+      case "fingers":
+        /* ROUND5 13: the touch setting for this launch only (Pencil and Fingers: `tool`; Pencil
+         * Only: `navigate`), as Settings applies it, without storing it: the owner's setting is
+         * read again at the next launch. */
+        guard let mode = words.first, ["tool", "navigate"].contains(mode), let model = ShellModel.current else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        model.fingerUsesTool = mode == "tool"
+        wm_apple_ios_window_set_finger_tool(model.window, mode == "tool")
+        WM_native_ui_log("snapshot", step)
       case "motion":
         guard words.count >= 2, words[0] == "reduce", ["on", "off"].contains(words[1]) else {
           WM_native_ui_log("snapshot", "unknown step: \(step)")

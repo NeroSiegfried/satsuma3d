@@ -74,6 +74,20 @@ bool wm_apple_ios_window_navigation_button(void *_Nullable window, int phase, CG
 bool wm_apple_ios_window_navigation_drawn(void *_Nullable window,
                                           CGPoint *_Nonnull r_center,
                                           CGFloat *_Nonnull r_radius);
+/** A check script's finger on Blender's interface (ROUND5 13B, check 3): \a phase 0 lands, 1
+ * moves, 2 lifts, 3 is cancelled, at \a point in the window's points. False when, as it lands,
+ * the point is not interface or the gate is closed. */
+bool wm_apple_ios_window_script_touch(void *_Nullable window, int phase, CGPoint point);
+/** Where a check script finds a place to touch (ROUND5 13B): the centre of the region \a where
+ * (`TOPBAR HEADER`, `PROPERTIES WINDOW`) with \a button_type -1, or of its first (\a last: last)
+ * button of that `ButtonType`, in the window's points. False when there is none. */
+bool wm_apple_ios_window_touch_find(void *_Nullable window,
+                                    const char *_Nonnull where,
+                                    int button_type,
+                                    bool last,
+                                    CGPoint *_Nonnull r_point);
+/** What Blender says is under \a point, in the window's points (ROUND5 13A), for the log. */
+NSString *_Nonnull wm_apple_ios_window_touch_description(void *_Nullable window, CGPoint point);
 /** End the Pencil's stroke, cancelling its tool, when a control takes the touch. */
 void wm_apple_ios_window_cancel_pencil_stroke(void *_Nullable window);
 /** One of Blender's icons by key (such as `tool.object.builtin.move`), or the symbol. */

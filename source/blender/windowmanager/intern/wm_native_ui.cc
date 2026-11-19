@@ -54,6 +54,7 @@
 
 #include "BLI_math_color.h"
 #include "CLG_log.h"
+#include "GHOST_IWindow.hh"
 #include "GHOST_Mailbox.hh"
 
 #include "DEG_depsgraph.hh"
@@ -96,6 +97,7 @@
 
 #include "RNA_enum_types.hh"
 #include "RNA_prototypes.hh"
+#include "UI_interface_c.hh"
 #include "UI_resources.hh"
 #include "UI_view2d.hh"
 
@@ -6196,6 +6198,8 @@ static int bridge_navigation_parts(const ScrArea *area,
   return ui::UI_view2d_navigate_gizmo_parts(area, region, r_parts);
 }
 
+static void bridge_touch_zones_update(wmWindowManager *wm);
+
 void WM_native_ui_navigation_parts_update(bContext *C)
 {
   wmWindowManager *wm = CTX_wm_manager(C);
@@ -6245,6 +6249,7 @@ void WM_native_ui_navigation_parts_update(bContext *C)
     /* The toolbar says where the gizmo is, which the shell keeps clear of. */
     views::view_type_dirty("toolbar");
   }
+  bridge_touch_zones_update(wm);
 }
 
 extern "C" bool WM_native_ui_navigation_drawn(const void *ghost_window,
@@ -6263,7 +6268,7 @@ extern "C" bool WM_native_ui_navigation_drawn(const void *ghost_window,
   return false;
 }
 
-int WM_native_ui_navigation_part_at(const void *ghost_window, const int x, const int y)
+static int bridge_navigation_part_at(const void *ghost_window, const int x, const int y)
 {
   std::lock_guard lock(bridge_navigation_targets_mutex);
   for (const BridgeNavigationTarget &target : bridge_navigation_targets) {
@@ -6275,6 +6280,390 @@ int WM_native_ui_navigation_part_at(const void *ghost_window, const int x, const
     }
   }
   return int(NavigationGizmoPart::None);
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name What a Finger Meets (ROUND5 13A, decision 84)
+ *
+ * For each window, after each draw: every place a touch can begin, in the order Blender would
+ * send an event there (the popups on top first, the newest first; then each area's overlapping
+ * regions, then the others, as #ED_area_find_region_xy_visual looks), with what kind of place it
+ * is, whether it scrolls now, and its interactive buttons with the directions each takes for
+ * itself. The window asks it on the main thread as a finger lands (#WM_native_ui_touch_at);
+ * Blender's own data is never read off its loop.
+ * \{ */
+
+#if defined(__clang__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic error "-Wswitch"
+#elif defined(__GNUC__)
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic error "-Wswitch"
+#endif
+
+/** The kind of place a region's main area is, by its editor: a closed list, so a new editor fails
+ * the build until it is placed (ROUND5 13A.2). */
+static NativeTouchKind bridge_touch_main_kind(const eSpace_Type space)
+{
+  switch (space) {
+    case SPACE_VIEW3D:
+      return NativeTouchKind::View3D;
+    /* Canvases: what a finger draws on, pans or zooms in. */
+    case SPACE_IMAGE:
+    case SPACE_NODE:
+    case SPACE_GRAPH:
+    case SPACE_ACTION:
+    case SPACE_NLA:
+    case SPACE_SEQ:
+    case SPACE_CLIP:
+      return NativeTouchKind::Canvas;
+    /* Buttons, panels, lists and text: interface, which a finger presses and scrolls. */
+    case SPACE_PROPERTIES:
+    case SPACE_USERPREF:
+    case SPACE_TOPBAR:
+    case SPACE_STATUSBAR:
+    case SPACE_OUTLINER:
+    case SPACE_FILE:
+    case SPACE_INFO:
+    case SPACE_TEXT:
+    case SPACE_CONSOLE:
+    case SPACE_SPREADSHEET:
+    case SPACE_SCRIPT:
+    case SPACE_EMPTY:
+      return NativeTouchKind::Interface;
+  }
+  return NativeTouchKind::Interface;
+}
+
+/** The kind of place a region is: its editor's main kind for the main region, a canvas for a
+ * preview, interface for every region of buttons (ROUND5 13A.2). */
+static NativeTouchKind bridge_touch_region_kind(const eSpace_Type space, const eRegion_Type type)
+{
+  switch (type) {
+    case RGN_TYPE_WINDOW:
+      return bridge_touch_main_kind(space);
+    case RGN_TYPE_PREVIEW:
+      return NativeTouchKind::Canvas;
+    case RGN_TYPE_HEADER:
+    case RGN_TYPE_CHANNELS:
+    case RGN_TYPE_TEMPORARY:
+    case RGN_TYPE_UI:
+    case RGN_TYPE_TOOLS:
+    case RGN_TYPE_TOOL_PROPS:
+    case RGN_TYPE_HUD:
+    case RGN_TYPE_NAV_BAR:
+    case RGN_TYPE_EXECUTE:
+    case RGN_TYPE_FOOTER:
+    case RGN_TYPE_TOOL_HEADER:
+    case RGN_TYPE_ASSET_SHELF:
+    case RGN_TYPE_ASSET_SHELF_HEADER:
+      return NativeTouchKind::Interface;
+    case RGN_TYPE_XR:
+      return NativeTouchKind::None;
+  }
+  return NativeTouchKind::None;
+}
+
+#if defined(__clang__)
+#  pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#  pragma GCC diagnostic pop
+#endif
+
+/** A place a touch can begin, in Blender's window pixels. A standard vector inside: the map
+ * outlives Blender's allocator, freed as the process ends. */
+struct BridgeTouchZone {
+  const void *ghost_window = nullptr;
+  /** The window's height and pixel size, to read GHOST's client pixels. */
+  int window_height = 0;
+  float pixel_size = 1.0f;
+  rcti rect = {};
+  NativeTouchKind kind = NativeTouchKind::None;
+  bool scroll_x = false;
+  bool scroll_y = false;
+  /** An overlapping header: only where its buttons are (within Blender's margin). */
+  bool buttons_only = false;
+  /** An overlapping sidebar or toolbar: only over its contents, and its tabs. */
+  bool contents_only = false;
+  rcti contents = {};
+  rcti tabs = {};
+  std::vector<ui::TouchButton> buttons;
+  std::string where;
+};
+
+static std::mutex bridge_touch_mutex;
+static std::vector<BridgeTouchZone> bridge_touch_zones;
+
+static bool bridge_touch_zone_has(const BridgeTouchZone &zone, const int xy[2])
+{
+  if (!BLI_rcti_isect_pt_v(&zone.rect, xy)) {
+    return false;
+  }
+  if (zone.buttons_only) {
+    rcti near;
+    BLI_rcti_init_pt_radius(&near, xy, int(UI_REGION_OVERLAP_MARGIN));
+    for (const ui::TouchButton &button : zone.buttons) {
+      if (BLI_rcti_isect(&button.rect, &near, nullptr)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  if (zone.contents_only) {
+    return BLI_rcti_isect_pt_v(&zone.contents, xy) || BLI_rcti_isect_pt_v(&zone.tabs, xy);
+  }
+  return true;
+}
+
+static void bridge_touch_zone_add(std::vector<BridgeTouchZone> &zones,
+                                  const wmWindow &win,
+                                  const ScrArea *area,
+                                  const ARegion &region)
+{
+  if (region.runtime == nullptr || !region.runtime->visible || region.winx <= 1 ||
+      region.winy <= 1 || (region.flag & RGN_FLAG_HIDDEN))
+  {
+    return;
+  }
+  const eSpace_Type space = area ? eSpace_Type(area->spacetype) : SPACE_EMPTY;
+  const eRegion_Type type = eRegion_Type(region.regiontype);
+  BridgeTouchZone zone;
+  zone.ghost_window = win.runtime->ghostwin;
+  zone.window_height = win.sizey;
+  zone.pixel_size = static_cast<GHOST_IWindow *>(win.runtime->ghostwin)->getNativePixelSize();
+  zone.rect = region.winrct;
+  zone.kind = area ? bridge_touch_region_kind(space, type) : NativeTouchKind::Interface;
+  if (zone.kind == NativeTouchKind::None) {
+    return;
+  }
+  if (area == nullptr) {
+    zone.where = "MENU";
+    zone.scroll_y = ui::region_popup_scrolls(&region);
+  }
+  else {
+    const char *space_name = "";
+    const char *region_name = "";
+    RNA_enum_identifier(rna_enum_space_type_items, space, &space_name);
+    RNA_enum_identifier(rna_enum_region_type_items, type, &region_name);
+    zone.where = std::string(space_name) + " " + region_name;
+    /* Scrolls along an axis when its content is longer than the region and the axis is free. */
+    const View2D &v2d = region.v2d;
+    zone.scroll_x = !(v2d.keepofs & V2D_LOCKOFS_X) &&
+                    BLI_rctf_size_x(&v2d.tot) > BLI_rctf_size_x(&v2d.cur) + 1.0f;
+    zone.scroll_y = !(v2d.keepofs & V2D_LOCKOFS_Y) &&
+                    BLI_rctf_size_y(&v2d.tot) > BLI_rctf_size_y(&v2d.cur) + 1.0f;
+  }
+  if (zone.kind == NativeTouchKind::Interface) {
+    Vector<ui::TouchButton> buttons;
+    ui::region_touch_buttons(&region, buttons);
+    zone.buttons.assign(buttons.begin(), buttons.end());
+  }
+  if (area && region.overlap) {
+    /* Where an overlapping region lets touches through to the region below, as
+     * #ED_region_contains_xy has it. */
+    if (region.v2d.keeptot == V2D_KEEPTOT_STRICT) {
+      zone.buttons_only = true;
+    }
+    else {
+      zone.contents_only = true;
+      rcti contents;
+      ui::view2d_view_to_region_rcti(&region.v2d, &region.v2d.tot, &contents);
+      BLI_rcti_translate(&contents, region.winrct.xmin, region.winrct.ymin);
+      const int alignment = RGN_ALIGN_ENUM_FROM_MASK(region.alignment);
+      zone.contents = region.winrct;
+      if (ELEM(alignment, RGN_ALIGN_TOP, RGN_ALIGN_BOTTOM)) {
+        zone.contents.xmin = contents.xmin - int(UI_REGION_OVERLAP_MARGIN);
+        zone.contents.xmax = contents.xmax + int(UI_REGION_OVERLAP_MARGIN);
+      }
+      else {
+        zone.contents.ymin = contents.ymin - int(UI_REGION_OVERLAP_MARGIN);
+        zone.contents.ymax = contents.ymax + int(UI_REGION_OVERLAP_MARGIN);
+      }
+      if (!ED_region_panel_category_gutter_calc_rect(&region, &zone.tabs)) {
+        BLI_rcti_init(&zone.tabs, 0, -1, 0, -1);
+      }
+    }
+  }
+  zones.push_back(std::move(zone));
+}
+
+static void bridge_touch_zones_update(wmWindowManager *wm)
+{
+  std::vector<BridgeTouchZone> zones;
+  for (wmWindow &win : wm->windows) {
+    const bScreen *screen = WM_window_get_active_screen(&win);
+    if (screen == nullptr || win.runtime->ghostwin == nullptr) {
+      continue;
+    }
+    /* Popups and menus on top, the newest first. */
+    Vector<const ARegion *> popups;
+    for (const ARegion &region : screen->regionbase) {
+      popups.append(&region);
+    }
+    for (int i = popups.size() - 1; i >= 0; i--) {
+      bridge_touch_zone_add(zones, win, nullptr, *popups[i]);
+    }
+    ED_screen_areas_iter (&win, screen, area) {
+      for (const bool overlap : {true, false}) {
+        for (const ARegion &region : area->regionbase) {
+          if (bool(region.overlap) == overlap) {
+            bridge_touch_zone_add(zones, win, area, region);
+          }
+        }
+      }
+    }
+  }
+  std::lock_guard lock(bridge_touch_mutex);
+  bridge_touch_zones = std::move(zones);
+}
+
+static bool bridge_touch_answer(const std::vector<BridgeTouchZone> &zones,
+                                const void *ghost_window,
+                                const int xy[2],
+                                NativeTouchAnswer *r_answer)
+{
+  for (const BridgeTouchZone &zone : zones) {
+    if ((ghost_window && zone.ghost_window != ghost_window) || !bridge_touch_zone_has(zone, xy)) {
+      continue;
+    }
+    r_answer->kind = zone.kind;
+    r_answer->scroll_x = zone.scroll_x;
+    r_answer->scroll_y = zone.scroll_y;
+    STRNCPY(r_answer->where, zone.where.c_str());
+    /* The control on top: the last drawn that holds the point. */
+    for (auto button = zone.buttons.rbegin(); button != zone.buttons.rend(); ++button) {
+      if (BLI_rcti_isect_pt_v(&button->rect, xy)) {
+        r_answer->takes = int8_t(button->takes);
+        r_answer->button_type = button->type;
+        break;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+bool WM_native_ui_touch_at(const void *ghost_window,
+                           const int x,
+                           const int y,
+                           NativeTouchAnswer *r_answer)
+{
+  *r_answer = NativeTouchAnswer();
+  const int part = bridge_navigation_part_at(ghost_window, x, y);
+  if (part != int(NavigationGizmoPart::None)) {
+    r_answer->kind = NativeTouchKind::Navigation;
+    r_answer->navigation_part = part;
+    STRNCPY(r_answer->where, "NAVIGATION");
+    return true;
+  }
+  std::lock_guard lock(bridge_touch_mutex);
+  for (const BridgeTouchZone &zone : bridge_touch_zones) {
+    if (zone.ghost_window != ghost_window) {
+      continue;
+    }
+    /* GHOST's client pixels to Blender's window pixels, as #wm_cursor_position_from_ghost_client_coords. */
+    const int xy[2] = {int(x * zone.pixel_size),
+                       int(((zone.window_height - 1) - y) * zone.pixel_size)};
+    return bridge_touch_answer(bridge_touch_zones, ghost_window, xy, r_answer);
+  }
+  return false;
+}
+
+bool WM_native_ui_touch_find(const void *ghost_window,
+                             const char *where,
+                             const int button_type,
+                             const bool last,
+                             int r_client_xy[2])
+{
+  std::lock_guard lock(bridge_touch_mutex);
+  bool found = false;
+  int xy[2] = {0, 0};
+  float pixel_size = 1.0f;
+  int height = 0;
+  for (const BridgeTouchZone &zone : bridge_touch_zones) {
+    if (zone.ghost_window != ghost_window || zone.where != where) {
+      continue;
+    }
+    pixel_size = zone.pixel_size;
+    height = zone.window_height;
+    if (button_type < 0) {
+      xy[0] = BLI_rcti_cent_x(&zone.rect);
+      xy[1] = BLI_rcti_cent_y(&zone.rect);
+      found = true;
+      break;
+    }
+    for (const ui::TouchButton &button : zone.buttons) {
+      if (button.type == button_type) {
+        xy[0] = BLI_rcti_cent_x(&button.rect);
+        xy[1] = BLI_rcti_cent_y(&button.rect);
+        found = true;
+        if (!last) {
+          break;
+        }
+      }
+    }
+    break;
+  }
+  if (found) {
+    /* Blender's window pixels to GHOST's client pixels, as #wm_cursor_position_to_ghost_client_coords. */
+    r_client_xy[0] = int(xy[0] / pixel_size);
+    r_client_xy[1] = height - int(xy[1] / pixel_size) - 1;
+  }
+  return found;
+}
+
+/**
+ * The same question in Blender's window pixels of the first window, for the Mac harness's `touch`
+ * scenario (ROUND5 13A, check 2): \a r_values gets the kind, the navigation part, scroll x, scroll
+ * y, what the control takes and its button type; \a r_where the editor and region. False where
+ * nothing is.
+ */
+extern "C" bool WM_native_ui_touch_query(const int x,
+                                         const int y,
+                                         int r_values[6],
+                                         char *r_where,
+                                         const int where_size)
+{
+  NativeTouchAnswer answer;
+  const int xy[2] = {x, y};
+  bool found;
+  {
+    std::lock_guard lock(bridge_touch_mutex);
+    found = bridge_touch_answer(bridge_touch_zones, nullptr, xy, &answer);
+  }
+  r_values[0] = int(answer.kind);
+  r_values[1] = answer.navigation_part;
+  r_values[2] = answer.scroll_x;
+  r_values[3] = answer.scroll_y;
+  r_values[4] = answer.takes;
+  r_values[5] = answer.button_type;
+  BLI_strncpy(r_where, answer.where, size_t(where_size));
+  return found;
+}
+
+/**
+ * Every interactive button of the first window's map, as lines `<where>|<type>|<takes>|xmin ymin
+ * xmax ymax`, for the harness to find a number field or a panel's place (ROUND5 13A, check 2).
+ * The text is the caller's to free with `free`.
+ */
+extern "C" char *WM_native_ui_touch_map_text()
+{
+  std::string text;
+  std::lock_guard lock(bridge_touch_mutex);
+  for (const BridgeTouchZone &zone : bridge_touch_zones) {
+    text += zone.where + "|zone|" + std::to_string(int(zone.kind)) + "|" +
+            std::to_string(zone.rect.xmin) + " " + std::to_string(zone.rect.ymin) + " " +
+            std::to_string(zone.rect.xmax) + " " + std::to_string(zone.rect.ymax) + "\n";
+    for (const ui::TouchButton &button : zone.buttons) {
+      text += zone.where + "|" + std::to_string(int(button.type)) + "|" +
+              ui::touch_takes_name(button.takes) + "|" + std::to_string(button.rect.xmin) + " " +
+              std::to_string(button.rect.ymin) + " " + std::to_string(button.rect.xmax) + " " +
+              std::to_string(button.rect.ymax) + "\n";
+    }
+  }
+  return strdup(text.c_str());
 }
 
 /** \} */

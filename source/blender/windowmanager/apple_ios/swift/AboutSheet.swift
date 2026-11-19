@@ -98,7 +98,7 @@ enum SessionLogShare {
   static let description = "The session log lists the commands you ran with their settings, the messages the app "
     + "showed, when documents opened and saved, which interface showed, window and viewport sizes, layout checks, "
     + "the steps of developer checks, the gestures on the navigation gizmo, when side panels opened and closed, "
-    + "this iPad's chip and memory, "
+    + "this iPad's chip and memory, the kinds of finger gestures on the Desktop Interface's controls, "
     + "input that arrived while a sheet was open, on the sheet or behind it, "
     + "and a mark at most once a minute while the app is in use. It can include "
     + "the names of your files and objects. It stays on this iPad unless you share it."

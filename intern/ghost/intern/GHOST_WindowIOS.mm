@@ -699,6 +699,14 @@ UIWindow *document_window = nil;
   if (touch == navigation_button_touch) {
     return NO;
   }
+  /* A finger on Blender's interface is told apart by the window (ROUND5 13B): no one-finger
+   * navigation or tap takes it, nor any finger of a gesture that began there. Two-finger
+   * recognizers do, and scroll there as a trackpad's two fingers do. */
+  if ((touch == interface_touch || interface_gesture) &&
+      (gestureRecognizer == pan_gesture_recognizer || gestureRecognizer == tap_gesture_recognizer))
+  {
+    return NO;
+  }
   if (finger_tool_enabled &&
       (gestureRecognizer == pan_gesture_recognizer || gestureRecognizer == tap_gesture_recognizer))
   {
@@ -1014,11 +1022,27 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
     }
     const bool finger_tweak = finger_tool_enabled && ios_finger_tweak_active();
     [self updateFingerTweakHeld:event];
+    /* A gesture that began on interface keeps one-finger navigation and taps off its fingers until
+     * every finger has lifted (ROUND5 13B). */
+    if (interface_gesture && interface_touch == nil) {
+      bool down = false;
+      for (UITouch *touch in event.allTouches) {
+        if (touch.type == UITouchTypeDirect && touch.phase != UITouchPhaseEnded &&
+            touch.phase != UITouchPhaseCancelled && touch.phase != UITouchPhaseBegan)
+        {
+          down = true;
+        }
+      }
+      if (!down) {
+        interface_gesture = false;
+      }
+    }
     for (UITouch *touch in event.allTouches) {
       ios_pencil_roll(touch);
       if (touch.phase == UITouchPhaseBegan) {
         ios_pencil_hover(false, 0, 0);
         [self stopOrbitMomentum];
+        [self stopScrollMomentum];
       }
       if (touch.type == UITouchTypeDirect && pencil_context_menu.active) {
         if (touch.phase == UITouchPhaseBegan) {
@@ -1035,6 +1059,11 @@ static float pencil_pressure(const CGFloat force, const CGFloat maximum)
       if ((touch.type == UITouchTypeDirect || touch.type == UITouchTypePencil) &&
           [self handleNavigationButtonTouch:touch event:event])
       {
+        continue;
+      }
+      /* On Blender's own interface: told apart before it acts, whatever the touch setting
+       * (ROUND5 13B). */
+      if ([self handleInterfaceTouch:touch event:event]) {
         continue;
       }
       if (touch.type == UITouchTypeDirect && [self sendFingerTweakTouch:touch
@@ -1689,7 +1718,7 @@ static GHOST_TButton pointer_button(int index)
  * as a pointer's press, moves and release, for as long as the touch lasts, as a mouse's on the
  * desktop: Blender's own button then zooms, pans or toggles, about the view's centre. No tablet
  * data, no orbit, no pan, no pinch for that touch. Blender says which part is where
- * (#GHOST_IOSNativeInterface::navigation_part_at). The 3D View's axes keep the shell's hotspot in
+ * (#GHOST_IOSNativeInterface::touch_at). The 3D View's axes keep the shell's hotspot in
  * the iPad interface, whose touches never begin on this view; where there is none, as in
  * Blender's own interface, the axes are answered the same way.
  * \{ */
@@ -1721,13 +1750,9 @@ static NSString *ios_navigation_part_name(const int part)
   }
   if (phase == 0) {
     navigation_button_active = false;
-    const CGPoint pixels = window->scalePointToWindow(point);
-    const GHOST_IOSNativeInterface *native = GHOST_ios_native_interface();
-    const int part = native && native->navigation_part_at ?
-                         native->navigation_part_at(static_cast<GHOST_IWindow *>(window),
-                                                    int(pixels.x),
-                                                    int(pixels.y)) :
-                         int(GHOST_kIOSNavigationNone);
+    const GHOST_IOSTouchAnswer answer = [self touchAnswerAt:point];
+    const int part = answer.place == GHOST_kIOSPlaceNavigation ? answer.navigation_part :
+                                                                 int(GHOST_kIOSNavigationNone);
     if (part == GHOST_kIOSNavigationNone) {
       return NO;
     }
@@ -1818,6 +1843,401 @@ static NSString *ios_navigation_part_name(const int part)
       break;
   }
   return YES;
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name A finger on Blender's own interface (ROUND5 13B, decisions 81-84)
+ *
+ * Wherever Blender itself draws interface (a header, a toolbar, a sidebar, Properties,
+ * Preferences, a menu, a popover), a finger presses, scrolls and drags, whatever the touch setting
+ * says: the setting is about the 3D View and the other canvases. A finger that lands on interface
+ * moves Blender's cursor there (the control lights up) and presses nothing yet:
+ *
+ * - lifted within the slop: a click;
+ * - past 10 pt along a direction that scrolls now and that the control does not take: a scroll,
+ *   sent as a trackpad's two fingers send it, from where it began, running on after a flick;
+ * - past 10 pt otherwise (across the scrolling, or on a control that takes that direction): the
+ *   press at where it began, the moves and the release, as a mouse's;
+ * - held still for the hold's time: the press, and what follows is the control's (a panel moved
+ *   by its header, a tool's fly-out).
+ *
+ * Blender says what is under the point (#GHOST_IOSNativeInterface::touch_at). The Pencil stays a
+ * pointer everywhere (T6).
+ * \{ */
+
+/** The hold's time, as the navigation gizmo's hold has it (`ViewGizmo.swift`). */
+static constexpr NSTimeInterval ios_interface_hold_seconds = 0.32;
+/** How far a finger moves before it is a drag, in the view's points. */
+static constexpr CGFloat ios_interface_slop = 10.0;
+
+enum {
+  IOS_INTERFACE_PENDING = 0,
+  IOS_INTERFACE_SCROLLING = 1,
+  IOS_INTERFACE_PRESSED = 2,
+};
+
+/** Blender's answer about a point of the view, in its points. */
+- (GHOST_IOSTouchAnswer)touchAnswerAt:(CGPoint)point
+{
+  GHOST_IOSTouchAnswer answer;
+  const GHOST_IOSNativeInterface *native = GHOST_ios_native_interface();
+  if (window && native && native->touch_at) {
+    const CGPoint pixels = window->scalePointToWindow(point);
+    native->touch_at(static_cast<GHOST_IWindow *>(window), int(pixels.x), int(pixels.y), &answer);
+  }
+  return answer;
+}
+
+/** One line in the session's log for each kind of gesture on interface, at most every two seconds
+ * a kind, as `input behind sheet` is paced: `touch interface: scroll in PROPERTIES WINDOW`. */
+- (void)noteInterfaceGesture:(NSString *)kind
+{
+  if (!interface_logged) {
+    interface_logged = [[NSMutableDictionary alloc] init];
+  }
+  NSDate *last = interface_logged[kind];
+  if (last && -last.timeIntervalSinceNow < 2.0) {
+    return;
+  }
+  interface_logged[kind] = [NSDate date];
+  ios_log(@"touch",
+          [NSString stringWithFormat:@"interface: %@ in %s", kind, interface_answer.where]);
+}
+
+/** Scroll what is under \a location (the view's points) by \a delta (the view's points), as
+ * #handleTrackpadScroll: sends a trackpad's: the content follows the finger. */
+- (void)sendScroll:(CGPoint)delta at:(CGPoint)location
+{
+  const CGPoint pixels = window->scalePointToWindow(delta);
+  const CGPoint place = window->scalePointToWindow(location);
+  if (pixels.x == 0 && pixels.y == 0) {
+    return;
+  }
+  system->pushEvent(std::make_unique<GHOST_EventTrackpad>(system->getMilliSeconds(),
+                                                          window,
+                                                          GHOST_kTrackpadEventScroll,
+                                                          place.x,
+                                                          place.y,
+                                                          pixels.x,
+                                                          pixels.y,
+                                                          true));
+}
+
+- (void)stopScrollMomentum
+{
+  [scroll_display_link invalidate];
+  scroll_display_link = nil;
+}
+
+/** A scroll runs on after a flick at \a velocity (the view's points a second) from \a location,
+ * slowing as scrolling does everywhere on the iPad; a touch stops it. */
+- (void)startScrollMomentum:(CGPoint)velocity at:(CGPoint)location
+{
+  [self stopScrollMomentum];
+  const CGFloat speed = hypot(velocity.x, velocity.y);
+  if (speed < 80.0) {
+    return;
+  }
+  const CGFloat limit = MIN(1.0, 6000.0 / speed);
+  scroll_velocity = CGPointMake(velocity.x * limit, velocity.y * limit);
+  scroll_remainder = CGPointZero;
+  scroll_location = location;
+  scroll_timestamp = CACurrentMediaTime();
+  scroll_display_link = [CADisplayLink displayLinkWithTarget:self
+                                                    selector:@selector(updateScrollMomentum:)];
+  [scroll_display_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+}
+
+- (void)updateScrollMomentum:(CADisplayLink *)display_link
+{
+  if (!window || !system ||
+      UIApplication.sharedApplication.applicationState != UIApplicationStateActive ||
+      [self blockedReason] != nil)
+  {
+    [self stopScrollMomentum];
+    return;
+  }
+  const CFTimeInterval elapsed = display_link.timestamp - scroll_timestamp;
+  if (elapsed <= 0.0) {
+    return;
+  }
+  scroll_timestamp = display_link.timestamp;
+  const CGPoint pixels = ios_momentum_step(window, &scroll_velocity, &scroll_remainder, elapsed);
+  if (!CGPointEqualToPoint(pixels, CGPointZero)) {
+    const CGPoint place = window->scalePointToWindow(scroll_location);
+    system->pushEvent(std::make_unique<GHOST_EventTrackpad>(system->getMilliSeconds(),
+                                                            window,
+                                                            GHOST_kTrackpadEventScroll,
+                                                            place.x,
+                                                            place.y,
+                                                            pixels.x,
+                                                            pixels.y,
+                                                            true));
+  }
+  if (ios_momentum_stopped(scroll_velocity)) {
+    [self stopScrollMomentum];
+  }
+}
+
+/** The press at where the finger began: from now on the touch is the control's. */
+- (void)pressInterface
+{
+  [interface_hold_timer invalidate];
+  interface_hold_timer = nil;
+  interface_state = IOS_INTERFACE_PRESSED;
+  [self sendPointerMove:interface_start];
+  [self sendPointerButtons:UIEventButtonMaskPrimary];
+}
+
+- (void)interfaceHold:(NSTimer *)timer
+{
+  UNUSED_VARS(timer);
+  interface_hold_timer = nil;
+  if ((interface_touch == nil && !interface_scripted) || interface_state != IOS_INTERFACE_PENDING) {
+    return;
+  }
+  if ([self blockedReason] != nil) {
+    [self endInterfaceTouch:YES];
+    return;
+  }
+  [self pressInterface];
+  [self noteInterfaceGesture:@"hold"];
+}
+
+/** The touch on interface is over: \a cancelled releases what it pressed and runs nothing on. */
+- (void)endInterfaceTouch:(BOOL)cancelled
+{
+  [interface_hold_timer invalidate];
+  interface_hold_timer = nil;
+  if (interface_touch == nil && !interface_scripted) {
+    return;
+  }
+  if (interface_state == IOS_INTERFACE_PRESSED) {
+    [self sendPointerButtons:0];
+  }
+  UNUSED_VARS(cancelled);
+  interface_touch = nil;
+  interface_scripted = false;
+  interface_state = IOS_INTERFACE_PENDING;
+}
+
+/**
+ * A finger lands at \a point (the view's points) at \a time, as the only finger down: true when
+ * it is on Blender's interface, which then has it (ROUND5 13B). A check script's `touch` step
+ * enters here too, without a touch.
+ */
+- (BOOL)interfaceTouchBegan:(CGPoint)point time:(CFTimeInterval)time
+{
+  const GHOST_IOSTouchAnswer answer = [self touchAnswerAt:point];
+  if (answer.place != GHOST_kIOSPlaceInterface) {
+    return NO;
+  }
+  [self stopScrollMomentum];
+  interface_gesture = true;
+  interface_state = IOS_INTERFACE_PENDING;
+  interface_answer = answer;
+  interface_start = point;
+  interface_last = point;
+  interface_time = time;
+  interface_velocity = CGPointZero;
+  /* Blender's cursor there: the control lights up, nothing is pressed. */
+  [self sendPointerMove:point];
+  interface_hold_timer = [NSTimer scheduledTimerWithTimeInterval:ios_interface_hold_seconds
+                                                          target:self
+                                                        selector:@selector(interfaceHold:)
+                                                        userInfo:nil
+                                                         repeats:NO];
+  return YES;
+}
+
+/** The finger on interface moved to \a samples (the view's points, the last the newest). */
+- (void)interfaceTouchMoved:(NSArray<NSValue *> *)samples time:(CFTimeInterval)time
+{
+  const CGPoint point = samples.lastObject.CGPointValue;
+  const CFTimeInterval dt = time - interface_time;
+  if (dt > 0.0) {
+    interface_velocity = CGPointMake((point.x - interface_last.x) / dt,
+                                     (point.y - interface_last.y) / dt);
+  }
+  interface_time = time;
+  if (interface_state == IOS_INTERFACE_PENDING) {
+    const CGPoint travel = CGPointMake(point.x - interface_start.x, point.y - interface_start.y);
+    if (hypot(travel.x, travel.y) <= ios_interface_slop) {
+      return;
+    }
+    const bool along_x = fabs(travel.x) >= fabs(travel.y);
+    const bool scrolls = along_x ? interface_answer.scroll_x : interface_answer.scroll_y;
+    const bool taken = interface_answer.takes & (along_x ? GHOST_kIOSTakesX : GHOST_kIOSTakesY);
+    [interface_hold_timer invalidate];
+    interface_hold_timer = nil;
+    if (scrolls && !taken) {
+      interface_state = IOS_INTERFACE_SCROLLING;
+      [self noteInterfaceGesture:@"scroll"];
+      /* From where it began: nothing of the travel is lost. */
+      [self sendScroll:travel at:interface_start];
+    }
+    else {
+      [self pressInterface];
+      [self noteInterfaceGesture:@"drag"];
+      [self sendPointerMove:point];
+    }
+  }
+  else if (interface_state == IOS_INTERFACE_SCROLLING) {
+    [self sendScroll:CGPointMake(point.x - interface_last.x, point.y - interface_last.y)
+                  at:interface_start];
+  }
+  else {
+    for (NSValue *sample in samples) {
+      [self sendPointerMove:sample.CGPointValue];
+    }
+  }
+  interface_last = point;
+}
+
+/** The finger on interface lifted at \a point at \a time. */
+- (void)interfaceTouchEnded:(CGPoint)point time:(CFTimeInterval)time
+{
+  const int state = interface_state;
+  [interface_hold_timer invalidate];
+  interface_hold_timer = nil;
+  if (state == IOS_INTERFACE_PENDING) {
+    /* A tap: a click where it began. */
+    [self sendPointerMove:interface_start];
+    [self sendPointerButtons:UIEventButtonMaskPrimary];
+    [self sendPointerButtons:0];
+    [self noteInterfaceGesture:@"tap"];
+  }
+  else if (state == IOS_INTERFACE_PRESSED) {
+    [self sendPointerMove:point];
+    [self sendPointerButtons:0];
+  }
+  else {
+    /* A flick runs on; a finger that stopped before lifting does not. */
+    const bool fresh = time - interface_time < 0.05;
+    [self startScrollMomentum:(fresh ? interface_velocity : CGPointZero) at:interface_start];
+  }
+  interface_touch = nil;
+  interface_scripted = false;
+  interface_state = IOS_INTERFACE_PENDING;
+}
+
+/**
+ * A finger's touch that may be on Blender's interface: true when it is, and this handled it.
+ * Begins only as the first finger of a gesture, on the view, with nothing presented, where Blender
+ * says it is interface; a second finger gives the gesture to the two-finger recognizers, which
+ * scroll there as a trackpad does (13B.3).
+ */
+- (BOOL)handleInterfaceTouch:(UITouch *)touch event:(UIEvent *)event
+{
+  if (touch.type != UITouchTypeDirect) {
+    return NO;
+  }
+  if (touch.phase == UITouchPhaseBegan) {
+    if (interface_touch != nil || interface_scripted) {
+      /* A second finger: nothing pressed yet goes unpressed, a press is released. */
+      [self endInterfaceTouch:YES];
+      return NO;
+    }
+    if (touch.view != window->getView() || ![self touchBeganInBlenderViewport:touch]) {
+      return NO;
+    }
+    for (UITouch *other in event.allTouches) {
+      if (other != touch && other.type == UITouchTypeDirect &&
+          other.phase != UITouchPhaseEnded && other.phase != UITouchPhaseCancelled)
+      {
+        return NO;
+      }
+    }
+    if (![self interfaceTouchBegan:[touch preciseLocationInView:window->getView()]
+                              time:touch.timestamp])
+    {
+      return NO;
+    }
+    interface_touch = touch;
+    return YES;
+  }
+  if (touch != interface_touch) {
+    return NO;
+  }
+  /* The gate (ROUND5 9G.1): something presented meanwhile takes the touch from Blender. */
+  if (touch.phase != UITouchPhaseEnded && [self blockedReason] != nil) {
+    [self endInterfaceTouch:YES];
+    return YES;
+  }
+  switch (touch.phase) {
+    case UITouchPhaseMoved: {
+      NSMutableArray<NSValue *> *samples = [NSMutableArray array];
+      NSArray<UITouch *> *coalesced = [event coalescedTouchesForTouch:touch];
+      for (UITouch *sample in coalesced.count ? coalesced : @[ touch ]) {
+        [samples addObject:[NSValue valueWithCGPoint:[sample preciseLocationInView:window->getView()]]];
+      }
+      [samples addObject:[NSValue valueWithCGPoint:[touch preciseLocationInView:window->getView()]]];
+      [self interfaceTouchMoved:samples time:touch.timestamp];
+      break;
+    }
+    case UITouchPhaseEnded:
+      [self interfaceTouchEnded:[touch preciseLocationInView:window->getView()]
+                           time:touch.timestamp];
+      break;
+    case UITouchPhaseCancelled:
+      [self endInterfaceTouch:YES];
+      break;
+    default:
+      break;
+  }
+  return YES;
+}
+
+/**
+ * A check script's `touch` step (ROUND5 13B, check 3): \a phase 0 lands, 1 moves, 2 lifts, 3 is
+ * cancelled, at \a point in the view's points, entering where a finger's touch on interface does.
+ * It proves the telling-apart and Blender's answers, not UIKit's delivery. False when the point
+ * is not interface (at landing), or the gate is closed.
+ */
+- (BOOL)scriptInterfaceTouch:(int)phase at:(CGPoint)point
+{
+  const CFTimeInterval now = CACurrentMediaTime();
+  if (phase == 0) {
+    [self endInterfaceTouch:YES];
+    if ([self blockedReason] != nil || ![self interfaceTouchBegan:point time:now]) {
+      return NO;
+    }
+    interface_scripted = true;
+    return YES;
+  }
+  if (!interface_scripted) {
+    return NO;
+  }
+  switch (phase) {
+    case 1:
+      [self interfaceTouchMoved:@[ [NSValue valueWithCGPoint:point] ] time:now];
+      break;
+    case 2:
+      [self interfaceTouchEnded:point time:now];
+      interface_gesture = false;
+      break;
+    default:
+      [self endInterfaceTouch:YES];
+      interface_gesture = false;
+      break;
+  }
+  return YES;
+}
+
+/** What Blender says is under \a point, for a check script's log. */
+- (NSString *)touchDescriptionAt:(CGPoint)point
+{
+  static NSString *const places[] = {@"nothing", @"3D View", @"canvas", @"interface", @"navigation"};
+  static NSString *const takes[] = {@"none", @"x", @"y", @"both"};
+  const GHOST_IOSTouchAnswer answer = [self touchAnswerAt:point];
+  return [NSString stringWithFormat:@"%@ %s, scrolls x %d y %d, takes %@",
+                                    places[std::clamp(answer.place, 0, 4)],
+                                    answer.where,
+                                    int(answer.scroll_x),
+                                    int(answer.scroll_y),
+                                    takes[std::clamp(answer.takes, 0, 3)]];
 }
 
 /** \} */
@@ -2280,6 +2700,17 @@ static UIBezierPath *pointer_move()
   CGPoint translation = [sender getScaledTranslation:window];
   const NSUInteger touches = sender.numberOfTouches;
 
+  if (sender.state == UIGestureRecognizerStateBegan) {
+    /* Over interface or another canvas a drag scrolls, as a trackpad's fingers do (ROUND5 13B.3,
+     * 13B.4); over a 3D View nothing changes. */
+    navigation_place = [self touchAnswerAt:[sender locationInView:window->getView()]].place;
+  }
+  if ((navigation_place == GHOST_kIOSPlaceInterface || navigation_place == GHOST_kIOSPlaceCanvas) &&
+      sender.state != UIGestureRecognizerStatePossible)
+  {
+    [self navigationScroll:sender];
+    return;
+  }
   if (sender.state == UIGestureRecognizerStateBegan ||
       sender.state == UIGestureRecognizerStateChanged)
   {
@@ -2330,6 +2761,32 @@ static UIBezierPath *pointer_move()
   }
 }
 
+/** A navigation drag over interface or a canvas: scroll events, from where it is, and a run-on
+ * after a flick (ROUND5 13B.3, 13B.4). */
+- (void)navigationScroll:(GHOSTUIPanGestureRecognizer *)sender
+{
+  const CGPoint translation = [sender translationInView:window->getView()];
+  const CGPoint location = [sender locationInView:window->getView()];
+  if (sender.state == UIGestureRecognizerStateBegan) {
+    [self stopScrollMomentum];
+    [sender setCachedTranslation:translation];
+    return;
+  }
+  if (sender.state == UIGestureRecognizerStateChanged) {
+    const CGPoint relative = [sender getRelativeTranslation:translation];
+    [sender setCachedTranslation:translation];
+    if (![self fingerTweakHolds] && [self blockedReason] == nil) {
+      [self sendScroll:relative at:location];
+    }
+    return;
+  }
+  [sender setCachedTranslation:CGPointZero];
+  if (sender.state == UIGestureRecognizerStateEnded) {
+    [self startScrollMomentum:[sender velocityInView:window->getView()] at:location];
+  }
+  navigation_place = GHOST_kIOSPlaceNothing;
+}
+
 /** \} */
 
 - (void)stopOrbitMomentum
@@ -2341,6 +2798,8 @@ static UIBezierPath *pointer_move()
 - (void)applicationWillResignActive:(NSNotification *)notification
 {
   UNUSED_VARS(notification);
+  [self endInterfaceTouch:YES];
+  [self stopScrollMomentum];
   [self releaseKeys];
   [self releasePointerButtons];
   [self stopOrbitMomentum];
@@ -2348,6 +2807,38 @@ static UIBezierPath *pointer_move()
   [self cancelFingerTweakTouches];
   [pencil_context_menu cancel];
   ios_navigation_hover(false);
+}
+
+/**
+ * One step of a flick's run-on, \a elapsed seconds long: UIKit's exponential deceleration,
+ * integrated independently of the display's refresh rate. The orbit's spin (ROUND5 12A) and the
+ * interface's scroll (13B.2) both run on it. \a velocity, in the view's points a second, decays in
+ * place; the travel is returned in whole window pixels, along the velocity, and what does not add
+ * up to a pixel is kept in \a remainder.
+ */
+static CGPoint ios_momentum_step(GHOST_WindowIOS *window,
+                                 CGPoint *velocity,
+                                 CGPoint *remainder,
+                                 const CFTimeInterval elapsed)
+{
+  const double decay_rate = -1000.0 * log(UIScrollViewDecelerationRateNormal);
+  const double decay = exp(-decay_rate * elapsed);
+  const double distance_scale = (1.0 - decay) / decay_rate;
+  CGPoint travel = CGPointMake(velocity->x * distance_scale, velocity->y * distance_scale);
+  travel = window->scalePointToWindow(travel);
+  travel.x += remainder->x;
+  travel.y += remainder->y;
+  const CGPoint pixels = CGPointMake(trunc(travel.x), trunc(travel.y));
+  *remainder = CGPointMake(travel.x - pixels.x, travel.y - pixels.y);
+  velocity->x *= decay;
+  velocity->y *= decay;
+  return pixels;
+}
+
+/** Whether a run-on has slowed to a stop: under 8 of the view's points a second. */
+static bool ios_momentum_stopped(const CGPoint velocity)
+{
+  return hypot(velocity.x, velocity.y) < 8.0;
 }
 
 - (void)updateOrbitMomentum:(CADisplayLink *)display_link
@@ -2364,19 +2855,9 @@ static UIBezierPath *pointer_move()
     return;
   }
   orbit_timestamp = display_link.timestamp;
-  /* Integrate UIKit's exponential deceleration independently of the display refresh rate. */
-  const double decay_rate = -1000.0 * log(UIScrollViewDecelerationRateNormal);
-  const double decay = exp(-decay_rate * elapsed);
-  const double distance_scale = (1.0 - decay) / decay_rate;
-  CGPoint translation = CGPointMake(-orbit_velocity.x * distance_scale,
-                                    -orbit_velocity.y * distance_scale);
-  translation = window->scalePointToWindow(translation);
-  translation.x += orbit_remainder.x;
-  translation.y += orbit_remainder.y;
-  CGPoint pixels = CGPointMake(trunc(translation.x), trunc(translation.y));
-  orbit_remainder = CGPointMake(translation.x - pixels.x, translation.y - pixels.y);
-  orbit_velocity.x *= decay;
-  orbit_velocity.y *= decay;
+  /* The view turns against the fingers' travel. */
+  CGPoint pixels = ios_momentum_step(window, &orbit_velocity, &orbit_remainder, elapsed);
+  pixels = CGPointMake(-pixels.x, -pixels.y);
 
   if (!CGPointEqualToPoint(pixels, CGPointZero)) {
     UserInputEvent event_info(&orbit_location, &pixels, nullptr, false);
@@ -2385,7 +2866,7 @@ static UIBezierPath *pointer_move()
     event_info.add_event(UserInputEvent::EventTypes::ORBIT_GESTURE);
     [self generateUserInputEvents:event_info];
   }
-  if (hypot(orbit_velocity.x, orbit_velocity.y) < 8.0) {
+  if (ios_momentum_stopped(orbit_velocity)) {
     [self stopOrbitMomentum];
   }
 }
@@ -2394,7 +2875,7 @@ static UIBezierPath *pointer_move()
 {
   /* One finger uses the tool: two orbit, as one does with a Pencil, and three pan. Otherwise one
    * finger's drag navigates, with as many fingers as it has, see #handlePan. */
-  if (finger_tool_enabled) {
+  if (finger_tool_enabled || interface_gesture) {
     [self handleNavigationDrag:sender orbitingFingers:2];
   }
 }
@@ -2531,8 +3012,12 @@ static UIBezierPath *pointer_move()
   if (sender.state == UIGestureRecognizerStateBegan ||
       sender.state == UIGestureRecognizerStateChanged)
   {
-    /* Twisting needs two fingers, and not a one-finger orbit's second one. */
-    if (sender.numberOfTouches < 2 || navigation_from_orbit) {
+    /* Twisting needs two fingers, and not a one-finger orbit's second one; it turns a 3D View,
+     * not Blender's interface or another canvas (ROUND5 13B.3). */
+    if (sender.numberOfTouches < 2 || navigation_from_orbit ||
+        navigation_place == GHOST_kIOSPlaceInterface || navigation_place == GHOST_kIOSPlaceCanvas ||
+        interface_gesture)
+    {
       rotation_restart = true;
       sender.rotation = 0.0;
       return;

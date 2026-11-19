@@ -239,6 +239,31 @@ typedef struct UserInputEvent {
   int navigation_button_part;
   CGPoint navigation_button_start;
   CGPoint navigation_button_last;
+  /* A finger on Blender's own interface (ROUND5 13B, decisions 81-83), told apart before it acts:
+   * pending (nothing pressed yet), scrolling, or pressed (the control's). Where it began and was
+   * last, in the view's points; what Blender said is there; its speed, for the run-on. While a
+   * gesture began on interface, one-finger navigation and taps take none of its fingers. */
+  UITouch *interface_touch;
+  /** A check script's `touch` step holds the state instead of a touch. */
+  bool interface_scripted;
+  int interface_state;
+  CGPoint interface_start;
+  CGPoint interface_last;
+  CFTimeInterval interface_time;
+  CGPoint interface_velocity;
+  GHOST_IOSTouchAnswer interface_answer;
+  NSTimer *interface_hold_timer;
+  bool interface_gesture;
+  NSMutableDictionary<NSString *, NSDate *> *interface_logged;
+  /* What a navigation drag began over (a #GHOST_IOSPlace): over interface or another canvas it
+   * scrolls, as a trackpad's two fingers do (13B.3, 13B.4). */
+  int navigation_place;
+  /* A scroll's run-on after a flick: the same integrator as the orbit's spin (13B.2). */
+  CADisplayLink *scroll_display_link;
+  CGPoint scroll_velocity;
+  CGPoint scroll_remainder;
+  CGPoint scroll_location;
+  CFTimeInterval scroll_timestamp;
   /* How many fingers a navigation drag had at its last update: it orbits or pans by their count,
    * and goes on from where it is when that changes. */
   NSUInteger navigation_touches;

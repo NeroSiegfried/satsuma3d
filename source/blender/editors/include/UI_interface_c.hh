@@ -2740,6 +2740,26 @@ ID *context_active_but_get_tab_ID(bContext *C);
 
 Button *region_active_but_get(const ARegion *region);
 Button *region_but_find_rect_over(const ARegion *region, const rcti *rect_px);
+
+/** Which directions a control takes a finger's drag for itself (ROUND5 13A, decision 84). */
+enum class TouchTakes : int8_t { None = 0, X = 1, Y = 2, Both = 3 };
+/** For each kind of button, by a closed list (`interface_touch.cc`): numbers, sliders and text
+ * take x; scrollbars, colour pickers, curves, colour bands, grips and the like take both; a row of
+ * a list or a tree, or a preview, both when \a draggable; the rest none. */
+TouchTakes button_type_touch_takes(ButtonType type, bool draggable);
+const char *touch_takes_name(TouchTakes takes);
+/** #TouchButton::type of a panel's header, which is no button. */
+#define TOUCH_PANEL_HEADER (-2)
+/** An interactive button of a region where a finger can meet it, in window pixels. */
+struct TouchButton {
+  rcti rect;
+  TouchTakes takes;
+  int8_t type;
+};
+/** Every interactive button the region shows, clipped to it, in drawing order. */
+void region_touch_buttons(const ARegion *region, Vector<TouchButton> &r_buttons);
+/** Whether a popup's menu is longer than the room it has, so it scrolls. */
+bool region_popup_scrolls(const ARegion *region);
 Block *region_block_find_mouse_over(const ARegion *region, const int xy[2], bool only_clip);
 /**
  * Try to find a search-box region opened from a button in \a button_region.

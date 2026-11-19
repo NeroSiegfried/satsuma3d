@@ -11,6 +11,8 @@
 
 #import "wm_apple_ios_interface.hh"
 
+#include "WM_native_ui.hh"
+
 #include <algorithm>
 #include <string>
 #include <utility>
@@ -265,6 +267,37 @@ extern "C" bool wm_apple_ios_window_navigation_drawn(void *window,
   *r_center = CGPointMake(place[0] / scale, place[1] / scale);
   *r_radius = place[2] / scale;
   return true;
+}
+
+extern "C" bool wm_apple_ios_window_script_touch(void *window, const int phase, const CGPoint point)
+{
+  return window && [GHOST_ios_window_native(ghost_window(window)) scriptInterfaceTouch:phase
+                                                                                   at:point];
+}
+
+extern "C" bool wm_apple_ios_window_touch_find(
+    void *window, const char *where, const int button_type, const bool last, CGPoint *r_point)
+{
+  int client[2];
+  if (!window || !blender::WM_native_ui_touch_find(GHOST_ios_window_handle(ghost_window(window)),
+                                                   where,
+                                                   button_type,
+                                                   last,
+                                                   client))
+  {
+    return false;
+  }
+  /* Client pixels to the window's points, the inverse of `scalePointToWindow`. */
+  const CGPoint one = GHOST_ios_window_pixels(ghost_window(window), CGPointMake(1, 1));
+  const CGFloat scale = one.x > 0 ? one.x : 1;
+  *r_point = CGPointMake(client[0] / scale, client[1] / scale);
+  return true;
+}
+
+extern "C" NSString *wm_apple_ios_window_touch_description(void *window, const CGPoint point)
+{
+  return window ? [GHOST_ios_window_native(ghost_window(window)) touchDescriptionAt:point] :
+                  @"no window";
 }
 
 extern "C" void wm_apple_ios_window_cancel_pencil_stroke(void *window)

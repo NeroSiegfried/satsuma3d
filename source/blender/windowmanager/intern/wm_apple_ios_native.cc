@@ -28,6 +28,7 @@
 #  include "GHOST_IOSNativeInterface.hh"
 #  include "wm_apple_ios_alerts.hh"
 
+#  include "UI_interface_c.hh"
 #  include "UI_interface_icons.hh"
 
 #  include "WM_api.hh"
@@ -221,6 +222,21 @@ void engine_step(bContext *C)
   }
 }
 
+/** Blender's answer about a point, for GHOST (ROUND5 13A). */
+bool wm_apple_ios_touch_at(const void *window, const int x, const int y, GHOST_IOSTouchAnswer *r)
+{
+  NativeTouchAnswer answer;
+  const bool found = WM_native_ui_touch_at(window, x, y, &answer);
+  *r = GHOST_IOSTouchAnswer();
+  r->place = int(answer.kind);
+  r->navigation_part = answer.navigation_part;
+  r->scroll_x = answer.scroll_x;
+  r->scroll_y = answer.scroll_y;
+  r->takes = answer.takes;
+  STRNCPY(r->where, answer.where);
+  return found;
+}
+
 GHOST_IOSNativeInterface ghost_interface_create()
 {
   GHOST_IOSNativeInterface native;
@@ -239,9 +255,15 @@ GHOST_IOSNativeInterface ghost_interface_create()
   native.finger_tweak_active = WM_apple_ios_finger_tweak_active;
   native.finger_tweak_touch = WM_apple_ios_finger_tweak_touch;
   native.finger_tweak_holding = WM_apple_ios_finger_tweak_holding;
-  native.navigation_part_at = WM_native_ui_navigation_part_at;
+  native.touch_at = wm_apple_ios_touch_at;
   static_assert(int(NavigationGizmoPart::CameraLock) == GHOST_kIOSNavigationCameraLock &&
                 int(NavigationGizmoPart::Axes) == GHOST_kIOSNavigationAxes);
+  static_assert(int(NativeTouchKind::Navigation) == GHOST_kIOSPlaceNavigation &&
+                int(NativeTouchKind::Interface) == GHOST_kIOSPlaceInterface &&
+                int(NativeTouchKind::Canvas) == GHOST_kIOSPlaceCanvas &&
+                int(NativeTouchKind::View3D) == GHOST_kIOSPlaceView3D);
+  static_assert(int(ui::TouchTakes::Both) == GHOST_kIOSTakesBoth &&
+                int(ui::TouchTakes::X) == GHOST_kIOSTakesX);
   native.launcher_controller = WM_apple_ios_launcher_controller;
   native.window_controller = WM_apple_ios_window_controller;
   native.document_window_changed = WM_apple_ios_document_window_changed;

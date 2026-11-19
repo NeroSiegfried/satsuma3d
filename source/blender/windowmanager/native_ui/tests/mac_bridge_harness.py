@@ -1775,6 +1775,172 @@ def _toolbar_window_height():
     return max(r.y + r.height for area in window.screen.areas for r in area.regions)
 
 
-bpy.app.timers.register({"material": tick_material, "insets": tick_insets, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror,
+# ROUND5 13A: what a finger meets, as the window manager's map says after a draw.
+TOUCH = getattr(lib, "WM_native_ui_touch_query", None)
+if TOUCH is not None:
+    TOUCH.restype = ctypes.c_bool
+    TOUCH.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.c_char_p, ctypes.c_int]
+    lib.WM_native_ui_touch_map_text.restype = ctypes.c_void_p
+# `ButtonType`'s values (UI_interface_c.hh): the ones the scenario looks for.
+BUTTON_NUM, BUTTON_TAB = 6, 16
+TOUCH_KINDS = {0: "nothing", 1: "3D View", 2: "canvas", 3: "interface", 4: "navigation"}
+TOUCH_TAKES = {0: "none", 1: "x", 2: "y", 3: "both"}
+
+
+def _touch(x, y):
+    """Blender's answer at a point of the window, in its pixels from the bottom left."""
+    values = (ctypes.c_int * 6)()
+    where = ctypes.create_string_buffer(40)
+    found = TOUCH(int(x), int(y), values, where, 40)
+    return {"at": [int(x), int(y)], "found": bool(found), "kind": TOUCH_KINDS.get(values[0], values[0]),
+            "part": values[1], "scroll_x": bool(values[2]), "scroll_y": bool(values[3]),
+            "takes": TOUCH_TAKES.get(values[4], values[4]), "button_type": values[5],
+            "where": where.value.decode()}
+
+
+def _touch_map():
+    """The map's zones and buttons: [(where, type or 'zone', takes or kind, (xmin, ymin, xmax, ymax))]."""
+    pointer = lib.WM_native_ui_touch_map_text()
+    text = ctypes.string_at(pointer).decode()
+    lib.free(ctypes.c_void_p(pointer))
+    rows = []
+    for line in text.splitlines():
+        where, kind, takes, rect = line.split("|")
+        rows.append((where, kind, takes, tuple(int(v) for v in rect.split())))
+    return rows
+
+
+def _centre(rect):
+    return ((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0)
+
+
+touch_state = {}
+
+
+def tick_touch():
+    """ROUND5 13A, check 2: Blender's answers in its own interface (Layout, factory settings): a
+    header, a number field, a panel's empty space, the toolbar, the 3D View, the top bar's tabs and a
+    menu. Each is checked against what 13A says it is."""
+    global step
+    try:
+        pump()
+        step += 1
+        if TOUCH is None:
+            report["problems"] = ["this build has no WM_native_ui_touch_query"]
+            finish("error")
+            return None
+        if step == 1:
+            # As the app has it: the iPad interface registered, then Blender's own interface
+            # (Desktop Interface) switched on, which brings Blender's own layout back.
+            lib.WM_native_ui_test_install_hooks()
+            subs["settings"] = subscribe("settings")
+            return 0.5
+        if step == 2:
+            set_bool(subs["settings"], "desktop", True, 1300)
+            return 1.0
+        if step < 6:
+            return 0.5
+        rows = _touch_map()
+        zones = {where: rect for where, kind, _takes, rect in rows if kind == "zone"}
+        buttons = [(where, int(kind), takes, rect) for where, kind, takes, rect in rows if kind != "zone"]
+        problems = report.setdefault("problems", [])
+        cases = report.setdefault("cases", {})
+
+        def expect(name, point, kind, takes=None, scroll=None):
+            answer = _touch(*point)
+            cases[name] = answer
+            if answer["kind"] != kind:
+                problems.append("%s: %s, expected %s" % (name, answer["kind"], kind))
+            if takes is not None and answer["takes"] != takes:
+                problems.append("%s: takes %s, expected %s" % (name, answer["takes"], takes))
+            if scroll is not None:
+                axis, value = scroll
+                if answer["scroll_" + axis] != value:
+                    problems.append("%s: scroll %s is %s, expected %s" % (name, axis, answer["scroll_" + axis], value))
+            return answer
+
+        if step == 6:
+            report["zones"] = sorted(zones)
+            report["areas"] = [(a.type, [(r.type, r.x, r.y, r.width, r.height) for r in a.regions])
+                               for a in _view3d()[0].screen.areas]
+            report["button_count"] = len(buttons)
+            header = next(rect for where, _t, _k, rect in buttons if where == "VIEW_3D HEADER")
+            expect("a header (the 3D View's first button)", _centre(header), "interface", takes="none")
+            numbers = [rect for where, kind, _k, rect in buttons if where == "PROPERTIES WINDOW" and kind == BUTTON_NUM]
+            if not numbers:
+                problems.append("no number field in Properties' map")
+            else:
+                expect("a number field (Properties)", _centre(numbers[0]), "interface", takes="x")
+            headers = [rect for where, kind, _k, rect in buttons if where == "PROPERTIES WINDOW" and kind == -2]
+            if not headers:
+                problems.append("no panel header in Properties' map")
+            else:
+                expect("a panel's header (Properties)", _centre(headers[0]), "interface", takes="none")
+            properties = zones["PROPERTIES WINDOW"]
+            props_buttons = [rect for where, _t, _k, rect in buttons if where == "PROPERTIES WINDOW"]
+            # A point of Properties under no button and no panel header: a panel's empty space.
+            empty = None
+            for y in range(properties[3] - 4, properties[1], -3):
+                for x in (properties[0] + 6, properties[0] + 10):
+                    if not any(r[0] <= x <= r[2] and r[1] <= y <= r[3] for r in props_buttons):
+                        empty = (x, y)
+                        break
+                if empty:
+                    break
+            expect("a panel's empty space (Properties)", empty, "interface", takes="none")
+            tools = next(rect for where, _t, _k, rect in buttons if where == "VIEW_3D TOOLS")
+            expect("the toolbar (a tool)", _centre(tools), "interface", takes="none")
+            expect("the 3D View", _centre(zones["VIEW_3D WINDOW"]), "3D View")
+            tabs = [rect for where, kind, _k, rect in buttons if where == "TOPBAR HEADER" and kind == BUTTON_TAB]
+            if not tabs:
+                problems.append("no workspace tab in the top bar's map")
+            else:
+                expect("the top bar's last workspace tab", _centre(tabs[-1]), "interface", takes="none")
+            timeline = zones.get("DOPESHEET_EDITOR WINDOW")
+            if timeline:
+                expect("the timeline (a canvas)", _centre(timeline), "canvas")
+            # Properties scrolls along y exactly when its content is longer than the region.
+            _window = _view3d()[0]
+            area = next(a for a in _window.screen.areas if a.type == 'PROPERTIES')
+            region = next(r for r in area.regions if r.type == 'WINDOW')
+            report["properties_region"] = [region.width, region.height]
+            _call_menu("call_menu", "VIEW3D_MT_add")
+            return 0.6
+        if step == 7:
+            menu = zones.get("MENU")
+            if not menu:
+                problems.append("no menu in the map after opening Add")
+            else:
+                answer = expect("a menu (Add)", _centre(menu), "interface", takes="none")
+                report["menu_rect"] = list(menu)
+                report["menu_scrolls"] = answer["scroll_y"]
+            # Outside every area: nothing.
+            expect("outside the window", (-50, -50), "nothing")
+            # A Properties tab longer than the region: it scrolls along y now, and not along x.
+            _window = _view3d()[0]
+            cube = bpy.data.objects["Cube"]
+            bpy.context.view_layer.objects.active = cube
+            for index in range(12):
+                cube.modifiers.new("Bevel %d" % index, 'BEVEL')
+            area = next(a for a in _window.screen.areas if a.type == 'PROPERTIES')
+            area.spaces[0].context = 'MODIFIER'
+            for _a in _window.screen.areas:
+                _a.tag_redraw()
+            return 0.8
+        if step == 8:
+            expect("Properties on Modifiers (12 Bevels), longer than the region", _centre(zones["PROPERTIES WINDOW"]),
+                   "interface", scroll=("y", True))
+            expect("Properties on Modifiers, not wider than the region", _centre(zones["PROPERTIES WINDOW"]),
+                   "interface", scroll=("x", False))
+            finish("done" if not problems else "error")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
+bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets": tick_insets, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror,
                          "extensions": tick_extensions, "keys": tick_keys}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

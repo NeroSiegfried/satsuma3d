@@ -725,6 +725,7 @@ LOG_KINDS = {
     'gizmo': 'the gestures on the navigation gizmo',
     'panel': 'when side panels opened and closed',
     'device': "this iPad's chip and memory",
+    'touch': "the kinds of finger gestures on the Desktop Interface's controls",
 }
 writers = ''.join(path.read_text(encoding='utf-8', errors='replace')
                   for path in (SWIFT.parents[3]).rglob('*') if path.suffix in ('.cc', '.mm', '.swift'))
@@ -780,8 +781,32 @@ send_event = ghost_text[ghost_text.index('- (void)sendEvent:(UIEvent *)event'):]
 send_event = send_event[:send_event.index('\n}\n')]
 check(0 < send_event.find('handleNavigationButtonTouch:') < send_event.find('sendFingerTweakTouch:') and
       'if (touch == navigation_button_touch) {\n    return NO;' in ghost_text and
-      'native->navigation_part_at(' in ghost_text,
+      'native->touch_at(' in ghost_text,
       "12D: a touch on a gizmo's button is routed as a pointer before anything else, and no recognizer takes it")
+
+# ROUND5 13 (decisions 81-84): a finger on Blender's own interface is told apart before it acts.
+# It is routed after a gizmo's button and before Tweak, the tool or navigation; no one-finger
+# recognizer takes it; one question answers what is under a point (12D's folded in); the drags a
+# control takes are a closed list that fails the build when a button type is missing; the run-on
+# after a flick uses the orbit's one integrator.
+touch_source = (SWIFT.parents[2] / 'editors/interface/interface_touch.cc').read_text(encoding='utf-8')
+takes_body = touch_source[touch_source.index('TouchTakes button_type_touch_takes('):]
+takes_body = takes_body[:takes_body.index('\n}\n')]
+bridge_kinds = bridge_text[bridge_text.index('static NativeTouchKind bridge_touch_main_kind('):]
+bridge_kinds = bridge_kinds[:bridge_kinds.index('#  pragma clang diagnostic pop')]
+check(0 < send_event.find('handleNavigationButtonTouch:') < send_event.find('handleInterfaceTouch:') <
+      send_event.find('sendFingerTweakTouch:') and
+      '(touch == interface_touch || interface_gesture) &&' in ghost_text and
+      'navigation_part_at' not in ghost_text and 'WM_native_ui_navigation_part_at' not in bridge_text and
+      'default:' not in takes_body and 'default:' not in bridge_kinds and
+      'pragma clang diagnostic error "-Wswitch"' in touch_source and
+      'pragma clang diagnostic error "-Wswitch"' in bridge_text and
+      ghost_text.count('UIScrollViewDecelerationRateNormal') == 1 and
+      'ios_momentum_step(window, &orbit_velocity' in ghost_text and
+      'ios_momentum_step(window, &scroll_velocity' in ghost_text and
+      'case "touch":' in snapshots_text,
+      "13: a finger on interface is routed after the gizmo's buttons and before Tweak; one question; "
+      "closed lists of controls and editors; one run-on integrator; the `touch` step")
 
 # Found by 10A's measurement: the shell skips the first reveal it sees, so Blender publishes one
 # (number 0) before any command; otherwise the first command of a session revealed nothing.

@@ -209,15 +209,54 @@ bool WM_native_ui_navigation_minimal();
 bool WM_native_ui_navigation_left();
 /**
  * Note where every navigation gizmo's parts were placed in the windows' last draw (ROUND5 12D),
- * for #WM_native_ui_navigation_part_at. On Blender's loop, after drawing.
+ * and what a finger would meet anywhere in them (13A), for #WM_native_ui_touch_at. On Blender's
+ * loop, after drawing.
  */
 void WM_native_ui_navigation_parts_update(bContext *C);
+
+/** What lies under a point of a window, for a finger (ROUND5 13A, decision 84). */
+enum class NativeTouchKind : int8_t {
+  /** Nothing of Blender's: outside every area. */
+  None = 0,
+  /** A 3D View's main region: the app's navigation and the touch setting, unchanged (T5). */
+  View3D = 1,
+  /** Another editor's main region (Image, UV, nodes, curves, the timeline, ...): a canvas (T5). */
+  Canvas = 2,
+  /** Blender's interface: a header, a toolbar, a sidebar, Properties, Preferences, a menu (T1-T3). */
+  Interface = 3,
+  /** A part of a navigation gizmo (12D): given to Blender as a pointer. */
+  Navigation = 4,
+};
+struct NativeTouchAnswer {
+  NativeTouchKind kind = NativeTouchKind::None;
+  /** For #NativeTouchKind::Navigation: a #NavigationGizmoPart. */
+  int navigation_part = 0;
+  /** Whether what is under the point scrolls along x and along y now: its content is longer than
+   * the region, or the menu longer than the room it has. */
+  bool scroll_x = false;
+  bool scroll_y = false;
+  /** Which directions the control under the point takes for itself, see #ui::TouchTakes. */
+  int8_t takes = 0;
+  /** The control's #ButtonType, or -1 where there is none. */
+  int8_t button_type = -1;
+  /** The editor and region, for the session log: `PROPERTIES WINDOW`, `TOPBAR HEADER`, `MENU`. */
+  char where[40] = "";
+};
 /**
- * Which part of a navigation gizmo (a #NavigationGizmoPart) is at \a x, \a y in the GHOST window's
- * client pixels, as of its last draw, or none (0). Safe from any thread: the window asks it on the
- * main thread as a touch begins.
+ * What a finger meets at \a x, \a y in the GHOST window's client pixels (the window as a
+ * `GHOST_IWindow *`), as of its last draw: a navigation gizmo's part first, then a popup or menu on
+ * top, then the area's region where Blender would send an event there. False where the window has
+ * not been drawn. Safe from any thread: the window asks it on the main thread as a touch begins.
  */
-int WM_native_ui_navigation_part_at(const void *ghost_window, int x, int y);
+bool WM_native_ui_touch_at(const void *ghost_window, int x, int y, NativeTouchAnswer *r_answer);
+/**
+ * Where a check script finds a place to touch (ROUND5 13B, check 3): the centre of the region
+ * \a where (as #NativeTouchAnswer::where names it) with \a button_type -1, or of its first (or
+ * \a last) button of that #ButtonType, in the GHOST window's client pixels. False when there is
+ * none.
+ */
+bool WM_native_ui_touch_find(
+    const void *ghost_window, const char *where, int button_type, bool last, int r_client_xy[2]);
 /** Whether a pointer hovers over the navigation gizmo, which then grows its axes. */
 bool WM_native_ui_navigation_hover_active();
 /** Redraw the navigation gizmo while its axes animate. */
