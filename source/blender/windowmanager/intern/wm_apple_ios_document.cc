@@ -18,12 +18,27 @@
 #  include <ctime>
 #  include <fmt/format.h>
 #  include <optional>
+#  include <set>
+#  include <unistd.h>
 #  include <variant>
 #  include <vector>
 #  include <string>
 
 #  include "BKE_appdir.hh"
 #  include "BKE_blender_version.h"
+#  include "BKE_bpath.hh"
+#  include "BKE_cachefile.hh"
+#  include "BKE_library.hh"
+#  include "BKE_movieclip.hh"
+#  include "BKE_vfont.hh"
+#  include "BKE_volume.hh"
+#  include "DEG_depsgraph.hh"
+#  include "DNA_cachefile_types.h"
+#  include "DNA_curve_types.h"
+#  include "DNA_movieclip_types.h"
+#  include "DNA_sequence_types.h"
+#  include "DNA_vfont_types.h"
+#  include "DNA_volume_types.h"
 #  include "BKE_context.hh"
 #  include "BKE_global.hh"
 #  include "BKE_image.hh"
@@ -585,6 +600,9 @@ static void document_hold(const Main *bmain, const char *filepath, wmDocumentOpe
  * a document opens from its own path, from iCloud through a coordinated read or from its newer
  * auto-save, and each of these loads one file the same way.
  */
+/** Files beside the document that cannot be read, see below (ROUND6 FILES-3). */
+std::vector<std::string> WM_apple_ios_document_unreadable(Main *bmain, std::string &r_folder);
+
 static uint64_t document_read = UINT64_MAX;
 static std::string document_path;
 /** The next open of the document runs its scripts: Allow Execution's reload (ROUND6 SAFE-3). */
@@ -712,6 +730,17 @@ bool WM_apple_ios_document_open(bContext *C,
      * #WM_apple_ios_document_is_loaded. */
     document_path = BKE_main_blendfile_path(CTX_data_main(C));
     document_hold(CTX_data_main(C), filepath, r_opened);
+    /* What it refers to beside itself that cannot be read (ROUND6 FILES-3). */
+    r_opened.unreadable = WM_apple_ios_document_unreadable(CTX_data_main(C),
+                                                           r_opened.unreadable_folder);
+    if (!r_opened.unreadable.empty()) {
+      WM_native_ui_session_log(
+          "document",
+          fmt::format("{} files beside it cannot be read, such as {}",
+                      r_opened.unreadable.size(),
+                      BLI_path_basename(r_opened.unreadable.front().c_str()))
+              .c_str());
+    }
   }
   WM_native_ui_session_log(
       "document",
@@ -724,6 +753,212 @@ bool WM_apple_ios_document_open(bContext *C,
           .c_str());
   return success;
 }
+
+/* -------------------------------------------------------------------- */
+/** \name The files beside a document (ROUND6 FILES-3, finding F8)
+ *
+ * A document's access covers its one file. What it refers to beside itself, by a relative path
+ * or in its folder (textures, linked libraries, caches, movie clips, sequences), cannot be read
+ * until the person gives the app its folder, once (a bookmark). These are found as it opens, said
+ * once, and read again after the folder is given.
+ *
+ * Every data-block type whose `IDTypeInfo::foreach_path` lists a path is in this table, with
+ * whether a path it lists is a file the document reads, and how it is read again
+ * (`tests/ios/test_document_neighbours.py` fails on a type that is not):
+ *
+ * NEIGHBOURS image: counted; reloaded (`IMA_SIGNAL_RELOAD`)
+ * NEIGHBOURS library: counted; reloaded (`WM_lib_reload`)
+ * NEIGHBOURS movieclip: counted; reloaded (`BKE_movieclip_reload`)
+ * NEIGHBOURS cachefile: counted; reloaded (`BKE_cachefile_reload`)
+ * NEIGHBOURS volume: counted; unloaded, read again as it is drawn
+ * NEIGHBOURS vfont: counted; its data freed and its text objects evaluated again
+ * NEIGHBOURS scene: counted (sequencer strips' media); the strips' images freed, read again
+ * NEIGHBOURS sound: not counted: sound is compiled out on the iPad (Audaspace off)
+ * NEIGHBOURS camera: not counted: its background images are images and movie clips, above
+ * NEIGHBOURS mesh: not counted: external multires data is written by Save External, not read here
+ * NEIGHBOURS node: not counted: File Output paths are written, not read; script nodes need OSL,
+ * which is off
+ * NEIGHBOURS object: not counted: disk caches exist only once baked; the folder's grant serves
+ * them, read at each frame
+ * NEIGHBOURS text: not counted: a text's content is stored in the document; its path is for
+ * Reload and Save only
+ * \{ */
+
+static bool neighbour_type_read(const ID *id)
+{
+  return id && ELEM(GS(id->name), ID_IM, ID_LI, ID_MC, ID_CF, ID_VO, ID_VF, ID_SCE);
+}
+
+struct NeighbourScan {
+  std::string folder;
+  std::string home;
+  std::set<std::string> paths;
+};
+
+static bool neighbour_scan_path(BPathForeachPathData *bpath_data,
+                                char *path_dst,
+                                size_t /*path_dst_maxncpy*/,
+                                const char *path_src)
+{
+  NeighbourScan &scan = *static_cast<NeighbourScan *>(bpath_data->user_data);
+  if (!neighbour_type_read(bpath_data->owner_id) || !path_src[0]) {
+    return false;
+  }
+  /* The app's own folders are always readable; what is missing there is missing. */
+  if (!scan.home.empty() && BLI_path_contains(scan.home.c_str(), path_src)) {
+    return false;
+  }
+  const bool beside = BLI_path_is_rel(path_dst) ||
+                      BLI_path_contains(scan.folder.c_str(), path_src);
+  if (beside && access(path_src, R_OK) != 0) {
+    scan.paths.insert(path_src);
+  }
+  return false;
+}
+
+/** The folder holding both \a a and \a b (each a folder). */
+static std::string common_folder(const std::string &a, const std::string &b)
+{
+  std::string common = a;
+  while (!common.empty() && !BLI_path_contains(common.c_str(), b.c_str())) {
+    char parent[FILE_MAX];
+    STRNCPY(parent, common.c_str());
+    if (!BLI_path_parent_dir(parent) || common == parent) {
+      return "";
+    }
+    common = parent;
+  }
+  return common;
+}
+
+std::vector<std::string> WM_apple_ios_document_unreadable(Main *bmain, std::string &r_folder)
+{
+  r_folder.clear();
+  const char *blendfile = BKE_main_blendfile_path(bmain);
+  if (!blendfile[0]) {
+    return {};
+  }
+  NeighbourScan scan;
+  char folder[FILE_MAX];
+  BLI_path_split_dir_part(blendfile, folder, sizeof(folder));
+  scan.folder = folder;
+  if (const char *home = getenv("HOME")) {
+    scan.home = home;
+  }
+  BPathForeachPathData path_data{};
+  path_data.bmain = bmain;
+  path_data.callback_function = neighbour_scan_path;
+  path_data.flag = BKE_BPATH_FOREACH_PATH_ABSOLUTE | BKE_BPATH_FOREACH_PATH_SKIP_PACKED |
+                   BKE_BPATH_FOREACH_PATH_RESOLVE_TOKEN | BKE_BPATH_TRAVERSE_SKIP_WEAK_REFERENCES;
+  path_data.user_data = &scan;
+  BKE_bpath_foreach_path_main(&path_data);
+  /* The folder to ask for holds the document and everything it reaches by "//..". */
+  std::string ask = scan.folder;
+  for (const std::string &path : scan.paths) {
+    char parent[FILE_MAX];
+    BLI_path_split_dir_part(path.c_str(), parent, sizeof(parent));
+    ask = common_folder(ask, parent);
+  }
+  r_folder = ask.empty() ? scan.folder : ask;
+  return std::vector<std::string>(scan.paths.begin(), scan.paths.end());
+}
+
+std::vector<std::string> WM_apple_ios_document_neighbours_reload(
+    bContext *C, const std::vector<std::string> &unreadable)
+{
+  Main *bmain = CTX_data_main(C);
+  const std::set<std::string> was(unreadable.begin(), unreadable.end());
+  auto listed = [&](const char *path) { return was.count(path) != 0; };
+  int reloaded = 0;
+  for (Image &image : bmain->images) {
+    if (!BKE_image_has_packedfile(&image) &&
+        ELEM(image.source, IMA_SRC_FILE, IMA_SRC_SEQUENCE, IMA_SRC_TILED, IMA_SRC_MOVIE))
+    {
+      BKE_image_signal(bmain, &image, nullptr, IMA_SIGNAL_RELOAD);
+      reloaded++;
+    }
+  }
+  std::vector<Library *> libraries;
+  for (Library &library : bmain->libraries) {
+    if (listed(library.runtime->filepath_abs)) {
+      libraries.push_back(&library);
+    }
+  }
+  ReportList reports;
+  BKE_reports_init(&reports, RPT_STORE);
+  for (Library *library : libraries) {
+    WM_lib_reload(library, C, &reports);
+    reloaded++;
+  }
+  BKE_reports_free(&reports);
+  for (MovieClip &clip : bmain->movieclips) {
+    BKE_movieclip_reload(bmain, &clip);
+    reloaded++;
+  }
+  if (Depsgraph *depsgraph = CTX_data_depsgraph_pointer(C)) {
+    for (CacheFile &cache_file : bmain->cachefiles) {
+      BKE_cachefile_reload(depsgraph, &cache_file);
+      reloaded++;
+    }
+  }
+  for (Volume &volume : bmain->volumes) {
+    BKE_volume_unload(&volume);
+    DEG_id_tag_update(&volume.id, ID_RECALC_SYNC_TO_EVAL);
+    reloaded++;
+  }
+  std::set<VFont *> fonts;
+  for (VFont &vfont : bmain->fonts) {
+    if (listed(vfont.filepath) || BLI_path_is_rel(vfont.filepath)) {
+      BKE_vfont_data_free(&vfont);
+      fonts.insert(&vfont);
+    }
+  }
+  for (Curve &curve : bmain->curves) {
+    if (fonts.count(curve.vfont) || fonts.count(curve.vfontb) || fonts.count(curve.vfonti) ||
+        fonts.count(curve.vfontbi))
+    {
+      DEG_id_tag_update(&curve.id, ID_RECALC_GEOMETRY);
+      reloaded++;
+    }
+  }
+  for (Scene &scene : bmain->scenes) {
+    if (scene.ed) {
+      seq::relations_free_imbuf(&scene, &scene.ed->seqbase, false);
+      seq::cache_cleanup(&scene, seq::CacheCleanup::All);
+    }
+  }
+  DEG_relations_tag_update(bmain);
+  WM_main_add_notifier(NC_WINDOW, nullptr);
+  std::string folder;
+  std::vector<std::string> remaining = WM_apple_ios_document_unreadable(bmain, folder);
+  WM_native_ui_session_log(
+      "document",
+      fmt::format("neighbours read again: {} of {} still cannot be read ({} data-blocks reloaded)",
+                  remaining.size(),
+                  unreadable.size(),
+                  reloaded)
+          .c_str());
+  if (remaining.empty()) {
+    WM_native_ui_notice(RPT_INFO,
+                        fmt::format(fmt::runtime(IFACE_("The {} files beside this document are "
+                                                        "read now.")),
+                                    unreadable.size())
+                            .c_str());
+  }
+  else {
+    WM_native_ui_notice(
+        RPT_WARNING,
+        fmt::format(fmt::runtime(IFACE_("{} files beside this document still cannot be read, "
+                                        "such as “{}”. File › External Data › Report Missing "
+                                        "Files lists them.")),
+                    remaining.size(),
+                    BLI_path_basename(remaining.front().c_str()))
+            .c_str());
+  }
+  return remaining;
+}
+
+/** \} */
 
 /**
  * The reason Blender gave for a write it could not make: its first error, else its first warning.

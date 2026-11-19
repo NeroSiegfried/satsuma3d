@@ -32,4 +32,12 @@ extern "C" bool GHOST_ios_document_coordinate(const char *path,
                                               char *error,
                                               size_t error_size);
 extern "C" void GHOST_ios_document_access_restore();
+/**
+ * Keep the access a picker's security-scoped `NSURL *` gives, bookmarked for later launches, as
+ * the picker's own picks are: the folder beside a document (ROUND6 FILES-3).
+ */
+#ifdef __OBJC__
+@class NSURL;
+extern "C" void GHOST_ios_document_access_remember_url(NSURL *url);
+#endif
 extern "C" void GHOST_ios_document_access_shutdown();

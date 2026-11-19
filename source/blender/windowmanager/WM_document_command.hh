@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace blender {
 
@@ -78,6 +79,13 @@ struct wmDocumentOpened {
   bool hold_copy_only = false;
   /** Why it could not be opened, in Blender's words. */
   std::string error;
+  /**
+   * Files it refers to beside itself (by a relative path, or in its folder) that cannot be read:
+   * outside what the app may read until the person gives it the folder, `unreadable_folder`
+   * (ROUND6 FILES-3), or iCloud placeholders.
+   */
+  std::vector<std::string> unreadable;
+  std::string unreadable_folder;
 };
 
 }  // namespace blender

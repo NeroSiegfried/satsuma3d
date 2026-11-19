@@ -2,8 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #import "wm_apple_ios_blend_document.hh"
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #include "BKE_blender_version.h"
+#include "GHOST_IOSDocumentPicker.hh"
 #include "GHOST_IOSRuntime.hh"
 #include "WM_document_command.hh"
 #include "WM_native_ui.h"
@@ -16,6 +18,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace blender {
 /* Implemented in wm_files.cc. */
@@ -32,6 +35,9 @@ std::string WM_apple_ios_document_template_write(bContext *C,
                                                  const char *filepath,
                                                  const char *preview,
                                                  std::string &attribution);
+/* Implemented in wm_apple_ios_document.cc (ROUND6 FILES-3). */
+std::vector<std::string> WM_apple_ios_document_neighbours_reload(
+    bContext *C, const std::vector<std::string> &unreadable);
 }  // namespace blender
 
 /**
@@ -71,6 +77,64 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work, bool *r_t
 }
 
 static void writeFreshCopy(NSString *name, UIViewController *presenter, void (^done)(NSURL *url));
+
+/** One folder pick, for the folder beside a document (ROUND6 FILES-3). */
+@interface WMIOSFolderGrant : NSObject <UIDocumentPickerDelegate>
+@property(nonatomic, copy) void (^completion)(NSURL *url);
++ (void)chooseFolder:(NSString *)folder completion:(void (^)(NSURL *url))completion;
+@end
+
+@implementation WMIOSFolderGrant
+static WMIOSFolderGrant *folder_grant_shown = nil;
+
++ (void)chooseFolder:(NSString *)folder completion:(void (^)(NSURL *url))completion
+{
+  UIViewController *presenter = wm_apple_ios_top_presenter();
+  if (!presenter || folder_grant_shown) {
+    completion(nil);
+    return;
+  }
+  WMIOSFolderGrant *grant = [[WMIOSFolderGrant alloc] init];
+  grant.completion = completion;
+  folder_grant_shown = grant; /* Owned until it finishes. */
+  UIDocumentPickerViewController *picker = [[[UIDocumentPickerViewController alloc]
+      initForOpeningContentTypes:@[ UTTypeFolder ]
+                          asCopy:NO] autorelease];
+  picker.delegate = grant;
+  picker.directoryURL = [NSURL fileURLWithPath:folder isDirectory:YES];
+  [presenter presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)finish:(NSURL *)url
+{
+  void (^completion)(NSURL *) = [[self.completion retain] autorelease];
+  self.completion = nil;
+  if (folder_grant_shown == self) {
+    folder_grant_shown = nil;
+    [self autorelease];
+  }
+  if (completion) {
+    completion(url);
+  }
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+    didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
+{
+  [self finish:urls.firstObject];
+}
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller
+{
+  [self finish:nil];
+}
+
+- (void)dealloc
+{
+  [_completion release];
+  [super dealloc];
+}
+@end
 
 @implementation WMIOSBlendDocument
 {
@@ -138,6 +202,12 @@ static void writeFreshCopy(NSString *name, UIViewController *presenter, void (^d
   /** When the recovered auto-save was written. */
   NSDate *_recoveredTime;
   UIAlertController *_recoveryAlert;
+  /** Files beside it that could not be read as it opened, and the folder to ask for (ROUND6
+   * FILES-3). */
+  std::vector<std::string> _unreadable;
+  NSString *_unreadableFolder;
+  /** Tries left to say so while another question is on screen. */
+  int _neighboursTries;
 }
 
 - (void)dealloc
@@ -151,6 +221,7 @@ static void writeFreshCopy(NSString *name, UIViewController *presenter, void (^d
   [_openProblem release];
   [_recoveredTime release];
   [_recoveryAlert release];
+  [_unreadableFolder release];
   [super dealloc];
 }
 
@@ -458,6 +529,119 @@ static void writeFreshCopy(NSString *name, UIViewController *presenter, void (^d
 /** \} */
 
 /* -------------------------------------------------------------------- */
+/** \name The folder beside the document (ROUND6 FILES-3, finding F8)
+ *
+ * The document's access covers its one file. Textures by relative path, linked libraries, caches
+ * and sequences beside it are read once the person gives the app the folder: asked once as it
+ * opens, one folder pick, bookmarked, then what was not read is read again. A folder given before
+ * is not asked for again: its files may be iCloud placeholders, which are asked for and read
+ * under coordination.
+ * \{ */
+
+- (void)presentNeighbours
+{
+  if (_unreadable.empty() || self.documentState & UIDocumentStateClosed) {
+    return;
+  }
+  NSString *folder = _unreadableFolder.length ? _unreadableFolder :
+                                                self.fileURL.path.stringByDeletingLastPathComponent;
+  if (GHOST_ios_document_can_write_path(folder.UTF8String)) {
+    WM_native_ui_log("document", "neighbours: the folder was given before; reading them again");
+    [self readNeighbours];
+    return;
+  }
+  /* After the recovered-work and held-document questions, which come first. */
+  UIViewController *presenter = wm_apple_ios_top_presenter();
+  if (_recoveryPending || [presenter isKindOfClass:UIAlertController.class] || !presenter) {
+    if (_neighboursTries-- > 0) {
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(1.0 * NSEC_PER_SEC)),
+                     dispatch_get_main_queue(),
+                     ^{
+                       [self presentNeighbours];
+                     });
+    }
+    return;
+  }
+  const size_t count = _unreadable.size();
+  NSString *title = count == 1 ?
+                        @"1 file beside this document cannot be read" :
+                        [NSString stringWithFormat:@"%zu files beside this document cannot be read",
+                                                   count];
+  NSString *first = [NSString stringWithUTF8String:_unreadable.front().c_str()].lastPathComponent;
+  UIAlertController *alert = [UIAlertController
+      alertControllerWithTitle:title
+                       message:[NSString stringWithFormat:@"“%@” uses files from its folder, such "
+                                                          @"as “%@”, that the app may not read "
+                                                          @"yet. Give access to the folder “%@” "
+                                                          @"to read them.",
+                                                          self.name,
+                                                          first,
+                                                          folder.lastPathComponent]
+                preferredStyle:UIAlertControllerStyleAlert];
+  UIAlertAction *give = [UIAlertAction actionWithTitle:@"Give Access to the Folder"
+                                                 style:UIAlertActionStyleDefault
+                                               handler:^(UIAlertAction *) {
+                                                 [self chooseNeighbourFolder:folder];
+                                               }];
+  [alert addAction:give];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Not Now"
+                                            style:UIAlertActionStyleCancel
+                                          handler:^(UIAlertAction *) {
+                                            WM_native_ui_log("document", "neighbours: not now");
+                                          }]];
+  alert.preferredAction = give;
+  WM_native_ui_log("document", [@"neighbours said: " stringByAppendingString:title].UTF8String);
+  [presenter presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)chooseNeighbourFolder:(NSString *)folder
+{
+  [WMIOSFolderGrant chooseFolder:folder
+                      completion:^(NSURL *url) {
+                        if (!url) {
+                          WM_native_ui_log("document", "neighbours: no folder given");
+                          return;
+                        }
+                        GHOST_ios_document_access_remember_url(url);
+                        WM_native_ui_log("document",
+                                         [@"neighbours: folder given: "
+                                             stringByAppendingString:url.lastPathComponent]
+                                             .UTF8String);
+                        [self readNeighbours];
+                      }];
+}
+
+/** Ask iCloud for what is not downloaded, wait for each under coordination, then read them all
+ * again in Blender, which says what is still missing. */
+- (void)readNeighbours
+{
+  const std::vector<std::string> unreadable = _unreadable;
+  _unreadable.clear();
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    for (const std::string &path : unreadable) {
+      @autoreleasepool {
+        NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
+        [NSFileManager.defaultManager startDownloadingUbiquitousItemAtURL:url error:nil];
+        NSFileCoordinator *coordinator = [[[NSFileCoordinator alloc] initWithFilePresenter:nil]
+            autorelease];
+        [coordinator coordinateReadingItemAtURL:url
+                                        options:NSFileCoordinatorReadingWithoutChanges
+                                          error:nil
+                                     byAccessor:^(NSURL *){
+                                     }];
+      }
+    }
+    GHOST_ios_engine_perform([unreadable](blender::bContext *C) {
+      if (C) {
+        blender::WM_apple_ios_document_neighbours_reload(C, unreadable);
+      }
+    });
+  });
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
 /** \name Held documents (ROUND6 SAFE-2)
  *
  * A file Blender's Save would ask about before overwriting (from a newer Blender, with missing
@@ -719,6 +903,17 @@ static const CFTimeInterval document_save_interval = 60.0;
                        });
       });
     }
+    /* Files beside it that cannot be read: said once it shows, after the questions above. */
+    if (success) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        _neighboursTries = 30;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(1.2 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(),
+                       ^{
+                         [self presentNeighbours];
+                       });
+      });
+    }
     if (completionHandler) {
       completionHandler(success);
     }
@@ -766,6 +961,9 @@ static const CFTimeInterval document_save_interval = 60.0;
     /* Before the open completes on the main queue, so it is known when the document shows. */
     dispatch_async(dispatch_get_main_queue(), ^{
       [self setHold:hold];
+      _unreadable = hold.unreadable;
+      [_unreadableFolder release];
+      _unreadableFolder = [[NSString alloc] initWithUTF8String:hold.unreadable_folder.c_str()];
     });
     return YES;
   }

@@ -100,6 +100,13 @@ static void documentRememberAccess(NSArray<NSURL *> *urls)
   [NSUserDefaults.standardUserDefaults setObject:bookmarks forKey:bookmark_key];
 }
 
+extern "C" void GHOST_ios_document_access_remember_url(NSURL *url)
+{
+  if (url && [url startAccessingSecurityScopedResource]) {
+    documentRememberAccess(@[ url ]);
+  }
+}
+
 extern "C" bool GHOST_ios_document_can_write_path(const char *path)
 {
   if (!dispatch_get_specific(&document_queue_key)) {
