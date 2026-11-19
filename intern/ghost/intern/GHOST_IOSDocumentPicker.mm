@@ -153,7 +153,13 @@ static NSArray<UTType *> *documentContentTypes(NSString *types, NSString *glob)
   return result.count ? result : @[ UTTypeData ];
 }
 
-static NSString *documentFilename(NSString *value, NSString *extension)
+/**
+ * The name a Save writes, from what the person typed. A name without an extension gets the
+ * operator's (its format's, chosen in its options before the picker). A typed extension of a kind
+ * the operator writes is kept, as desktop's browser keeps a typed name: "render.jpg" stays, never
+ * "render.jpg.png". Any other gets the operator's appended ("notes.v2" → "notes.v2.blend").
+ */
+static NSString *documentFilename(NSString *value, NSString *extension, NSArray<UTType *> *types)
 {
   value = [value stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
   if (!value.length || [value isEqualToString:@"."] || [value isEqualToString:@".."] ||
@@ -163,12 +169,21 @@ static NSString *documentFilename(NSString *value, NSString *extension)
   {
     return nil;
   }
-  if (extension.length &&
-      ![value.lowercaseString hasSuffix:[@"." stringByAppendingString:extension.lowercaseString]])
+  if (!extension.length ||
+      [value.lowercaseString hasSuffix:[@"." stringByAppendingString:extension.lowercaseString]])
   {
-    value = [value stringByAppendingPathExtension:extension];
+    return value;
   }
-  return value;
+  NSString *typed = value.pathExtension;
+  if (typed.length) {
+    UTType *type = [UTType typeWithFilenameExtension:typed];
+    for (UTType *accepted in types) {
+      if (type && ![accepted isEqual:UTTypeData] && [type conformsToType:accepted]) {
+        return value;
+      }
+    }
+  }
+  return [value stringByAppendingPathExtension:extension];
 }
 
 @interface GHOSTIOSDocumentPicker
@@ -276,7 +291,8 @@ static NSString *documentFilename(NSString *value, NSString *extension)
 {
   UIAlertController *alert = (UIAlertController *)self.controller;
   alert.actions.lastObject.enabled = documentFilename(field.text,
-                                                      self.initialPath.pathExtension) != nil;
+                                                      self.initialPath.pathExtension,
+                                                      self.types) != nil;
 }
 
 - (void)start
@@ -313,7 +329,8 @@ static NSString *documentFilename(NSString *value, NSString *extension)
                                           handler:^(UIAlertAction *) {
                                             self.filename = documentFilename(
                                                 nameAlert.textFields.firstObject.text,
-                                                initial.pathExtension);
+                                                initial.pathExtension,
+                                                self.types);
                                             [nameAlert dismissViewControllerAnimated:YES
                                                                           completion:^{
                                                                             if (self.filename) {

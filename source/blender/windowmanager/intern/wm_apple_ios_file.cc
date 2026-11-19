@@ -18,7 +18,9 @@
 #  include "GHOST_IOSDocumentPicker.hh"
 #  include "GHOST_Mailbox.hh"
 #  include "RNA_access.hh"
+#  include "BLT_translation.hh"
 #  include "WM_api.hh"
+#  include "WM_native_ui.hh"
 #  include "wm_event_system.hh"
 #  include "wm_event_types.hh"
 
@@ -32,6 +34,9 @@ struct Request {
   wmOperator *op;
   GHOST_IOSDocumentMode mode;
   std::string path;
+  wmWindow *window = nullptr;
+  /** Its options are being asked for; the picker comes after (ROUND6 FILES-2). */
+  bool options = false;
 };
 struct Result {
   uint64_t id;
@@ -109,9 +114,11 @@ bool operator_is_live(bContext *C, const wmOperator *op)
 }
 }  // namespace
 
-bool WM_apple_ios_fileselect_begin(bContext *C, wmOperator *op)
+namespace {
+
+/** Where the selector starts: the operator's path as it stands, made absolute. */
+std::string initial_path(bContext *C, wmOperator *op)
 {
-  using namespace wm::apple_ios;
   std::string initial = string(op, "filepath");
   if (initial.empty()) {
     char path[FILE_MAX];
@@ -119,7 +126,18 @@ bool WM_apple_ios_fileselect_begin(bContext *C, wmOperator *op)
         path, sizeof(path), string(op, "directory").c_str(), string(op, "filename").c_str());
     initial = path;
   }
-  FileSelectFacts facts;
+  if (!initial.empty()) {
+    char path[FILE_MAX];
+    STRNCPY(path, initial.c_str());
+    BLI_path_abs(path, BKE_main_blendfile_path(CTX_data_main(C)));
+    initial = path;
+  }
+  return initial;
+}
+
+wm::apple_ios::FileSelectFacts facts_of(wmOperator *op)
+{
+  wm::apple_ios::FileSelectFacts facts;
   facts.filepath = RNA_struct_find_property(op->ptr, "filepath");
   facts.directory = RNA_struct_find_property(op->ptr, "directory");
   facts.filename = RNA_struct_find_property(op->ptr, "filename");
@@ -133,23 +151,39 @@ bool WM_apple_ios_fileselect_begin(bContext *C, wmOperator *op)
   /* `buttons.file_browse` sets `check_existing` at invoke exactly when its property is an output
    * path (`PROP_PATH_OUTPUT`): the render output, File Output nodes. */
   facts.output_path = STREQ(op->type->idname, "BUTTONS_OT_file_browse") && facts.check_existing;
-  facts.path_is_folder = initial.empty() || BLI_path_slash_is_native_compat(initial.back());
+  const std::string path = string(op, facts.filepath ? "filepath" : "directory");
+  facts.path_is_folder = path.empty() || BLI_path_slash_is_native_compat(path.back());
   facts.name = op->type->name ? op->type->name : "";
-  const FileSelectKind kind = file_select_kind(facts);
-  /* Linking/appending browses datablocks inside .blend files, not ordinary files. */
-  if (ELEM(kind, FileSelectKind::Browser, FileSelectKind::Library)) {
-    return false;
+  facts.hide_props_region = boolean(op, "hide_props_region");
+  /* What Blender's side panel would show (`uiTemplateOperatorPropertyButs` skips hidden ones). */
+  RNA_STRUCT_BEGIN (op->ptr, prop) {
+    const char *identifier = RNA_property_identifier(prop);
+    if ((RNA_property_flag(prop) & PROP_HIDDEN) || STREQ(identifier, "rna_type") ||
+        STR_ELEM(identifier, "filepath", "directory", "filename", "files", "relative_path"))
+    {
+      continue;
+    }
+    facts.options++;
   }
-  const GHOST_IOSDocumentMode mode = kind == FileSelectKind::Directory ?
-                                         GHOST_IOSDocumentMode::Directory :
-                                     kind == FileSelectKind::Save ? GHOST_IOSDocumentMode::Save :
-                                                                    GHOST_IOSDocumentMode::Open;
-  if (!initial.empty()) {
-    char path[FILE_MAX];
-    STRNCPY(path, initial.c_str());
-    BLI_path_abs(path, BKE_main_blendfile_path(CTX_data_main(C)));
-    initial = path;
+  RNA_STRUCT_END;
+  return facts;
+}
+
+/** Show the system picker for request \a id, from the operator's properties as they are now. */
+void picker_begin(bContext *C, const uint64_t id)
+{
+  auto it = requests.find(id);
+  if (it == requests.end()) {
+    return;
   }
+  wmOperator *op = it->second.op;
+  wmWindow *win = it->second.window;
+  if (!win || BLI_findindex(&CTX_wm_manager(C)->windows, win) == -1 ||
+      !win->runtime->ghostwin)
+  {
+    win = CTX_wm_window(C);
+  }
+  const std::string initial = initial_path(C, op);
   std::string types;
   const struct {
     const char *property;
@@ -170,22 +204,87 @@ bool WM_apple_ios_fileselect_begin(bContext *C, wmOperator *op)
       types += std::string(filter.type) + ";";
     }
   }
-  const uint64_t id = ++next_request;
-  requests.emplace(id, Request{op, mode, ""});
-  if (!GHOST_ios_document_picker_begin(CTX_wm_window(C)->runtime->ghostwin,
-                                       id,
-                                       mode,
-                                       op->type->name,
-                                       initial.c_str(),
-                                       types.c_str(),
-                                       string(op, "filter_glob").c_str(),
-                                       mode == GHOST_IOSDocumentMode::Open &&
-                                           RNA_struct_find_property(op->ptr, "files"),
-                                       completed))
+  const GHOST_IOSDocumentMode mode = it->second.mode;
+  if (!win || !GHOST_ios_document_picker_begin(win->runtime->ghostwin,
+                                               id,
+                                               mode,
+                                               op->type->name,
+                                               initial.c_str(),
+                                               types.c_str(),
+                                               string(op, "filter_glob").c_str(),
+                                               mode == GHOST_IOSDocumentMode::Open &&
+                                                   RNA_struct_find_property(op->ptr, "files"),
+                                               completed))
   {
     WM_global_report(RPT_ERROR, "Unable to present the iOS document picker");
     WM_event_fileselect_event(CTX_wm_manager(C), op, EVT_FILESELECT_CANCEL);
   }
+}
+
+/** The options were answered: on to the picker, or the selection is cancelled. */
+void options_answered(bContext *C, const uint64_t id, const bool confirmed)
+{
+  auto it = requests.find(id);
+  if (it == requests.end()) {
+    return; /* The operator went while its options were shown. */
+  }
+  it->second.options = false;
+  wmOperator *op = it->second.op;
+  if (!operator_is_live(C, op)) {
+    requests.erase(it);
+    return;
+  }
+  if (!confirmed) {
+    WM_event_fileselect_event(CTX_wm_manager(C), op, EVT_FILESELECT_CANCEL);
+    return;
+  }
+  /* As the browser does after each change: the name's extension follows the chosen format. */
+  if (op->type->check) {
+    op->type->check(C, op);
+  }
+  picker_begin(C, id);
+}
+
+}  // namespace
+
+bool WM_apple_ios_fileselect_begin(bContext *C, wmOperator *op)
+{
+  using namespace wm::apple_ios;
+  const FileSelectFacts facts = facts_of(op);
+  const FileSelectKind kind = file_select_kind(facts);
+  /* Linking/appending browses datablocks inside .blend files, not ordinary files. */
+  if (ELEM(kind, FileSelectKind::Browser, FileSelectKind::Library)) {
+    return false;
+  }
+  const GHOST_IOSDocumentMode mode = kind == FileSelectKind::Directory ?
+                                         GHOST_IOSDocumentMode::Directory :
+                                     kind == FileSelectKind::Save ? GHOST_IOSDocumentMode::Save :
+                                                                    GHOST_IOSDocumentMode::Open;
+  const uint64_t id = ++next_request;
+  requests.emplace(id, Request{op, mode, "", CTX_wm_window(C), false});
+  if (file_select_shows_options(facts)) {
+    /* Desktop shows these in the File Browser's side panel; here they come first, in the
+     * interface's own dialog, then the picker (ROUND6 FILES-2, finding F6). */
+    const std::string title = WM_operatortype_name(op->type, op->ptr);
+    const std::string confirm = mode == GHOST_IOSDocumentMode::Save ? IFACE_("Choose Location") :
+                                mode == GHOST_IOSDocumentMode::Directory ?
+                                                                      IFACE_("Choose Folder") :
+                                                                      IFACE_("Choose File");
+    auto then = [id](bContext *context, const bool confirmed) {
+      options_answered(context, id, confirmed);
+    };
+    requests[id].options = true;
+    if (WM_native_ui_desktop_mode()) {
+      WM_apple_ios_options_dialog(C, op, title, confirm, then);
+      return true;
+    }
+    if (ui::native_operator_dialog_handback(C, op, title, confirm, then)) {
+      return true;
+    }
+    /* Another operator's dialog is open: the picker alone, as before. */
+    requests[id].options = false;
+  }
+  picker_begin(C, id);
   return true;
 }
 
@@ -203,6 +302,9 @@ void WM_apple_ios_fileselect_cancel(wmOperator *op)
 {
   for (auto it = requests.begin(); it != requests.end();) {
     if (it->second.op == op) {
+      if (it->second.options) {
+        ui::native_operator_dialog_abandon(op);
+      }
       GHOST_ios_document_picker_cancel(it->first);
       it = requests.erase(it);
     }

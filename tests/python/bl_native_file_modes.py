@@ -15,6 +15,11 @@ what the operator means:
   an output path naming a folder and a name, an input path, a typed choice of the caller);
 - every other operator is listed below with its meaning, or as not opening a selector at all.
   An operator in none of these fails: a new one has to be placed.
+
+And whether its options are asked for before the picker (ROUND6 FILES-2, finding F6): desktop
+draws an operator's visible properties in the File Browser's side panel unless it was registered
+without `WM_FILESEL_SHOW_PROPS` (`hide_props_region`); every operator F6 names gets the dialog, and
+in `WM_apple_ios_fileselect_begin` the dialog comes before the picker.
 """
 import inspect
 import json
@@ -86,6 +91,23 @@ WITHOUT_CHECK_EXISTING = {
 DECLARED_OTHERWISE = {}
 
 
+PATH_PROPS = {"rna_type", "filepath", "directory", "filename", "files", "relative_path"}
+
+# F6's table: operators whose options desktop shows beside the browser (those of this build).
+F6_OPTIONS = {
+    "wm.obj_export", "wm.stl_export", "wm.ply_export", "wm.alembic_export",
+    "wm.grease_pencil_export_svg", "wm.grease_pencil_export_pdf", "export_scene.gltf",
+    "export_scene.fbx", "export_anim.bvh", "wm.obj_import", "wm.stl_import", "wm.ply_import",
+    "wm.fbx_import", "wm.alembic_import", "wm.grease_pencil_import_svg", "import_scene.gltf",
+    "import_scene.fbx", "import_anim.bvh", "image.save_as", "sound.mixdown", "uv.export_layout",
+    "sequencer.movie_strip_add", "sequencer.sound_strip_add", "sequencer.image_strip_add",
+    "graph.sound_to_samples",
+}
+# Registered without `WM_FILESEL_SHOW_PROPS`: desktop shows no options for these, nor does the iPad.
+NO_OPTIONS = {"wm.save_as_mainfile", "wm.open_mainfile", "image.open", "sound.open", "font.open",
+              "text.save_as"}
+
+
 def facts_of(idname, rna):
     props = rna.properties
     keys = set(props.keys())
@@ -103,6 +125,8 @@ def facts_of(idname, rna):
         "output_path": False,
         "path_is_folder": filepath.endswith("/") or not filepath,
         "name": rna.name,
+        "hide_props_region": "hide_props_region" in keys and props["hide_props_region"].default,
+        "options": sum(1 for key in keys if not props[key].is_hidden and key not in PATH_PROPS),
     }
 
 
@@ -177,8 +201,10 @@ for label, facts, _expected in rows:
     fields = ", ".join("true" if facts[k] else "false" for k in (
         "filepath", "directory", "filename", "files", "has_check_existing", "check_existing",
         "blenlib", "output_path", "path_is_folder"))
-    driver.append('  { FileSelectFacts f{%s, %s}; printf("%%s\\n", name(file_select_kind(f))); }'
-                  % (fields, json.dumps(facts["name"])))
+    driver.append('  { FileSelectFacts f{%s, %s, %s, %d}; printf("%%s %%s\\n", '
+                  'name(file_select_kind(f)), file_select_shows_options(f) ? "options" : "-"); }'
+                  % (fields, json.dumps(facts["name"]),
+                     "true" if facts["hide_props_region"] else "false", facts["options"]))
 driver += ["  return 0;", "}"]
 with tempfile.TemporaryDirectory() as directory:
     source = os.path.join(directory, "rule.cc")
@@ -186,15 +212,43 @@ with tempfile.TemporaryDirectory() as directory:
     with open(source, "w") as handle:
         handle.write("\n".join(driver))
     subprocess.run([compiler, "-std=c++17", "-o", binary, source], check=True)
-    answers = subprocess.run([binary], check=True, capture_output=True,
-                             text=True).stdout.split()
+    answers = [line.split() for line in subprocess.run(
+        [binary], check=True, capture_output=True, text=True).stdout.splitlines()]
 
 check(len(answers) == len(rows), "the rule answered every row")
 wrong = []
-for (label, _facts, expected), answer in zip(rows, answers):
+with_options = set()
+for (label, facts, expected), (answer, options) in zip(rows, answers):
     if answer != expected:
         wrong.append("%s: asks %s, means %s" % (label, answer, expected))
+    # Desktop's side panel: shown for an operator registered with it, when it has something to show.
+    desktop = expected != "library" and not facts["hide_props_region"] and facts["options"] > 0
+    if (options == "options") != desktop:
+        wrong.append("%s: options %s, desktop shows them: %s" % (label, options, desktop))
+    if options == "options":
+        with_options.add(label)
 check(not wrong, "the picker asks what each operator means:\n  " + "\n  ".join(wrong))
+present = {label for label, _f, _e in rows}
+missing = sorted((F6_OPTIONS & present) - with_options)
+check(not missing, "every operator of F6's table has its options asked for: %s" % missing)
+shown = sorted(NO_OPTIONS & with_options)
+check(not shown, "operators desktop shows no options for get none: %s" % shown)
+print("OPTIONS ASKED %d: %s" % (len(with_options), " ".join(sorted(with_options))))
+
+# In the iPad's selector, the options come before the picker, and the picker starts in one place.
+with open(os.path.join(ROOT, "source", "blender", "windowmanager", "intern",
+                       "wm_apple_ios_file.cc")) as handle:
+    source = handle.read()
+begin = source[source.index("bool WM_apple_ios_fileselect_begin"):]
+begin = begin[:begin.index("\n}\n")]
+check(begin.index("file_select_shows_options") < begin.index("picker_begin(C, id)"),
+      "the options are asked for before the picker")
+check(source.count("GHOST_ios_document_picker_begin(") == 1 and
+      source.index("GHOST_ios_document_picker_begin(") > source.index("void picker_begin("),
+      "the picker is started by picker_begin only, which follows the options")
+check(begin.count("native_operator_dialog_handback") == 1 and
+      begin.count("WM_apple_ios_options_dialog") == 1,
+      "the options are asked for in both interfaces")
 
 table = {}
 for (label, _facts, expected) in rows:

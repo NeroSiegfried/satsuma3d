@@ -54,6 +54,12 @@ struct FileSelectFacts {
   bool path_is_folder = false;
   /** The operator's name as the person reads it ("Export Keying Set"). */
   std::string_view name;
+  /** `hide_props_region`'s value: an operator registered without `WM_FILESEL_SHOW_PROPS` has it,
+   * true. Python operators do not. */
+  bool hide_props_region = false;
+  /** Properties the person can see other than the path's own (`filepath`, `directory`,
+   * `filename`, `files`, `relative_path`). */
+  int options = 0;
 };
 
 /** An operator that has no `check_existing` says what it does in its name. Python operators that
@@ -92,6 +98,19 @@ inline FileSelectKind file_select_kind(const FileSelectFacts &facts)
   }
   return facts.filepath && file_select_name_writes(facts.name) ? FileSelectKind::Save :
                                                                   FileSelectKind::Open;
+}
+
+/**
+ * Whether an operator's options are asked for before the picker (ROUND6 FILES-2, finding F6):
+ * desktop draws them in the File Browser's side panel, which the system picker has not. As desktop,
+ * an operator registered without `WM_FILESEL_SHOW_PROPS` has none to show.
+ */
+inline bool file_select_shows_options(const FileSelectFacts &facts)
+{
+  const FileSelectKind kind = file_select_kind(facts);
+  return (kind == FileSelectKind::Open || kind == FileSelectKind::Save ||
+          kind == FileSelectKind::Directory) &&
+         !facts.hide_props_region && facts.options > 0;
 }
 
 }  // namespace blender::wm::apple_ios

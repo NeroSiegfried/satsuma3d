@@ -83,6 +83,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <map>
 #include <set>
 #include <vector>
@@ -2345,6 +2346,9 @@ namespace {
 /* An operator whose properties are set before it runs, in place of Blender's dialog: owned here
  * until it runs or is cancelled, see #native_operator_dialog_begin. */
 wmOperator *native_dialog_operator = nullptr;
+/* Set when the operator is not the dialog's: OK and Cancel hand it back (true for OK) instead of
+ * running or freeing it, see #native_operator_dialog_handback. */
+std::function<void(bContext *, bool)> native_dialog_then;
 uint64_t native_dialog_generation = 0;
 std::string native_dialog_title;
 std::string native_dialog_confirm;
@@ -2357,6 +2361,7 @@ ARegion *native_dialog_region = nullptr;
 void native_dialog_end()
 {
   native_dialog_operator = nullptr;
+  native_dialog_then = nullptr;
   native_dialog_window = nullptr;
   native_dialog_area = nullptr;
   native_dialog_region = nullptr;
@@ -2402,6 +2407,26 @@ bool native_operator_dialog_begin(bContext *C,
   return true;
 }
 
+bool native_operator_dialog_handback(bContext *C,
+                                     wmOperator *op,
+                                     const std::string &title,
+                                     const std::string &confirm,
+                                     std::function<void(bContext *, bool)> then)
+{
+  if (!native_operator_dialog_begin(C, op, title, confirm, "")) {
+    return false;
+  }
+  native_dialog_then = std::move(then);
+  return true;
+}
+
+void native_operator_dialog_abandon(const wmOperator *op)
+{
+  if (op && native_dialog_operator == op) {
+    native_dialog_end();
+  }
+}
+
 namespace native {
 
 static void dialog_draw(bContext *C, Layout &layout)
@@ -2437,6 +2462,13 @@ std::string dialog_edit(bContext *C, PanelsData &data, const EditRequest &reques
   wmOperator *op = native_dialog_operator;
   if (!op || data.identity != "dialog" + std::to_string(native_dialog_generation)) {
     return "The dialog is no longer open.";
+  }
+  if (native_dialog_then && (ELEM(request.action, "cancel", "dismiss", "confirm"))) {
+    /* Handed back where it is owned, in the context the dialog was started in. */
+    std::function<void(bContext *, bool)> then = std::move(native_dialog_then);
+    native_dialog_end();
+    then(C, request.action == "confirm");
+    return "";
   }
   if (ELEM(request.action, "cancel", "dismiss")) {
     native_dialog_end();

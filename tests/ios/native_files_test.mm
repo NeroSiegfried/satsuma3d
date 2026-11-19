@@ -68,12 +68,19 @@ static void waitUntil(BOOL (^ready)(), void (^next)(), int attempts = 500)
 static void checkRouting(void (^finished)())
 {
   GHOST_ios_document_access_restore();
-  assert([documentFilename(@"  Model  ", @"blend") isEqual:@"Model.blend"]);
-  assert([documentFilename(@"Model.BLEND", @"blend") isEqual:@"Model.BLEND"]);
-  assert([documentFilename(@"v1.2", @"blend") isEqual:@"v1.2.blend"]);
+  NSArray *blend = documentContentTypes(@"org.blenderfoundation.blender.file", @"");
+  assert([documentFilename(@"  Model  ", @"blend", blend) isEqual:@"Model.blend"]);
+  assert([documentFilename(@"Model.BLEND", @"blend", blend) isEqual:@"Model.BLEND"]);
+  assert([documentFilename(@"v1.2", @"blend", blend) isEqual:@"v1.2.blend"]);
   for (NSString *invalid in @[ @"", @"  ", @".", @"..", @"../file", @"file/name", @"a:b" ]) {
-    assert(documentFilename(invalid, @"blend") == nil);
+    assert(documentFilename(invalid, @"blend", blend) == nil);
   }
+  /* A typed extension of a kind the operator writes is kept (ROUND6 FILES-2). */
+  NSArray *images = documentContentTypes(@"public.image", @"");
+  assert([documentFilename(@"render.jpg", @"png", images) isEqual:@"render.jpg"]);
+  assert([documentFilename(@"render", @"png", images) isEqual:@"render.png"]);
+  NSArray *gltf = documentContentTypes(@"", @"*.glb;*.gltf");
+  assert([documentFilename(@"scene.gltf", @"glb", gltf) isEqual:@"scene.gltf"]);
   NSArray *types = documentContentTypes(@"public.image", @"*.png;*.jpeg;*.png");
   assert(types.count == 2 && [types[0] conformsToType:UTTypeImage]);
   assert([documentContentTypes(@"public.audio", @"")[0] conformsToType:UTTypeAudio]);

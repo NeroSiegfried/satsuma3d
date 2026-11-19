@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <sstream>
 
 #include <fmt/format.h>
@@ -104,6 +105,7 @@
 #include "WM_api.hh"
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
 #  include "WM_apple_ios.hh"
+#  include "wm_apple_ios_file.hh"
 #endif
 #ifdef WITH_NATIVE_UI
 #  include "WM_native_ui.hh"
@@ -1489,17 +1491,22 @@ struct wmOpPopUp {
   bool cancel_default;
   bool mouse_move_quit;
   bool include_properties;
+  /** Instead of running the operator, OK and Cancel hand it back (true for OK), see
+   * #WM_apple_ios_options_dialog. */
+  std::function<void(bContext *, bool)> then;
 };
 
 /* Only invoked by OK button in popups created with #wm_block_dialog_create(). */
 static void dialog_exec_cb(bContext *C, void *arg1, void *arg2)
 {
   wmOperator *op;
+  std::function<void(bContext *, bool)> then;
   {
     /* Execute will free the operator.
      * In this case, wm_operator_ui_popup_cancel won't run. */
     wmOpPopUp *data = static_cast<wmOpPopUp *>(arg1);
     op = data->op;
+    then = std::move(data->then);
     MEM_delete(data);
   }
 
@@ -1514,6 +1521,10 @@ static void dialog_exec_cb(bContext *C, void *arg1, void *arg2)
   wmWindow *win = CTX_wm_window(C);
   popup_block_close(C, win, block);
 
+  if (then) {
+    then(C, true);
+    return;
+  }
   WM_operator_call_ex(C, op, true);
 }
 
@@ -1727,6 +1738,12 @@ static void wm_operator_ui_popup_cancel(bContext *C, void *user_data)
   wmOpPopUp *data = static_cast<wmOpPopUp *>(user_data);
   wmOperator *op = data->op;
 
+  if (data->then) {
+    std::function<void(bContext *, bool)> then = std::move(data->then);
+    MEM_delete(data);
+    then(C, false);
+    return;
+  }
   if (op) {
     if (op->type->cancel) {
       op->type->cancel(C, op);
@@ -1745,6 +1762,12 @@ static void wm_operator_ui_popup_ok(bContext *C, void *arg, int retval)
   wmOpPopUp *data = static_cast<wmOpPopUp *>(arg);
   wmOperator *op = data->op;
 
+  if (data->then) {
+    std::function<void(bContext *, bool)> then = std::move(data->then);
+    MEM_delete(data);
+    then(C, retval > 0);
+    return;
+  }
   if (op && retval > 0) {
     WM_operator_call_ex(C, op, true);
   }
@@ -1933,6 +1956,32 @@ wmOperatorStatus WM_operator_props_dialog_popup(bContext *C,
 
   return OPERATOR_RUNNING_MODAL;
 }
+
+#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
+void WM_apple_ios_options_dialog(bContext *C,
+                                 wmOperator *op,
+                                 std::string title,
+                                 std::string confirm_text,
+                                 std::function<void(bContext *, bool)> then)
+{
+  wmOpPopUp *data = MEM_new<wmOpPopUp>(__func__);
+  data->op = op;
+  data->width = int(float(400) * UI_SCALE_FAC * ui::style_get()->widget.points /
+                    UI_DEFAULT_TEXT_POINTS);
+  data->free_op = false; /* The file selector owns it. */
+  data->title = std::move(title);
+  data->confirm_text = std::move(confirm_text);
+  data->icon = ui::AlertIcon::None;
+  data->size = WM_POPUP_SIZE_SMALL;
+  data->position = WM_POPUP_POSITION_CENTER;
+  data->cancel_default = false;
+  data->mouse_move_quit = false;
+  data->include_properties = true;
+  data->then = std::move(then);
+  popup_block_ex(
+      C, wm_block_dialog_create, wm_operator_ui_popup_ok, wm_operator_ui_popup_cancel, data, op);
+}
+#endif
 
 wmOperatorStatus WM_operator_redo_popup(bContext *C, wmOperator *op)
 {
