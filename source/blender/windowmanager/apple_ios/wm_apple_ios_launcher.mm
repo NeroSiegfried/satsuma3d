@@ -264,12 +264,20 @@ static NSString *const launcher_opening_ends_key = @"BlenderSessionOpeningEnds";
 + (void)startWithLastSession:(NSString *)last_session;
 @end
 
+/* The app's version, from `AppIdentity.swift`, the one place that reads it. */
+@interface NSObject (WMIOSSwiftAppIdentity)
++ (NSString *)versionAndBuild;
+@end
+
 static NSString *launcherBuild()
 {
-  NSDictionary *info = NSBundle.mainBundle.infoDictionary;
-  return [NSString stringWithFormat:@"%@ (%@)",
-                                    info[@"CFBundleShortVersionString"] ?: @"?",
-                                    info[@"CFBundleVersion"] ?: @"?"];
+  Class identity = NSClassFromString(@"WMIOSAppIdentity");
+  NSString *build = identity ? [identity versionAndBuild] : nil;
+  if (build == nil) {
+    WM_native_ui_log("launch", "the app's version could not be read (WMIOSAppIdentity missing)");
+    return @"?";
+  }
+  return build;
 }
 
 static void launcherMarkerSet(NSURL *url, NSString *phase)

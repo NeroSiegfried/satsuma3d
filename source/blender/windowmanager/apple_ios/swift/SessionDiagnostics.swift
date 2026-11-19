@@ -31,9 +31,8 @@ final class SessionDiagnostics: NSObject, MXMetricManagerSubscriber {
   }
 
   private static func launchLine() -> String {
-    let info = Bundle.main.infoDictionary ?? [:]
-    let version = info["CFBundleShortVersionString"] as? String ?? "?"
-    let build = info["CFBundleVersion"] as? String ?? "?"
+    let version = AppIdentity.version.isEmpty ? "?" : AppIdentity.version
+    let build = AppIdentity.build.isEmpty ? "?" : AppIdentity.build
     var system = utsname()
     uname(&system)
     let machine = withUnsafeBytes(of: &system.machine) { bytes in

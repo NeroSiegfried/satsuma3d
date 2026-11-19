@@ -36,3 +36,11 @@ enum AppIdentity {
   /** "0.1.0 (1)". */
   static var versionAndBuild: String { build.isEmpty ? version : "\(version) (\(build))" }
 }
+
+/** `AppIdentity` for Objective-C, so the app's version is read in this file only (the packaging
+ * test `test_versions_kept_apart` keeps it apart from Blender's). */
+@objc(WMIOSAppIdentity)
+final class AppIdentityObjC: NSObject {
+  /** "0.1.0 (1)", or "?" when the build wrote no version. */
+  @objc static var versionAndBuild: String { AppIdentity.version.isEmpty ? "?" : AppIdentity.versionAndBuild }
+}
