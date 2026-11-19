@@ -93,13 +93,30 @@ that library without them, which `derive_python_without_openssl.py` makes at con
 build directory (`<build>/python_without_openssl/`; checked, never committed), and no longer links
 `libssl.a` or `libcrypto.a`. `hashlib` then uses Python's own MD5, SHA-1, SHA-2, SHA-3 and BLAKE2
 (`pbkdf2_hmac` and `scrypt` are gone), `hmac` its own code, `import ssl` raises `ImportError`, and an
-`https` request fails with `URLError` ("unknown url type"). `check_no_encryption_library.py <app>`
-reads the main program and every library with `nm` and for OpenSSL's version text and says
-`no encryption library` or `encryption library present`. `build_testflight.sh` writes
-`ITSAppUsesNonExemptEncryption` = false exactly when it passes and leaves the key out when it
-fails; `upload_testflight.sh` prints both and refuses when they disagree. `-DWITH_PLATYPUS_PYTHON_OPENSSL=ON`
+`https` request fails with `URLError` ("unknown url type"). `-DWITH_PLATYPUS_PYTHON_OPENSSL=ON`
 (`PYTHON_OPENSSL=ON` in the settings) links the library and OpenSSL again, as build 1 did; desktop
 builds do not have the option.
+
+The app still holds cipher code that is not the operating system's: FFmpeg's own AES, AES-CTR,
+DES, RC4 and TEA with the demuxers, muxers and protocols that use them (the `crypto:` protocol,
+SRTP, protected MP4, HLS, ASF, MXF), and libharu's PDF encryption (ROUND5 8M.2; desktop Blender
+has them too). `check_no_encryption_library.py [--claim ask|exempt [--write-key]] <app>` reads the
+main program and every library with `nm` (demangling C++ and Swift names) and lists every cipher in
+three groups: **a general encryption library** (OpenSSL, BoringSSL, LibreSSL, mbedTLS, wolfSSL,
+libsodium, libgcrypt, nettle, Crypto++, libtomcrypt); **format ciphers**, each family on the
+reviewed list `reviewed_ciphers.txt` with its library and reason (the same list names what only
+looks like a cipher: cryptomatte, FreeType's `t1_decrypt`, the random number generators'
+`chacha_block`); and **unreviewed**, any defined symbol whose name names a cipher and is on neither
+list. Its verdict: `no encryption library` (0), `encryption library present` (1), `unreviewed cipher
+code` (3), or `cannot check` (2). A library update that brings a cipher in shows up as unreviewed
+until someone reads it and adds a line.
+
+The key (`ITSAppUsesNonExemptEncryption`) is the owner's claim, not the build's (decision 98).
+`ENCRYPTION_CLAIM` in the settings is `ask` by default: no key, and App Store Connect asks at upload.
+`exempt` is the owner's recorded decision; even then `build_testflight.sh` writes the key `false`
+only when the check finds no general library and nothing unreviewed, and leaves it out otherwise.
+`upload_testflight.sh` prints the three groups and the claim and refuses an archive whose key is not
+the one that rule writes.
 
 **Uploading** (ROUND5 8L, L4) is `upload_testflight.sh [<settings>]`. It reads the archive and the
 exported `.ipa` that `build_testflight.sh` made, prints the app, version, build number, source

@@ -1,0 +1,42 @@
+# Cipher code in the iPad app that is not the operating system's and not a general encryption
+# library, reviewed one family at a time (ROUND5 8M.2, E6; decisions 98-99). Read by
+# `check_no_encryption_library.py`: a defined symbol whose name names a cipher and that matches no
+# line here is "unreviewed", and an unreviewed symbol keeps the tester build from claiming anything
+# about encryption. A library update that brings a new cipher in therefore shows up as unreviewed
+# until someone reads it and adds a line with its reason.
+#
+# One line per family: `<group> | <library> | <family> | <pattern> | <reason>`.
+#   group    `format`: a cipher inside a media or document library (listed every time, never a pass
+#            for claiming "no encryption" by itself: the claim is the owner's, ENCRYPTION_CLAIM);
+#            `not a cipher`: a name that only looks like one, with why.
+#   pattern  a Python regular expression matched whole against the demangled name, without Mach-O's
+#            leading underscore. Keep each one narrow: it hides what it matches.
+# How each format cipher could be reached in this app, read in the code: Blender iPad
+# evidence/2026-11-19-encryption/format-ciphers-reach.md (8M.2, E8).
+#
+# Reviewed 2026-11-19 against the tester build of 9ffb6d74682 (the main program and its 40
+# libraries); the library each symbol comes from was read in lib/ios_arm64 with `nm -A`.
+
+format | FFmpeg (libavutil, aes.c) | AES | av_aes_(alloc|crypt|init|size)|aes_(crypt|encrypt|decrypt) | FFmpeg's own AES-128/192/256 block cipher; used by the demuxers and protocols below to read protected media, never for the app's own data
+format | FFmpeg (libavutil, aes_ctr.c) | AES-CTR | av_aes_ctr_[a-z_]+ | FFmpeg's AES counter mode, for reading (mov.c) and writing (movenccenc.c) MP4 Common Encryption
+format | FFmpeg (libavutil, des.c) | DES | av_des_[a-z_]+|des_encdec | FFmpeg's DES, called by ASF's legacy content protection (asfcrypt.o) and the OpenMG/ATRAC demuxer (omadec.o), both reading
+format | FFmpeg (libavutil, rc4.c) | RC4 | av_rc4_[a-z_]+ | FFmpeg's RC4, used by ASF's legacy content protection (asfcrypt) only
+format | FFmpeg (libavutil, tea.c) | TEA | av_tea_[a-z_]+|tea_crypt_ecb | FFmpeg's TEA, called only by the Audible .aa demuxer (aadec.o), reading
+format | FFmpeg (libavutil, encryption_info.c) | encryption side data | av_encryption_(info|init_info)_[a-z_]+ | containers for the key ids and IVs a protected stream announces; no cipher of their own
+format | FFmpeg (libavformat, crypto.c) | crypto: protocol | ff_crypto_protocol|crypto_(class|close|open2|options|read|seek|write) | the `crypto:` URL protocol (AES-128-CBC read and write of a stream, as HLS uses); reached only by a URL that names it
+format | FFmpeg (libavformat, srtp.c, srtpproto.c, rtpdec.c) | SRTP | ff_srtp_[a-z_]+|srtp_[a-z_]+|ff_rtp_parse_set_crypto | Secure RTP for RTSP/RTP streaming, both directions; reached only by an `srtp:` or `rtsp:` URL
+format | FFmpeg (libavformat, movenccenc.c) | MP4 Common Encryption, writing | ff_mov_cenc_[a-z_]+|mov_cenc_start_packet | the MP4 muxer's AES-CTR encryption of samples, switched on only by the muxer options `encryption_scheme`, `encryption_key` and `encryption_kid`
+format | FFmpeg (libavformat, mov.c) | MP4/MOV protected samples | mov_aaxc_crypto|mov_read_sample_encryption_info|get_current_encryption_info | reading Common Encryption (cenc) and Audible AAXC samples, with a key the caller passes as an option
+format | FFmpeg (libavformat, hls_sample_encryption.c) | HLS sample encryption | ff_hls_senc_[a-z_]+|mov_read_senc | reading HLS SAMPLE-AES segments (key fetched by URL) and MP4's `senc` box
+format | FFmpeg (libavformat, asfcrypt.c, asf.c) | ASF content protection | ff_asfcrypt_dec|ff_asf_(ext_)?content_encryption | reading legacy ASF/WMV DRM-protected payloads (RC4 and DES) given a key
+format | FFmpeg (libavformat, mxfdec.c, mxfenc.c) | MXF encrypted essence | mxf_(aes3_descriptor_key|crypto_source_container_ul|encrypted_essence_container|read_cryptographic_context|write_aes3_desc)|mxf_decrypt_triplet\.checkv | MXF's encrypted-triplet labels and (with a key) AES decryption when reading; `aes3` in the writer is AES3 the audio format, not the cipher
+format | FFmpeg (libavformat, matroskadec.c) | Matroska content encryption | matroska_track_encoding_encryption | the parser's record of a track's ContentEncryption element; it reports the key id and does not decrypt
+format | libharu (libhpdf, hpdf_encrypt.c, hpdf_encryptdict.c, hpdf_doc.c) | PDF encryption (RC4 40/128) | HPDF_(Encrypt|EncryptDict)_[A-Za-z]+|HPDF_Doc_(PrepareEncryption|SetEncryptOn|SetEncryptOff)|HPDF_SetEncryptionMode | PDF's standard security handler; switched on only by HPDF_SetPassword
+
+not a cipher | Blender | cryptomatte | (.*[^A-Za-z])?(\w*[Cc]ryptomatte\w*|crypto_picker|template_crypto_picker)([^A-Za-z].*)? | Cryptomatte is an ID-matte render pass (object, material and asset masks by hashed name); "crypto" is its name, not a cipher
+not a cipher | FreeType (psaux) | Type 1 font obfuscation | t1_decrypt | the Type 1 font format's fixed eexec/charstring scrambling with public constants (r = 55665/4330); reading fonts, not encryption
+not a cipher | SQLite, Python (obmalloc/mimalloc) | ChaCha20 random numbers | chacha_block|sqlite3_randomness\.chacha20_init | the ChaCha20 block function used as a pseudo-random number generator (sqlite3_randomness; mimalloc's heap randomisation); no data is enciphered
+not a cipher | FFmpeg (libavcodec, dv.c) | DV serpentine scan | dv_calc_mb_coordinates\.serpent[12] | the DV codec's serpentine macroblock order tables
+not a cipher | OpenColorIO (minizip-ng) | zip CRC and random bytes | mz_crypt_(crc32_update|rand)|mz_zip_writer_set_aes | minizip-ng built without encryption: the program has no mz_stream_wzaes or mz_stream_pkcrypt; mz_crypt.c holds only a CRC-32 and the OS's random bytes, and the AES setter only stores a flag nothing reads
+not a cipher | NumPy (Highway) | SIMD target name | .*N_NEON_WITHOUT_AES.* | Highway's name for the NEON target without the AES instructions; the code is sorting
+not a cipher | the app (Swift, CryptoKit) | SHA-256 hashing | .*CryptoKit\.SHA256.*|9CryptoKit12SHA256DigestV | Swift's specialisations of the operating system's CryptoKit SHA-256 (RenderSheet.swift names a render's file by a hash of its path); a hash, and the OS's

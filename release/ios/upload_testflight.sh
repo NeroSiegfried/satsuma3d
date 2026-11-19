@@ -10,12 +10,14 @@
 #
 # Takes the archive `build_testflight.sh` made (`<build dir>/Satsuma3D.xcarchive`, with its exported
 # `.ipa` beside it, so the export has run) and prints what it would send: the app, its version,
-# build number, source commit, the encryption key and the verdict of `check_no_encryption_library.py`
-# on the archived app. Then it checks:
+# build number, source commit, the encryption key, the owner's claim and the three groups of
+# `check_no_encryption_library.py` on the archived app. Then it checks:
 #
 # - the archive's bundle id, version and build number are the settings' (`testflight.env`);
-# - the key and the verdict agree (ROUND5 8M, E4): `ITSAppUsesNonExemptEncryption` false with no
-#   encryption library, no key with one; anything else, or a program the check cannot read, refuses;
+# - the key is the one the rule writes (ROUND5 8M.2, E7): `ITSAppUsesNonExemptEncryption` false only
+#   when the check finds no general encryption library and nothing unreviewed and the settings carry
+#   the owner's `ENCRYPTION_CLAIM=exempt`; no key in every other case. Anything else, a program the
+#   check cannot read or a claim it does not know refuses. The check's three groups are printed;
 # - the commit the app names (`SatsumaSourceCommit`) is in this checkout and is on the `github`
 #   remote's `ipad/main` (read with `git ls-remote`; nothing is fetched): every tester's build has
 #   its exact source published (the GPL; PLAN §3, decision 89);
@@ -65,6 +67,7 @@ main() {
   BUNDLE_ID=app.satsuma3d
   MARKETING_VERSION=0.1.0
   BUILD_NUMBER=1
+  ENCRYPTION_CLAIM=ask
   TEAM_ID=
   BUILD_DIR="$workspace/build_ios_testflight"
   REMOTE=github
@@ -104,20 +107,25 @@ main() {
   echo "  archive    $archive"
   echo "  package    $ipa"
   echo "  ITSAppUsesNonExemptEncryption  $encryption"
-  local check_status=0 verdict
-  verdict="$(python3 -B "$checkout/release/ios/check_no_encryption_library.py" "$app" 2>&1)" || check_status=$?
-  verdict="$(echo "$verdict" | tail -1 | sed "s|: $app\$||")"
+  local check_status=0 output verdict expected
+  output="$(python3 -B "$checkout/release/ios/check_no_encryption_library.py" --claim "$ENCRYPTION_CLAIM" "$app" 2>&1)" \
+    || check_status=$?
+  verdict="$(echo "$output" | tail -1 | sed "s|: $app\$||")"
+  echo "  encryption claim  $ENCRYPTION_CLAIM (testflight.env)"
   echo "  encryption check  $verdict"
+  echo "$output" | sed -n '/^1\. /,/^3\. /p; /^   /p' | awk '!seen[$0]++' | sed "s|$app/||; s|^|    |"
+  expected="$(echo "$output" | sed -n 's/^ITSAppUsesNonExemptEncryption: //p' | cut -d' ' -f1)"
 
   local problems=()
   [ "$bundle_id" = "$BUNDLE_ID" ] || problems+=("the archive's bundle id is $bundle_id, the settings say $BUNDLE_ID")
   [ "$version" = "$MARKETING_VERSION" ] || problems+=("the archive's version is $version, the settings say $MARKETING_VERSION")
   [ "$build" = "$BUILD_NUMBER" ] || problems+=("the archive's build is $build, the settings say $BUILD_NUMBER")
-  case "$check_status:$encryption" in
-    0:false|1:"(absent)") ;;
-    0:*) problems+=("no encryption library in the program, but ITSAppUsesNonExemptEncryption is $encryption (expected false)") ;;
-    1:*) problems+=("the program carries an encryption library, but ITSAppUsesNonExemptEncryption is $encryption (expected absent)") ;;
-    *) problems+=("the encryption check could not read the program: $verdict") ;;
+  case "$check_status" in
+    0|1|3)
+      [ "$expected" = absent ] && expected="(absent)"
+      [ "$encryption" = "$expected" ] \
+        || problems+=("ITSAppUsesNonExemptEncryption is $encryption, but the rule writes $expected for \"$verdict\" with ENCRYPTION_CLAIM=$ENCRYPTION_CLAIM") ;;
+    *) problems+=("the encryption check could not read the program or the claim: $verdict") ;;
   esac
 
   local tag="testers/$version-$build"

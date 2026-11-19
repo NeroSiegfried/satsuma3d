@@ -14,7 +14,8 @@
 #   4. numpy      NumPy's modules rebuilt and relinked as dynamic libraries (`build_numpy_ios.sh`)
 #   5. oidn       OpenImageDenoise rebuilt to find its device module as a framework (`build_oidn_ios.sh`)
 #   6. prepare    every library a framework, without app extensions (`prepare_testflight.py`);
-#                 the encryption key written from a check of the program (`check_no_encryption_library.py`)
+#                 every cipher listed and the encryption key written from the check and the owner's
+#                 recorded claim (`check_no_encryption_library.py`, ENCRYPTION_CLAIM)
 #   7. checks     identity, layout, privacy manifests, artwork (`test_testflight_packaging.py`)
 #   8. archive    signed `.xcarchive` (`archive_testflight.py`), and
 #   9. export     an App Store `.ipa` on disk (`xcodebuild -exportArchive`, destination `export`)
@@ -50,6 +51,8 @@ main() {
   MINIMUM_OS=27.0
   # ROUND5 8M, E5: ON links Python's `_ssl` and `_hashlib` and OpenSSL, as build 1 did.
   PYTHON_OPENSSL=OFF
+  # ROUND5 8M.2, E7: the owner's recorded decision about the encryption claim; `ask` makes none.
+  ENCRYPTION_CLAIM=ask
   TEAM_ID=
   SIGNING_IDENTITY=
   PROFILE=
@@ -68,6 +71,10 @@ main() {
     *.dev) fail "BUNDLE_ID $BUNDLE_ID ends in .dev: that is the development app's; a tester build needs its own" ;;
   esac
   [ -n "$SOURCE_URL" ] || fail "SOURCE_URL is empty: a build for other people must name its source"
+  case "$ENCRYPTION_CLAIM" in
+    ask|exempt) echo "Encryption claim: $ENCRYPTION_CLAIM (ROUND5 8M.2: \`exempt\` is the owner's recorded decision; \`ask\` makes no claim)" ;;
+    *) fail "ENCRYPTION_CLAIM is '$ENCRYPTION_CLAIM': it must be ask (the default: no claim, App Store Connect asks) or exempt (the owner's recorded decision)" ;;
+  esac
 
   local release="$checkout/release/ios"
   local logs="$BUILD_DIR/logs"
@@ -194,29 +201,34 @@ main() {
      --without-plugins) > "$logs/prepare.log" 2>&1 \
     || fail_log prepare
   tail -1 "$logs/prepare.log"
-  # Encryption (ROUND5 8M, E4; decision 95): the key follows the program, never a hand. When the
-  # check finds no OpenSSL in the prepared app (the default: Python without `_ssl` and `_hashlib`),
-  # the key says `false` and App Store Connect asks nothing. When it finds it (`PYTHON_OPENSSL=ON`,
-  # build 1's library), the key is left out and App Store Connect asks at upload (decision 92).
-  # A program the check cannot read stops the build.
-  /usr/libexec/PlistBuddy -c 'Delete :ITSAppUsesNonExemptEncryption' "$prepared/Info.plist" 2>/dev/null || true
+  # Encryption (ROUND5 8M.2, E6 and E7; decisions 98-99): the check lists every cipher in the app in
+  # three groups (a general encryption library; format ciphers on the reviewed list; unreviewed), and
+  # writes the key from the rule: ITSAppUsesNonExemptEncryption = false only when there is no general
+  # library and nothing unreviewed **and** the settings carry the owner's decision
+  # (ENCRYPTION_CLAIM=exempt). Otherwise no key, and App Store Connect asks (as for build 1). The key
+  # is never written by hand. A program the check cannot read, or a claim it does not know, stops
+  # the build.
   local encryption status=0
-  "$python" -B "$release/check_no_encryption_library.py" "$prepared" > "$logs/encryption.log" 2>&1 || status=$?
+  "$python" -B "$release/check_no_encryption_library.py" --claim "$ENCRYPTION_CLAIM" --write-key "$prepared" \
+    > "$logs/encryption.log" 2>&1 || status=$?
   case "$status" in
-    0) encryption=none
-       /usr/libexec/PlistBuddy -c 'Add :ITSAppUsesNonExemptEncryption bool false' "$prepared/Info.plist" ;;
+    0) encryption=none ;;
     1) encryption=present ;;
+    3) encryption=unreviewed ;;
     *) fail_log encryption ;;
   esac
-  echo "  $(tail -1 "$logs/encryption.log" | sed "s|$prepared|the prepared app|")"
+  sed -n '/^1\. /,$p' "$logs/encryption.log" | sed "s|$prepared|the prepared app|; s|^|  |"
 
   # 7. Checks.
   step checks
   "$python" -B - "$prepared" "$BUNDLE_ID" "$PRODUCT_NAME" "$MARKETING_VERSION" "$BUILD_NUMBER" \
-    "$SOURCE_URL" "$MINIMUM_OS" "$commit" "$encryption" <<'PYTHON' || fail "the prepared app's identity is wrong"
+    "$SOURCE_URL" "$MINIMUM_OS" "$commit" "$encryption" "$ENCRYPTION_CLAIM" "$release" <<'PYTHON' \
+    || fail "the prepared app's identity is wrong"
 import plistlib, sys
 from pathlib import Path
-app, bundle_id, name, version, build, source, minimum, commit, encryption = sys.argv[1:]
+app, bundle_id, name, version, build, source, minimum, commit, encryption, claim, release = sys.argv[1:]
+sys.path.insert(0, release)
+from check_no_encryption_library import key_for
 info = plistlib.loads((Path(app) / 'Info.plist').read_bytes())
 expected = {
     'CFBundleIdentifier': bundle_id, 'CFBundleName': name, 'CFBundleDisplayName': name,
@@ -227,16 +239,18 @@ expected = {
 }
 wrong = [f'{key} is {info.get(key)!r}, expected {value!r}' for key, value in expected.items()
          if info.get(key) != value]
-# ROUND5 8M, E4: false exactly when the check found no encryption library; absent otherwise.
+# ROUND5 8M.2, E7: the key is what the rule writes for this verdict and claim, and nothing else.
 key = info.get('ITSAppUsesNonExemptEncryption', 'absent')
-if (encryption, key) not in (('none', False), ('present', 'absent')):
-    wrong.append(f'ITSAppUsesNonExemptEncryption is {key!r} but the check says the library is {encryption}')
+expected = key_for({'none': 0, 'present': 1, 'unreviewed': 3}[encryption], claim)
+if key != ('absent' if expected is None else expected):
+    wrong.append(f'ITSAppUsesNonExemptEncryption is {key!r}, but the rule writes '
+                 f'{"none" if expected is None else expected!r} for "{encryption}" with ENCRYPTION_CLAIM={claim}')
 if (Path(app) / 'PlugIns').exists():
     wrong.append('the app carries PlugIns (decision 36)')
 for line in wrong:
     print('  ' + line)
 print(f'  identity: {bundle_id} {version} ({build}), source {source} at {commit[:11]}')
-print(f'  encryption: library {encryption}, ITSAppUsesNonExemptEncryption {key}')
+print(f'  encryption: {encryption}, claim {claim}, ITSAppUsesNonExemptEncryption {key}')
 sys.exit(1 if wrong else 0)
 PYTHON
   (cd "$release" && "$python" -B -c 'import sys; from prepare_testflight import check_icons

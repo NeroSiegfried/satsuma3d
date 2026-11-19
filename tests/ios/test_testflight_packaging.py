@@ -363,23 +363,33 @@ class BuildScriptTest(unittest.TestCase):
             return subprocess.run(['bash', str(self.SCRIPT), str(path)], capture_output=True, text=True,
                                   timeout=60)
 
-    def test_encryption_key_follows_the_check(self):
-        """ROUND5 8M, E4 (decision 95): the tester build's key is written from the check of the
-        prepared program: false when it finds no encryption library, absent when it finds one, and
-        the identity check holds the pair. Nothing else writes the key. E5: one setting brings the
-        library back. The development build's template keeps its key."""
+    def test_encryption_key_follows_the_check_and_the_claim(self):
+        """ROUND5 8M.2, E7 (decision 98): the tester build's key is written by the check from its
+        verdict and the owner's recorded claim (`ENCRYPTION_CLAIM`, default `ask`), and the identity
+        check holds it to the same rule (`key_for`). Nothing else writes the key. E5: one setting
+        brings the library back. The development build's template keeps its key."""
         text = self.SCRIPT.read_text()
-        self.assertIn('"$release/check_no_encryption_library.py" "$prepared"', text)
-        self.assertIn("Delete :ITSAppUsesNonExemptEncryption' \"$prepared/Info.plist\"", text)
-        self.assertIn("0) encryption=none\n       /usr/libexec/PlistBuddy -c 'Add :ITSAppUsesNonExemptEncryption bool false'", text)
-        self.assertIn('1) encryption=present ;;', text)
-        self.assertIn('*) fail_log encryption ;;', text)
-        self.assertEqual(text.count('ITSAppUsesNonExemptEncryption bool'), 1)
-        self.assertIn("if (encryption, key) not in (('none', False), ('present', 'absent')):", text)
+        self.assertIn('"$release/check_no_encryption_library.py" --claim "$ENCRYPTION_CLAIM" --write-key "$prepared"',
+                      text)
+        self.assertIn('  ENCRYPTION_CLAIM=ask\n', text)
+        for line in ('0) encryption=none ;;', '1) encryption=present ;;', '3) encryption=unreviewed ;;',
+                     '*) fail_log encryption ;;'):
+            self.assertIn(line, text)
+        self.assertNotIn('ITSAppUsesNonExemptEncryption bool', text)
+        self.assertNotIn('PlistBuddy -c \'Add :ITSApp', text)
+        self.assertIn('from check_no_encryption_library import key_for', text)
+        self.assertIn("expected = key_for({'none': 0, 'present': 1, 'unreviewed': 3}[encryption], claim)", text)
         self.assertIn('PYTHON_OPENSSL=OFF', text)
         self.assertIn('-DWITH_PLATYPUS_PYTHON_OPENSSL="$PYTHON_OPENSSL"', text)
         template = plistlib.loads((self.SCRIPT.parent / 'Blender.app/Info.plist').read_bytes())
         self.assertIs(template.get('ITSAppUsesNonExemptEncryption'), False)
+        example = (self.SCRIPT.parent / 'testflight.env.example').read_text()
+        self.assertIn('\nENCRYPTION_CLAIM=ask\n', example)
+
+    def test_refuses_a_claim_it_does_not_know(self):
+        result = self.run_with('ENCRYPTION_CLAIM=yes\n')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("ENCRYPTION_CLAIM is 'yes'", result.stderr)
 
     def test_refuses_the_development_identity_and_a_missing_source(self):
         result = self.run_with('BUNDLE_ID=app.example.dev\n')
@@ -408,6 +418,19 @@ PLAIN_PROGRAM = 'int main(void) { return 0; }\n'
 # The same program, linked against the prebuilt OpenSSL the way the stock app was.
 OPENSSL_PROGRAM = ('const char *OpenSSL_version(int);\n'
                    'int main(void) { return OpenSSL_version(0)[0] == 0; }\n')
+
+
+def defining(*names):
+    """A program that defines (and calls) functions of these names."""
+    return (''.join(f'void {name}(void) {{}}\n' for name in names)
+            + 'int main(void) { ' + ' '.join(f'{name}();' for name in names) + ' return 0; }\n')
+
+
+# One program for each group of ROUND5 8M.2's check (E6).
+FORMAT_PROGRAM = defining('av_rc4_init', 'HPDF_Encrypt_Init')          # format ciphers, reviewed
+NOT_A_CIPHER_PROGRAM = defining('cryptomatte_hash', 't1_decrypt')      # reviewed: not ciphers
+UNREVIEWED_PROGRAM = defining('av_rc4_init', 'blowfish_encrypt_block')  # a cipher on no list
+GENERAL_PROGRAM = defining('mbedtls_aes_init')                         # a general library (mbedTLS)
 
 
 @unittest.skipUnless(sys.platform == 'darwin', 'Requires the iPhoneOS SDK')
@@ -451,6 +474,91 @@ class EncryptionCheckTest(unittest.TestCase):
         program = ios_program(self.root / 'text', 'const char *v = "OpenSSL 3.5.2 5 Aug 2025";\n'
                               'int main(void) { return v[0] == 0; }\n')
         self.assertEqual(self.verdict(program)[0], 1)
+
+    def output(self, path, *options):
+        return subprocess.run([sys.executable, '-B', str(Path(__file__).resolve().parents[2] /
+                               'release/ios/check_no_encryption_library.py'), *options, str(path)],
+                              capture_output=True, text=True)
+
+    def test_three_groups(self):
+        """ROUND5 8M.2, E6: each group present and absent."""
+        plain = self.output(ios_program(self.root / 'plain', PLAIN_PROGRAM))
+        self.assertEqual(plain.returncode, 0)
+        for line in ('1. general encryption library: none', '2. format ciphers (reviewed, reviewed_ciphers.txt): none',
+                     '3. unreviewed: none'):
+            self.assertIn(line, plain.stdout)
+        found = self.output(ios_program(self.root / 'format', FORMAT_PROGRAM))
+        self.assertEqual(found.returncode, 0, found.stdout)
+        self.assertIn('2. format ciphers (reviewed, reviewed_ciphers.txt): 2 families, 2 symbols', found.stdout)
+        self.assertIn('FFmpeg (libavutil, rc4.c): RC4: 1 (av_rc4_init)', found.stdout)
+        self.assertIn('PDF encryption (RC4 40/128): 1 (HPDF_Encrypt_Init)', found.stdout)
+        self.assertIn('3. unreviewed: none', found.stdout)
+        named = self.output(ios_program(self.root / 'named', NOT_A_CIPHER_PROGRAM))
+        self.assertEqual(named.returncode, 0, named.stdout)
+        self.assertIn('named like a cipher but not one (reviewed): Blender: cryptomatte (1); '
+                      'FreeType (psaux): Type 1 font obfuscation (1)', named.stdout)
+        unreviewed = self.output(ios_program(self.root / 'unreviewed', UNREVIEWED_PROGRAM))
+        self.assertEqual(unreviewed.returncode, 3, unreviewed.stdout)
+        self.assertIn('3. unreviewed: 1 symbols', unreviewed.stdout)
+        self.assertIn('   blowfish_encrypt_block  (in ', unreviewed.stdout)
+        self.assertEqual(unreviewed.stdout.strip().splitlines()[-1],
+                         f'unreviewed cipher code: {self.root / "unreviewed"}')
+        general = self.output(ios_program(self.root / 'general', GENERAL_PROGRAM))
+        self.assertEqual(general.returncode, 1, general.stdout)
+        self.assertIn('1. general encryption library: PRESENT', general.stdout)
+        self.assertIn('   mbedTLS in ', general.stdout)
+
+    def test_names_cipher(self):
+        from check_no_encryption_library import names_cipher
+        for name in ('av_aes_init', 'AESContext::encrypt', 'Rc4Key', 'chacha20_block', 'ff_mov_cenc_init',
+                     'my_cipher_init', 'srtp_open', 'twofish_setup'):
+            self.assertTrue(names_cipher(name), name)
+        for name in ('nodes_update', 'instead_of', 'steady_clock', 'random_seed', 'des', 'ui_desc'):
+            self.assertEqual(names_cipher(name), name == 'des', name)
+
+    def test_key_rule_for_every_verdict_and_claim(self):
+        """ROUND5 8M.2, E7: false only for "no encryption library" with `exempt`; no key otherwise.
+        `--write-key` (what `build_testflight.sh` runs) writes exactly that, over whatever was there."""
+        from check_no_encryption_library import key_for
+        programs = {0: FORMAT_PROGRAM, 1: GENERAL_PROGRAM, 3: UNREVIEWED_PROGRAM}
+        for status, source in programs.items():
+            for claim in ('ask', 'exempt'):
+                for before in (None, False, True):
+                    with self.subTest(status=status, claim=claim, before=before):
+                        app = self.root / f'{status}-{claim}-{before}/Example.app'
+                        ios_program(app / 'Example', source)
+                        info = {'CFBundleExecutable': 'Example'}
+                        if before is not None:
+                            info['ITSAppUsesNonExemptEncryption'] = before
+                        (app / 'Info.plist').write_bytes(plistlib.dumps(info))
+                        result = self.output(app, '--claim', claim, '--write-key')
+                        self.assertEqual(result.returncode, status, result.stdout)
+                        written = plistlib.loads((app / 'Info.plist').read_bytes()).get(
+                            'ITSAppUsesNonExemptEncryption', 'absent')
+                        expected = False if (status, claim) == (0, 'exempt') else 'absent'
+                        self.assertEqual(written, expected)
+                        self.assertEqual(key_for(status, claim), None if expected == 'absent' else False)
+                        self.assertIn(f'claim: {claim}', result.stdout)
+                        self.assertIn('ITSAppUsesNonExemptEncryption: ' + ('false' if expected is False else 'absent ('),
+                                      result.stdout)
+        with self.assertRaises(ValueError):
+            key_for(0, 'yes')
+        result = self.output(self.root / '0-ask-None/Example.app', '--claim', 'yes')
+        self.assertEqual(result.returncode, 2)
+
+    def test_the_reviewed_list_is_whole(self):
+        """Every line of the list reads, says why, and no pattern is so wide that it hides any name."""
+        from check_no_encryption_library import reviewed
+        entries = reviewed()
+        self.assertGreaterEqual(len([entry for entry in entries if entry.group == 'format']), 10)
+        for entry in entries:
+            self.assertFalse(entry.pattern.fullmatch('blowfish_encrypt_block'), entry.line)
+            self.assertFalse(entry.pattern.fullmatch(''), entry.line)
+            self.assertGreater(len(entry.reason), 20, entry.line)
+        broken = self.root / 'list.txt'
+        broken.write_text('format | a | b | c\n')
+        with self.assertRaises(ValueError):
+            reviewed(broken)
 
     def test_unreadable_is_never_a_pass(self):
         self.assertEqual(self.verdict(self.root / 'missing')[0], 2)
@@ -571,8 +679,8 @@ class UploadScriptTest(unittest.TestCase):
         script = self.repo / 'release/ios/upload_testflight.sh'
         script.parent.mkdir(parents=True)
         script.write_text(self.SCRIPT.read_text())
-        check = 'check_no_encryption_library.py'
-        (script.parent / check).write_text((self.SCRIPT.parent / check).read_text())
+        for name in ('check_no_encryption_library.py', 'reviewed_ciphers.txt'):
+            (script.parent / name).write_text((self.SCRIPT.parent / name).read_text())
         self.git('init', '-q', '-b', 'ipad/main')
         self.git('add', '.')
         self.git('commit', '-q', '-m', 'one')
@@ -585,7 +693,7 @@ class UploadScriptTest(unittest.TestCase):
         app.mkdir(parents=True)
         self.info = {'CFBundleIdentifier': 'app.example', 'CFBundleShortVersionString': '0.1.0',
                      'CFBundleVersion': '3', 'CFBundleDisplayName': 'Example',
-                     'SatsumaSourceCommit': self.commit, 'ITSAppUsesNonExemptEncryption': False}
+                     'SatsumaSourceCommit': self.commit}
         self.app = app
         ios_program(app / 'Blender', PLAIN_PROGRAM)
         self.write_info()
@@ -620,34 +728,51 @@ class UploadScriptTest(unittest.TestCase):
 
     def test_prints_and_sends_nothing_without_the_flag(self):
         result = self.run_script()
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         for text in ('app.example', '0.1.0', 'build      3', self.commit, 'source     on github/ipad/main',
-                     'ITSAppUsesNonExemptEncryption  false', 'encryption check  no encryption library',
-                     'Nothing sent', '--upload-build 3'):
+                     'ITSAppUsesNonExemptEncryption  (absent)', 'encryption claim  ask (testflight.env)',
+                     'encryption check  no encryption library', '1. general encryption library: none',
+                     '3. unreviewed: none', 'Nothing sent', '--upload-build 3'):
             self.assertIn(text, result.stdout)
 
-    def test_key_and_check_agree(self):
-        """ROUND5 8M, E4: false with no library, absent with one; anything else is refused."""
-        del self.info['ITSAppUsesNonExemptEncryption']
-        self.write_info()
-        result = self.run_script()
-        self.assertEqual(result.returncode, 1)
-        self.assertIn('no encryption library in the program, but ITSAppUsesNonExemptEncryption is (absent)',
-                      result.stdout)
+    def test_key_rule_for_every_verdict_and_claim(self):
+        """ROUND5 8M.2, E7: the archive's key must be the one the rule writes: false only with no
+        general library, nothing unreviewed and `ENCRYPTION_CLAIM=exempt`; absent otherwise. Every
+        verdict, claim and key."""
+        settings = self.settings.read_text()
         crypto = LIBDIR / 'ssl/lib/libcrypto.a'
-        if not crypto.is_file():
-            self.skipTest('No prebuilt OpenSSL at ' + str(crypto))
-        ios_program(self.app / 'Blender', OPENSSL_PROGRAM, crypto)
-        result = self.run_script()
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertIn('ITSAppUsesNonExemptEncryption  (absent)', result.stdout)
-        self.assertIn('encryption check  encryption library present', result.stdout)
-        self.info['ITSAppUsesNonExemptEncryption'] = False
-        self.write_info()
+        programs = {'no encryption library': (FORMAT_PROGRAM,),
+                    'encryption library present': (GENERAL_PROGRAM,),
+                    'unreviewed cipher code': (UNREVIEWED_PROGRAM,)}
+        if crypto.is_file():
+            programs['encryption library present (OpenSSL)'] = (OPENSSL_PROGRAM, crypto)
+        for verdict, program in programs.items():
+            ios_program(self.app / 'Blender', *program)
+            for claim in (None, 'ask', 'exempt'):
+                self.settings.write_text(settings + (f'ENCRYPTION_CLAIM={claim}\n' if claim else ''))
+                for key in (None, False, True):
+                    with self.subTest(verdict=verdict, claim=claim, key=key):
+                        self.info.pop('ITSAppUsesNonExemptEncryption', None)
+                        if key is not None:
+                            self.info['ITSAppUsesNonExemptEncryption'] = key
+                        self.write_info()
+                        result = self.run_script()
+                        self.assertIn('encryption check  ' + verdict.split(' (')[0], result.stdout)
+                        self.assertIn(f'encryption claim  {claim or "ask"}', result.stdout)
+                        allowed = (False if verdict == 'no encryption library' and claim == 'exempt'
+                                   else None)
+                        if key == allowed:
+                            self.assertEqual(result.returncode, 0, result.stdout)
+                        else:
+                            self.assertEqual(result.returncode, 1, result.stdout)
+                            self.assertIn('ITSAppUsesNonExemptEncryption is ', result.stdout)
+                            self.assertIn('but the rule writes ' + ('false' if allowed is False else '(absent)'),
+                                          result.stdout)
+        self.settings.write_text(settings + 'ENCRYPTION_CLAIM=yes\n')
         result = self.run_script()
         self.assertEqual(result.returncode, 1)
-        self.assertIn('the program carries an encryption library, but ITSAppUsesNonExemptEncryption is false',
-                      result.stdout)
+        self.assertIn('the encryption check could not read the program or the claim', result.stdout)
+        self.settings.write_text(settings)
         (self.app / 'Blender').unlink()
         result = self.run_script()
         self.assertEqual(result.returncode, 1)
@@ -785,7 +910,8 @@ class IdentityTest(unittest.TestCase):
                                str(path)], capture_output=True, text=True).returncode
 
     def expected_check(self, app):
-        """0 unless the build directory the app came from links OpenSSL (`WITH_PLATYPUS_PYTHON_OPENSSL`)."""
+        """0 unless the build directory the app came from links OpenSSL (`WITH_PLATYPUS_PYTHON_OPENSSL`):
+        its format ciphers are all on the reviewed list (8M.2)."""
         build = next(parent for parent in app.parents if (parent / 'CMakeCache.txt').is_file())
         return 1 if 'WITH_PLATYPUS_PYTHON_OPENSSL:BOOL=ON' in (build / 'CMakeCache.txt').read_text() else 0
 
@@ -809,10 +935,20 @@ class IdentityTest(unittest.TestCase):
                 status = self.encryption_check(app)
                 self.assertEqual(status, self.expected_check(app))
                 if 'build_ios_testflight' in app.parts:
-                    # ROUND5 8M, E4: the key is false exactly when the check finds no library.
+                    # ROUND5 8M.2, E7: the key is the rule's for the verdict and the claim in the
+                    # settings beside the checkout (default `ask`: no key).
+                    from check_no_encryption_library import key_for
                     info = plistlib.loads((app / 'Info.plist').read_bytes())
+                    expected = key_for(status, self.encryption_claim())
                     self.assertEqual(info.get('ITSAppUsesNonExemptEncryption', 'absent'),
-                                     False if status == 0 else 'absent')
+                                     'absent' if expected is None else expected)
+
+    def encryption_claim(self):
+        """ENCRYPTION_CLAIM in `testflight.env` beside the checkout (only that key is read)."""
+        settings = self.ROOT.parent / 'testflight.env'
+        found = re.findall(r'^ENCRYPTION_CLAIM=\"?([a-z]+)\"?\s*$',
+                           settings.read_text() if settings.is_file() else '', re.MULTILINE)
+        return found[-1] if found else 'ask'
 
 
 if __name__ == '__main__':
