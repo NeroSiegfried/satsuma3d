@@ -23,6 +23,8 @@
  * - `popover shading|close`: the 3D View's shading popover;
  * - `prefs open|close`: Preferences;
  * - `about open|close`: About and Licences, as the app menu and the launcher open it (ROUND5 8C);
+ * - `floor continue`: the device floor's notice, as its Continue (ROUND5 8N; the notice shows in a
+ *   check launch with `PLATYPUS_PRETEND_DEVICE`, see `DeviceFloorNotice.swift`);
  * - `gate <label>`: the input gate's answer (ROUND5 9G.1) at the viewport's middle and at a point
  *   left of the middle, where a sheet's dimmed surround is, written to the log as
  *   `gate <label> centre <answer> side <answer>`: `takes`, or why Blender is given no input there;
@@ -255,6 +257,14 @@ enum ShellSnapshots {
         else {
           SwiftAbout.dismiss()
         }
+        try? await Task.sleep(for: .seconds(1))
+      case "floor":
+        /* The device floor's notice: `floor continue`, as its button. */
+        guard words.first == "continue" else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        WM_native_ui_log("snapshot", "floor continue: \(DeviceFloorNotice.continueNotice() ? "done" : "no notice")")
         try? await Task.sleep(for: .seconds(1))
       case "gate":
         /* What every input asks before it reaches Blender (ROUND5 9G.1, decision 66). */

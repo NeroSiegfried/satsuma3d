@@ -209,6 +209,12 @@ static NSArray<NSDictionary *> *launcherTemplates()
 + (void)presentFrom:(UIViewController *)presenter;
 @end
 
+/* The device floor (ROUND5 8N), `DeviceFloorNotice` in
+ * `source/blender/windowmanager/apple_ios/swift/DeviceFloorNotice.swift`. */
+@interface NSObject (WMIOSSwiftDeviceFloor)
++ (void)presentIfNeededFrom:(UIViewController *)presenter;
+@end
+
 /* The template chooser in SwiftUI
  * (`source/blender/windowmanager/apple_ios/swift/TemplatePicker.swift`). */
 @interface UIViewController (WMIOSSwiftTemplatePicker)
@@ -498,6 +504,17 @@ static NSURL *launcher_pending_url = nil;
   }
   if (url) {
     [self openDocumentAtURL:url];
+  }
+}
+
+- (void)viewDidAppear:(BOOL)animated
+{
+  [super viewDidAppear:animated];
+  /* An iPad below the floor is told so, here when the app opens on its documents (ROUND5 8N);
+   * once per launch, whichever of this and a document's window asks first. */
+  Class floor_class = NSClassFromString(@"WMIOSSwiftDeviceFloor");
+  if (floor_class) {
+    [floor_class presentIfNeededFrom:self];
   }
 }
 

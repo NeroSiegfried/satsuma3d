@@ -110,6 +110,8 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     shell.pullViews()
     NativeViews.shared.checkViews()
     ShellSnapshots.start()
+    /* The device floor: logged at every launch, said below it (ROUND5 8N). */
+    DeviceFloorNotice.presentIfNeeded(from: nil)
     SoakProbe.start(model: model, shell: shell)
     model.refreshWindowState()
     /* Snapshots arrive by notification. Whether the viewport has drawn is read from the

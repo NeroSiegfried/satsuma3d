@@ -724,6 +724,7 @@ LOG_KINDS = {
     'input': 'input that arrived while a sheet was open',
     'gizmo': 'the gestures on the navigation gizmo',
     'panel': 'when side panels opened and closed',
+    'device': "this iPad's chip and memory",
 }
 writers = ''.join(path.read_text(encoding='utf-8', errors='replace')
                   for path in (SWIFT.parents[3]).rglob('*') if path.suffix in ('.cc', '.mm', '.swift'))
