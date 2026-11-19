@@ -5,6 +5,7 @@
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
 
 #  include "wm_apple_ios_file.hh"
+#  include "wm_apple_ios_file_mode.hh"
 
 #  include "BKE_context.hh"
 #  include "BKE_main.hh"
@@ -61,6 +62,35 @@ void completed(uint64_t id, const char *const *paths, int count, const char *err
   results.push(std::move(result));
 }
 
+/** Puts a picked path in the operator's path properties. A picked folder is its own directory;
+ * as a `filepath` (an output path that names a folder) it keeps Blender's trailing separator. */
+void set_operator_path(bContext *C, wmOperator *op, const char *path, const bool folder)
+{
+  char directory[FILE_MAX];
+  STRNCPY(directory, path);
+  if (!folder) {
+    BLI_path_parent_dir(directory);
+  }
+  BLI_path_slash_ensure(directory, sizeof(directory));
+  if (RNA_struct_find_property(op->ptr, "filepath")) {
+    char filepath[FILE_MAX];
+    STRNCPY(filepath, path);
+    if (folder) {
+      BLI_path_slash_ensure(filepath, sizeof(filepath));
+    }
+    if (boolean(op, "relative_path")) {
+      BLI_path_rel(filepath, BKE_main_blendfile_path(CTX_data_main(C)));
+    }
+    RNA_string_set(op->ptr, "filepath", filepath);
+  }
+  if (RNA_struct_find_property(op->ptr, "directory")) {
+    RNA_string_set(op->ptr, "directory", directory);
+  }
+  if (RNA_struct_find_property(op->ptr, "filename")) {
+    RNA_string_set(op->ptr, "filename", folder ? "" : BLI_path_basename(path));
+  }
+}
+
 bool operator_is_live(bContext *C, const wmOperator *op)
 {
   for (wmWindow &win_item : CTX_wm_manager(C)->windows) {
@@ -81,24 +111,7 @@ bool operator_is_live(bContext *C, const wmOperator *op)
 
 bool WM_apple_ios_fileselect_begin(bContext *C, wmOperator *op)
 {
-  /* Linking/appending browses datablocks inside .blend files, not ordinary files. */
-  if (boolean(op, "filter_blenlib") || (RNA_struct_find_property(op->ptr, "filemode") &&
-                                        RNA_int_get(op->ptr, "filemode") == FILE_LOADLIB))
-  {
-    return false;
-  }
-  const bool filepath = RNA_struct_find_property(op->ptr, "filepath");
-  const bool directory = RNA_struct_find_property(op->ptr, "directory");
-  if (!filepath && !directory) {
-    return false;
-  }
-  const bool folder = !filepath && !RNA_struct_find_property(op->ptr, "filename") &&
-                      !RNA_struct_find_property(op->ptr, "files");
-  PropertyRNA *check_existing = RNA_struct_find_property(op->ptr, "check_existing");
-  const bool save = check_existing && RNA_property_boolean_get_default(op->ptr, check_existing);
-  const GHOST_IOSDocumentMode mode = folder ? GHOST_IOSDocumentMode::Directory :
-                                     save   ? GHOST_IOSDocumentMode::Save :
-                                              GHOST_IOSDocumentMode::Open;
+  using namespace wm::apple_ios;
   std::string initial = string(op, "filepath");
   if (initial.empty()) {
     char path[FILE_MAX];
@@ -106,6 +119,31 @@ bool WM_apple_ios_fileselect_begin(bContext *C, wmOperator *op)
         path, sizeof(path), string(op, "directory").c_str(), string(op, "filename").c_str());
     initial = path;
   }
+  FileSelectFacts facts;
+  facts.filepath = RNA_struct_find_property(op->ptr, "filepath");
+  facts.directory = RNA_struct_find_property(op->ptr, "directory");
+  facts.filename = RNA_struct_find_property(op->ptr, "filename");
+  facts.files = RNA_struct_find_property(op->ptr, "files");
+  facts.has_check_existing = RNA_struct_find_property(op->ptr, "check_existing");
+  /* The value the operator's invoke left, as Blender's own browser reads it. */
+  facts.check_existing = boolean(op, "check_existing");
+  facts.blenlib = boolean(op, "filter_blenlib") ||
+                  (RNA_struct_find_property(op->ptr, "filemode") &&
+                   RNA_int_get(op->ptr, "filemode") == FILE_LOADLIB);
+  /* `buttons.file_browse` sets `check_existing` at invoke exactly when its property is an output
+   * path (`PROP_PATH_OUTPUT`): the render output, File Output nodes. */
+  facts.output_path = STREQ(op->type->idname, "BUTTONS_OT_file_browse") && facts.check_existing;
+  facts.path_is_folder = initial.empty() || BLI_path_slash_is_native_compat(initial.back());
+  facts.name = op->type->name ? op->type->name : "";
+  const FileSelectKind kind = file_select_kind(facts);
+  /* Linking/appending browses datablocks inside .blend files, not ordinary files. */
+  if (ELEM(kind, FileSelectKind::Browser, FileSelectKind::Library)) {
+    return false;
+  }
+  const GHOST_IOSDocumentMode mode = kind == FileSelectKind::Directory ?
+                                         GHOST_IOSDocumentMode::Directory :
+                                     kind == FileSelectKind::Save ? GHOST_IOSDocumentMode::Save :
+                                                                    GHOST_IOSDocumentMode::Open;
   if (!initial.empty()) {
     char path[FILE_MAX];
     STRNCPY(path, initial.c_str());
@@ -201,27 +239,7 @@ void WM_apple_ios_fileselect_flush(bContext *C)
       continue;
     }
     it->second.path = path;
-    const bool folder = it->second.mode == GHOST_IOSDocumentMode::Directory;
-    char directory[FILE_MAX];
-    STRNCPY(directory, path.c_str());
-    if (!folder) {
-      BLI_path_parent_dir(directory);
-    }
-    BLI_path_slash_ensure(directory, sizeof(directory));
-    if (RNA_struct_find_property(op->ptr, "filepath")) {
-      char filepath[FILE_MAX];
-      STRNCPY(filepath, path.c_str());
-      if (boolean(op, "relative_path")) {
-        BLI_path_rel(filepath, BKE_main_blendfile_path(CTX_data_main(C)));
-      }
-      RNA_string_set(op->ptr, "filepath", filepath);
-    }
-    if (RNA_struct_find_property(op->ptr, "directory")) {
-      RNA_string_set(op->ptr, "directory", directory);
-    }
-    if (RNA_struct_find_property(op->ptr, "filename")) {
-      RNA_string_set(op->ptr, "filename", BLI_path_basename(path.c_str()));
-    }
+    set_operator_path(C, op, path.c_str(), it->second.mode == GHOST_IOSDocumentMode::Directory);
     if (PropertyRNA *files = RNA_struct_find_property(op->ptr, "files")) {
       RNA_property_collection_clear(op->ptr, files);
       for (const std::string &selected : result.paths) {
@@ -270,27 +288,7 @@ wmOperatorStatus WM_apple_ios_fileselect_exec(bContext *C, wmOperator *op)
         request.mode == GHOST_IOSDocumentMode::Save,
         [](void *data, const char *path) {
           auto &execution = *static_cast<Execution *>(data);
-          wmOperator *op = execution.op;
-          if (RNA_struct_find_property(op->ptr, "directory")) {
-            char directory[FILE_MAX];
-            STRNCPY(directory, path);
-            if (!execution.folder) {
-              BLI_path_parent_dir(directory);
-            }
-            BLI_path_slash_ensure(directory, sizeof(directory));
-            RNA_string_set(op->ptr, "directory", directory);
-          }
-          if (RNA_struct_find_property(op->ptr, "filename")) {
-            RNA_string_set(op->ptr, "filename", BLI_path_basename(path));
-          }
-          if (RNA_struct_find_property(op->ptr, "filepath")) {
-            char filepath[FILE_MAX];
-            STRNCPY(filepath, path);
-            if (boolean(op, "relative_path")) {
-              BLI_path_rel(filepath, BKE_main_blendfile_path(CTX_data_main(execution.C)));
-            }
-            RNA_string_set(op->ptr, "filepath", filepath);
-          }
+          set_operator_path(execution.C, execution.op, path, execution.folder);
           execution.status = execution.op->type->exec(execution.C, execution.op);
         },
         &execution,
