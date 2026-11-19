@@ -22,6 +22,7 @@ without `WM_FILESEL_SHOW_PROPS` (`hide_props_region`); every operator F6 names g
 in `WM_apple_ios_fileselect_begin` the dialog comes before the picker.
 """
 import inspect
+import re
 import json
 import os
 import shutil
@@ -64,6 +65,8 @@ WITHOUT_CHECK_EXISTING = {
     "preferences.studiolight_install": "open",
     "preferences.theme_install": "open",
     "scene.freestyle_module_open": "open",
+    # The `.blend` whose data-blocks Link and Append list (ROUND6 FILES-4).
+    "wm.native_link_append": "open",
     "wm.previews_batch_clear": "open",
     "wm.previews_batch_generate": "open",
     # Folders.
@@ -140,6 +143,7 @@ def meaning_declared(facts):
 
 
 rows = []  # (label, facts, expected)
+idents = {}
 python_ops = 0
 for module_name in dir(bpy.ops):
     module = getattr(bpy.ops, module_name)
@@ -180,6 +184,7 @@ for module_name in dir(bpy.ops):
             if expected == "none":
                 continue
         rows.append((idname, facts, expected))
+        idents[idname] = rna.identifier
 
 stale = sorted(set(WITHOUT_CHECK_EXISTING) - {label.split(" ")[0] for label, _f, _e in rows}
                - {k for k, v in WITHOUT_CHECK_EXISTING.items() if v == "none"})
@@ -249,6 +254,21 @@ check(source.count("GHOST_ios_document_picker_begin(") == 1 and
 check(begin.count("native_operator_dialog_handback") == 1 and
       begin.count("WM_apple_ios_options_dialog") == 1,
       "the options are asked for in both interfaces")
+
+# ROUND6 FILES-4: every selector that browses inside a `.blend` has a native presentation, the
+# list of `bl_ui/native_files.py`, and is reachable from the menu bar again.
+routes = set(re.findall(r'\{"(WM_OT_\w+)", "(?:LINK|APPEND|RELOCATE)"\}', source))
+library = {idents[label] for label, _f, expected in rows if expected == "library"}
+check(library and not (library - routes),
+      "every operator browsing inside a .blend is handed to the native list: %s" % sorted(library - routes))
+check(hasattr(bpy.types, "WM_OT_native_link_append"), "the native list is registered")
+with open(os.path.join(ROOT, "source", "blender", "editors", "interface",
+                       "interface_native_menu.cc")) as handle:
+    menu = handle.read()
+hidden = menu[menu.index("bool hidden_from_menu_bar"):]
+hidden = hidden[:hidden.index("static const Set<StringRef> menus")]
+check(not any('"%s"' % op in hidden for op in routes),
+      "Link and Append are not hidden from the menu bar any more")
 
 table = {}
 for (label, _facts, expected) in rows:

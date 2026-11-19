@@ -11,6 +11,7 @@
 #  include "BKE_main.hh"
 #  include "BKE_report.hh"
 #  include "BLI_listbase.h"
+#  include "BKE_screen.hh"
 #  include "BLI_path_utils.hh"
 #  include "BLI_string.h"
 #  include "DNA_space_types.h"
@@ -66,6 +67,42 @@ void completed(uint64_t id, const char *const *paths, int count, const char *err
   }
   results.push(std::move(result));
 }
+
+/**
+ * Selectors that browse inside a `.blend` (Link, Append, Relocate) are handed to the native
+ * `wm.native_link_append` (`bl_ui/native_files.py`, ROUND6 FILES-4): the system picker for the
+ * `.blend`, then a list of its data-blocks, then Blender's own operator. Every operator whose
+ * selector browses inside a `.blend` is listed (`script_native_file_modes` fails on one that is
+ * not).
+ */
+const struct {
+  const char *idname;
+  const char *mode;
+} LIBRARY_ROUTES[] = {
+    {"WM_OT_link", "LINK"},
+    {"WM_OT_append", "APPEND"},
+    {"WM_OT_id_linked_relocate", "RELOCATE"},
+};
+/** Desktop's options those carry, copied over. */
+const char *const LIBRARY_OPTIONS[] = {"autoselect",
+                                       "active_collection",
+                                       "instance_collections",
+                                       "instance_object_data",
+                                       "do_reuse_local_id",
+                                       "clear_asset_data"};
+
+/** A route waiting for the next pass: the original selector is cancelled first, so the native
+ * one does not open its selector from inside the original's handler. */
+struct LibraryRoute {
+  std::string mode;
+  std::string filepath;
+  std::vector<std::pair<std::string, bool>> options;
+  int id_session_uid = 0;
+  wmWindow *window = nullptr;
+  ScrArea *area = nullptr;
+  ARegion *region = nullptr;
+};
+std::vector<LibraryRoute> library_routes;
 
 /** Puts a picked path in the operator's path properties. A picked folder is its own directory;
  * as a `filepath` (an output path that names a folder) it keeps Blender's trailing separator. */
@@ -252,8 +289,36 @@ bool WM_apple_ios_fileselect_begin(bContext *C, wmOperator *op)
   using namespace wm::apple_ios;
   const FileSelectFacts facts = facts_of(op);
   const FileSelectKind kind = file_select_kind(facts);
-  /* Linking/appending browses datablocks inside .blend files, not ordinary files. */
-  if (ELEM(kind, FileSelectKind::Browser, FileSelectKind::Library)) {
+  if (kind == FileSelectKind::Browser) {
+    return false;
+  }
+  /* Linking/appending browses data-blocks inside .blend files: handed to the native list. */
+  if (kind == FileSelectKind::Library) {
+    for (const auto &route : LIBRARY_ROUTES) {
+      if (!STREQ(op->type->idname, route.idname)) {
+        continue;
+      }
+      LibraryRoute pending;
+      pending.mode = route.mode;
+      pending.filepath = string(op, "filepath");
+      if (pending.filepath.empty()) {
+        pending.filepath = string(op, "directory");
+      }
+      for (const char *option : LIBRARY_OPTIONS) {
+        if (RNA_struct_find_property(op->ptr, option)) {
+          pending.options.emplace_back(option, RNA_boolean_get(op->ptr, option));
+        }
+      }
+      if (RNA_struct_find_property(op->ptr, "id_session_uid")) {
+        pending.id_session_uid = RNA_int_get(op->ptr, "id_session_uid");
+      }
+      pending.window = CTX_wm_window(C);
+      pending.area = CTX_wm_area(C);
+      pending.region = CTX_wm_region(C);
+      library_routes.push_back(std::move(pending));
+      WM_event_fileselect_event(CTX_wm_manager(C), op, EVT_FILESELECT_CANCEL);
+      return true;
+    }
     return false;
   }
   const GHOST_IOSDocumentMode mode = kind == FileSelectKind::Directory ?
@@ -316,6 +381,44 @@ void WM_apple_ios_fileselect_cancel(wmOperator *op)
 
 void WM_apple_ios_fileselect_flush(bContext *C)
 {
+  if (!library_routes.empty()) {
+    std::vector<LibraryRoute> routes = std::move(library_routes);
+    library_routes.clear();
+    wmWindowManager *wm = CTX_wm_manager(C);
+    for (const LibraryRoute &route : routes) {
+      if (!route.window || BLI_findindex(&wm->windows, route.window) == -1) {
+        continue;
+      }
+      wmWindow *previous_window = CTX_wm_window(C);
+      ScrArea *previous_area = CTX_wm_area(C);
+      ARegion *previous_region = CTX_wm_region(C);
+      CTX_wm_window_set(C, route.window);
+      bScreen *screen = WM_window_get_active_screen(route.window);
+      ScrArea *area = screen && BLI_findindex(&screen->areabase, route.area) != -1 ? route.area :
+                                                                                     nullptr;
+      CTX_wm_area_set(C, area);
+      CTX_wm_region_set(
+          C, area && BLI_findindex(&area->regionbase, route.region) != -1 ? route.region : nullptr);
+      PointerRNA props = WM_operator_properties_create("WM_OT_native_link_append");
+      RNA_enum_set_identifier(C, &props, "mode", route.mode.c_str());
+      RNA_string_set(&props, "filepath", route.filepath.c_str());
+      for (const auto &[option, value] : route.options) {
+        RNA_boolean_set(&props, option.c_str(), value);
+      }
+      RNA_int_set(&props, "id_session_uid", route.id_session_uid);
+      wmOperatorType *ot = WM_operatortype_find("WM_OT_native_link_append", false);
+      if (ot) {
+        WM_operator_name_call_ptr(C, ot, wm::OpCallContext::InvokeDefault, &props, nullptr);
+      }
+      else {
+        WM_global_report(RPT_ERROR, "Link and Append are not available: their list is missing");
+      }
+      WM_operator_properties_free(&props);
+      CTX_wm_window_set(C, previous_window);
+      CTX_wm_area_set(C, previous_area);
+      CTX_wm_region_set(C, previous_region);
+    }
+  }
   auto ready = results.take();
   for (const Result &result : ready) {
     auto it = requests.find(result.id);
@@ -398,6 +501,13 @@ wmOperatorStatus WM_apple_ios_fileselect_exec(bContext *C, wmOperator *op)
         sizeof(error));
     if (!ok) {
       BKE_report(op->reports, RPT_ERROR, error);
+    }
+    if (execution.status & OPERATOR_RUNNING_MODAL) {
+      /* Its `exec` handed it on (a dialog of its own, as Link and Append's list does): the
+       * selection is over, and the request must not outlive it. */
+      for (auto it = requests.begin(); it != requests.end();) {
+        it = it->second.op == op ? requests.erase(it) : std::next(it);
+      }
     }
     return execution.status;
   }

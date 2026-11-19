@@ -16,6 +16,7 @@ _modules = [
     "native_brush",
     "native_clipboard",
     "native_character",
+    "native_files",
     "native_intents",
     "native_panels",
     "native_render",

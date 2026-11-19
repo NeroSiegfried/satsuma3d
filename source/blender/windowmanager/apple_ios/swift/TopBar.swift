@@ -529,6 +529,12 @@ struct DocumentToolbar: ToolbarContent {
         wm_apple_ios_restore_opening_version()
       }
     }
+    /* Data-blocks from another .blend (ROUND6 FILES-4): the system picker for the file, then a
+     * list of what it holds. Blender's own operators, which the iPad hands to that list. */
+    Section {
+      Button("Link…", systemImage: "link") { Operators.run("WM_OT_link") }
+      Button("Append…", systemImage: "arrow.down.doc") { Operators.run("WM_OT_append") }
+    }
     /* Blender's own Import and Export menus, so every format it and its add-ons support is
      * listed. Their file browsers open the system's document picker. */
     Section {

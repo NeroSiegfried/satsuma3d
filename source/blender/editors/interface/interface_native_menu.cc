@@ -193,8 +193,6 @@ bool hidden_from_menu_bar(bContext *C, Button &but)
       "WM_OT_quit_blender",
       "WM_OT_save_homefile",
       "WM_OT_read_factory_settings",
-      "WM_OT_link",
-      "WM_OT_append",
       "WM_OT_window_new",
       "WM_OT_window_new_main",
       "WM_OT_window_fullscreen_toggle",
