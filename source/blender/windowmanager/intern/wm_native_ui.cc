@@ -755,6 +755,9 @@ std::string WM_native_ui_undo_refusal(bContext *C)
   return "";
 }
 
+/* The brush ring after a size change (ROUND6 TOUCH-9), see #WM_native_ui_stylus_hover_active. */
+static void bridge_cursor_flash(bContext *C);
+
 namespace {
 
 bool bridge_undo_available(bContext *C, const char *op_name = "ED_OT_undo")
@@ -3707,6 +3710,10 @@ views::CommandResult bridge_toolbar_view_command(bContext *C,
       value = bridge_json_number(number->value());
     }
     const bool commit = ELEM(command.phase(), views::protocol::Phase::Once, views::protocol::Phase::End);
+    if (ELEM(target.substr(6), "size", "unprojected_size", "radius")) {
+      /* The ring shows where it will act, at the last contact, while the size changes. */
+      bridge_cursor_flash(C);
+    }
     return setting(commit ? "native_brush_commit" : "native_brush",
                    "\"" + bridge_json_escape(std::string(target.substr(6))) + "\", " + value);
   }
@@ -5133,9 +5140,36 @@ extern "C" void WM_native_ui_stylus_hover_set(bool active, int x, int y)
   bridge_hover_requests.publish({active, x, y});
 }
 
+/* After the brush's size changed from the shell, its ring shows at the last contact for a moment
+ * (ROUND6 TOUCH-9): a finger has no hover to show it, and the Pencil none on every iPad. A timer's
+ * notifier redraws once the moment is over, and is removed then. */
+static std::chrono::steady_clock::time_point bridge_cursor_flash_until;
+static wmTimer *bridge_cursor_flash_timer = nullptr;
+
+static void bridge_cursor_flash(bContext *C)
+{
+  bridge_cursor_flash_until = std::chrono::steady_clock::now() + std::chrono::milliseconds(900);
+  wmWindowManager *wm = CTX_wm_manager(C);
+  if (bridge_cursor_flash_timer == nullptr && wm && CTX_wm_window(C)) {
+    bridge_cursor_flash_timer = WM_event_timer_add_notifier(wm, CTX_wm_window(C), NC_WINDOW, 1.0);
+  }
+}
+
 bool WM_native_ui_stylus_hover_active()
 {
-  return bridge_hover_request.active;
+  if (bridge_hover_request.active) {
+    return true;
+  }
+  if (bridge_cursor_flash_timer) {
+    if (std::chrono::steady_clock::now() < bridge_cursor_flash_until) {
+      return true;
+    }
+    if (wmWindowManager *wm = static_cast<wmWindowManager *>(G_MAIN->wm.first)) {
+      WM_event_timer_remove_notifier(wm, nullptr, bridge_cursor_flash_timer);
+    }
+    bridge_cursor_flash_timer = nullptr;
+  }
+  return false;
 }
 
 /* The barrel roll of a Pencil on the screen, set from the native interface's thread. */

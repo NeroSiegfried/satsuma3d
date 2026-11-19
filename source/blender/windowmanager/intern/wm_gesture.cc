@@ -23,7 +23,6 @@
 #include "BLI_utildefines.h"
 
 #include "WM_api.hh"
-#include "WM_native_interface.hh"
 #include "WM_types.hh"
 
 #include "wm.hh"
@@ -589,9 +588,7 @@ void wm_gesture_draw(wmWindow *win)
       wm_gesture_draw_rect(gt);
     }
     else if (gt->type == WM_GESTURE_CIRCLE) {
-      if (const wmNativeInterface *native = WM_native_interface();
-          native && native->pointer_hovering && !native->pointer_hovering())
-      {
+      if (!wm_pointer_cursor_shown(nullptr, win)) {
         continue;
       }
       wm_gesture_draw_circle(gt);

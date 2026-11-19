@@ -114,18 +114,29 @@ static bool wm_window_grab_warp_region_is_set(const wmWindow *win)
 /** \name Draw Paint Cursor
  * \{ */
 
+bool wm_pointer_cursor_shown(const wmWindowManager *wm, const wmWindow *win)
+{
+  const wmNativeInterface *native = WM_native_interface();
+  if (!(native && native->pointer_hovering) || native->pointer_hovering()) {
+    return true;
+  }
+  /* Dragging: the drop's snap target shows the surface the dragged item will land on. */
+  if (wm && !BLI_listbase_is_empty(&wm->runtime->drags)) {
+    return true;
+  }
+  /* A finger or the Pencil on the glass: the cursor is under the contact (ROUND6 TOUCH-9). */
+  const wmEvent *state = win ? win->runtime->eventstate : nullptr;
+  return state && ISMOUSE_BUTTON(state->type) && state->val == KM_PRESS;
+}
+
 static void wm_paintcursor_draw(bContext *C, ScrArea *area, ARegion *region)
 {
   wmWindowManager *wm = CTX_wm_manager(C);
-  /* Without hover (touch), cursors show only while something hovers, and while dragging, where
-   * the drop's snap target shows the surface the dragged item will land on. */
-  if (const wmNativeInterface *native = WM_native_interface();
-      native && native->pointer_hovering && !native->pointer_hovering() &&
-      BLI_listbase_is_empty(&wm->runtime->drags))
-  {
+  wmWindow *win = CTX_wm_window(C);
+  /* Without hover (touch), see #wm_pointer_cursor_shown. */
+  if (!wm_pointer_cursor_shown(wm, win)) {
     return;
   }
-  wmWindow *win = CTX_wm_window(C);
   bScreen *screen = WM_window_get_active_screen(win);
 
   /* Don't draw paint cursors with locked interface. Painting is not possible

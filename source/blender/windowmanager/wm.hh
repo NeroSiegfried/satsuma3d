@@ -142,4 +142,13 @@ void wm_open_init_load_ui(wmOperator *op, bool use_prefs);
  */
 bool wm_open_init_use_scripts(wmOperator *op, bool use_prefs) ATTR_WARN_UNUSED_RESULT;
 
+/**
+ * Whether what Blender draws where the pointer is (paint cursors, the circle select outline) shows
+ * now (ROUND6 TOUCH-9, A8): always for a pointer that hovers; for a touch, which has no hover,
+ * while something hovers, while a button is down (the cursor then sits under the contact, as in
+ * every drawing app), while dragging, and for a moment after the brush's size changed.
+ */
+bool wm_pointer_cursor_shown(const wmWindowManager *wm /* Null: no drag asked about. */,
+                             const wmWindow *win);
+
 }  // namespace blender

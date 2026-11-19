@@ -1378,4 +1378,20 @@ check('.onDisappear' in sticky and 'wm_apple_ios_window_sticky_modifier(model.wi
       'StickyModifierKeys(model: model)' in window_t8 and 'model.desktop || controlsShown' in window_t8,
       "R6 TOUCH-8: the keys are drawn in both interfaces and let go when their buttons go")
 
+# ROUND6 TOUCH-9 (A8, E14): what a brush will touch is drawn without hover. Every gate on hover for
+# what Blender draws at the pointer goes through one rule, which also shows it while a button is
+# down; the brush's ring shows at the last contact for a moment after its size changed.
+hover_gates = []
+for path in sorted((ROOT / 'source/blender').rglob('*.cc')):
+    text = path.read_text(encoding='utf-8', errors='replace')
+    if 'pointer_hovering()' in text:
+        hover_gates.append(path.name)
+draw_text = (ROOT / 'source/blender/windowmanager/intern/wm_draw.cc').read_text(encoding='utf-8')
+shown_body = draw_text[draw_text.index('bool wm_pointer_cursor_shown('):]
+shown_body = shown_body[:shown_body.index('\n}\n')]
+check(hover_gates == ['wm_draw.cc'] and 'state->val == KM_PRESS' in shown_body and
+      'wm_pointer_cursor_shown(nullptr, win)' in (ROOT / 'source/blender/windowmanager/intern/wm_gesture.cc').read_text() and
+      'bridge_cursor_flash(C);' in bridge_text,
+      "R6 TOUCH-9: cursors show while a button is down and after a size change, through one rule (%s)" % hover_gates)
+
 print('PASS: native shell sources ' + json.dumps(checks))
