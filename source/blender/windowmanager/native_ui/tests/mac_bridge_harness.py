@@ -11,6 +11,7 @@ WM_native_ui_flush_commands, decodes updates into node trees, sends commands, wr
 import ctypes
 import json
 import sys
+import time
 import traceback
 
 import bpy
@@ -1087,6 +1088,65 @@ def tick_numinput():
     return 0.3
 
 
+# ROUND6 0.3 (G1): Stop stops a render. An animation render holds a modal handler for as long as it
+# runs, and a command that is not live waits for that to end. The render view's `cancel`, sent while
+# it renders (past the first frames), must end the render job within a second.
+def tick_render():
+    global step
+    try:
+        pump()
+        step += 1
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            subs["render"] = subscribe("render")
+            scene = bpy.context.scene
+            scene.render.resolution_percentage = 25
+            scene.frame_start, scene.frame_end = 1, 2000
+            report["engine"] = scene.render.engine
+        elif step == 3:
+            invoke(subs["render"], "animation", 100)
+        elif step < 200 and "rendering_at" not in report:
+            # Past its first frame, which compiles shaders and stops only once they are done.
+            if bpy.app.is_job_running('RENDER') and bpy.context.scene.frame_current > 2:
+                if "clear_sent" not in report:
+                    # Each of the view's buttons is live or waits: Clear answers at once (and leaves
+                    # a running render alone), rendering again waits for this render.
+                    invoke(subs["render"], "clear", 102)
+                    invoke(subs["render"], "image", 103)
+                    report["clear_sent"] = step
+                    return 0.1
+                if step < report["clear_sent"] + 8 and 102 not in acks:
+                    return 0.1  # The view answers as it is next built, four times a second at most.
+                report["clear_ack"] = acks.get(102)
+                report["image_ack_while_rendering"] = acks.get(103)
+                report["rendering_at"] = step
+                invoke(subs["render"], "cancel", 101)
+                report["cancel_sent"] = time.monotonic()
+            return 0.1
+        elif "rendering_at" not in report:
+            report["error"] = "The render never started"
+            finish("error")
+            return None
+        else:
+            running = bpy.app.is_job_running('RENDER')
+            elapsed = time.monotonic() - report["cancel_sent"]
+            if not running or elapsed > 1.0:
+                pump()
+                report["cancel_ack"] = acks.get(101)
+                report["stopped_after"] = round(elapsed, 2)
+                report["job_running"] = running
+                report["cancel_sent"] = None
+                finish("done" if not running and acks.get(101) == "ok" and report["clear_ack"] == "ok" and
+                       report["image_ack_while_rendering"] is None else "error")
+                return None
+            return 0.05
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
 # Materials as the Material tab makes them (ROUND5 7D): with no slots, New makes one slot holding one
 # material (C5); the slot's Link is sent with its role, can be set and reads back; the material's
 # reference lists its actions; in Edit Mode, Assign gives the selected faces the active slot.
@@ -1980,5 +2040,5 @@ def tick_touch():
 
 bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets": tick_insets, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror,
                          "extensions": tick_extensions, "keys": tick_keys,
-                         "numinput": tick_numinput}.get(SCENARIO, tick_actions),
+                         "numinput": tick_numinput, "render": tick_render}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

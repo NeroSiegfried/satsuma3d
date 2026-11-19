@@ -4766,6 +4766,13 @@ void WM_native_ui_views_register()
   render.min_interval = 0.25;
   render.build = bridge_render_view_build;
   render.command = bridge_render_view_command;
+  /* Stop acts on the render it is meant to stop, which holds a modal handler for as long as it
+   * runs; were it to wait for that to end, it would stop nothing (R6 G1). Clear only forgets what
+   * was shown. Rendering again still waits for the running render. */
+  render.live = [](const protocol::Command &command) {
+    return command.op() == protocol::Op::Invoke &&
+           ELEM(command.target()->string_view(), "cancel", "clear");
+  };
   view_type_add(std::move(render));
 }
 
