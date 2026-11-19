@@ -375,6 +375,137 @@ wmOperator *bridge_waiting_operator(wmWindow *win)
   return nullptr;
 }
 
+static bToolRef *bridge_active_tool(bContext *C);
+
+/** Shift (0), Ctrl (1), Alt (2) for a modifier key event type, or -1. */
+static int bridge_modifier_index(const int type)
+{
+  switch (type) {
+    case EVT_LEFTSHIFTKEY:
+    case EVT_RIGHTSHIFTKEY:
+      return 0;
+    case EVT_LEFTCTRLKEY:
+    case EVT_RIGHTCTRLKEY:
+      return 1;
+    case EVT_LEFTALTKEY:
+    case EVT_RIGHTALTKEY:
+      return 2;
+    default:
+      return -1;
+  }
+}
+
+/** A modal item's name without its "on" half: "Snap Midpoints On" is "Snap Midpoints". */
+static std::string bridge_modifier_item_name(const char *name)
+{
+  std::string text = name ? name : "";
+  for (const char *suffix : {" On", " Enable", " Enabled"}) {
+    if (StringRef(text).endswith(suffix)) {
+      text.resize(text.size() - strlen(suffix));
+    }
+  }
+  return text;
+}
+
+/** What the key-map item does, named for a button: the set choice ("Subtract", "Invert"), the set
+ * toggle's name, or the operator's name. */
+static std::string bridge_modifier_kmi_name(wmKeyMapItem &kmi)
+{
+  wmOperatorType *ot = WM_operatortype_find(kmi.idname, true);
+  if (ot == nullptr) {
+    return "";
+  }
+  if (kmi.ptr) {
+    PropertyRNA *iter = nullptr;
+    RNA_STRUCT_BEGIN (kmi.ptr, prop) {
+      if (!RNA_property_is_set(kmi.ptr, prop)) {
+        continue;
+      }
+      if (RNA_property_type(prop) == PROP_ENUM && !(RNA_property_flag(prop) & PROP_ENUM_FLAG)) {
+        const char *name = nullptr;
+        if (RNA_property_enum_name(nullptr, kmi.ptr, prop, RNA_property_enum_get(kmi.ptr, prop), &name) &&
+            name)
+        {
+          return name;
+        }
+      }
+      if (iter == nullptr && RNA_property_type(prop) == PROP_BOOLEAN &&
+          RNA_property_boolean_get(kmi.ptr, prop))
+      {
+        iter = prop;
+      }
+    }
+    RNA_STRUCT_END;
+    if (iter) {
+      return RNA_property_ui_name(iter);
+    }
+  }
+  return WM_operatortype_name(ot, nullptr);
+}
+
+/**
+ * What Shift, Ctrl and Alt do now, for the shell's buttons that hold them (ROUND6 TOUCH-8, decision
+ * R6-8): named by the running operation's modal key map where it names them ("Snap Midpoints",
+ * "Precision"), else by the active tool's key map ("Subtract", "Mask"); empty where neither does,
+ * and the button keeps the key's name. As `shift=…\nctrl=…\nalt=…`.
+ */
+static std::string bridge_modifier_names(bContext *C)
+{
+  std::string names[3];
+  wmWindowManager *wm = CTX_wm_manager(C);
+  wmWindow *win = CTX_wm_window(C);
+  if (wm && win) {
+    for (wmEventHandler &handler_base : win->runtime->modalhandlers) {
+      if (handler_base.type != WM_HANDLER_TYPE_OP) {
+        continue;
+      }
+      wmOperator *op = reinterpret_cast<wmEventHandler_Op &>(handler_base).op;
+      wmOperator *running = op ? (op->opm ? op->opm : op) : nullptr;
+      wmKeyMap *keymap = (running && running->type->modalkeymap) ?
+                             WM_keymap_active(wm, running->type->modalkeymap) :
+                             nullptr;
+      const EnumPropertyItem *items = keymap ? static_cast<const EnumPropertyItem *>(
+                                                   keymap->modal_items) :
+                                               nullptr;
+      if (items) {
+        for (wmKeyMapItem &kmi : keymap->items) {
+          const int index = bridge_modifier_index(kmi.type);
+          if (index < 0 || !names[index].empty() || (kmi.flag & KMI_INACTIVE) ||
+              !ELEM(kmi.val, KM_PRESS, KM_ANY))
+          {
+            continue;
+          }
+          const char *name = nullptr;
+          if (RNA_enum_name(items, kmi.propvalue, &name)) {
+            names[index] = bridge_modifier_item_name(name);
+          }
+        }
+      }
+      break;
+    }
+  }
+  if (const bToolRef *tool = bridge_active_tool(C);
+      wm && tool && tool->runtime && tool->runtime->keymap[0])
+  {
+    if (wmKeyMap *keymap = WM_keymap_find_all(wm, tool->runtime->keymap, SPACE_VIEW3D, RGN_TYPE_WINDOW)) {
+      for (wmKeyMapItem &kmi : keymap->items) {
+        if ((kmi.flag & KMI_INACTIVE) || kmi.type != LEFTMOUSE) {
+          continue;
+        }
+        const bool held[3] = {kmi.shift == KM_MOD_HELD, kmi.ctrl == KM_MOD_HELD, kmi.alt == KM_MOD_HELD};
+        if (held[0] + held[1] + held[2] != 1 || kmi.oskey == KM_MOD_HELD) {
+          continue;
+        }
+        const int index = held[0] ? 0 : (held[1] ? 1 : 2);
+        if (names[index].empty()) {
+          names[index] = bridge_modifier_kmi_name(kmi);
+        }
+      }
+    }
+  }
+  return "shift=" + names[0] + "\nctrl=" + names[1] + "\nalt=" + names[2];
+}
+
 /**
  * What to do for a command that waits in the view before it starts (ROUND6 TOUCH-5, finding A3):
  * one state for a command that waits for a click to place it ("Input pending", Rip Vertices, Vertex
@@ -3398,6 +3529,9 @@ void bridge_toolbar_view_build(bContext *C,
   }
   /* Moving, turning or scaling: the held buttons are Snap and Precision then. */
   data("transforming", bridge_constraint_operator(CTX_wm_window(C)) != nullptr);
+  /* What the shell's Shift, Ctrl and Alt do now (ROUND6 TOUCH-8). */
+  const std::string modifier_names = bridge_modifier_names(C);
+  data("modifier_names", std::string_view(modifier_names));
   bool drag_done = false;
   std::string drag_hint;
   if (bridge_waiting_hint(CTX_wm_window(C), &drag_done, drag_hint)) {
@@ -5043,8 +5177,9 @@ bool WM_native_ui_stylus_roll(float *r_angle, float r_tilt[2])
  * \{ */
 
 /* Smooth: brush strokes smooth instead, as with Shift, while the Smooth button is held. */
-enum class BridgeSelectIntent { None = 0, Add = 1, Subtract = 2, Smooth = 3 };
-static_assert(int(BridgeSelectIntent::Smooth) == int(WM_NATIVE_UI_SELECT_INTENT_SMOOTH),
+enum class BridgeSelectIntent { None = 0, Add = 1, Subtract = 2, Smooth = 3, Toggle = 4 };
+static_assert(int(BridgeSelectIntent::Smooth) == int(WM_NATIVE_UI_SELECT_INTENT_SMOOTH) &&
+                  int(BridgeSelectIntent::Toggle) == int(WM_NATIVE_UI_SELECT_INTENT_TOGGLE),
               "Intents as WM_native_ui.h numbers them");
 
 static std::atomic<int> bridge_select_intent = int(BridgeSelectIntent::None);
@@ -5077,6 +5212,7 @@ void WM_native_ui_operator_input_adjust(bContext *C, wmOperator *op)
     return;
   }
   const bool add = intent == BridgeSelectIntent::Add;
+  const bool toggle = intent == BridgeSelectIntent::Toggle;
   PointerRNA *ptr = op->ptr;
 
   if (intent == BridgeSelectIntent::Smooth) {
@@ -5099,8 +5235,17 @@ void WM_native_ui_operator_input_adjust(bContext *C, wmOperator *op)
   {
     /* Box, lasso and circle selection, in every editor. */
     int value;
-    if (operator_enum_has(C, ptr, mode, "ADD") &&
-        RNA_property_enum_value(C, ptr, mode, add ? "ADD" : "SUB", &value))
+    if (toggle) {
+      /* Toggle: what is in the shape flips, as Difference does (Shift-click toggles a pick). */
+      if (operator_enum_has(C, ptr, mode, "ADD") && RNA_property_enum_value(C, ptr, mode, "XOR", &value)) {
+        RNA_property_enum_set(ptr, mode, value);
+      }
+      if (operator_enum_has(C, ptr, mode, "ADD")) {
+        return;
+      }
+    }
+    else if (operator_enum_has(C, ptr, mode, "ADD") &&
+             RNA_property_enum_value(C, ptr, mode, add ? "ADD" : "SUB", &value))
     {
       RNA_property_enum_set(ptr, mode, value);
       return;
@@ -5128,8 +5273,8 @@ void WM_native_ui_operator_input_adjust(bContext *C, wmOperator *op)
     return;
   }
   operator_bool_set(ptr, "extend", add);
-  operator_bool_set(ptr, "deselect", !add);
-  operator_bool_set(ptr, "toggle", false);
+  operator_bool_set(ptr, "deselect", !add && !toggle);
+  operator_bool_set(ptr, "toggle", toggle);
   operator_bool_set(ptr, "deselect_all", false);
 }
 

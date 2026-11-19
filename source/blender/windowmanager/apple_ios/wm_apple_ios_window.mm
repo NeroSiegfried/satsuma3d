@@ -180,6 +180,18 @@ extern "C" void wm_apple_ios_window_hold_modifier(void *window, const char *key,
       ghost_window(window), STREQ(key, "shift") ? GHOST_kKeyLeftShift : GHOST_kKeyLeftControl, down);
 }
 
+extern "C" void wm_apple_ios_window_sticky_modifier(void *window, const int index, const int action)
+{
+  if (window) {
+    GHOST_ios_window_sticky_modifier(ghost_window(window), index, action);
+  }
+}
+
+extern "C" unsigned int wm_apple_ios_sticky_modifiers(void)
+{
+  return GHOST_ios_sticky_modifiers();
+}
+
 /** A web page, in the browser: Help's links, an add-on's documentation. */
 extern "C" void wm_apple_ios_open_web_url(const char *url)
 {

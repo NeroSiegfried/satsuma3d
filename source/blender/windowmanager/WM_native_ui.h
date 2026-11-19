@@ -76,6 +76,9 @@ enum WMNativeUISelectIntent {
   WM_NATIVE_UI_SELECT_INTENT_ADD = 1,
   WM_NATIVE_UI_SELECT_INTENT_SUBTRACT = 2,
   WM_NATIVE_UI_SELECT_INTENT_SMOOTH = 3,
+  /** Shift-click's "again to deselect it": toggle, and Difference for a box or lasso (ROUND6
+   * TOUCH-8, E12). */
+  WM_NATIVE_UI_SELECT_INTENT_TOGGLE = 4,
 };
 
 /** How an asset dragged from the interface's asset pane moved, see #WM_native_ui_asset_drag. */

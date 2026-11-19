@@ -41,6 +41,11 @@ NSString *_Nullable wm_apple_ios_window_gate(void *_Nullable window, CGPoint fra
 int wm_apple_ios_dialogs_cancel_all(void);
 /** "shift" or "ctrl" held down or let go, for an operator running to read. */
 void wm_apple_ios_window_hold_modifier(void *_Nullable window, const char *_Nonnull key, bool down);
+/** Shift (0), Ctrl (1) or Alt (2) as a finger works the shell's button for it (ROUND6 TOUCH-8):
+ * 0 finger down, 1 tapped, 2 lifted after holding, 3 the button went away. */
+void wm_apple_ios_window_sticky_modifier(void *_Nullable window, int index, int action);
+/** Two bits each for Shift, Ctrl, Alt: 0 off, 1 held, 2 latched, 3 locked. */
+unsigned int wm_apple_ios_sticky_modifiers(void);
 /** Whether a document is open that the launcher can go back from, and going back. */
 bool wm_apple_ios_documents_available(void);
 void wm_apple_ios_show_documents(id _Nullable sender);

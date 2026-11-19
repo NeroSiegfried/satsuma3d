@@ -301,4 +301,46 @@ check("sculpt.face_set_grow" in placed and "sculpt.face_set_shrink" in placed,
 check(all(actions._BY_ID[name].invoke for name in placed), "An action that asks for a tap runs as invoked there")
 check('DEPENDS_ON_CURSOR' in bpy.ops.wm.native_action_at_tap.bl_options,
       "The tap's operator waits for the tap, as a menu's command that depends on the pointer does")
+# ROUND6 TOUCH-8 (E3, E12, H5, A5, A11, C9 part; decision R6-8): every tool key-map item with a
+# modifier or a double click, and every modal item on a modifier key, has a touch route. A left
+# press with Shift, Ctrl or Alt: the shell's real keys for them, in both interfaces. A double
+# click: a finger's double tap (22 pt, TOUCH-4). A modal item on Shift, Ctrl or Alt: the same keys,
+# named from the modal map while it runs. Anything else must be in TOUCH_ROUTES with its route, or
+# "desktop only" with why; a new one fails here.
+MODIFIER_KEYS = ('LEFT_SHIFT', 'RIGHT_SHIFT', 'LEFT_CTRL', 'RIGHT_CTRL', 'LEFT_ALT', 'RIGHT_ALT')
+TOUCH_ROUTES = {
+    ("Image Editor Tool: Uv, Grab", "F", "shift"): "the sidebar's Strength slider",
+    ("Image Editor Tool: Uv, Pinch", "F", "shift"): "the sidebar's Strength slider",
+    ("Image Editor Tool: Uv, Relax", "F", "shift"): "the sidebar's Strength slider",
+}
+routes = {"sticky": 0, "double tap": 0, "modal": 0, "listed": 0}
+unrouted = []
+for name, space, data in blender_default.generate_keymaps():
+    for item in data["items"]:
+        if item is None or not isinstance(item[1], dict):
+            continue
+        idname, event, _props = item
+        mods = [m for m in ("shift", "ctrl", "alt", "oskey") if event.get(m) in (True, 1)]
+        if space.get("modal"):
+            if event.get("type") in MODIFIER_KEYS:
+                routes["modal"] += 1
+            continue
+        if " Tool:" not in name:
+            continue
+        if not mods and event.get("value") != 'DOUBLE_CLICK' and "key_modifier" not in event:
+            continue
+        if event.get("type") == 'LEFTMOUSE' and "oskey" not in mods and "key_modifier" not in event:
+            routes["double tap" if not mods else "sticky"] += 1
+            continue
+        if (name, event.get("type"), "+".join(mods)) in TOUCH_ROUTES:
+            routes["listed"] += 1
+            continue
+        unrouted.append("%s: %s %s%s (%s)" % (name, "+".join(mods), event.get("type"),
+                                               " with " + event["key_modifier"] if "key_modifier" in event else "", idname))
+print("touch routes: " + json.dumps(routes))
+check(routes["sticky"] >= 20 and routes["modal"] >= 20 and not unrouted,
+      "R6 TOUCH-8: every tool binding with a modifier or a double click has a touch route (%s)" % unrouted)
+bridge_text = (Path(__file__).resolve().parents[2] / 'source/blender/windowmanager/intern/wm_native_ui.cc').read_text()
+check('data("modifier_names"' in bridge_text and 'operator_bool_set(ptr, "toggle", toggle);' in bridge_text,
+      "R6 TOUCH-8: Shift, Ctrl and Alt are named for the running operation and the tool; the latch has Toggle")
 print('PASS: native context actions ' + json.dumps(checks))

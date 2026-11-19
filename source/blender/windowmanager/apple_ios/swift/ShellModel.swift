@@ -194,6 +194,16 @@ final class ShellModel {
   }
   /** Moving, turning or scaling: the sidebar's + and - hold Snap and Precision. */
   var transforming: Bool { flag("transforming") }
+  /** What Shift, Ctrl and Alt do now, by `shift`, `ctrl`, `alt`: named by the running operation or
+   * the active tool where Blender names them, empty otherwise (ROUND6 TOUCH-8). */
+  var modifierNames: [String: String] {
+    var names: [String: String] = [:]
+    for line in (text("modifier_names") ?? "").split(separator: "\n") {
+      let parts = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+      if parts.count == 2, !parts[1].isEmpty { names[String(parts[0])] = String(parts[1]) }
+    }
+    return names
+  }
   /** A command waiting for a drag in the view, as Box Select chosen from the menu bar: what to
    * do, and whether it ends with Done. */
   var dragHint: DragHint? {

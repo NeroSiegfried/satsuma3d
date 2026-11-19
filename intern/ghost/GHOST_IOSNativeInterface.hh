@@ -177,6 +177,25 @@ void GHOST_ios_window_press_key(
     GHOST_WindowIOS *window, GHOST_TKey key, bool shift, bool ctrl, bool alt);
 /** Shift or Control held down or let go, as a keyboard's would be. */
 void GHOST_ios_window_hold_modifier(GHOST_WindowIOS *window, GHOST_TKey key, bool down);
+/** What a finger did on the shell's Shift, Ctrl or Alt (ROUND6 TOUCH-8). */
+enum {
+  /** The finger went down on the button: the key is down while it stays. */
+  GHOST_kStickyFingerDown = 0,
+  /** It lifted quickly: a tap, which latches for one action, locks, or lets go. */
+  GHOST_kStickyTapped = 1,
+  /** It lifted after holding: the key is let go. */
+  GHOST_kStickyHeldUp = 2,
+  /** The control went away: the key is let go whatever its state. */
+  GHOST_kStickyRelease = 3,
+};
+/** Shift (0), Ctrl (1) or Alt (2) as a finger works it, see the `GHOST_kSticky` actions. */
+void GHOST_ios_window_sticky_modifier(GHOST_WindowIOS *window, int index, int action);
+/** Let go of every key the shell's buttons hold, latch or lock. */
+void GHOST_ios_window_sticky_release_all(GHOST_WindowIOS *window);
+/** An action of a finger or the Pencil ended: a latched key is let go. */
+void GHOST_ios_sticky_action_ended(GHOST_WindowIOS *window);
+/** Two bits each for Shift, Ctrl, Alt: 0 off, 1 held, 2 latched, 3 locked. */
+uint32_t GHOST_ios_sticky_modifiers();
 
 #ifdef __OBJC__
 #  import <UIKit/UIKit.h>

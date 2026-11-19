@@ -966,6 +966,14 @@ public struct DocumentWindow: View {
    * they are windows of their own. */
   public var body: some View {
     window
+      /* Shift, Ctrl and Alt as real keys for a finger, in both interfaces (ROUND6 TOUCH-8). */
+      .overlay(alignment: .bottomLeading) {
+        if model.viewportReady && (model.desktop || controlsShown) {
+          StickyModifierKeys(model: model)
+            .padding(.leading, 12)
+            .padding(.bottom, model.desktop ? 12 : 96)
+        }
+      }
 #if !os(visionOS)
       /* The palette a Pencil's squeeze shows, over everything; its commands follow the context. */
       .overlay { SqueezePaletteLayer() }

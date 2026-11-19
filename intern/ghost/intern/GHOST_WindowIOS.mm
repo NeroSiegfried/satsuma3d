@@ -655,6 +655,8 @@ UIWindow *document_window = nil;
                                                                 window,
                                                                 GHOST_kButtonMaskLeft,
                                                                 tablet_data));
+          /* A latched Shift, Ctrl or Alt lasts one action (ROUND6 TOUCH-8). */
+          GHOST_ios_sticky_action_ended(window);
           break;
         case UserInputEvent::EventTypes::PINCH_GESTURE:
           system->pushEvent(std::make_unique<GHOST_EventTrackpad>(system->getMilliSeconds(),
@@ -1830,6 +1832,11 @@ static NSString *ios_event_kind(UIEvent *event)
 - (void)releaseKeys
 {
   [self stopKeyRepeat];
+  /* The shell's Shift, Ctrl and Alt too: nothing stays held for Blender when the app leaves the
+   * foreground or the window goes (ROUND6 TOUCH-8, A11). */
+  if (window) {
+    GHOST_ios_window_sticky_release_all(window);
+  }
   for (NSNumber *held in held_keys.allValues) {
     const GHOST_TKey key = GHOST_TKey(held.intValue);
     GHOST_TModifierKey modifier;
@@ -4821,23 +4828,133 @@ void GHOST_ios_window_press_key(GHOST_WindowIOS *window,
   }
 }
 
-void GHOST_ios_window_hold_modifier(GHOST_WindowIOS *window, GHOST_TKey key, const bool down)
+/* -------------------------------------------------------------------- */
+/** \name Shift, Ctrl and Alt for a Finger (ROUND6 TOUCH-8, decision R6-8)
+ *
+ * Real keys: the shell's three buttons send GHOST modifier key down and up, so Blender's widgets
+ * (`event->modifier`) and key-map matching both see them, in either interface. Held, a key is
+ * down while the finger is on its button; a tap latches it for one action (it is let go when the
+ * next press of a finger or the Pencil is let go); a second tap while latched locks it until it
+ * is tapped again. GHOST owns the state: it is let go on leaving the foreground, when the window
+ * goes, and when the shell's control for it goes (#GHOST_ios_window_sticky_release_all).
+ * \{ */
+
+enum { STICKY_OFF = 0, STICKY_HELD = 1, STICKY_LATCHED = 2, STICKY_LOCKED = 3 };
+static constexpr int sticky_count = 3;
+static const GHOST_TKey sticky_keys[sticky_count] = {
+    GHOST_kKeyLeftShift, GHOST_kKeyLeftControl, GHOST_kKeyLeftAlt};
+static const GHOST_TModifierKey sticky_modifiers[sticky_count] = {
+    GHOST_kModifierKeyLeftShift, GHOST_kModifierKeyLeftControl, GHOST_kModifierKeyLeftAlt};
+/* Read and written on the main thread only, as the shell's buttons and UIKit's touches are. */
+static uint8_t sticky_state[sticky_count] = {STICKY_OFF, STICKY_OFF, STICKY_OFF};
+/* What it was before the finger went down on its button. */
+static uint8_t sticky_before[sticky_count] = {STICKY_OFF, STICKY_OFF, STICKY_OFF};
+
+static void sticky_key(GHOST_WindowIOS *window, const int index, const bool down)
 {
   GHOST_SystemIOS *system = window->getSystem();
+  GHOST_ios_set_modifier_held(sticky_modifiers[index], down);
   if (system == nullptr) {
     return;
   }
-  const GHOST_TModifierKey modifier = key == GHOST_kKeyLeftShift ? GHOST_kModifierKeyLeftShift :
-                                                                   GHOST_kModifierKeyLeftControl;
-  GHOST_ios_set_modifier_held(modifier, down);
   system->pushEvent(std::make_unique<GHOST_EventKey>(system->getMilliSeconds(),
                                                      down ? GHOST_kEventKeyDown :
                                                             GHOST_kEventKeyUp,
                                                      window,
-                                                     key,
+                                                     sticky_keys[index],
                                                      false,
                                                      nullptr));
 }
+
+static void sticky_changed()
+{
+  /* The shell redraws its buttons: a latch ended by an action, or every key let go. */
+  [[NSNotificationCenter defaultCenter]
+      postNotificationName:@"GHOSTIOSStickyModifiersChanged"
+                    object:nil];
+}
+
+void GHOST_ios_window_sticky_modifier(GHOST_WindowIOS *window, const int index, const int action)
+{
+  if (window == nullptr || index < 0 || index >= sticky_count) {
+    return;
+  }
+  uint8_t &state = sticky_state[index];
+  switch (action) {
+    case GHOST_kStickyFingerDown:
+      sticky_before[index] = state;
+      if (state == STICKY_OFF) {
+        sticky_key(window, index, true);
+      }
+      state = STICKY_HELD;
+      break;
+    case GHOST_kStickyTapped:
+      /* Off: latched for one action; latched: locked; locked: let go. */
+      state = sticky_before[index] == STICKY_OFF     ? STICKY_LATCHED :
+              sticky_before[index] == STICKY_LATCHED ? STICKY_LOCKED :
+                                                       STICKY_OFF;
+      if (state == STICKY_OFF) {
+        sticky_key(window, index, false);
+      }
+      break;
+    case GHOST_kStickyHeldUp:
+    case GHOST_kStickyRelease:
+      if (state != STICKY_OFF) {
+        sticky_key(window, index, false);
+      }
+      state = STICKY_OFF;
+      break;
+  }
+  sticky_changed();
+}
+
+void GHOST_ios_window_sticky_release_all(GHOST_WindowIOS *window)
+{
+  bool changed = false;
+  for (int index = 0; index < sticky_count; index++) {
+    if (sticky_state[index] != STICKY_OFF) {
+      sticky_key(window, index, false);
+      sticky_state[index] = STICKY_OFF;
+      changed = true;
+    }
+  }
+  if (changed) {
+    sticky_changed();
+  }
+}
+
+void GHOST_ios_sticky_action_ended(GHOST_WindowIOS *window)
+{
+  bool changed = false;
+  for (int index = 0; index < sticky_count; index++) {
+    if (sticky_state[index] == STICKY_LATCHED) {
+      sticky_key(window, index, false);
+      sticky_state[index] = STICKY_OFF;
+      changed = true;
+    }
+  }
+  if (changed) {
+    sticky_changed();
+  }
+}
+
+uint32_t GHOST_ios_sticky_modifiers()
+{
+  uint32_t bits = 0;
+  for (int index = 0; index < sticky_count; index++) {
+    bits |= uint32_t(sticky_state[index]) << (index * 2);
+  }
+  return bits;
+}
+
+void GHOST_ios_window_hold_modifier(GHOST_WindowIOS *window, GHOST_TKey key, const bool down)
+{
+  /* Snap and Precision while moving: Ctrl and Shift held, through the same keys. */
+  const int index = key == GHOST_kKeyLeftShift ? 0 : 1;
+  GHOST_ios_window_sticky_modifier(window, index, down ? GHOST_kStickyFingerDown : GHOST_kStickyHeldUp);
+}
+
+/** \} */
 
 UIWindow<GHOST_IOSInputWindow> *GHOST_ios_window_native(GHOST_WindowIOS *window)
 {

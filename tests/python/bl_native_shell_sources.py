@@ -1359,4 +1359,23 @@ check('bridge_pointer_to_view_middle(win);' in cursor_body and
       'nothing there to act on' in system_text,
       "R6 TOUCH-7: a command with no position has the view's middle, never a stale pointer")
 
+# ROUND6 TOUCH-8 (E3, E12, H5, A5, A11; decision R6-8): Shift, Ctrl and Alt for a finger are real
+# keys GHOST holds, latches or locks, in both interfaces; GHOST owns what is held and lets go on
+# leaving the foreground and when the window goes; a latch lasts one action; the held Snap and
+# Precision go through the same keys and are let go when their button goes.
+release_keys = objc_method(ghost_r6, '- (void)releaseKeys')
+check('GHOST_ios_window_sticky_release_all(window)' in release_keys and
+      'GHOST_ios_sticky_action_ended(window);' in ghost_r6 and
+      'GHOST_ios_window_sticky_modifier(window, index, down ? GHOST_kStickyFingerDown : GHOST_kStickyHeldUp)' in ghost_r6,
+      "R6 TOUCH-8: GHOST owns the held keys: let go on resign and detach, a latch after one action")
+rails_r6 = (SWIFT / 'Rails.swift').read_text(encoding='utf-8')
+window_t8 = (SWIFT / 'DocumentWindow.swift').read_text(encoding='utf-8')
+sticky = rails_r6[rails_r6.index('struct StickyModifierKeys: View {'):]
+modifier_button = rails_r6[rails_r6.index('private func modifierButton(_ key: String'):]
+modifier_button = modifier_button[:modifier_button.index('\n  }\n')]
+check('.onDisappear' in sticky and 'wm_apple_ios_window_sticky_modifier(model.window, Int32(index), 3)' in sticky and
+      '.onDisappear' in modifier_button and
+      'StickyModifierKeys(model: model)' in window_t8 and 'model.desktop || controlsShown' in window_t8,
+      "R6 TOUCH-8: the keys are drawn in both interfaces and let go when their buttons go")
+
 print('PASS: native shell sources ' + json.dumps(checks))

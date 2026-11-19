@@ -1463,7 +1463,8 @@ enum DirectionSymbol {
 }
 
 enum SelectIntent: Int {
-  case none = 0, add = 1, subtract = 2
+  /* `toggle`: Shift-click's "again to deselect it", Difference for a box (ROUND6 TOUCH-8, E12). */
+  case none = 0, add = 1, subtract = 2, toggle = 4
 }
 
 @MainActor
@@ -1991,7 +1992,7 @@ struct SidebarContent: Equatable {
   var size = false
   var strength = false
   var buttons = false
-  /** Where Blender selects, the buttons are Set, Extend and Subtract: three, not two. */
+  /** Where Blender selects, the buttons are Set, Extend, Subtract and Toggle: four, not two. */
   var selecting = false
   var smooth = false
   /** The brush's color, below the sliders. */
@@ -2024,7 +2025,7 @@ struct SidebarContent: Equatable {
   var sliderHeight: CGFloat { dial ? 52 : 148 }
   /** The buttons, Smooth and Face Control below them, each a cell with its name. */
   var buttonsHeight: CGFloat {
-    let count = (buttons ? (selecting ? 3 : 2) : 0) + (smooth ? 1 : 0) + (face ? 1 : 0)
+    let count = (buttons ? (selecting ? 4 : 2) : 0) + (smooth ? 1 : 0) + (face ? 1 : 0)
     return count == 0 ? 0 : CGFloat(count) * PaintSidebar.cellHeight + CGFloat(count - 1) * 4
   }
 
@@ -2119,6 +2120,7 @@ struct PaintSidebar: View {
             button(.none, symbol: "square.dashed", marquee: false, label: "Set", icon: "SELECT_SET")
             button(.add, symbol: "plus", marquee: true, label: "Extend", icon: "SELECT_EXTEND")
             button(.subtract, symbol: "minus", marquee: true, label: "Subtract", icon: "SELECT_SUBTRACT")
+            button(.toggle, symbol: "plusminus", marquee: true, label: "Toggle", icon: "SELECT_DIFFERENCE")
           }
           if content.smooth { smoothButton }
 #if !os(visionOS)
@@ -2216,6 +2218,13 @@ struct PaintSidebar: View {
       .onChange(of: transforming) { _, transforming in
         /* The move ended with it held: let go of it too. */
         if !transforming, held == key {
+          held = nil
+          wm_apple_ios_window_hold_modifier(window, key, false)
+        }
+      }
+      .onDisappear {
+        /* The button went with the move, under the finger (A11): its key is let go with it. */
+        if held == key {
           held = nil
           wm_apple_ios_window_hold_modifier(window, key, false)
         }
@@ -3293,3 +3302,117 @@ struct DragHintBadge: View {
     .accessibilityIdentifier("blender.drag-hint")
   }
 }
+
+/* -------------------------------------------------------------------- */
+/** \name Shift, Ctrl and Alt for a Finger (ROUND6 TOUCH-8, decision R6-8)
+ *
+ * Three buttons that are real keys for Blender, in both interfaces: held, the key is down while
+ * the finger stays; a tap latches it for one action; a second tap locks it until tapped again.
+ * GHOST owns what is held and lets go on leaving the foreground, when the window goes and when
+ * these buttons go. Each is named for what it does now where Blender names it ("Snap Midpoints",
+ * "Subtract"), else by the key.
+ * \{ */
+
+/** What GHOST holds, refreshed when it says it changed (a latch ended by an action). */
+@MainActor
+@Observable
+final class StickyModifierState {
+  static let shared = StickyModifierState()
+  /** Two bits each for Shift, Ctrl, Alt: 0 off, 1 held, 2 latched, 3 locked. */
+  private(set) var bits: UInt32 = 0
+
+  private init() {
+    NotificationCenter.default.addObserver(forName: Notification.Name("GHOSTIOSStickyModifiersChanged"),
+                                           object: nil, queue: .main) { _ in
+      MainActor.assumeIsolated { StickyModifierState.shared.refresh() }
+    }
+  }
+
+  func refresh() { bits = UInt32(wm_apple_ios_sticky_modifiers()) }
+  func state(_ index: Int) -> UInt32 { (bits >> UInt32(index * 2)) & 3 }
+}
+
+struct StickyModifierKeys: View {
+  let model: ShellModel
+  @State private var pressedAt: [Int: Date] = [:]
+  @State private var folded = false
+  private static let keys: [(key: String, symbol: String, title: String)] = [
+    ("shift", "shift", "Shift"), ("ctrl", "control", "Ctrl"), ("alt", "option", "Alt"),
+  ]
+  /** Shorter than this, a lift is a tap: it latches, or locks a latched key. */
+  private static let tapSeconds = 0.3
+
+  var body: some View {
+    let names = model.modifierNames
+    let sticky = StickyModifierState.shared
+    HStack(spacing: 4) {
+      if !folded {
+        ForEach(Array(Self.keys.enumerated()), id: \.offset) { index, key in
+          keyButton(index: index, key: key, name: names[key.key], state: sticky.state(index))
+        }
+      }
+      Button {
+        withAnimation(.easeOut(duration: 0.18)) { folded.toggle() }
+      } label: {
+        Image(systemName: folded ? "command" : "chevron.left")
+          .font(.system(size: 14, weight: .semibold))
+          .frame(width: 32, height: 44)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(folded ? "Show Shift, Ctrl and Alt" : "Hide Shift, Ctrl and Alt")
+    }
+    .padding(4)
+    .panelGlass(in: Capsule())
+    .onAppear { sticky.refresh() }
+    .onDisappear {
+      /* The control went: nothing stays held for Blender. */
+      for index in 0..<Self.keys.count { wm_apple_ios_window_sticky_modifier(model.window, Int32(index), 3) }
+    }
+    .onChange(of: folded) { _, folded in
+      if folded {
+        for index in 0..<Self.keys.count { wm_apple_ios_window_sticky_modifier(model.window, Int32(index), 3) }
+      }
+    }
+    .accessibilityElement(children: .contain)
+    .accessibilityIdentifier("blender.sticky-modifiers")
+  }
+
+  private func keyButton(index: Int, key: (key: String, symbol: String, title: String), name: String?,
+                         state: UInt32) -> some View
+  {
+    let on = state != 0
+    return VStack(spacing: 1) {
+      Image(systemName: state == 3 ? "lock.fill" : key.symbol)
+        .font(.system(size: 15, weight: .semibold))
+      Text(name ?? key.title)
+        .font(.system(size: 10, weight: .medium))
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+    }
+    .frame(width: 58, height: 44)
+    .foregroundStyle(on ? Color.white : Color.primary)
+    .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+      .fill(on ? Color.accentColor.opacity(state == 2 ? 0.7 : 1) : Color.primary.opacity(0.08)))
+    .contentShape(Rectangle())
+    .gesture(DragGesture(minimumDistance: 0)
+      .onChanged { _ in
+        guard pressedAt[index] == nil else { return }
+        pressedAt[index] = Date()
+        Haptics.selection()
+        wm_apple_ios_window_sticky_modifier(model.window, Int32(index), 0)
+      }
+      .onEnded { _ in
+        let tapped = Date().timeIntervalSince(pressedAt[index] ?? .distantPast) < Self.tapSeconds
+        pressedAt[index] = nil
+        wm_apple_ios_window_sticky_modifier(model.window, Int32(index), tapped ? 1 : 2)
+      })
+    .accessibilityElement()
+    .accessibilityLabel(name.map { "\(key.title): \($0)" } ?? key.title)
+    .accessibilityValue(state == 3 ? "Locked" : state == 2 ? "For the next action" : state == 1 ? "Held" : "")
+    .accessibilityHint("Hold, tap for the next action, or tap twice to lock")
+    .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+  }
+}
+
+/** \} */
