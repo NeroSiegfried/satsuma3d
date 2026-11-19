@@ -12,6 +12,8 @@
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
 
 #  include <cstring>
+#  include <fmt/format.h>
+#  include <string>
 
 #  include "BLI_listbase.h"
 #  include "BLI_string.h"
@@ -151,6 +153,22 @@ bool props_dialog(bContext *C,
   return ui::native_operator_dialog_begin(C, op, title, confirm, message);
 }
 
+/** A drop nothing took (ROUND6 FILES-8): "Satsuma 3D cannot open this kind of file", by name. */
+void drop_unhandled(bContext * /*C*/, const char *name, const int count)
+{
+  const char *app = WM_apple_ios_app_name();
+  const std::string text =
+      count > 1 ?
+          fmt::format(fmt::runtime(IFACE_("{} cannot open these kinds of file, such as “{}”.")),
+                      app && app[0] ? app : IFACE_("This app"),
+                      name) :
+          fmt::format(fmt::runtime(IFACE_("{} cannot open this kind of file: “{}”.")),
+                      app && app[0] ? app : IFACE_("This app"),
+                      name);
+  WM_native_ui_session_log("warning", fmt::format("drop: nothing took {} ({} files)", name, count).c_str());
+  WM_native_ui_notice(RPT_WARNING, text.c_str());
+}
+
 /** Two fingers move the view; Blender's own keymaps have no touch gestures. */
 void keyconfig_default_ensure(wmKeyConfig *keyconf)
 {
@@ -203,6 +221,7 @@ wmNativeInterface native_interface_create()
   native.document_command = WM_apple_ios_document_command;
   native.about_show = WM_apple_ios_about_show;
   native.app_name = WM_apple_ios_app_name;
+  native.drop_unhandled = drop_unhandled;
   return native;
 }
 

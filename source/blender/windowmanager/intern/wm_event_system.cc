@@ -4965,6 +4965,33 @@ void wm_event_do_handlers(bContext *C)
 
       /* A key press that only matched items the native interface keeps from Blender, and that no
        * other key-map went on to handle: the interface does or says what it answers, once. */
+      /* Files dropped where no drop box took them: said by a native interface (ROUND6 FILES-8),
+       * where a drop that did nothing is otherwise silent. */
+      if (event->type == EVT_DROP && wm_action_not_handled(action) &&
+          event->custom == EVT_DATA_DRAGDROP && event->customdata)
+      {
+        const wmNativeInterface *native = WM_native_interface();
+        if (native && native->drop_unhandled) {
+          const ListBaseT<wmDrag> *drags = static_cast<const ListBaseT<wmDrag> *>(
+              event->customdata);
+          int count = 0;
+          std::string first;
+          for (const wmDrag &drag : *drags) {
+            if (drag.type == WM_DRAG_PATH) {
+              const wmDragPath *path_data = static_cast<const wmDragPath *>(drag.poin);
+              for (const std::string &path : path_data->paths) {
+                if (first.empty()) {
+                  first = BLI_path_basename(path.c_str());
+                }
+                count++;
+              }
+            }
+          }
+          if (count > 0) {
+            native->drop_unhandled(C, first.c_str(), count);
+          }
+        }
+      }
       if (wm_native_skipped_kmi != nullptr) {
         const wmKeyMapItem *skipped = wm_native_skipped_kmi;
         wm_native_skipped_kmi = nullptr;

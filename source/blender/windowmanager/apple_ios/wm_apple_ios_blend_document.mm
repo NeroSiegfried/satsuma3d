@@ -39,6 +39,7 @@ std::string WM_apple_ios_document_template_write(bContext *C,
 /* Implemented in wm_apple_ios_document.cc (ROUND6 FILES-3, FILES-5). */
 std::string WM_apple_ios_document_external(bContext *C);
 int WM_apple_ios_document_pack_external(bContext *C);
+void WM_apple_ios_import_pending_run(bContext *C);
 std::vector<std::string> WM_apple_ios_document_neighbours_reload(
     bContext *C, const std::vector<std::string> &unreadable);
 }  // namespace blender
@@ -911,6 +912,19 @@ static const CFTimeInterval document_save_interval = 60.0;
                          [self presentRecovered];
                        });
       });
+    }
+    /* Files sent to the app while no document was open are imported into this one (ROUND6
+     * FILES-8), once it shows. */
+    if (success) {
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(1.5 * NSEC_PER_SEC)),
+                     dispatch_get_main_queue(),
+                     ^{
+                       GHOST_ios_engine_perform([](blender::bContext *C) {
+                         if (C) {
+                           blender::WM_apple_ios_import_pending_run(C);
+                         }
+                       });
+                     });
     }
     /* Files beside it that cannot be read: said once it shows, after the questions above. */
     if (success) {

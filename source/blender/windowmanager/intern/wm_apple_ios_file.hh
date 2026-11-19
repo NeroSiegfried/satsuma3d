@@ -30,6 +30,13 @@ void WM_apple_ios_options_dialog(bContext *C,
                                  std::string confirm_text,
                                  std::function<void(bContext *, bool)> then);
 
+/** A file sent to the app (Files, share sheet, AirDrop) imported into the open document, as a drop
+ * would be (ROUND6 FILES-8). Says so when nothing can open it. */
+bool WM_apple_ios_import_file(bContext *C, const char *path);
+/** Kept for the next document, when none is open; run once one has opened. */
+void WM_apple_ios_import_pending_add(const char *path);
+void WM_apple_ios_import_pending_run(bContext *C);
+
 namespace ui {
 /** The native interface's operator dialog, handing the operator back on OK and Cancel (true for
  * OK) instead of owning it. False when another dialog is open. See

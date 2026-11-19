@@ -203,6 +203,11 @@ struct wmNativeInterface {
   void (*about_show)() = nullptr;
   /** The app's name, which its About item in Blender's own menu carries. */
   const char *(*app_name)() = nullptr;
+  /**
+   * Files dropped where nothing took them (ROUND6 FILES-8): said, as a drop that did nothing
+   * would otherwise be silent. \a name is the first file's name, \a count how many there were.
+   */
+  void (*drop_unhandled)(bContext *C, const char *name, int count) = nullptr;
 };
 
 /** The registered native interface, or null for Blender's own. */

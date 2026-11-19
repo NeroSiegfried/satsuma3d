@@ -13,6 +13,13 @@
 
 #include <string>
 
+namespace blender {
+struct bContext;
+/* Implemented in wm_apple_ios_file.cc (ROUND6 FILES-8). */
+bool WM_apple_ios_import_file(bContext *C, const char *path);
+void WM_apple_ios_import_pending_add(const char *path);
+}  // namespace blender
+
 /* The views drawing Suzanne and the logo are Swift, in the app itself, see
  * `Launcher.swift`. They are found by name, as this library is built without Swift. */
 @protocol WMIOSLauncherModelView
@@ -449,6 +456,7 @@ static NSURL *launcherScratchCreate()
     : UIDocumentViewController <UIDocumentBrowserViewControllerDelegate,
                                 UIDocumentPickerDelegate>
 - (void)openDocumentAtURL:(NSURL *)url;
+- (void)importURL:(NSURL *)url;
 - (void)openFailed:(UIDocument *)document reason:(NSString *)reason;
 - (void)adoptCopy:(NSURL *)copy nextTo:(NSURL *)next_to;
 - (void)importAndOpen:(NSURL *)source name:(NSString *)name;
@@ -954,8 +962,86 @@ static NSURL *launcher_pending_url = nil;
   });
 }
 
+/** A model or an image sent to the app from Files, the share sheet or AirDrop (ROUND6 FILES-8):
+ * copied in as a drop's file is (FILES-5), then imported into the open document as a drop would
+ * be, or into the next document opened. */
+- (void)importURL:(NSURL *)url
+{
+  NSString *name = url.lastPathComponent ?: @"the file";
+  NSString *extension = url.pathExtension.lowercaseString;
+  /* Read by its path, so kept where Files shows it; everything else is packed at the next save. */
+  static NSSet<NSString *> *kept = [[NSSet alloc] initWithArray:@[
+    @"abc", @"vdb", @"usd", @"usda", @"usdc", @"usdz", @"mov", @"mp4", @"m4v", @"mkv", @"avi",
+    @"webm", @"wav", @"mp3", @"flac", @"ogg"
+  ]];
+  NSFileManager *files = NSFileManager.defaultManager;
+  NSURL *base = [kept containsObject:extension] ?
+                    [[files URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask]
+                         .firstObject URLByAppendingPathComponent:@"Brought In"
+                                                      isDirectory:YES] :
+                    [[NSURL fileURLWithPath:NSTemporaryDirectory() isDirectory:YES]
+                        URLByAppendingPathComponent:@"Dropped"
+                                        isDirectory:YES];
+  NSURL *folder = [base URLByAppendingPathComponent:NSUUID.UUID.UUIDString isDirectory:YES];
+  NSURL *target = [folder URLByAppendingPathComponent:name];
+  const BOOL scoped = [url startAccessingSecurityScopedResource];
+  __block BOOL copied = NO;
+  if ([files createDirectoryAtURL:folder withIntermediateDirectories:YES attributes:nil error:nil])
+  {
+    NSFileCoordinator *coordinator = [[[NSFileCoordinator alloc] initWithFilePresenter:nil]
+        autorelease];
+    [coordinator coordinateReadingItemAtURL:url
+                                    options:0
+                                      error:nil
+                                 byAccessor:^(NSURL *readable) {
+                                   copied = [files copyItemAtURL:readable toURL:target error:nil];
+                                 }];
+  }
+  if (scoped) {
+    [url stopAccessingSecurityScopedResource];
+  }
+  if (!copied) {
+    WM_native_ui_log("document", [@"sent to the app, could not be read: " stringByAppendingString:name].UTF8String);
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:[NSString stringWithFormat:@"“%@” could not be read", name]
+                         message:nil
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+    [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+    return;
+  }
+  const std::string path = target.path.UTF8String ?: "";
+  UIDocument *document = self.document;
+  const bool open = document && !(document.documentState & UIDocumentStateClosed);
+  GHOST_ios_engine_perform([path, open](blender::bContext *C) {
+    if (!C) {
+      return;
+    }
+    if (open) {
+      blender::WM_apple_ios_import_file(C, path.c_str());
+    }
+    else {
+      blender::WM_apple_ios_import_pending_add(path.c_str());
+    }
+  });
+  if (!open) {
+    WM_native_ui_log("document", [@"sent to the app, waits for a document: " stringByAppendingString:name].UTF8String);
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:[NSString stringWithFormat:@"Import “%@”", name]
+                         message:@"Open a document, or make a new one, and it is imported into it."
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+    [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+  }
+}
+
 - (void)openDocumentAtURL:(NSURL *)url
 {
+  /* Not a .blend: a model or an image sent to the app (ROUND6 FILES-8). */
+  if (url.pathExtension.length && ![url.pathExtension.lowercaseString hasPrefix:@"blend"]) {
+    [self importURL:url];
+    return;
+  }
   UIDocument *previous = self.document;
   const BOOL previous_open = previous && !(previous.documentState & UIDocumentStateClosed);
   /* A second tap while a file opens, or opening the file that is open, changes nothing. */

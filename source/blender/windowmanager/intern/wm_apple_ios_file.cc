@@ -8,6 +8,9 @@
 #  include "wm_apple_ios_file_mode.hh"
 
 #  include "BKE_context.hh"
+#  include "BKE_file_handler.hh"
+#  include "BKE_image.hh"
+#  include "IMB_imbuf_types.hh"
 #  include "BKE_main.hh"
 #  include "BKE_report.hh"
 #  include "BLI_listbase.h"
@@ -22,9 +25,11 @@
 #  include "BLT_translation.hh"
 #  include "WM_api.hh"
 #  include "WM_native_ui.hh"
+#  include "WM_apple_ios.hh"
 #  include "wm_event_system.hh"
 #  include "wm_event_types.hh"
 
+#  include <fmt/format.h>
 #  include <map>
 #  include <string>
 #  include <vector>
@@ -513,6 +518,99 @@ wmOperatorStatus WM_apple_ios_fileselect_exec(bContext *C, wmOperator *op)
   }
   return op->type->exec(C, op);
 }
+
+/* -------------------------------------------------------------------- */
+/** \name Files sent to the app (ROUND6 FILES-8, finding F14)
+ *
+ * A model or an image opened in the app from Files, the share sheet or AirDrop is imported into
+ * the open document, as a drop on its 3D View would be: its file handler's importer, with its
+ * options. With no document open it waits for the next one.
+ * \{ */
+
+static std::vector<std::string> import_pending;
+
+void WM_apple_ios_import_pending_add(const char *path)
+{
+  import_pending.emplace_back(path);
+}
+
+bool WM_apple_ios_import_file(bContext *C, const char *path)
+{
+  wmWindowManager *wm = CTX_wm_manager(C);
+  wmWindow *win = wm ? static_cast<wmWindow *>(wm->windows.first) : nullptr;
+  bScreen *screen = win ? WM_window_get_active_screen(win) : nullptr;
+  ScrArea *area = screen ? BKE_screen_find_big_area(screen, SPACE_VIEW3D, 0) : nullptr;
+  ARegion *region = area ? BKE_area_find_region_type(area, RGN_TYPE_WINDOW) : nullptr;
+  wmWindow *previous_window = CTX_wm_window(C);
+  ScrArea *previous_area = CTX_wm_area(C);
+  ARegion *previous_region = CTX_wm_region(C);
+  CTX_wm_window_set(C, win);
+  CTX_wm_area_set(C, area);
+  CTX_wm_region_set(C, region);
+  const std::string name = BLI_path_basename(path);
+  bool imported = false;
+  const Vector<bke::FileHandlerType *> handlers = bke::file_handlers_poll_file_drop(
+      C, Span<std::string>({std::string(path)}));
+  if (!handlers.is_empty()) {
+    if (wmOperatorType *ot = WM_operatortype_find(handlers.first()->import_operator, false)) {
+      PointerRNA props = WM_operator_properties_create_ptr(ot);
+      char directory[FILE_MAX];
+      BLI_path_split_dir_part(path, directory, sizeof(directory));
+      if (RNA_struct_find_property(&props, "filepath")) {
+        RNA_string_set(&props, "filepath", path);
+      }
+      if (RNA_struct_find_property(&props, "directory")) {
+        RNA_string_set(&props, "directory", directory);
+      }
+      if (PropertyRNA *files = RNA_struct_find_property(&props, "files")) {
+        PointerRNA entry;
+        RNA_property_collection_add(&props, files, &entry);
+        RNA_string_set(&entry, "name", name.c_str());
+      }
+      /* As a drop: the importer's options first (`filesel_drop_import_invoke`). */
+      WM_operator_name_call_ptr(C, ot, wm::OpCallContext::InvokeDefault, &props, nullptr);
+      WM_operator_properties_free(&props);
+      imported = true;
+    }
+  }
+  else if (BLI_path_extension_check_array(path, imb_ext_image) &&
+           BKE_image_load_exists(CTX_data_main(C), path))
+  {
+    /* An image: one of the document's images, packed as it is next written (FILES-5). */
+    WM_native_ui_notice(
+        RPT_INFO,
+        fmt::format(fmt::runtime(IFACE_("“{}” was added to the document's images.")), name)
+            .c_str());
+    imported = true;
+  }
+  if (!imported) {
+    const char *app = WM_apple_ios_app_name();
+    WM_native_ui_notice(
+        RPT_WARNING,
+        fmt::format(fmt::runtime(IFACE_("{} cannot open this kind of file: “{}”.")),
+                    app && app[0] ? app : IFACE_("This app"),
+                    name)
+            .c_str());
+  }
+  WM_native_ui_session_log(
+      "document",
+      fmt::format("sent to the app: {} {}", name, imported ? "imported" : "not openable").c_str());
+  CTX_wm_window_set(C, previous_window);
+  CTX_wm_area_set(C, previous_area);
+  CTX_wm_region_set(C, previous_region);
+  return imported;
+}
+
+void WM_apple_ios_import_pending_run(bContext *C)
+{
+  std::vector<std::string> paths = std::move(import_pending);
+  import_pending.clear();
+  for (const std::string &path : paths) {
+    WM_apple_ios_import_file(C, path.c_str());
+  }
+}
+
+/** \} */
 
 }  // namespace blender
 
