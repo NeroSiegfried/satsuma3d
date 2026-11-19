@@ -49,8 +49,15 @@
  * - `editor uv|image open|close`: the UV Editor or the Image Editor, as the editors menu opens it
  *   (ROUND5 9B.7); `editor uv desktop`: its Edit UVs in Desktop Interface; `editor nodes
  *   open|close`: the Shader Editor docked along the bottom (ROUND5 10A);
- * - `sidebar properties|outliner open|close`: Properties or the Outliner, as the header's buttons
- *   show and hide them (ROUND5 10A);
+ * - `sidebar properties|outliner open|close [sample]`: Properties or the Outliner, as the header's
+ *   buttons show and hide them (ROUND5 10A); `sample` logs where the shell has the gizmo against where
+ *   Blender last drew it, through the slide (ROUND5 14B, 14C);
+ * - `motion reduce on|off`: the app's Reduce Motion path without the system setting (ROUND5 14C):
+ *   the sidebars' slide and the insets in one step; until the app quits, never saved;
+ * - `trait compact on|off`, `trait text <size>|default`: the window's horizontal size class or its
+ *   text size (a `UIContentSizeCategory` name's end, such as `extraExtraLarge` or
+ *   `accessibilityLarge`), as trait overrides of this launch's window (ROUND5 14C): the window's
+ *   size and the owner's settings are not touched;
  * - `mark <text>`: a line in the log, to count what a group of steps wrote (ROUND5 10A);
  * - `document <step>`: the document checks of ROUND5 9D.5, in the scratch document only and on
  *   files in its folder: `copy <name>`, `open <name>`, `stat <name>`, `list`, `save`, `reopen`,
@@ -429,14 +436,71 @@ enum ShellSnapshots {
         else { panels.setHierarchyShown(words[1] == "open", by: "script") }
         WM_native_ui_log("snapshot", step)
         if sample {
-          try? await Task.sleep(for: .milliseconds(200))
+          /* ROUND5 14C: the hotspot (the shell's place for the gizmo) against where Blender last drew
+           * it, at moments through the slide; the largest difference is the line's verdict. */
+          var samples: [String] = []
+          var largest: CGFloat = 0
+          var elapsed = 0
+          for moment in [50, 100, 150, 200, 300, 450, 700] {
+            try? await Task.sleep(for: .milliseconds(moment - elapsed))
+            elapsed = moment
+            guard let model = ShellModel.current, let hotspot = model.navigationGizmoRect else { continue }
+            var drawn = CGPoint.zero
+            var radius: CGFloat = 0
+            guard wm_apple_ios_window_navigation_drawn(model.window, &drawn, &radius) else {
+              samples.append("\(moment) ms: not drawn")
+              continue
+            }
+            let difference = abs(hotspot.midX - drawn.x)
+            largest = max(largest, difference)
+            samples.append(String(format: "%d ms: %.1f/%.1f", moment, hotspot.midX, drawn.x))
+          }
           let middle = gizmoX()
-          try? await Task.sleep(for: .milliseconds(800))
+          try? await Task.sleep(for: .milliseconds(300))
           WM_native_ui_log("snapshot", "gizmo slide x: \(before) -> \(middle) -> \(gizmoX()) px")
+          WM_native_ui_log("snapshot", "gizmo hotspot/drawn x pt: " + samples.joined(separator: ", ") +
+                           String(format: "; largest difference %.1f pt", largest))
         }
         else {
           try? await Task.sleep(for: .seconds(1))
         }
+      case "motion":
+        guard words.count >= 2, words[0] == "reduce", ["on", "off"].contains(words[1]) else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        SidebarSlide.reduceMotionForScript = words[1] == "on"
+        WM_native_ui_log("snapshot", step)
+      case "trait":
+        guard words.count >= 2, let window = scene?.windows.first(where: \.isKeyWindow) ?? scene?.windows.first else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        if words[0] == "compact", ["on", "off"].contains(words[1]) {
+          if words[1] == "on" { window.traitOverrides.horizontalSizeClass = .compact }
+          else { window.traitOverrides.remove(UITraitHorizontalSizeClass.self) }
+        }
+        else if words[0] == "text" {
+          if words[1] == "default" { window.traitOverrides.remove(UITraitPreferredContentSizeCategory.self) }
+          else {
+            let sizes: [String: UIContentSizeCategory] = [
+              "large": .large, "extraLarge": .extraLarge, "extraExtraLarge": .extraExtraLarge,
+              "extraExtraExtraLarge": .extraExtraExtraLarge, "accessibilityMedium": .accessibilityMedium,
+              "accessibilityLarge": .accessibilityLarge, "accessibilityExtraLarge": .accessibilityExtraLarge,
+            ]
+            guard let size = sizes[words[1]] else {
+              WM_native_ui_log("snapshot", "unknown step: \(step)")
+              break
+            }
+            window.traitOverrides.preferredContentSizeCategory = size
+          }
+        }
+        else {
+          WM_native_ui_log("snapshot", "unknown step: \(step)")
+          break
+        }
+        WM_native_ui_log("snapshot", step)
+        try? await Task.sleep(for: .seconds(1))
       case "mark":
         WM_native_ui_log("snapshot", step)
       case "editor":

@@ -434,6 +434,8 @@ struct ViewGizmoLayer: View {
         state.pie = pie
       }
       .onChange(of: model.navigationGizmo) { state.geometry = geometry }
+      /* During a sidebar's slide the hotspot rides the easing (ROUND5 14C). */
+      .onChange(of: model.navigationSlide) { state.geometry = geometry }
       .onChange(of: model.pointScale) { state.geometry = geometry }
       .onChange(of: model.safeAreaInsets) { state.geometry = geometry }
       .onChange(of: model.sideInsets) { state.geometry = geometry }

@@ -266,20 +266,88 @@ final class ShellModel {
   var pointScale: CGFloat = 2
 
   /** Blender's navigation gizmo, as the square around its circle, in window points; nil before
-   * Blender says. */
+   * Blender says. During a sidebar's slide, where the easing puts it (ROUND5 14C). */
   var navigationGizmoRect: CGRect? {
-    let g = navigationGizmo
+    let slide = navigationSlide
+    let g = slide?.gizmo ?? navigationGizmo
     guard g.count == 3, pointScale > 0 else { return nil }
     let r = CGFloat(g[2]) / pointScale
-    return CGRect(x: CGFloat(g[0]) / pointScale - r, y: CGFloat(g[1]) / pointScale - r, width: r * 2, height: r * 2)
+    return CGRect(x: CGFloat(g[0]) / pointScale - r + (slide?.shift ?? 0), y: CGFloat(g[1]) / pointScale - r,
+                  width: r * 2, height: r * 2)
   }
 
-  /** The navigation gizmo and its buttons, in window points; nil before Blender says. */
+  /** The navigation gizmo and its buttons, in window points; nil before Blender says. During a
+   * sidebar's slide, where the easing puts them (ROUND5 14C). */
   var navigationFrame: CGRect? {
-    let f = navigationFootprint
+    let slide = navigationSlide
+    let f = slide?.footprint ?? navigationFootprint
     guard f.count == 4, pointScale > 0 else { return navigationGizmoRect }
-    return CGRect(x: CGFloat(f[0]) / pointScale, y: CGFloat(f[1]) / pointScale,
+    return CGRect(x: CGFloat(f[0]) / pointScale + (slide?.shift ?? 0), y: CGFloat(f[1]) / pointScale,
                   width: CGFloat(f[2] - f[0]) / pointScale, height: CGFloat(f[3] - f[1]) / pointScale)
+  }
+
+  /** A sidebar's slide, as the shell places what it puts on Blender's gizmo (ROUND5 14C): the place
+   * Blender reported when the slide began, moved by the change in the eased inset on the gizmo's
+   * side, until Blender's report at the slide's end replaces it. One source for the motion, the
+   * easing Blender is told, so the hotspot and the rails cannot trail the gizmo they lie on. */
+  struct NavigationSlide: Equatable {
+    /** Blender's report when the slide began, in window pixels. */
+    var gizmo: [Double]
+    var footprint: [Double]
+    /** The insets, in points, that report was drawn with. */
+    var leading: CGFloat
+    var trailing: CGFloat
+    /** Whether the gizmo stands on the trailing side, whose inset moves it. */
+    var trailingSide: Bool
+    /** How far the eased inset has moved it, in points along x. */
+    var shift: CGFloat = 0
+    /** When the easing ended; Blender's next report at the end replaces the slide. */
+    var ended: Date?
+  }
+  private(set) var navigationSlide: NavigationSlide?
+
+  enum InsetsEasing {
+    /** A slide begins from the insets Blender has now, in a view \a width points wide. */
+    case began(leading: CGFloat, trailing: CGFloat, width: CGFloat)
+    /** The insets Blender is told at this step. */
+    case step(leading: CGFloat, trailing: CGFloat)
+    /** The slide has reached the insets it was going to. */
+    case ended(leading: CGFloat, trailing: CGFloat)
+  }
+
+  /** The viewport's easing of the insets (ROUND5 14B), each step as it tells Blender. */
+  func insetsEased(_ easing: InsetsEasing) {
+    switch easing {
+      case let .began(leading, trailing, width):
+        /* A slide that turns round, or follows one whose end Blender has not reported yet, keeps
+         * the place it began from: Blender's report trails its draws. */
+        guard navigationSlide == nil else {
+          navigationSlide?.ended = nil
+          return
+        }
+        let g = navigationGizmo
+        guard g.count == 3, pointScale > 0 else { return }
+        navigationSlide = NavigationSlide(gizmo: g, footprint: navigationFootprint, leading: leading,
+                                          trailing: trailing, trailingSide: CGFloat(g[0]) / pointScale > width / 2)
+      case let .step(leading, trailing), let .ended(leading, trailing):
+        guard var slide = navigationSlide else { return }
+        slide.shift = slide.trailingSide ? slide.trailing - trailing : leading - slide.leading
+        if case .ended = easing { slide.ended = Date() }
+        navigationSlide = slide
+    }
+  }
+
+  /** Blender's report replaces the slide once it agrees with where the slide ended (within 2 pt),
+   * or a second after the end in any case. */
+  func settleNavigationSlide(now: Date = Date()) {
+    guard let slide = navigationSlide, let ended = slide.ended, pointScale > 0 else { return }
+    let g = navigationGizmo
+    let agrees = g.count == 3 && slide.gizmo.count == 3 &&
+      abs(CGFloat(g[0] - slide.gizmo[0]) / pointScale - slide.shift) <= 2 &&
+      abs(CGFloat(g[1] - slide.gizmo[1]) / pointScale) <= 2
+    if agrees || now.timeIntervalSince(ended) > 1 {
+      navigationSlide = nil
+    }
   }
   /** The color the viewport is cleared to, as red, green and blue in display space. */
   var viewportBackground: [Double] { floats("viewport_background") }
@@ -403,6 +471,7 @@ final class ShellModel {
 
   /** Read without waiting for Blender: the presentation mailbox and the launcher. */
   func refreshWindowState() {
+    settleNavigationSlide()
     if !viewportReady && wm_apple_ios_window_presented_frame(window) {
       viewportReady = true
     }

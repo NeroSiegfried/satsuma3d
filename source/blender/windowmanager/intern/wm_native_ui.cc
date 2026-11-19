@@ -6247,6 +6247,22 @@ void WM_native_ui_navigation_parts_update(bContext *C)
   }
 }
 
+extern "C" bool WM_native_ui_navigation_drawn(const void *ghost_window,
+                                              const int part,
+                                              float r_center_radius[3])
+{
+  std::lock_guard lock(bridge_navigation_targets_mutex);
+  for (const BridgeNavigationTarget &target : bridge_navigation_targets) {
+    if (target.ghost_window == ghost_window && int(target.part) == part) {
+      r_center_radius[0] = target.x;
+      r_center_radius[1] = target.y;
+      r_center_radius[2] = target.radius;
+      return true;
+    }
+  }
+  return false;
+}
+
 int WM_native_ui_navigation_part_at(const void *ghost_window, const int x, const int y)
 {
   std::lock_guard lock(bridge_navigation_targets_mutex);

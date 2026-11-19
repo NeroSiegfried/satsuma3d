@@ -69,6 +69,11 @@ bool wm_apple_ios_window_navigation_drag(void *_Nullable window,
  * window sends a finger's that begins there. False when no part is there or the input gate
  * refused it. */
 bool wm_apple_ios_window_navigation_button(void *_Nullable window, int phase, CGPoint point);
+/** Where Blender drew the navigation gizmo's axes in this window's last draw (ROUND5 14C): its
+ * centre and radius in the window's points. False before it is drawn, or while it is hidden. */
+bool wm_apple_ios_window_navigation_drawn(void *_Nullable window,
+                                          CGPoint *_Nonnull r_center,
+                                          CGFloat *_Nonnull r_radius);
 /** End the Pencil's stroke, cancelling its tool, when a control takes the touch. */
 void wm_apple_ios_window_cancel_pencil_stroke(void *_Nullable window);
 /** One of Blender's icons by key (such as `tool.object.builtin.move`), or the symbol. */

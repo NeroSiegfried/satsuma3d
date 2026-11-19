@@ -248,6 +248,25 @@ extern "C" bool wm_apple_ios_window_navigation_button(void *window,
                                                                                      at:point];
 }
 
+extern "C" bool wm_apple_ios_window_navigation_drawn(void *window,
+                                                     CGPoint *r_center,
+                                                     CGFloat *r_radius)
+{
+  float place[3];
+  if (!window || !WM_native_ui_navigation_drawn(GHOST_ios_window_handle(ghost_window(window)),
+                                                1 /* #NavigationGizmoPart::Axes */,
+                                                place))
+  {
+    return false;
+  }
+  /* Client pixels to the window's points, the inverse of `scalePointToWindow`. */
+  const CGPoint one = GHOST_ios_window_pixels(ghost_window(window), CGPointMake(1, 1));
+  const CGFloat scale = one.x > 0 ? one.x : 1;
+  *r_center = CGPointMake(place[0] / scale, place[1] / scale);
+  *r_radius = place[2] / scale;
+  return true;
+}
+
 extern "C" void wm_apple_ios_window_cancel_pencil_stroke(void *window)
 {
   if (window) {

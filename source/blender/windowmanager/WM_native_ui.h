@@ -150,6 +150,11 @@ void WM_native_ui_viewport_insets_step(float leading,
                                        float trailing,
                                        float final_leading,
                                        float final_trailing);
+/** Where a navigation gizmo's \a part (a #NavigationGizmoPart; 1 the axes) was drawn in the GHOST
+ * window \a ghost_window's last draw (ROUND5 14C): its centre and radius in the window's client
+ * pixels from the top left, as #WM_native_ui_navigation_part_at reads them. False when it was not
+ * drawn there. Safe from any thread. */
+bool WM_native_ui_navigation_drawn(const void *ghost_window, int part, float r_center_radius[3]);
 
 /** \} */
 

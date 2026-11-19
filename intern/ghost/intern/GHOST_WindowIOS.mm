@@ -3907,6 +3907,11 @@ CGPoint GHOST_ios_window_pixels(GHOST_WindowIOS *window, CGPoint point)
   return window->scalePointToWindow(point);
 }
 
+const void *GHOST_ios_window_handle(GHOST_WindowIOS *window)
+{
+  return static_cast<GHOST_IWindow *>(window);
+}
+
 NSString *GHOST_ios_window_gate(GHOST_WindowIOS *window, CGPoint fraction)
 {
   GHOSTUIWindow *native = (GHOSTUIWindow *)window->rootWindow;

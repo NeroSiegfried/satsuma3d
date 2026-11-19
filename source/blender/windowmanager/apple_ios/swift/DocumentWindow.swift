@@ -52,6 +52,7 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     SqueezePalette.shared.showSettings = { [weak commands] in commands?.settings?.present() }
 #endif
     let viewport = ViewportContainer(metalView: metalView)
+    viewport.insetsEased = { [weak model] easing in model?.insetsEased(easing) }
 #if os(visionOS)
     /* visionOS has no Pencil to bring a radial menu up. */
     pencilMenu = nil
@@ -664,14 +665,20 @@ final class ViewportContainer: UIView {
   private var slideFrom = (leading: CGFloat(0), trailing: CGFloat(0))
   private var slideSteps = 0
 
+  /** Each step of the easing as Blender is told it, for what the shell places on Blender's gizmo
+   * (ROUND5 14C: `ShellModel.insetsEased`). */
+  var insetsEased: ((ShellModel.InsetsEasing) -> Void)?
+
   private func insetsChanged() {
     slideLink?.invalidate()
     slideLink = nil
-    guard window != nil, appliedSize != .zero, !UIAccessibility.isReduceMotionEnabled else {
+    insetsEased?(.began(leading: shownLeadingInset, trailing: shownTrailingInset, width: bounds.width))
+    guard window != nil, appliedSize != .zero, !SidebarSlide.reduceMotion else {
       /* One step: before the first layout, and with Reduce Motion, as the panel appears at once. */
       noteSlide(from: (shownLeadingInset, shownTrailingInset), steps: 1, seconds: 0)
       shownLeadingInset = leadingInset
       shownTrailingInset = trailingInset
+      insetsEased?(.ended(leading: shownLeadingInset, trailing: shownTrailingInset))
       setNeedsLayout()
       return
     }
@@ -693,7 +700,11 @@ final class ViewportContainer: UIView {
     if time >= SidebarSlide.duration {
       link.invalidate()
       slideLink = nil
+      insetsEased?(.ended(leading: shownLeadingInset, trailing: shownTrailingInset))
       noteSlide(from: slideFrom, steps: slideSteps, seconds: time)
+    }
+    else {
+      insetsEased?(.step(leading: shownLeadingInset, trailing: shownTrailingInset))
     }
   }
 

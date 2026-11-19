@@ -833,6 +833,21 @@ check('SidebarSlide.progress(' in viewport_container and 'WM_native_ui_viewport_
       'withAnimation(SidebarSlide.animation)' in (SWIFT / 'ShellPanels.swift').read_text(encoding='utf-8'),
       "14B: a sidebar's insets ease over its slide, on the panel's own curve")
 
+# ROUND5 14C: whatever the shell places on Blender's gizmo takes its place from the easing during a
+# slide: every reader of the gizmo's place goes through `navigationGizmoRect` or `navigationFrame`,
+# which ride `navigationSlide`. The raw report is read only by them, by the slide's own bookkeeping
+# and by the scripts' sampling (which compares the two).
+raw = sorted('%s:%d' % (name, number) for name, text in code.items()
+             for number, line in enumerate(text.splitlines(), 1)
+             if re.search(r'\.navigation(Gizmo|Footprint)\b(?!Rect)', line) and not line.lstrip().startswith(('/*', '*', '//')))
+allowed_raw = {'ShellModel.swift', 'Snapshots.swift', 'ViewGizmo.swift'}
+check(all(entry.split(':')[0] in allowed_raw for entry in raw) and
+      'let g = slide?.gizmo ?? navigationGizmo' in code['ShellModel.swift'] and
+      'let f = slide?.footprint ?? navigationFootprint' in code['ShellModel.swift'] and
+      'insetsEased?(.step(' in viewport_container and 'insetsEased?(.ended(' in viewport_container and
+      'viewport.insetsEased = { [weak model] easing in model?.insetsEased(easing) }' in window_text,
+      "14C: the gizmo's place in the shell rides the easing during a slide; raw reads only in %s" % raw)
+
 # ROUND5 10D (decision 60): a resize under way, or while the scene is not in front, never reaches
 # Blender; the size is applied once, at the end or on coming back.
 viewport_container = window_text[window_text.index('final class ViewportContainer'):window_text.index('struct ViewportView')]

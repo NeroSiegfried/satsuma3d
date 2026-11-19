@@ -173,6 +173,8 @@ void GHOST_ios_window_hold_modifier(GHOST_WindowIOS *window, GHOST_TKey key, boo
 UIWindow<GHOST_IOSInputWindow> *GHOST_ios_window_native(GHOST_WindowIOS *window);
 /** A point in the window's view to Blender's window pixels. */
 CGPoint GHOST_ios_window_pixels(GHOST_WindowIOS *window, CGPoint point);
+/** The window as Blender's window manager holds it (`GHOST_IWindow *`, `wmWindow::ghostwin`). */
+const void *GHOST_ios_window_handle(GHOST_WindowIOS *window);
 /** Files dropped on the window at a point in its view, such as from another app. */
 void GHOST_ios_window_drop_files(GHOST_WindowIOS *window,
                                  NSArray<NSString *> *paths,

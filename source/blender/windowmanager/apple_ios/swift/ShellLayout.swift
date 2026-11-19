@@ -647,8 +647,13 @@ enum SidebarSlide {
   static let duration: TimeInterval = 0.45
 
   static var animation: Animation? {
-    UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: response, dampingFraction: damping)
+    reduceMotion ? nil : .spring(response: response, dampingFraction: damping)
   }
+
+  /** The system's Reduce Motion, or a check script's `motion reduce on` (ROUND5 14C), which lasts
+   * until the app quits and is never saved. */
+  nonisolated(unsafe) static var reduceMotionForScript = false
+  static var reduceMotion: Bool { UIAccessibility.isReduceMotionEnabled || reduceMotionForScript }
 
   /** How far the slide has come, 0 to 1, \a time seconds after it began: the same spring's step
    * response (unit mass, stiffness (2π / response)², damping 4π · fraction / response). */
