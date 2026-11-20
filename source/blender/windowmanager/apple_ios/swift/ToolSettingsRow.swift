@@ -7,8 +7,9 @@
  * folded into one, in Blender's order. The active tool (its icon and name, then its own settings,
  * as `VIEW3D_HT_tool_header.draw_tool_settings`), the transform settings (orientation, pivot,
  * snapping, proportional editing, as `VIEW3D_HT_header.draw_xform_template`), then the mode's
- * settings (mirror or symmetry, Auto Merge, as `draw_mode_settings`). Blender's widgets, see
- * #BlenderWidgets.
+ * settings (mirror or symmetry, Auto Merge, as `draw_mode_settings`), then what else Blender's
+ * header has for the mode (its `HEADER` view: masks, select modes, popovers). Blender's widgets,
+ * see #BlenderWidgets.
  *
  * In Blender's style it is Blender's tool header: full width, flush under the header, its grey.
  * In Liquid Glass it is a capsule hugging its items, a little below the header. A narrow window
@@ -35,7 +36,9 @@ struct ToolSettingsRow: View {
     MirrorToggles.available(model) || model.transformSettings["automerge"] != nil
   }
 
-  var hasContent: Bool { transformMode || modeSettings || shell.panels.tools.hasToolSettings }
+  var hasContent: Bool {
+    transformMode || modeSettings || shell.panels.tools.hasToolSettings || shell.panels.header.hasToolSettings
+  }
 
   private var items: some View {
     HStack(spacing: 6) {
@@ -51,6 +54,12 @@ struct ToolSettingsRow: View {
       if modeSettings {
         BlenderWidgetSeparator()
         MirrorInline(model: model)
+      }
+      /* The rest of Blender's header for the mode, as its header draws it (ROUND6 MODE-1): masks,
+       * select modes, placement, and its popovers, beside the transform settings they extend. */
+      if shell.panels.header.hasToolSettings {
+        BlenderWidgetSeparator()
+        ToolSettingsItems(model: shell.panels.header)
       }
     }
     .labelStyle(.titleAndIcon)

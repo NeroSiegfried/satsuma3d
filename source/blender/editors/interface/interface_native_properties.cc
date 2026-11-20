@@ -43,6 +43,7 @@
 #include "BLI_listbase.h"
 #include "BLI_rect.h"
 #include "BLI_serialize.hh"
+#include "BLI_set.hh"
 #include "DEG_depsgraph.hh"
 #include "DEG_depsgraph_build.hh"
 #include "DNA_ID.h"
@@ -2627,13 +2628,14 @@ class Writer {
                              StringRef(text).startswith("Delete");
     return builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
       common(fields);
+      /* Drawn pressed, as the header's select modes are (`depress`, MODE-1). */
       return protocol::CreateButton(buffer,
                                     destructive ? protocol::ButtonStyle::Destructive :
                                                   protocol::ButtonStyle::Normal,
                                     0,
                                     0,
                                     0,
-                                    false,
+                                    (but.flag & (UI_SELECT | UI_SELECT_DRAW)) != 0,
                                     label.empty() && but.str.empty() && icon != ICON_NONE);
     });
   }
@@ -3218,6 +3220,127 @@ constexpr const char *PREFERENCES_ADDON_PREFIX = "ADDON:";
 /** A popover a panel's button opens (PANEL-8): this, the popover's panel, and after a tab the tab
  * it is opened from. */
 constexpr const char *POPOVER_TAB_PREFIX = "POPOVER:";
+/** The 3D Viewport's header, as the tool settings row shows what of it the shell does not own
+ * (ROUND6 MODE-1, findings E4 and B14). */
+constexpr const char *HEADER_TAB = "HEADER";
+
+/**
+ * The panel a button opens as a popover: a `popover()` button's, or a `prop_with_popover()`
+ * property's, such as the header's orientation or proportional editing, whose menu is a panel.
+ */
+static PanelType *button_popover_panel(const Button &but)
+{
+  if (PanelType *panel = button_paneltype_get(&but)) {
+    return panel;
+  }
+  if (button_menu_draw_as_popover(&but) && but.func_argN) {
+    return WM_paneltype_find(static_cast<const char *>(but.func_argN), true);
+  }
+  return nullptr;
+}
+
+/** Whether a popover's panel is drawn in the 3D Viewport's context, as the viewport's header and
+ * top bar open it: the 3D Viewport's own panels and the top bar's (Grease Pencil's layers). */
+static bool viewport_popover_space(const PanelType &panel)
+{
+  return ELEM(panel.space_type, SPACE_VIEW3D, SPACE_TOPBAR);
+}
+
+/** Blender's own 3D Viewport header, which the `HEADER` tab draws. */
+static HeaderType *view3d_header_type(const bContext *C)
+{
+  ARegionType *region_type = BKE_regiontype_from_id(BKE_spacetype_from_id(SPACE_VIEW3D),
+                                                    RGN_TYPE_HEADER);
+  if (region_type == nullptr) {
+    return nullptr;
+  }
+  for (HeaderType &ht : region_type->headertypes) {
+    if (STREQ(ht.idname, "VIEW3D_HT_header")) {
+      return (ht.poll == nullptr || ht.poll(C, &ht)) ? &ht : nullptr;
+    }
+  }
+  return nullptr;
+}
+
+/**
+ * The 3D Viewport's header as one panel without a header of its own, so the walker draws it as it
+ * draws panels: `VIEW3D_HT_header.draw`, with `template_header_3D_mode`, into a detached block.
+ */
+static PanelType *view3d_header_panel_type()
+{
+  static PanelType type = []() {
+    PanelType pt{};
+    STRNCPY(pt.idname, "VIEW3D_HT_header");
+    STRNCPY(pt.label, "3D Viewport Header");
+    pt.space_type = SPACE_VIEW3D;
+    pt.region_type = RGN_TYPE_HEADER;
+    pt.flag = PANEL_TYPE_NO_HEADER;
+    pt.poll = [](const bContext *C, PanelType * /*pt*/) { return view3d_header_type(C) != nullptr; };
+    pt.draw = [](const bContext *C, Panel *panel) {
+      if (HeaderType *ht = view3d_header_type(C)) {
+        Header header{};
+        header.type = ht;
+        header.layout = panel->layout;
+        ht->draw(C, &header);
+      }
+    };
+    return pt;
+  }();
+  return &type;
+}
+
+/**
+ * Why the shell, not the header's row, shows one of the header's buttons, or null: the editor's
+ * type and the mode, which the shell's header has; the menus, which are its menu bar; the
+ * transform settings, its row's own items (their popovers are still the row's, see
+ * #button_popover_panel); select mode in Edit Mode; and the viewport's shading, overlays, X-ray and
+ * gizmos switch, its own buttons (More, Viewport Shading). A table: the `header` scenario fails on
+ * any of the header's buttons neither shown in the row nor named here (ROUND6 MODE-1's sweep).
+ */
+static const char *header_owner(const Button &but)
+{
+  if (button_menutype_get(const_cast<Button *>(&but))) {
+    return "shell_menus";
+  }
+  /* The mode menu, an operator's enum as a menu (`operator_menu_enum`). */
+  const wmOperatorType *ot = but.optype ? but.optype :
+                                          button_operatortype_get_from_enum_menu(
+                                              const_cast<Button *>(&but), nullptr);
+  if (ot && ELEM(StringRef(ot->idname),
+                 "OBJECT_OT_mode_set",
+                 "MESH_OT_select_mode",
+                 "VIEW3D_OT_toggle_xray"))
+  {
+    return "shell_header";
+  }
+  if (but.rnaprop && but.rnapoin.type) {
+    static const Set<std::string> properties = {
+        "Area.ui_type",
+        "TransformOrientationSlot.type",
+        "ToolSettings.transform_pivot_point",
+        "ToolSettings.use_snap",
+        "ToolSettings.use_proportional_edit",
+        "ToolSettings.use_proportional_edit_objects",
+        "ToolSettings.proportional_edit_falloff",
+        "View3DOverlay.show_overlays",
+        "View3DShading.type",
+        "SpaceView3D.show_gizmo",
+    };
+    if (properties.contains(std::string(RNA_struct_identifier(but.rnapoin.type)) + "." +
+                            RNA_property_identifier(but.rnaprop)))
+    {
+      return "shell_header";
+    }
+  }
+  if (const PanelType *panel = button_paneltype_get(&but)) {
+    if (STREQ(panel->idname, "VIEW3D_PT_shading") ||
+        StringRef(panel->idname).startswith("VIEW3D_PT_overlay"))
+    {
+      return "shell_header";
+    }
+  }
+  return nullptr;
+}
 
 /** The sidebar's categories beside Tool that have panels, in the order Blender registered them. */
 static Vector<std::string> sidebar_categories()
@@ -3411,6 +3534,13 @@ Fate fate_consumed(const char *reason)
 Fate fate_dropped(const char *reason, const Fate::Counted counted = Fate::Counted::Control)
 {
   return {"dropped", "", reason, counted};
+}
+
+/** Left out on purpose: shown by the shell itself, such as the 3D Viewport header's mode menu
+ * (MODE-1, #header_owner). */
+Fate fate_hidden(const char *reason)
+{
+  return {"hidden", "", reason};
 }
 
 /** What a panel (or a tab) could not show, as its row says it. */
@@ -3765,14 +3895,10 @@ static std::string panels_walk(bContext *C,
   const bool shading = requested_tab == "SHADING";
   /* The viewport's overlays, a popover beside its shading in Blender's header. */
   const bool overlays = requested_tab == "OVERLAYS";
-  const bool header_popover = shading || overlays;
-  /* The toolbar's tool settings; the Properties' Tool tab is Blender's own, see #tool_tab. */
-  const bool tool_settings = requested_tab == "TOOL" && !data.tool_tab;
-  const bool viewport = header_popover || tool_settings;
-  /* The Preferences' sections, their tabs named apart from the Properties' ones. */
-  const bool preferences = StringRef(requested_tab).startswith(PREFERENCES_TAB_PREFIX);
   /* A popover a panel's button opens, such as a header's presets (B8, B14, PANEL-8): its panel,
-   * drawn in the Properties tab it is opened from, as Blender draws it from there. */
+   * drawn in the Properties tab it is opened from, as Blender draws it from there; or one of the
+   * 3D Viewport's (Snapping, Selectability & Visibility, a paint mode's masks: MODE-1), drawn in
+   * the viewport, as its header opens it. */
   const bool panel_popover = StringRef(requested_tab).startswith(POPOVER_TAB_PREFIX);
   std::string popover_id, popover_origin;
   PanelType *popover_type = nullptr;
@@ -3782,10 +3908,22 @@ static std::string panels_walk(bContext *C,
     popover_id = at == StringRef::not_found ? rest : rest.substr(0, at);
     popover_origin = at == StringRef::not_found ? "" : rest.substr(at + 1);
     popover_type = WM_paneltype_find(popover_id.c_str(), true);
-    if (!popover_type || popover_type->space_type != SPACE_PROPERTIES) {
+    if (!popover_type ||
+        !(popover_type->space_type == SPACE_PROPERTIES || viewport_popover_space(*popover_type)))
+    {
       return nothing("This popover is only in the Desktop Interface.");
     }
   }
+  const bool viewport_popover = panel_popover && popover_type->space_type != SPACE_PROPERTIES;
+  /* Drawn as Blender's header draws its popovers, each sub-panel flattened into its panel. */
+  const bool header_popover = shading || overlays || viewport_popover;
+  /* The toolbar's tool settings; the Properties' Tool tab is Blender's own, see #tool_tab. */
+  const bool tool_settings = requested_tab == "TOOL" && !data.tool_tab;
+  /* The 3D Viewport's header, what of it the shell does not own (MODE-1). */
+  const bool header_tab = requested_tab == HEADER_TAB && !data.tool_tab;
+  const bool viewport = header_popover || tool_settings || header_tab;
+  /* The Preferences' sections, their tabs named apart from the Properties' ones. */
+  const bool preferences = StringRef(requested_tab).startswith(PREFERENCES_TAB_PREFIX);
   /* The Properties tab to draw in. */
   const std::string &properties_tab = panel_popover ? popover_origin : requested_tab;
   std::unique_ptr<DetachedAreaContext> detached_context;
@@ -3802,7 +3940,12 @@ static std::string panels_walk(bContext *C,
   ARegionType *panel_region_type = viewport ?
       BKE_regiontype_from_id(CTX_wm_area(C)->type, tool_settings ? RGN_TYPE_UI : RGN_TYPE_HEADER) :
       panel_region->runtime->type;
-  std::string tab_id = tool_settings ? "TOOL" : shading ? "SHADING" : overlays ? "OVERLAYS" : "OBJECT";
+  std::string tab_id = tool_settings    ? "TOOL" :
+                       shading          ? "SHADING" :
+                       overlays         ? "OVERLAYS" :
+                       header_tab       ? HEADER_TAB :
+                       viewport_popover ? requested_tab :
+                                          "OBJECT";
   std::string panel_context;
   Vector<Tab> tabs;
   /* The Properties editor's own space, for its context path. */
@@ -3887,6 +4030,13 @@ static std::string panels_walk(bContext *C,
       return "The active tool has changed.";
     }
   }
+  if (header_tab) {
+    /* Each mode has its own header. */
+    identity += std::string(":") + CTX_data_mode_string(C);
+    if (execute && data.identity != identity) {
+      return "The mode has changed.";
+    }
+  }
   /* The panels' nodes, by the panels' ids; a viewport popover's sub-panels are their outer's. */
   std::map<std::string, NodeId> panel_nodes;
   /* What each panel's node, and the tab, could not show, which their rows say (R6-9). */
@@ -3900,11 +4050,13 @@ static std::string panels_walk(bContext *C,
     /* Where this walk's notes begin, as each build of the view walks again. */
     census_record(tab_id, "", "Walk", identity, {"walk", "", ""});
     top = writer->builder.top("properties", [&](Buffer &buffer, NodeFields &fields) {
-      fields.label = tool_settings ? "Tool Settings" :
-                     shading       ? "Viewport Shading" :
-                     overlays      ? "Overlays" :
-                     preferences   ? "Preferences" :
-                                     "Properties";
+      fields.label = tool_settings    ? "Tool Settings" :
+                     shading          ? "Viewport Shading" :
+                     overlays         ? "Overlays" :
+                     header_tab       ? "3D Viewport Header" :
+                     viewport_popover ? popover_type->label :
+                     preferences      ? "Preferences" :
+                                        "Properties";
       /* What it shows: another object's controls start again. */
       fields.property = identity;
       return protocol::CreateGroup(buffer);
@@ -4131,8 +4283,12 @@ static std::string panels_walk(bContext *C,
     };
     add(*popover_type, "");
   }
+  if (header_tab) {
+    PanelType *header = view3d_header_panel_type();
+    candidates.push_back({header, nullptr, header->idname, ""});
+  }
   for (PanelType &pt : candidate_region_type->paneltypes) {
-    if (panel_popover) {
+    if (panel_popover || header_tab) {
       break;
     }
     if (sidebar_tab) {
@@ -5073,10 +5229,57 @@ static std::string panels_walk(bContext *C,
       }
       return *section.node;
     };
+    /* A popover's button, see below. \a beside: a property's, whose own control is written too,
+     * named by the popover's panel rather than the property's value. */
+    const auto write_popover = [&](const Button &but, const PanelType &popover, const bool beside) {
+      std::string label = !beside && !but.str.empty() ? but.str : std::string(popover.label);
+      /* As Blender draws it, to its end: a panel that names itself in its header, such as the
+       * vertex groups' slots by the active group, writes its label over the type's, and a button
+       * made before keeps the rest of the old one after the new one's end ("Bone", not
+       * "Bone\0x Groups"). */
+      label.resize(strlen(label.c_str()));
+      const bool in_header = header_buttons.count(const_cast<Button *>(&but)) != 0;
+      writer->builder.add(node,
+                          writer->key(std::string("popover:") + candidate.id + ":" + popover.idname),
+                          [&](Buffer &buffer, NodeFields &fields) {
+                            fields.label = label;
+                            fields.icon = icon_name(beside ? ICON_NONE : button_icon(&but));
+                            fields.enabled = !(but.flag & BUT_DISABLED);
+                            fields.inactive = (but.flag & BUT_INACTIVE) != 0;
+                            fields.role = in_header ? protocol::Role::Header : protocol::Role::None;
+                            const auto param = protocol::CreateParamDirect(
+                                buffer,
+                                "panel",
+                                protocol::Value::TextValue,
+                                protocol::CreateTextValueDirect(buffer, popover.idname).Union());
+                            return protocol::CreateMenuButton(buffer,
+                                                              buffer.CreateString("popover"),
+                                                              buffer.CreateVector(&param, 1));
+                          });
+      if (!beside) {
+        decide(&but, fate_projected("Popover"));
+      }
+    };
     for (const auto &button : block->buttons) {
       Button &but = *button;
       if (section_request) {
         break;
+      }
+      if (header_tab) {
+        /* What the shell's own header and row show (MODE-1): left out, but for the popover an
+         * owned property opens (Transform Orientations, Proportional Editing), which is the row's. */
+        if (const char *owner = header_owner(but)) {
+          PanelType *popover = button_menu_draw_as_popover(&but) ? button_popover_panel(but) :
+                                                                   nullptr;
+          if (writer && popover && viewport_popover_space(*popover) && !(but.flag & UI_HIDDEN)) {
+            write_popover(but, *popover, true);
+            decide(&but, fate_projected("Popover"));
+          }
+          else {
+            decide(&but, fate_hidden(owner));
+          }
+          continue;
+        }
       }
       bool in_section_header = false;
       if (writer && !sections.empty() && panel_nodes.count(candidate.id)) {
@@ -5386,36 +5589,33 @@ static std::string panels_walk(bContext *C,
           continue;
         }
       }
-      if (PanelType *popover = but.type == ButtonType::Popover && !header_popover ?
-                                   button_paneltype_get(&but) :
-                                   nullptr;
-          popover && popover->space_type == SPACE_PROPERTIES && !viewport && !preferences)
-      {
-        /* A popover of the panel's, such as its header's presets (B8, B14, PANEL-8): opened by
-         * the interface as a view of its own (`POPOVER:` tab), as Shading and Overlays are. */
-        if (writer && !(but.flag & UI_HIDDEN)) {
-          const std::string label = !but.str.empty() ? but.str : std::string(popover->label);
-          const bool in_header = header_buttons.count(&but) != 0;
-          writer->builder.add(node,
-                              writer->key(std::string("popover:") + candidate.id + ":" + popover->idname),
-                              [&](Buffer &buffer, NodeFields &fields) {
-                                fields.label = label;
-                                fields.icon = icon_name(button_icon(&but));
-                                fields.enabled = !(but.flag & BUT_DISABLED);
-                                fields.role = in_header ? protocol::Role::Header :
-                                                          protocol::Role::None;
-                                const auto param = protocol::CreateParamDirect(
-                                    buffer,
-                                    "panel",
-                                    protocol::Value::TextValue,
-                                    protocol::CreateTextValueDirect(buffer, popover->idname).Union());
-                                return protocol::CreateMenuButton(buffer,
-                                                                  buffer.CreateString("popover"),
-                                                                  buffer.CreateVector(&param, 1));
-                              });
-          decide(&but, fate_projected("Popover"));
+      /* A popover of the panel's, such as its header's presets (B8, B14, PANEL-8), or one of the
+       * 3D Viewport's, from its header or the tool's settings (MODE-1): opened by the interface as
+       * a view of its own (`POPOVER:` tab), as Shading and Overlays are. A property whose menu is
+       * a panel (`prop_with_popover`) in the viewport's row keeps its choice beside it. */
+      PanelType *popover = nullptr;
+      bool popover_beside = false;
+      if (!header_popover && !preferences) {
+        if (but.type == ButtonType::Popover) {
+          popover = button_paneltype_get(&but);
         }
-        continue;
+        else if (viewport && button_menu_draw_as_popover(&but)) {
+          popover = button_popover_panel(but);
+          popover_beside = true;
+        }
+        if (popover && !(viewport_popover_space(*popover) ||
+                         (!viewport && popover->space_type == SPACE_PROPERTIES)))
+        {
+          popover = nullptr;
+        }
+      }
+      if (popover) {
+        if (writer && !(but.flag & UI_HIDDEN)) {
+          write_popover(but, *popover, popover_beside);
+        }
+        if (!popover_beside) {
+          continue;
+        }
       }
       if (!execute && !open && !header_toggle && !header_operator && !header_name) {
         continue;

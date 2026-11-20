@@ -130,9 +130,15 @@ struct ToolSettingItem: View {
         .toggleStyle(BlenderCheckboxStyle())
         .fixedSize()
         .disabled(!node.enabled)
-      case .button:
-        Button { model.send(node, .invoke) } label: { label }
+      case .button where node.content(Blender_NativeUI_Button.self)?.pressed == true:
+        /* Drawn pressed while it is the one chosen, as the header's select modes are (MODE-1): lit
+         * as the bar's toggles are; a tap runs it. Unpressed, it is a button as Blender draws it. */
+        Toggle(isOn: Binding(get: { true }, set: { _ in model.send(node, .invoke) })) { label }
+          .toggleStyle(.button)
           .disabled(!node.enabled)
+      case .menubutton where menuButtonView(node) == "popover":
+        /* One of the 3D Viewport's popovers, such as Snapping (MODE-1). */
+        ToolSettingPanelPopover(model: model, node: node)
       case .menubutton:
         /* The 3D Viewport's menus, such as Sculpt Mode's Mask: run there, not in Properties. */
         let route = BlenderMenus.route(menuName(node))
@@ -176,6 +182,57 @@ struct ToolSettingItem: View {
     else {
       Text(title)
     }
+  }
+}
+
+/**
+ * A popover of Blender's header or of the tool's settings in the bar, such as Snapping, Proportional
+ * Editing or Selectability & Visibility (ROUND6 MODE-1, findings E4 and B14): its panel, drawn by
+ * Blender in the viewport as a view of its own while it shows, as Shading and Overlays are.
+ */
+struct ToolSettingPanelPopover: View {
+  let model: PanelsModel
+  let node: NativeNode
+  @State private var content: PanelsModel?
+
+  private var title: String { node.shortLabel }
+
+  var body: some View {
+    Button {
+      let panel = menuButtonParam(node, "panel")
+      guard !panel.isEmpty else { return }
+      content = PanelsModel(mode: .popover, tab: "POPOVER:" + panel + "\t" + model.currentTab)
+    } label: {
+      HStack(spacing: 4) {
+        if let image = BlenderIcon.image(node.icon) {
+          Label { Text(title) } icon: { Image(uiImage: image).renderingMode(.template) }
+        }
+        else {
+          Text(title)
+        }
+        Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+      }
+    }
+    .disabled(!node.enabled)
+    .opacity(node.inactive ? 0.6 : 1)
+    .accessibilityLabel(title)
+    .popover(isPresented: Binding(get: { content != nil }, set: { if !$0 { dismiss() } })) {
+      if let content {
+        ScrollView {
+          PanelsForm(model: content, scrolls: false)
+        }
+        .frame(minWidth: 320, idealWidth: 360, minHeight: 120, idealHeight: 420)
+        .presentationCompactAdaptation(.popover)
+        .tint(PanelStyle.tint)
+        .onDisappear { dismiss() }
+      }
+    }
+  }
+
+  /** Blender stops building the popover's view once it is gone. */
+  private func dismiss() {
+    if let content { NativeViews.shared.unsubscribe(content.view) }
+    content = nil
   }
 }
 

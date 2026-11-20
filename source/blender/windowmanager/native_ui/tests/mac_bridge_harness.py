@@ -4624,11 +4624,12 @@ CENSUS_KNOWN = {
     # (PANEL-2), sections sub-panels (PANEL-3) and menus Blender builds in C menu buttons
     # (PANEL-4), the active object's panels stay with others selected (PANEL-6), curves are
     # curve nodes (PANEL-7), and header presets and Properties' popovers open as views (PANEL-8):
-    # one dropped is a failure. Popups Blender builds in C are not menus yet; popovers of other
-    # editors (the 3D View's asset shelf) are MODE-1's.
+    # one dropped is a failure. Popups Blender builds in C are not menus yet. The 3D Viewport's
+    # popovers open as views too (MODE-1); what is left is the asset shelf's popover (brushes,
+    # which the shell's brush rail picks) and Preferences' presets, said by the panel's row.
     "c_block": ("B4", "PANEL-4 (popups)"),
     "callback": ("B18, Table 1", "PANEL-14"),
-    "popover": ("B14", "MODE-1"),
+    "popover": ("B14", None),
     "pointer": ("B11", "PANEL-11"),
     "row_button": ("B18", "PANEL-14 (callbacks over rows)"),
     "grid": ("B18", "PANEL-14 (grids)"),
@@ -5256,6 +5257,250 @@ def _touchstart_enter_for(idname):
     return mode, name
 
 
+# ROUND6 MODE-1 (E4, B14): the 3D Viewport header's buttons, in every mode reachable from one
+# object of each type. Every button Blender's header draws is either shown in the tool settings
+# row (the `HEADER` tab of the `tool_settings` view) or left to the shell by a named reason
+# (`header_owner`): one dropped, or hidden for a reason not named here, fails. The rig's bone
+# selection in Weight Paint is set from the row, and a 3D Viewport popover opens as a view.
+HEADER_OWNERS = ("shell_menus", "shell_header")
+header_state = {"stage": 0, "at": 0, "problems": [], "modes": {}, "sub": None, "objects": {}}
+
+
+def _header_objects():
+    """One object of each type, made once: a rig deforming the cube, a curve, a surface, text, a
+    metaball, a lattice, hair curves on the cube, a point cloud, Grease Pencil, and a cube with a
+    hair particle system."""
+    made = header_state["objects"]
+    if made:
+        return made
+    scene = bpy.context.scene
+    scene.tool_settings.lock_object_mode = False
+    cube = bpy.data.objects["Cube"]
+    made["MESH"] = cube
+
+    def link(name, data):
+        ob = bpy.data.objects.new(name, data)
+        scene.collection.objects.link(ob)
+        made[name] = ob
+        return ob
+
+    rig_data = bpy.data.armatures.new("Rig")
+    rig = link("Rig", rig_data)
+    bpy.context.view_layer.objects.active = rig
+    bpy.ops.object.mode_set(mode='EDIT')
+    bone = rig_data.edit_bones.new("Bone")
+    bone.tail = (0, 0, 1)
+    bpy.ops.object.mode_set(mode='OBJECT')
+    cube.vertex_groups.new(name="Bone")
+    cube.modifiers.new("Armature", 'ARMATURE').object = rig
+    curve = bpy.data.curves.new("Curve", 'CURVE')
+    curve.splines.new('BEZIER').bezier_points.add(1)
+    link("Curve", curve)
+    with bpy.context.temp_override(**dict(zip(("window", "area", "region"), _view3d()))):
+        bpy.ops.surface.primitive_nurbs_surface_surface_add(location=(-3, 0, 0))
+    made["Surface"] = bpy.context.view_layer.objects.active
+    link("Text", bpy.data.curves.new("Text", 'FONT'))
+    metaball = bpy.data.metaballs.new("Metaball")
+    metaball.elements.new()
+    link("Metaball", metaball)
+    link("Lattice", bpy.data.lattices.new("Lattice"))
+    hair = bpy.data.hair_curves.new("Hair") if hasattr(bpy.data, "hair_curves") else None
+    if hair is not None:
+        hair.surface = cube
+        link("Hair", hair)
+    if hasattr(bpy.data, "pointclouds"):
+        link("PointCloud", bpy.data.pointclouds.new("PointCloud"))
+    link("Pencil", bpy.data.grease_pencils.new("Pencil")).data.layers.new("Layer")
+    particles = cube.copy()
+    particles.data = cube.data.copy()
+    particles.modifiers.clear()
+    particles.location.x = 3
+    scene.collection.objects.link(particles)
+    made["Particles"] = particles
+    system = particles.modifiers.new("Hair", 'PARTICLE_SYSTEM').particle_system
+    system.settings.type = 'HAIR'
+    system.settings.count = 20
+    return made
+
+
+# context.mode, the object it is entered on, and the object mode to enter.
+HEADER_MODES = (
+    ("OBJECT", "MESH", 'OBJECT'), ("EDIT_MESH", "MESH", 'EDIT'), ("SCULPT", "MESH", 'SCULPT'),
+    ("PAINT_VERTEX", "MESH", 'VERTEX_PAINT'), ("PAINT_TEXTURE", "MESH", 'TEXTURE_PAINT'),
+    ("PAINT_WEIGHT", "MESH", 'WEIGHT_PAINT'), ("POSE", "Rig", 'POSE'),
+    ("EDIT_ARMATURE", "Rig", 'EDIT'), ("EDIT_CURVE", "Curve", 'EDIT'),
+    ("EDIT_SURFACE", "Surface", 'EDIT'), ("EDIT_TEXT", "Text", 'EDIT'),
+    ("EDIT_METABALL", "Metaball", 'EDIT'), ("EDIT_LATTICE", "Lattice", 'EDIT'),
+    ("PARTICLE", "Particles", 'PARTICLE_EDIT'), ("EDIT_CURVES", "Hair", 'EDIT'),
+    ("SCULPT_CURVES", "Hair", 'SCULPT_CURVES'), ("EDIT_POINTCLOUD", "PointCloud", 'EDIT'),
+    ("EDIT_GREASE_PENCIL", "Pencil", 'EDIT'), ("PAINT_GREASE_PENCIL", "Pencil", 'PAINT_GREASE_PENCIL'),
+    ("SCULPT_GREASE_PENCIL", "Pencil", 'SCULPT_GREASE_PENCIL'),
+    ("WEIGHT_GREASE_PENCIL", "Pencil", 'WEIGHT_GREASE_PENCIL'),
+    ("VERTEX_GREASE_PENCIL", "Pencil", 'VERTEX_GREASE_PENCIL'),
+)
+
+
+def _header_enter(mode, name, object_mode):
+    made = _header_objects()
+    window, area, region = _view3d()
+    with bpy.context.temp_override(window=window, area=area, region=region):
+        if bpy.context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        ob = made.get(name)
+        if ob is None:
+            return "no %s object in this build" % name
+        bpy.ops.object.select_all(action='DESELECT')
+        if mode == "PAINT_WEIGHT":
+            # The rig in Pose Mode, the mesh it deforms in Weight Paint: the header's bone selection.
+            rig = made["Rig"]
+            bpy.context.view_layer.objects.active = rig
+            rig.select_set(True)
+            bpy.ops.object.mode_set(mode='POSE')
+        ob.select_set(True)
+        bpy.context.view_layer.objects.active = ob
+    with bpy.context.temp_override(window=window, area=area, region=region, active_object=ob, object=ob):
+        if object_mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode=object_mode)
+    return None
+
+
+def _header_popovers(node):
+    return [n for n in _census_nodes(node) if n.get("content") == "MenuButton" and n.get("view") == "popover"]
+
+
+def tick_header():
+    global step
+    state = header_state
+    problems = state["problems"]
+    try:
+        pump()
+        step += 1
+        if step == 1:
+            _census_lib().UI_native_panel_census_record(True)
+        if state["stage"] >= len(HEADER_MODES):
+            if state.get("popover") and state["at"] == 3:
+                toggles = [n for n in _census_nodes(tree(state["popover"]) or {}) if n.get("content") == "Toggle"]
+                report["Selectability & Visibility, as a view"] = len(toggles)
+                if not toggles:
+                    problems.append("MODE-1: the Selectability & Visibility popover's view has no switch: %r" %
+                                    (tree(state["popover"]) or {}))
+            if state["at"] >= 3 or not state.get("popover"):
+                _census_lib().UI_native_panel_census_record(False)
+                report["modes"] = state["modes"]
+                report["problems"] = problems
+                finish("done" if not problems else "error")
+                return None
+            state["at"] += 1
+            return 0.3
+        mode, name, object_mode = HEADER_MODES[state["stage"]]
+        at = state["at"]
+        if at == 0:
+            why = _header_enter(mode, name, object_mode)
+            if why is None and bpy.context.mode != mode:
+                why = "entered %s instead" % bpy.context.mode
+            if why:
+                problems.append("MODE-1: %s could not be entered: %s" % (mode, why))
+                state["stage"] += 1
+                return 0.1
+            if state["sub"] is None:
+                state["sub"] = subscribe("tool_settings", tab="HEADER")
+        elif at == 4:
+            entries = json.loads(_census_lib().UI_native_panel_census_take())
+            walks, current = {}, None
+            for entry in entries:
+                if entry["button"] == "Walk":
+                    current = walks.setdefault(entry["detail"], []) if entry["tab"] == "HEADER" else None
+                    if current is not None:
+                        current.clear()
+                elif current is not None:
+                    current.append(entry)
+            # The last walk of this mode's header: the view's top names what it shows.
+            top = tree(state["sub"]) or {}
+            walk = walks.get(top.get("property"))
+            shown, owned = [], []
+            if walk is None:
+                problems.append("MODE-1: %s: no header walk" % mode)
+            for entry in walk or []:
+                what = "%s %s" % (entry["button"], entry["detail"])
+                if entry["outcome"] == "projected":
+                    shown.append("%s (%s)" % (what, entry["kind"]))
+                elif entry["outcome"] == "hidden" and entry["reason"] in HEADER_OWNERS:
+                    owned.append(what)
+                elif entry["outcome"] != "consumed":
+                    problems.append("MODE-1: %s: %s %s (%s): neither in the row nor the shell's" % (
+                        mode, what, entry["outcome"], entry["reason"]))
+            state["modes"][mode] = {"shown": shown, "shell": owned}
+            if os.environ.get("HARNESS_HEADER_TREES"):
+                def shape(node):
+                    return [node.get("content"), node.get("label"), [shape(c) for c in node.get("children", [])]]
+                state["modes"][mode]["tree"] = shape(top)
+            labels = [n.get("label") or "" for n in _census_nodes(top)]
+            if any("\x00" in label for label in labels):
+                problems.append("MODE-1: %s: a label of the row holds a NUL: %r" % (mode, labels))
+            # Every popover the row offers opens as a view of its own, drawn in the viewport.
+            state["popovers"] = {}
+            for node in _header_popovers(top):
+                panel = (node.get("params") or {}).get("panel")
+                if panel and panel not in state["popovers"]:
+                    state["popovers"][panel] = subscribe("properties", tab="POPOVER:%s\tHEADER" % panel)
+            if mode == "PAINT_WEIGHT":
+                # Bone selection, face and vertex masks are one choice of three (Blender's header
+                # turns one on, not off): the face mask from the row, then the bones again.
+                toggles = {n.get("property"): n for n in _census_nodes(top) if n.get("content") == "Toggle"}
+                state["bone"] = toggles.get("use_paint_bone_selection")
+                state["mask"] = toggles.get("use_paint_mask")
+                if state["bone"] is None or state["mask"] is None:
+                    problems.append("MODE-1: Weight Paint on a posed rig: no bone selection or face mask in the row: %r" % [
+                        (n.get("content"), n.get("property")) for n in _census_nodes(top)])
+                else:
+                    set_bool(state["sub"], state["mask"]["key"], True, 4100)
+            if mode == "OBJECT":
+                found = [n for n in _header_popovers(top)
+                         if (n.get("params") or {}).get("panel") == "VIEW3D_PT_object_type_visibility"]
+                if not found:
+                    problems.append("MODE-1: Object Mode: no Selectability & Visibility popover in the row: %r" % [
+                        (n.get("params") or {}).get("panel") for n in _header_popovers(top)])
+                else:
+                    state["popover"] = subscribe(
+                        "properties", tab="POPOVER:VIEW3D_PT_object_type_visibility\tHEADER")
+        if at == 6:
+            empty = []
+            for panel, sub in state.get("popovers", {}).items():
+                shown = [n for n in _census_nodes(tree(sub) or {}) if n.get("content") not in ("Group", "Panel", None)]
+                if not shown:
+                    empty.append(panel)
+                lib.WM_native_ui_unsubscribe(sub)
+            state["modes"][mode]["popovers"] = sorted(state.get("popovers", {}))
+            if empty:
+                problems.append("MODE-1: %s: these popovers of the row open with nothing in them: %s" % (mode, empty))
+            state["popovers"] = {}
+        if at == 5 and mode == "PAINT_WEIGHT" and state.get("bone"):
+            mesh = bpy.data.objects["Cube"].data
+            report["face mask from the row"] = [mesh.use_paint_mask, mesh.use_paint_bone_selection, acks.get(4100)]
+            if not mesh.use_paint_mask or mesh.use_paint_bone_selection:
+                problems.append("MODE-1: the row's face mask switch did not turn it on (ack %r)" % acks.get(4100))
+            set_bool(state["sub"], state["bone"]["key"], True, 4101)
+        elif at == 7 and mode == "PAINT_WEIGHT" and state.get("bone"):
+            mesh = bpy.data.objects["Cube"].data
+            report["bone selection from the row"] = [mesh.use_paint_bone_selection, acks.get(4101)]
+            if not mesh.use_paint_bone_selection:
+                problems.append("MODE-1: the row's bone selection switch did not turn it on (ack %r)" % acks.get(4101))
+        if at >= 7:
+            state["stage"] += 1
+            state["at"] = 0
+            if state["stage"] >= len(HEADER_MODES):
+                with bpy.context.temp_override(**dict(zip(("window", "area", "region"), _view3d()))):
+                    if bpy.context.mode != 'OBJECT':
+                        bpy.ops.object.mode_set(mode='OBJECT')
+            return 0.3
+        state["at"] += 1
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
 # Every scenario, by the name `mac_bridge_check.py --scenario` takes: the one list (ROUND7 U4d).
 # `mac_bridge_check.py`'s SCENARIOS must name exactly these, which `bl_native_test_runners.py`
 # checks; a name not here ends the run with an error, never another scenario's run.
@@ -5268,6 +5513,7 @@ SCENARIOS = {
     "jobs": tick_jobs, "renderprogress": tick_render_progress, "busy": tick_busy,
     "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold, "typing": tick_typing,
     "windows": tick_windows, "margins": tick_margins, "census": tick_census, "stale": tick_stale,
+    "header": tick_header,
 }
 
 

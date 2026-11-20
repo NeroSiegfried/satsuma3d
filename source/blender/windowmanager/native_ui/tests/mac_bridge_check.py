@@ -31,7 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCENARIOS = ("actions", "tabs", "menus", "mirror", "reveal", "knife", "precision", "material",
              "extensions", "keys", "insets", "touch", "numinput", "render", "fingers", "undo",
              "tolerance", "waiting", "touchstart", "jobs", "renderprogress", "busy", "renderkeep",
-             "desk", "hold", "typing", "windows", "margins", "census", "stale")
+             "desk", "hold", "typing", "windows", "margins", "census", "stale", "header")
 
 
 def last_report(text):

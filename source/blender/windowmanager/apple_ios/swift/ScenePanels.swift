@@ -27,6 +27,10 @@ final class SwiftScenePanels {
   private let shading = PanelsModel(mode: .shading, tab: "SHADING")
   /** The active tool's settings, which the top bar shows. */
   let tools = PanelsModel(mode: .toolStrip, tab: "TOOL")
+  /** What Blender's 3D Viewport header has in this mode beyond the shell's own header: the paint
+   * modes' masks and bone selection, select modes, Grease Pencil's placement, and popovers such as
+   * Snapping or Selectability & Visibility (ROUND6 MODE-1). Shown after the tool's settings. */
+  let header = PanelsModel(mode: .toolStrip, tab: "HEADER")
   /** The last operation's settings, which the actions row shows, and a dialog's. */
   let redo = PanelsModel(mode: .redo)
   /** The 3D View's sidebar Item tab, for the selection's transform above the actions, see
@@ -279,7 +283,15 @@ final class SwiftScenePanels {
   /** All the tool's settings, in a popover from the toolbar. */
   func toolSettingsContent(done: @escaping () -> Void) -> some View {
     NavigationStack {
-      PanelsForm(model: tools)
+      /* The tool's settings, then the header's (ROUND6 MODE-1), as the row shows them. */
+      ScrollView {
+        VStack(spacing: 6) {
+          PanelsForm(model: tools, scrolls: false)
+          if header.hasToolSettings {
+            PanelsForm(model: header, scrolls: false)
+          }
+        }
+      }
         .tint(PanelStyle.tint)
         .navigationTitle("Tool Settings")
         .navigationBarTitleDisplayMode(.inline)

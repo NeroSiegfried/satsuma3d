@@ -718,7 +718,9 @@ struct DocumentToolbar: ToolbarContent {
             }
           }
         }
-        else if shell.panels.tools.hasToolSettings {
+        /* The tool's settings, with the rest of Blender's header for the mode (ROUND6 MODE-1):
+         * its popovers (Snapping, Selectability & Visibility) whatever the tool. */
+        if shell.panels.tools.hasToolSettings || shell.panels.header.hasToolSettings {
           Button("Tool Settings", systemImage: "slider.horizontal.3") { model.toolSettingsOpen = true }
         }
         /* Mirror, X-Axis Mirror or Symmetry, in every mode whose header has it, whatever the tool. */
