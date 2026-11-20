@@ -1997,4 +1997,21 @@ added_e5 = node_cc_e5[node_cc_e5.index('bNode *add_native_node('):]
 added_e5 = added_e5[:added_e5.index('\n}\n')]
 check('bke::node_group_poll(&tree, &group, nullptr)' in listed_e5 and 'bke::node_group_poll(&tree, group_tree, &why)' in added_e5,
       "R6 EDIT-5 (D4): a group that would contain itself is neither listed nor added")
+# ROUND6 EDIT-7 (D18, D19): every Outliner action the shell sends is one the Outliner's edit
+# operator handles and its rows offer: a collection row's tap makes it active, a row's menu has
+# Blender's restriction flags, and the panel says what it leaves to the Desktop Interface.
+outliner_swift_e7 = (SWIFT / 'HierarchyView.swift').read_text(encoding='utf-8')
+panels_py_e7 = (SWIFT.parents[4] / 'scripts/startup/bl_ui/native_panels.py').read_text(encoding='utf-8')
+sent_e7 = set(re.findall(r'\bact\("(\w+)"', outliner_swift_e7)) | \
+    set(re.findall(r'"action": "(\w+)"', outliner_swift_e7))
+edit_e7 = panels_py_e7[panels_py_e7.index('class WM_OT_native_panel_edit('):]
+handled_e7 = set(re.findall(r"(?:action|request\.get\('action'\)) == '(\w+)'", edit_e7)) | set(re.findall(r"'(\w+)'", ' '.join(
+    re.findall(r"action in \{([^}]*)\}", edit_e7))))
+offered_e7 = set(re.findall(r"'(\w+)'", ' '.join(re.findall(r"(?:actions|activate)(?: \+?=| =) [^\n]*", panels_py_e7))))
+check(sent_e7 and not sorted(sent_e7 - handled_e7 - {'collection_new'}) and 'collection_new' in edit_e7,
+      "R6 EDIT-7: every Outliner action sent has a branch (%s)" % sorted(sent_e7 - handled_e7))
+check({'activate', 'restrict'} <= sent_e7 and {'activate', 'restrict'} <= offered_e7,
+      "R6 EDIT-7 (D18, D19): rows offer and the shell sends activate and restrict (%s)" % sorted(offered_e7))
+check('blender.hierarchy.scope' in outliner_swift_e7 and 'Desktop Interface' in outliner_swift_e7,
+      "R6 EDIT-7 (D19): the Outliner says what it does not show")
 print('PASS: native shell sources ' + json.dumps(checks))

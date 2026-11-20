@@ -161,6 +161,9 @@ final class SwiftScenePanels {
       let segment = key[key.index(after: slash)...]
       let children = outliner.children(of: row)
       func child(_ suffix: String) -> NativeNode? { children.first { $0.key == key + suffix } }
+      /* Blender's own restriction flags, those set chosen (ROUND6 EDIT-7). */
+      let restrictions = child(":restrictions")?.choice
+      let set = Set((restrictions?.value ?? "").split(separator: ",").map(String.init))
       return [
         "key": key, "parent": String(key[..<slash]), "depth": NSNumber(value: row.row?.depth ?? 0),
         "kind": segment.first == "c" ? "collection" : "object", "id": String(segment.dropFirst()),
@@ -171,6 +174,11 @@ final class SwiftScenePanels {
         "accepts": child(":accepts")?.content(Blender_NativeUI_Data.self)?
           .value(type: Blender_NativeUI_BoolValue.self)?.value ?? false,
         "children": parents.contains(key),
+        "current": child(":current") != nil,
+        "restrictions": (restrictions?.allOptions ?? []).compactMap { option -> JSON? in
+          guard let value = option.value else { return nil }
+          return ["key": value, "label": option.label ?? value, "icon": option.icon ?? "", "value": set.contains(value)]
+        },
       ]
     }
     hierarchy.update(nodes: nodes, status: outlinerEdits.error ?? "")

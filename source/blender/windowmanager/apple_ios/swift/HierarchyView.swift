@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 /** \file
- * The Outliner: the scene's collections and objects as a tree. Tap to select, touch and hold or
- * swipe for actions, drag rows into a collection or onto an object to parent them, and use
- * Select mode to act on several at once, as the system's lists do.
+ * The Outliner: the scene's collections and objects as a tree. Tap an object to select it, a
+ * collection to make it the active one (where new objects go); touch and hold or swipe for
+ * actions, Blender's restriction flags among them; drag rows into a collection or onto an object to
+ * parent them, and use Select mode to act on several at once, as the system's lists do.
  */
 
 import SwiftUI
@@ -162,6 +163,15 @@ struct HierarchyPanel: View {
         .padding(.horizontal, 12)
         .padding(.bottom, 6)
       outline
+      /* What Blender's Outliner has and this one does not, said rather than left out silently
+       * (ROUND6 EDIT-7, D19). */
+      Text("Collections and objects of this view layer. Other display modes, object contents and filters are in the Desktop Interface.")
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .accessibilityIdentifier("blender.hierarchy.scope")
       if !store.status.isEmpty {
         Text(store.status)
           .font(.footnote)
@@ -374,9 +384,17 @@ struct OutlineList: View {
   private var animation: Animation? { UIAccessibility.isReduceMotionEnabled ? nil : .smooth(duration: 0.25) }
 
   /** A tap selects the object; in Select mode, or with Shift or Command held on a keyboard, it adds
-   * it to or takes it from the selection. */
+   * it to or takes it from the selection. A tap on a collection makes it the active collection, as
+   * a click does in Blender's Outliner (ROUND6 EDIT-7, D18). */
   private func tap(_ node: JSON) {
     let key = node.keyString
+    if node.string("kind") == "collection" {
+      if !node.bool("current"), store.allow([node], "activate") {
+        store.act("activate", [node])
+        Haptics.selection()
+      }
+      return
+    }
     guard node.string("kind") == "object", node.bool("enabled"), let id = node.string("id") else { return }
     /* Left and right Shift, and left and right Command, as GHOST numbers them. */
     let held = GHOST_ios_held_modifiers()
@@ -405,6 +423,8 @@ struct OutlineList: View {
     let enabled = node.bool("enabled")
     /* Select mode marks the selection with its check circles instead. */
     let selected = selection.contains(key) && !store.editing
+    /* The active collection, lit softly as in Blender's Outliner. */
+    let current = node.bool("current")
     let open = !store.query.isEmpty || !collapsed.contains(key)
     return HStack(spacing: 6) {
       if store.editing {
@@ -465,7 +485,8 @@ struct OutlineList: View {
      * the same way. */
     .background(
       RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .fill(selected ? Color.accentColor : dropTarget == key ? Color.accentColor.opacity(0.3) : .clear))
+        .fill(selected ? Color.accentColor : dropTarget == key ? Color.accentColor.opacity(0.3) :
+              current ? Color.primary.opacity(0.1) : .clear))
     .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     .onTapGesture { tap(node) }
     .contextMenu { menu(store.targets(store.byKey[key] ?? node)) }
@@ -474,7 +495,8 @@ struct OutlineList: View {
     .draggable(startDrag(key, node)) { dragPreview(node) }
     .background(CollectionViewFinder { dropper.install(on: $0) })
     .accessibilityElement(children: .combine)
-    .accessibilityAddTraits(selection.contains(key) ? [.isButton, .isSelected] : .isButton)
+    .accessibilityAddTraits(selection.contains(key) || current ? [.isButton, .isSelected] : .isButton)
+    .accessibilityValue(current ? "Active collection" : "")
     .accessibilityIdentifier("blender.hierarchy." + (node.string("id") ?? ""))
   }
 
@@ -539,6 +561,15 @@ struct OutlineList: View {
   @ViewBuilder
   private func menu(_ nodes: [JSON]) -> some View {
     let several = nodes.count > 1
+    if !several, nodes.first?.bool("current") == true {
+      Button {} label: { Label("Active Collection", systemImage: "checkmark") }
+        .disabled(true)
+    }
+    else if !several && store.allow(nodes, "activate") {
+      Button { store.act("activate", nodes) } label: {
+        Label("Set Active Collection", systemImage: "folder.badge.plus")
+      }
+    }
     if !several && store.allow(nodes, "rename") {
       Button { rename(nodes[0]) } label: { Label("Rename", systemImage: "pencil") }
     }
@@ -554,6 +585,7 @@ struct OutlineList: View {
       }
     }
     MoveToCollectionMenu(store: store, nodes: nodes)
+    if !several, let node = nodes.first { RestrictionsMenu(store: store, node: node) }
     if let target = store.unparentTarget(nodes) {
       /* Out from under the parent, staying where it is, as dropping it on its collection does. */
       Button { store.move(nodes, to: target) } label: {
@@ -583,6 +615,32 @@ enum DraggedRows {
   static func keys(_ payload: String) -> [String] {
     guard payload.hasPrefix(prefix) else { return [] }
     return payload.dropFirst(prefix.count).split(separator: "\n").map(String.init)
+  }
+}
+
+/** Blender's restriction flags of one row, by their own names and icons, as the Outliner's
+ * restriction columns toggle them: what undims a row the Outliner dims (ROUND6 EDIT-7, D19). */
+struct RestrictionsMenu: View {
+  @ObservedObject var store: HierarchyStore
+  let node: JSON
+
+  var body: some View {
+    let restrictions = node.array("restrictions")
+    if !restrictions.isEmpty && store.allow([node], "restrict") {
+      Menu {
+        ForEach(restrictions, id: \.keyString) { item in
+          Toggle(isOn: Binding(get: { item.bool("value") }, set: { on in
+            store.act("restrict", [node], value: ["key": item.keyString, "value": on])
+          })) {
+            Label { Text(item.string("label") ?? item.keyString) } icon: {
+              if let image = BlenderIcon.image(item.string("icon")) { Image(uiImage: image) }
+            }
+          }
+        }
+      } label: {
+        Label("Restrictions", systemImage: "checklist")
+      }
+    }
   }
 }
 

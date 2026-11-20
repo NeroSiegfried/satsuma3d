@@ -116,25 +116,6 @@ other_scene.collection.objects.link(camera)
 edit(camera, 'delete')
 check(camera.name in other_scene.objects and camera.name not in bpy.context.scene.objects,
       'Delete respects Blender scene-local unlinking')
-parent = bpy.context.view_layer.active_layer_collection
-edit(cube, 'collection_new', value='  Native Collection  ')
-collection = bpy.data.collections.get('Native Collection')
-check(collection and collection.name in parent.collection.children and
-      bpy.context.collection == collection, 'New collection is nested and becomes the active destination')
-bpy.ops.mesh.primitive_cube_add()
-check(bpy.context.object.name in collection.objects, 'New objects use the newly created collection')
-count = len(bpy.data.collections)
-edit(cube, 'collection_new', value='   ')
-check(len(bpy.data.collections) == count and failed(), 'Blank collection names are rejected')
-bpy.ops.object.mode_set(mode='EDIT')
-edit(cube, 'collection_new', value='Not Added')
-check(len(bpy.data.collections) == count and failed(), 'Collection creation is guarded in Edit Mode')
-bpy.ops.object.mode_set(mode='OBJECT')
-edit(cube, 'collection_new', value='Native Collection')
-check(len(bpy.data.collections) == count + 1 and bpy.context.collection.name != collection.name,
-      'Blender assigns unique collection names')
-
-
 def collection_row(coll):
     return next(row for row in rows() if row['kind'] == 'collection' and row['id'] == str(coll.session_uid))
 
@@ -143,10 +124,75 @@ def edit_collection(coll, action, **values):
     apply(id=str(coll.session_uid), kind='collection', action=action, **values)
 
 
-check(collection_row(bpy.context.scene.collection)['actions'] == [],
-      'The scene collection cannot be hidden, renamed or deleted')
-check(set(collection_row(collection)['actions']) == {'visibility', 'rename', 'delete', 'move'},
+parent = bpy.context.view_layer.active_layer_collection
+edit(cube, 'collection_new', value='  Native Collection  ')
+collection = bpy.data.collections.get('Native Collection')
+# ROUND6 EDIT-7 (D18): New Collection goes under the active collection and leaves it active, as
+# the Outliner's does; three in a row are siblings, not A > B > C.
+check(collection and collection.name in parent.collection.children and
+      bpy.context.view_layer.active_layer_collection == parent,
+      'New collection is nested under the active one, which stays active')
+for name in ('Sibling A', 'Sibling B', 'Sibling C'):
+    edit(cube, 'collection_new', value=name)
+check(all(name in parent.collection.children for name in ('Sibling A', 'Sibling B', 'Sibling C'))
+      and bpy.context.view_layer.active_layer_collection == parent,
+      'New Collection three times gives three siblings')
+check([row['name'] for row in rows() if row['kind'] == 'collection' and row['current']] == [parent.collection.name],
+      'Exactly one row is marked the active collection')
+edit_collection(collection, 'activate')
+check(not failed() and bpy.context.collection == collection and collection_row(collection)['current']
+      and not collection_row(parent.collection)['current'], 'A collection row makes it the active collection')
+bpy.ops.mesh.primitive_cube_add()
+check(bpy.context.object.name in collection.objects, 'New objects go into the active collection')
+edit_collection(bpy.context.scene.collection, 'activate')
+check(not failed() and bpy.context.collection == bpy.context.scene.collection,
+      'The scene collection can be the active one')
+edit_collection(collection, 'activate')
+for name in ('Sibling A', 'Sibling B', 'Sibling C'):
+    bpy.data.collections.remove(bpy.data.collections[name])
+count = len(bpy.data.collections)
+edit(cube, 'collection_new', value='   ')
+check(len(bpy.data.collections) == count and failed(), 'Blank collection names are rejected')
+bpy.ops.object.mode_set(mode='EDIT')
+edit(cube, 'collection_new', value='Not Added')
+check(len(bpy.data.collections) == count and failed(), 'Collection creation is guarded in Edit Mode')
+bpy.ops.object.mode_set(mode='OBJECT')
+edit(cube, 'collection_new', value='Native Collection')
+check(len(bpy.data.collections) == count + 1 and 'Native Collection.001' in bpy.data.collections,
+      'Blender assigns unique collection names')
+check(collection_row(bpy.context.scene.collection)['actions'] == ['activate'],
+      'The scene collection cannot be hidden, renamed or deleted, only made active')
+check(set(collection_row(collection)['actions']) == {'activate', 'visibility', 'restrict', 'rename', 'delete', 'move'},
       'Collections offer swipe actions and can be dragged')
+
+# ROUND6 EDIT-7 (D19): every restriction column of Blender's Outliner is a row's restriction or its
+# eye; a row it dims can be undimmed from its own menu.
+COLUMNS = {'enable': 'layer.exclude', 'select': 'collection.hide_select', 'hide': 'visibility',
+           'viewport': 'collection.hide_viewport', 'render': 'collection.hide_render',
+           'holdout': 'layer.holdout', 'indirect_only': 'layer.indirect_only'}
+columns = {prop.identifier[len('show_restrict_column_'):] for prop in bpy.types.SpaceOutliner.bl_rna.properties
+           if prop.identifier.startswith('show_restrict_column_')}
+offered = {item['key'] for item in collection_row(collection)['restrictions']} | {'visibility'}
+check(columns == set(COLUMNS) and set(COLUMNS.values()) <= offered,
+      'Every Outliner restriction column is offered (%s, %s)' % (sorted(columns), sorted(offered)))
+check({item['key'] for item in next(row for row in rows() if row['id'] == str(cube.session_uid))['restrictions']} ==
+      {'object.hide_select', 'object.hide_viewport', 'object.hide_render'},
+      'Objects offer their selectable, viewport and render flags')
+check(collection_row(bpy.context.scene.collection)['restrictions'] == [], 'The scene collection has none')
+edit(cube, 'restrict', value={'key': 'object.hide_select', 'value': True})
+cube_row = next(row for row in rows() if row['id'] == str(cube.session_uid))
+check(cube.hide_select and not cube_row['enabled'] and 'restrict' in cube_row['actions'],
+      'An unselectable object is dimmed and keeps its restrictions')
+edit(cube, 'restrict', value={'key': 'object.hide_select', 'value': False})
+check(not cube.hide_select and next(row for row in rows() if row['id'] == str(cube.session_uid))['enabled'],
+      'Its restriction undims it')
+edit_collection(collection, 'restrict', value={'key': 'layer.exclude', 'value': True})
+check(collection_row(collection)['enabled'] is False and 'activate' not in collection_row(collection)['actions'],
+      'An excluded collection is dimmed and cannot be the active one')
+edit_collection(collection, 'restrict', value={'key': 'layer.exclude', 'value': False})
+check(collection_row(collection)['enabled'], 'Including it again undims it')
+edit_collection(collection, 'restrict', value={'key': 'object.hide_select', 'value': True})
+check(failed(), 'A flag of another kind of row is refused')
 edit_collection(collection, 'visibility', value=True)
 check(collection_row(collection)['hidden'] and
       panels._layer_collection(bpy.context.view_layer.layer_collection, collection).hide_viewport,

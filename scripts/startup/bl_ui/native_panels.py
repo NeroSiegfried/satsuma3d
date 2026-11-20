@@ -14,8 +14,51 @@ def _uid(item):
     return str(item.session_uid)
 
 
+# Blender's own restriction flags, as the Outliner's restriction columns toggle them
+# (`show_restrict_column_*`), by owner: the view layer's collection, the collection, the object.
+# The eye (`hide_viewport` of the view layer's collection, `hide_get` of an object) is the row's
+# `visibility` action. Each is offered with Blender's own name and icon (ROUND6 EDIT-7, D19).
+RESTRICTIONS = {
+    'collection': (
+        ('layer', 'exclude', 'CHECKBOX_HLT'),
+        ('collection', 'hide_select', 'RESTRICT_SELECT_OFF'),
+        ('collection', 'hide_viewport', 'RESTRICT_VIEW_OFF'),
+        ('collection', 'hide_render', 'RESTRICT_RENDER_OFF'),
+        ('layer', 'holdout', 'HOLDOUT_OFF'),
+        ('layer', 'indirect_only', 'INDIRECT_ONLY_OFF'),
+    ),
+    'object': (
+        ('object', 'hide_select', 'RESTRICT_SELECT_OFF'),
+        ('object', 'hide_viewport', 'RESTRICT_VIEW_OFF'),
+        ('object', 'hide_render', 'RESTRICT_RENDER_OFF'),
+    ),
+}
+
+
+def _restrictions(kind, owners):
+    """The row's restriction flags as `[{"key", "label", "icon", "value"}]`, those it may change."""
+    found = []
+    for owner_name, prop, icon in RESTRICTIONS[kind]:
+        owner = owners[owner_name]
+        if owner.is_property_readonly(prop):
+            continue
+        found.append({"key": owner_name + "." + prop, "label": owner.bl_rna.properties[prop].name,
+                      "icon": icon, "value": bool(getattr(owner, prop))})
+    return found
+
+
+def _set_restriction(kind, owners, key, value):
+    owner_name, _, prop = str(key).partition('.')
+    if not any(owner_name == o and prop == p for o, p, _icon in RESTRICTIONS[kind]):
+        raise ValueError("Not a restriction of this row.")
+    owner = owners[owner_name]
+    if owner.is_property_readonly(prop):
+        raise ValueError("This setting cannot be changed here.")
+    setattr(owner, prop, bool(value))
+
+
 def _object_actions(context, obj):
-    actions = ['visibility']
+    actions = ['visibility', 'restrict']
     # Renaming, moving into collections and parenting only change data: in any mode, as in the
     # Outliner, though not for an object being edited.
     if obj.is_editable and obj.mode != 'EDIT':
@@ -34,11 +77,13 @@ def _accepts_children(context, obj):
 
 
 def _collection_actions(context, layer):
-    # The scene collection cannot be hidden, renamed or deleted, as in the Outliner.
+    # The scene collection cannot be hidden, renamed or deleted, as in the Outliner; it can be the
+    # active collection, where new objects go. An excluded one cannot (`BKE_layer_collection_activate`).
+    activate = [] if layer.exclude else ['activate']
     if layer == context.view_layer.layer_collection:
-        return []
+        return activate
     coll = layer.collection
-    actions = ['visibility']
+    actions = activate + ['visibility', 'restrict']
     if coll.is_editable and not coll.override_library:
         actions += ['rename', 'move']
         if context.mode == 'OBJECT':
@@ -158,6 +203,7 @@ def _delete_collection(context, coll):
 def _hierarchy(context):
     rows = []
     active = context.view_layer.objects.active
+    current = context.view_layer.active_layer_collection
     objects = {obj.name: obj for obj in context.view_layer.objects}
 
     def collection(layer, depth, parent):
@@ -166,6 +212,10 @@ def _hierarchy(context):
         rows.append({"key": key, "parent": parent, "depth": depth, "kind": "collection",
                      "id": _uid(coll), "name": coll.name, "icon": "OUTLINER_COLLECTION",
                      "enabled": not layer.exclude, "active": False, "hidden": layer.hide_viewport,
+                     # The active collection, where new objects go (ROUND6 EDIT-7, D18).
+                     "current": layer == current,
+                     "restrictions": [] if depth == 0 else
+                     _restrictions('collection', {'layer': layer, 'collection': coll}),
                      "actions": _collection_actions(context, layer),
                      "accepts": _accepts_drop(context, layer)})
         members = {obj.name: obj for obj in coll.objects if obj.name in objects}
@@ -183,6 +233,7 @@ def _hierarchy(context):
                              "selected": obj.select_get(view_layer=context.view_layer),
                              "hidden": obj.hide_get(view_layer=context.view_layer),
                              "actions": _object_actions(context, obj),
+                             "restrictions": _restrictions('object', {'object': obj}),
                              "accepts": _accepts_children(context, obj),
                              "enabled": obj.visible_get(view_layer=context.view_layer)
                              and not obj.hide_select and context.mode == 'OBJECT'})
@@ -279,10 +330,11 @@ class WM_OT_native_panel_edit(bpy.types.Operator):
                 except Exception:
                     bpy.data.collections.remove(collection)
                     raise
+                # Under the active collection, which stays active, as the Outliner's New
+                # Collection does: three in a row are siblings (ROUND6 EDIT-7, D18).
                 context.view_layer.update()
-                context.view_layer.active_layer_collection = parent.children[collection.name]
             elif request.get('kind') == 'collection':
-                coll = next((c for c in bpy.data.collections if _uid(c) == request.get('id')), None)
+                coll = _collection_by_uid(context, request.get('id'))
                 layer = coll and _layer_collection(context.view_layer.layer_collection, coll)
                 action = request.get('action')
                 if layer is None:
@@ -291,6 +343,12 @@ class WM_OT_native_panel_edit(bpy.types.Operator):
                     raise ValueError("This action is no longer available for this collection.")
                 if action == 'visibility':
                     layer.hide_viewport = bool(request['value'])
+                elif action == 'activate':
+                    context.view_layer.active_layer_collection = layer
+                elif action == 'restrict':
+                    value = request.get('value') or {}
+                    _set_restriction('collection', {'layer': layer, 'collection': coll},
+                                     value.get('key'), value.get('value'))
                 elif action == 'rename':
                     name = request.get('value')
                     if not isinstance(name, str) or not name.strip():
@@ -316,6 +374,9 @@ class WM_OT_native_panel_edit(bpy.types.Operator):
                         (other for other in context.view_layer.objects if other.select_get()), None)
             elif request.get('action') == 'visibility':
                 obj.hide_set(bool(request['value']), view_layer=context.view_layer)
+            elif request.get('action') == 'restrict':
+                value = request.get('value') or {}
+                _set_restriction('object', {'object': obj}, value.get('key'), value.get('value'))
             elif request.get('action') in {'duplicate', 'delete', 'rename'}:
                 action = request['action']
                 if action not in _object_actions(context, obj):

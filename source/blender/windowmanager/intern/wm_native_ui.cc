@@ -4734,7 +4734,9 @@ views::CommandResult bridge_preferences_list_view_command(bContext *C,
  * tree list `outliner`, its rows keyed by their path from the scene's collection, such as
  * `/c12/o34` for an object in a collection, the active object's the list's active row. Each row
  * has its `<key>:hidden` toggle, the `<key>:actions` it allows, and `<key>:accepts`, whether rows
- * may be dropped on it. Edits run `wm.native_panel_edit`.
+ * may be dropped on it; the active collection's has `<key>:current`; a row with restriction flags
+ * has `<key>:restrictions`, a choice of several, the flags set chosen. Edits run
+ * `wm.native_panel_edit`.
  * \{ */
 
 void bridge_outliner_view_build(bContext *C,
@@ -4797,6 +4799,36 @@ void bridge_outliner_view_build(bContext *C,
     builder.add(node, key + ":accepts", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
       return bridge_data(buffer, bridge_flag(*row, "accepts"));
     });
+    if (bridge_flag(*row, "current")) {
+      builder.add(node, key + ":current", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+        return bridge_data(buffer, true);
+      });
+    }
+    /* Blender's own restriction flags, by its own names, those set listed (ROUND6 EDIT-7). */
+    if (const ArrayValue *restrictions = row->lookup_array("restrictions");
+        restrictions && !restrictions->elements().is_empty())
+    {
+      builder.add(node, key + ":restrictions", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+        OptionOffsets options;
+        std::string set;
+        for (const std::shared_ptr<Value> &item : restrictions->elements()) {
+          const DictionaryValue *restriction = item->as_dictionary_value();
+          if (restriction == nullptr) {
+            continue;
+          }
+          const std::string name(bridge_text(*restriction, "key"));
+          options.push_back(views::protocol::CreateOptionDirect(buffer,
+                                                                name.c_str(),
+                                                                std::string(bridge_text(*restriction, "label")).c_str(),
+                                                                std::string(bridge_text(*restriction, "icon")).c_str()));
+          if (bridge_flag(*restriction, "value")) {
+            set += (set.empty() ? "" : ",") + name;
+          }
+        }
+        return views::protocol::CreateChoiceDirect(
+            buffer, set.c_str(), &options, views::protocol::ChoiceStyle::Menu, true);
+      });
+    }
   }
 }
 
