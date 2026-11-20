@@ -296,6 +296,25 @@ def decode_node(raw):
                 params[s(param.Key())] = s(tv.Value())
         if params:
             entry["params"] = params
+    elif CONTENT_NAMES.get(node.ContentType()) == "Record":
+        # A canvas's record (ROUND6 EDIT-5): its values by name.
+        from Blender.NativeUI import Record as RecordTable, IntValue as IntValueTable
+        table = node.Content()
+        record = RecordTable.Record()
+        record.Init(table.Bytes, table.Pos)
+        values = {}
+        for i in range(record.ParamsLength()):
+            param = record.Params(i)
+            kind = param.ValueType()
+            for value_type, table_type in ((Value.Value.TextValue, TextValue.TextValue),
+                                           (Value.Value.IntValue, IntValueTable.IntValue),
+                                           (Value.Value.FloatValue, FloatValue.FloatValue),
+                                           (Value.Value.BoolValue, BoolValue.BoolValue)):
+                if kind == value_type:
+                    v = table_type()
+                    v.Init(param.Value().Bytes, param.Value().Pos)
+                    values[s(param.Key())] = s(v.Value())
+        entry["record"] = values
     elif node.ContentType() == Content.Content.MenuButton:
         table = node.Content()
         menu = MenuButton.MenuButton()
@@ -6435,6 +6454,88 @@ def tick_animkeys():
     return 0.3
 
 
+# ROUND6 EDIT-5 (D4, D14): a node group that contains the tree shown is not offered in its Add list,
+# and adding it is refused with Blender's reason; the tree itself is not offered either. The node
+# menu's polls come with the snapshot: Connect to Viewer is off in a shader tree, on in geometry.
+nodegroups_state = {"at": 0, "problems": [], "found": {}}
+
+
+def _nodegroups_records():
+    """Every record of the nodes view by key: {key: values}."""
+    view = views.get(subs["nodes"], {"nodes": {}})
+    return {key: node.get("record", {}) for key, node in view["nodes"].items() if "record" in node}
+
+
+def tick_nodegroups():
+    global step
+    state = nodegroups_state
+    problems = state["problems"]
+    try:
+        pump()
+        step += 1
+        at = state["at"]
+        state["at"] += 1
+        if at == 0:
+            enter("object")
+            cube = bpy.data.objects["Cube"]
+            tree = bpy.data.node_groups.new("Shown Tree", "GeometryNodeTree")
+            tree.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+            tree.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+            tree.links.new(tree.nodes.new("NodeGroupInput").outputs[0], tree.nodes.new("NodeGroupOutput").inputs[0])
+            cube.modifiers.new("Shown", "NODES").node_group = tree
+            # A group using the shown tree: adding it into the shown tree would nest it in itself.
+            outer = bpy.data.node_groups.new("Uses Shown", "GeometryNodeTree")
+            outer.nodes.new("GeometryNodeGroup").node_tree = tree
+            # A group that may be added.
+            bpy.data.node_groups.new("Free Group", "GeometryNodeTree")
+            subs["nodes"] = subscribe("nodes")
+            canvas_command(subs["nodes"], "state", Op.Op.Set, {"tree": "GEOMETRY", "previews": 0}, 7301)
+        elif at == 4:
+            records = _nodegroups_records()
+            groups = sorted(r["group"] for r in records.values() if r.get("category") == "Group" and r.get("group"))
+            top = records.get(views[subs["nodes"]]["top"], {})
+            polls = {k.split("/")[-1]: v for k, v in records.items() if k.endswith("/polls")}
+            polls = next(iter(polls.values()), {})
+            state["found"].update({"tree": top.get("name"), "listed groups": groups, "polls": polls})
+            if "Uses Shown" in groups or "Shown Tree" in groups or "Free Group" not in groups:
+                problems.append("EDIT-5: the Add list's groups are %r: not the tree or one using it, the free one yes" % groups)
+            if not polls.get("NODE_OT_link_viewer"):
+                problems.append("EDIT-5: Connect to Viewer does not poll in a geometry tree: %r" % polls)
+            canvas_command(subs["nodes"], "edit", Op.Op.Invoke,
+                           {"tree": "GEOMETRY", "action": "add", "idname": "GeometryNodeGroup",
+                            "group": "Uses Shown", "x": 0.0, "y": 0.0, "sequence": 1}, 7302)
+            canvas_command(subs["nodes"], "edit", Op.Op.Invoke,
+                           {"tree": "GEOMETRY", "action": "add", "idname": "GeometryNodeGroup",
+                            "group": "Free Group", "x": 0.0, "y": 0.0, "sequence": 2}, 7303)
+        elif at == 6:
+            tree = bpy.data.node_groups["Shown Tree"]
+            used = sorted(n.node_tree.name for n in tree.nodes if n.bl_idname == "GeometryNodeGroup" and n.node_tree)
+            state["found"].update({"nesting answer": acks.get(7302), "free answer": acks.get(7303), "groups in tree": used})
+            if acks.get(7302) in (None, "ok") or "Uses Shown" in used:
+                problems.append("EDIT-5: adding a group that contains the tree was not refused: %r, %r" % (acks.get(7302), used))
+            if acks.get(7303) != "ok" or "Free Group" not in used:
+                problems.append("EDIT-5: adding a free group failed: %r, %r" % (acks.get(7303), used))
+            # A shader tree: no viewer.
+            canvas_command(subs["nodes"], "state", Op.Op.Set, {"tree": "SHADER", "previews": 0}, 7304)
+        elif at == 10:
+            records = _nodegroups_records()
+            polls = next((v for k, v in records.items() if k.endswith("/polls")), {})
+            state["found"]["shader polls"] = polls
+            if polls.get("NODE_OT_link_viewer"):
+                problems.append("EDIT-5: Connect to Viewer polls in a shader tree: %r" % polls)
+        elif at >= 11:
+            report["found"] = state["found"]
+            report["problems"] = problems
+            finish("done" if not problems else "error")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        report["found"] = state["found"]
+        finish("error")
+        return None
+    return 0.3
+
+
 # Every scenario, by the name `mac_bridge_check.py --scenario` takes: the one list (ROUND7 U4d).
 # `mac_bridge_check.py`'s SCENARIOS must name exactly these, which `bl_native_test_runners.py`
 # checks; a name not here ends the run with an error, never another scenario's run.
@@ -6448,7 +6549,7 @@ SCENARIOS = {
     "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold, "typing": tick_typing,
     "windows": tick_windows, "margins": tick_margins, "census": tick_census, "stale": tick_stale,
     "header": tick_header, "popups": tick_popups, "statuskeys": tick_statuskeys,
-    "answers": tick_answers, "animkeys": tick_animkeys,
+    "answers": tick_answers, "animkeys": tick_animkeys, "nodegroups": tick_nodegroups,
 }
 
 

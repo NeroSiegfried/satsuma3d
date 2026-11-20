@@ -6922,6 +6922,17 @@ void collect_add_menu(bContext *C,
   block_free(C, block);
 }
 
+/** The operators the native node menu runs, whose polls the snapshot carries (`polls`). */
+constexpr const char *native_node_menu_operators[] = {"NODE_OT_duplicate",
+                                                      "NODE_OT_group_make",
+                                                      "NODE_OT_group_ungroup",
+                                                      "NODE_OT_join",
+                                                      "NODE_OT_detach",
+                                                      "NODE_OT_link_viewer"};
+
+/** Why the node being added was refused, said instead of the general refusal. */
+std::string node_add_refusal;
+
 void project_node_add_items(bContext *C, bNodeTree &tree, ArrayValue &items)
 {
   std::set<std::string> seen;
@@ -6930,7 +6941,11 @@ void project_node_add_items(bContext *C, bNodeTree &tree, ArrayValue &items)
   /* The tree's own node groups, as the Group category lists them. */
   Main *bmain = CTX_data_main(C);
   for (bNodeTree &group : bmain->nodetrees) {
-    if (group.type != tree.type || &group == &tree || group.id.name[2] == '.') {
+    /* As desktop's Group menu: not the tree itself, nor a group that contains it, which would
+     * nest it inside itself (`node_group_poll`, ROUND6 EDIT-5, D4). */
+    if (group.type != tree.type || group.id.name[2] == '.' ||
+        !bke::node_group_poll(&tree, &group, nullptr))
+    {
       continue;
     }
     auto item = items.append_dict();
@@ -7006,6 +7021,23 @@ bNode *add_native_node(bContext *C, bNodeTree &tree, const DictionaryValue &quer
   if (!bke::node_type_find(idname)) {
     return nullptr;
   }
+  bNodeTree *group_tree = nullptr;
+  if (const auto group_name = query.lookup_str("group")) {
+    for (bNodeTree &group : CTX_data_main(C)->nodetrees) {
+      if (group.id.name + 2 == *group_name && group.type == tree.type) {
+        group_tree = &group;
+        break;
+      }
+    }
+    /* What desktop's Add Node Group checks: a group nested in itself recurses for ever. */
+    const char *why = nullptr;
+    if (group_tree == nullptr || !bke::node_group_poll(&tree, group_tree, &why)) {
+      node_add_refusal = group_tree == nullptr ? IFACE_("This node group is gone") :
+                         why                   ? why :
+                                                 IFACE_("This node group cannot be added here");
+      return nullptr;
+    }
+  }
   const float2 location(float(query.lookup_double("x").value_or(0)),
                         float(query.lookup_double("y").value_or(0)));
   for (bNode &node : tree.nodes) {
@@ -7016,16 +7048,10 @@ bNode *add_native_node(bContext *C, bNodeTree &tree, const DictionaryValue &quer
     return nullptr;
   }
   copy_v2_v2(node->location, location);
-  if (const auto group_name = query.lookup_str("group")) {
-    Main *bmain = CTX_data_main(C);
-    for (bNodeTree &group : bmain->nodetrees) {
-      if (group.id.name + 2 == *group_name && group.type == tree.type) {
-        node->id = &group.id;
-        id_us_plus(&group.id);
-        BKE_ntree_update_tag_node_property(&tree, node);
-        break;
-      }
-    }
+  if (group_tree) {
+    node->id = &group_tree->id;
+    id_us_plus(&group_tree->id);
+    BKE_ntree_update_tag_node_property(&tree, node);
   }
   if (const bke::bNodeZoneType *zone = bke::zone_type_by_node_type(node->type_legacy)) {
     if (zone->input_type == node->type_legacy) {
@@ -7327,7 +7353,6 @@ std::optional<std::string> apply_node_action(bContext *C, bNodeTree &tree, const
                                                   "NODE_OT_group_make",
                                                   "NODE_OT_group_ungroup",
                                                   "NODE_OT_join",
-                                                  "NODE_OT_parent_clear",
                                                   "NODE_OT_detach"};
     const std::string idname = std::string(query.lookup_str("operator").value_or(""));
     wmOperatorType *ot = allowed.count(idname) ? WM_operatortype_find(idname.c_str(), false) :
@@ -7710,9 +7735,11 @@ std::string nodes_edit(bContext *C, NodesData & /*data*/, const DictionaryValue 
   shown.tree->ensure_topology_cache();
   /* Resolved from the viewport's context; edited in a node editor's. */
   NodeSpaceContext node_space(C, shown);
+  node_add_refusal.clear();
   const std::optional<std::string> undo = apply_node_action(C, *shown.tree, query);
   if (!undo) {
-    return "This node change could not be made.";
+    return node_add_refusal.empty() ? IFACE_("This node change could not be made.") :
+                                      node_add_refusal;
   }
   if (!undo->empty()) {
     ED_undo_push(C, undo->c_str());
@@ -7799,6 +7826,13 @@ void nodes_write(bContext *C, NodesData &data, ViewBuilder &builder)
   }
   result.append_str("name", shown.tree->id.name + 2);
   result.append_str("owner", shown.owner);
+  /* The node menu offers an item only where its operator polls here, as Blender greys it: a
+   * shader tree has no viewer, so Connect to Viewer is not offered there (ROUND6 EDIT-5, D14). */
+  auto polls = result.append_dict("polls");
+  for (const char *idname : native_node_menu_operators) {
+    wmOperatorType *ot = WM_operatortype_find(idname, false);
+    polls->append_int(idname, ot && WM_operator_poll(C, ot));
+  }
   auto path = result.append_array("path");
   for (bNode *group : shown.path) {
     auto item = path->append_dict();

@@ -67,6 +67,10 @@ final class NodeEditorModel {
   @ObservationIgnored var shownChanged: (Bool) -> Void = { _ in }
 
   var nodes: [JSON] { snapshot?.array("nodes") ?? [] }
+  /** Whether Blender's operator for a node menu item polls in this tree, as Blender greys an item
+   * that does not (ROUND6 EDIT-5): a shader tree has no viewer. Offered until the first snapshot
+   * says. */
+  func polls(_ idname: String) -> Bool { snapshot?.dict("polls")?.int(idname).map { $0 != 0 } ?? true }
   var links: [JSON] { snapshot?.array("links") ?? [] }
   var addItems: [JSON] { snapshot?.array("add") ?? [] }
 
@@ -345,15 +349,15 @@ struct NodeEditorPanel: View {
         Button("Duplicate Selected", systemImage: "plus.square.on.square") {
           model.send("operator", ["operator": "NODE_OT_duplicate"])
         }
-        .disabled(!anySelected)
+        .disabled(!anySelected || !model.polls("NODE_OT_duplicate"))
         Button("Group Selected", systemImage: "square.on.square.dashed") {
           model.send("operator", ["operator": "NODE_OT_group_make"])
         }
-        .disabled(!anySelected)
+        .disabled(!anySelected || !model.polls("NODE_OT_group_make"))
         Button("Frame Selected", systemImage: "rectangle.dashed") {
           model.send("operator", ["operator": "NODE_OT_join"])
         }
-        .disabled(!anySelected)
+        .disabled(!anySelected || !model.polls("NODE_OT_join"))
         Divider()
         Button("Delete Selected", systemImage: "trash", role: .destructive) {
           model.send("delete", ["nodes": model.nodes.filter { $0.bool("selected") }.compactMap { $0.string("name") }])
@@ -1704,7 +1708,9 @@ struct NodeCanvas: View {
     if kind == "GROUP" {
       first.append(action("Enter Group", "arrow.down.right.square") { model.enter(group: name) })
     }
-    first.append(action("Duplicate", "plus.square.on.square") { runOnSelection(name, "NODE_OT_duplicate") })
+    if model.polls("NODE_OT_duplicate") {
+      first.append(action("Duplicate", "plus.square.on.square") { runOnSelection(name, "NODE_OT_duplicate") })
+    }
     first.append(action("Rename…", "pencil") { renaming = (name, node.string("title") ?? "") })
     first.append(action(node.bool("muted") ? "Unmute" : "Mute", node.bool("muted") ? "speaker.wave.2" : "speaker.slash") {
       model.send("mute", ["nodes": targets])
@@ -1716,7 +1722,7 @@ struct NodeCanvas: View {
       })
     }
     var more: [UIMenuElement] = []
-    if kind != "FRAME" && !node.array("outputs").isEmpty {
+    if kind != "FRAME" && !node.array("outputs").isEmpty && model.polls("NODE_OT_link_viewer") {
       more.append(action("Connect to Viewer", "eye") { model.send("viewer", ["node": name]) })
     }
     if node.bool("can_preview") {
@@ -1731,14 +1737,19 @@ struct NodeCanvas: View {
     if kind == "NODE" || kind == "GROUP" {
       more.append(action("Show Hidden Sockets", "circle.dotted") { model.send("sockets_show", ["node": name]) })
     }
-    more.append(action("Make Group", "square.on.square.dashed") { runOnSelection(name, "NODE_OT_group_make") })
-    if kind == "GROUP" {
+    if model.polls("NODE_OT_group_make") {
+      more.append(action("Make Group", "square.on.square.dashed") { runOnSelection(name, "NODE_OT_group_make") })
+    }
+    if kind == "GROUP" && model.polls("NODE_OT_group_ungroup") {
       more.append(action("Ungroup", "square.dashed") { runOnSelection(name, "NODE_OT_group_ungroup") })
     }
-    more.append(action("Frame Selected", "rectangle.dashed") { runOnSelection(name, "NODE_OT_join") })
-    if node.string("parent") != nil {
+    if model.polls("NODE_OT_join") {
+      more.append(action("Frame Selected", "rectangle.dashed") { runOnSelection(name, "NODE_OT_join") })
+    }
+    /* Blender's Remove from Frame is Detach (`NODE_OT_parent_clear` does not exist). */
+    if node.string("parent") != nil && model.polls("NODE_OT_detach") {
       more.append(action("Remove from Frame", "rectangle.portrait.and.arrow.right") {
-        runOnSelection(name, "NODE_OT_parent_clear")
+        runOnSelection(name, "NODE_OT_detach")
       })
     }
     return UIMenu(children: first + [UIMenu(title: "More", image: UIImage(systemName: "ellipsis.circle"), children: more),
@@ -1806,9 +1817,13 @@ struct NodeCanvas: View {
     }
   }
 
-  /** Runs a Blender operator on the node a menu was opened on, alone. */
+  /** Runs a Blender operator on the selection when the node a menu was opened on is part of it,
+   * as desktop's menu does; else on that node alone (ROUND6 EDIT-5, D14: it dropped the rest). */
   private func runOnSelection(_ name: String, _ idname: String) {
-    model.send("select", ["node": name])
+    let held = model.nodes.first(where: { $0.string("name") == name })
+    if !(held?.bool("selected") ?? false) {
+      model.send("select", ["node": name])
+    }
     model.send("operator", ["operator": idname])
   }
 

@@ -1968,4 +1968,32 @@ state_senders_e4 = sorted(path.name for path in SWIFT.glob('*.swift')
                           if re.search(r'target:\s*"state"', path.read_text(encoding='utf-8')))
 check(state_senders_e4 == ['NativeViews.swift'],
       "R6 EDIT-4 (D8): only the canvas sends its state (%s)" % state_senders_e4)
+# ROUND6 EDIT-5 (D4, D14): the node editor names only operators that exist, offers each only where
+# it polls (the snapshot's `polls`), and every action it sends has a branch in `apply_node_action`.
+# A group that would nest the tree inside itself is neither listed nor added (`node_group_poll`).
+import bpy  # noqa: E402
+node_swift_e5 = (SWIFT / 'NodeEditor.swift').read_text(encoding='utf-8')
+node_cc_e5 = (SWIFT.parents[2] / 'editors/interface/interface_native_properties.cc').read_text(encoding='utf-8')
+named_e5 = sorted(set(re.findall(r'"(NODE_OT_\w+)"', node_swift_e5)))
+registered_e5 = set(dir(bpy.ops.node))
+check(named_e5 and all(op[len('NODE_OT_'):] in registered_e5 for op in named_e5),
+      "R6 EDIT-5 (D14): every operator the node editor names exists (%s)" %
+      [op for op in named_e5 if op[len('NODE_OT_'):] not in registered_e5])
+menu_ops_e5 = node_cc_e5[node_cc_e5.index('native_node_menu_operators[] = {'):]
+menu_ops_e5 = set(re.findall(r'"(NODE_OT_\w+)"', menu_ops_e5[:menu_ops_e5.index('};')]))
+check(set(named_e5) <= menu_ops_e5 and all('model.polls("%s")' % op in node_swift_e5 for op in named_e5),
+      "R6 EDIT-5 (D14): each is offered only where it polls (%s)" %
+      [op for op in named_e5 if 'model.polls("%s")' % op not in node_swift_e5])
+apply_e5 = node_cc_e5[node_cc_e5.index('std::optional<std::string> apply_node_action('):]
+apply_e5 = apply_e5[:apply_e5.index('\n}\n')]
+branches_e5 = set(re.findall(r'action == "(\w+)"', apply_e5))
+sent_e5 = set(re.findall(r'model\.send\("(\w+)"', node_swift_e5)) | set(re.findall(r'\bsend\("(\w+)"', node_swift_e5))
+check(sent_e5 and not sorted(sent_e5 - branches_e5),
+      "R6 EDIT-5 (D14): every node action sent has a branch (%s)" % sorted(sent_e5 - branches_e5))
+listed_e5 = node_cc_e5[node_cc_e5.index('void project_node_add_items('):]
+listed_e5 = listed_e5[:listed_e5.index('\n}\n')]
+added_e5 = node_cc_e5[node_cc_e5.index('bNode *add_native_node('):]
+added_e5 = added_e5[:added_e5.index('\n}\n')]
+check('bke::node_group_poll(&tree, &group, nullptr)' in listed_e5 and 'bke::node_group_poll(&tree, group_tree, &why)' in added_e5,
+      "R6 EDIT-5 (D4): a group that would contain itself is neither listed nor added")
 print('PASS: native shell sources ' + json.dumps(checks))
