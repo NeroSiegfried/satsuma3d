@@ -277,6 +277,10 @@ struct SelectedOthers {
 SelectedOthers selected_others(bContext *C, Button &but)
 {
   SelectedOthers others;
+  /* The active item's alone, as the desktop edits it, unless the switch says all (R6-10). */
+  if (!native::PanelsData::edit_selected()) {
+    return others;
+  }
   PointerRNA ptr = but.rnapoin;
   PropertyRNA *prop = but.rnaprop;
   if (!ptr.data || !prop || !RNA_property_editable(&ptr, prop)) {
@@ -2643,28 +2647,6 @@ std::string preferences_tabs(bContext *C,
   return PREFERENCES_TAB_PREFIX + selected;
 }
 
-/** A button showing a property's value, which is a control of its own. */
-bool value_button(const Button &but)
-{
-  if (!but.rnaprop || !but.rnapoin.data || but.optype || (but.flag & UI_HIDDEN) ||
-      ELEM(but.type, ButtonType::ListRow, ButtonType::ListBox, ButtonType::ViewItem) ||
-      button_menutype_get(&but))
-  {
-    return false;
-  }
-  PointerRNA template_ptr;
-  PropertyRNA *template_prop;
-  int template_event;
-  if (template_id_property_get(but, template_ptr, template_prop, template_event)) {
-    return false;
-  }
-  const PropertyType type = RNA_property_type(but.rnaprop);
-  return ELEM(type, PROP_BOOLEAN, PROP_INT, PROP_FLOAT, PROP_STRING, PROP_ENUM) ||
-         (type == PROP_POINTER &&
-          RNA_struct_is_ID(RNA_property_pointer_type(const_cast<PointerRNA *>(&but.rnapoin),
-                                                      but.rnaprop)));
-}
-
 /**
  * Preferences left out of their sections: the iPad sets these itself on every redraw (see
  * `ios_ui_apply_viewport_preferences`), the keymap's filter belongs to a Preferences editor,
@@ -3270,6 +3252,21 @@ static std::string panels_walk(bContext *C,
               return protocol::CreateLabel(buffer);
             });
       }
+    }
+  }
+  if (writer && !viewport && !preferences && tab_id != "TOOL") {
+    /* With several objects selected, which of them an edit goes to: the active one, or with the
+     * switch on every selected one that has the property (R6-10, PANEL-6). */
+    const int64_t selected = CTX_data_collection_get(C, "selected_editable_objects").size();
+    if (selected > 1) {
+      const bool all = native::PanelsData::edit_selected();
+      const std::string label = all ? "Editing " + std::to_string(selected) + " objects" :
+                                      "Editing the active object of " + std::to_string(selected) +
+                                          " selected";
+      writer->builder.add(top, "edit_selected", [&](Buffer &buffer, NodeFields &fields) {
+        fields.label = label;
+        return protocol::CreateToggle(buffer, all);
+      });
     }
   }
   const std::set<std::string> *expanded = data.expanded().lookup_ptr(tab_id);
@@ -4203,29 +4200,12 @@ static std::string panels_walk(bContext *C,
     /* The other selected items with each property, and the panel's node, left out with its
      * sub-panels when they lack all it shows, such as a modifier only the active item has. The
      * physics' switches head panels of their own, see below. */
-    std::map<const Button *, SelectedOthers> others_of;
-    bool dropped = false;
+    /* The active item's panels, whatever else is selected, as the desktop draws them (B2,
+     * R6-10): an edit goes to the other selected items that have it only with the switch on. */
     if (writer) {
       writer->panel = candidate.id;
     }
-    if (writer && is_outer && !physics_toggles) {
-      int missing = 0, common = 0;
-      for (const auto &button : block->buttons) {
-        Button &but = *button;
-        if (!combined.count(&but) && !named_rows.count(&but) && value_button(but)) {
-          const SelectedOthers &others = others_of[&but] = selected_others(C, but);
-          (others.missing ? missing : common)++;
-        }
-      }
-      dropped = missing && !common;
-      if (dropped) {
-        /* Shown when it is the only item selected (B2). */
-        const Fate fate = fate_dropped("selection", Fate::Counted::Panel);
-        census_record(tab_id, "", "Panel", candidate.id, fate);
-        tab_said.add(fate.counted);
-      }
-    }
-    if (writer && !physics_toggles && !dropped) {
+    if (writer && !physics_toggles) {
       const auto physics = physics_panels.find(candidate.id);
       if (is_outer && physics != physics_panels.end()) {
         node = physics->second;
@@ -4282,7 +4262,7 @@ static std::string panels_walk(bContext *C,
     };
     for (const auto &button : block->buttons) {
       Button &but = *button;
-      if (dropped || section_request) {
+      if (section_request) {
         break;
       }
       bool in_section_header = false;
@@ -4745,16 +4725,8 @@ static std::string panels_walk(bContext *C,
       }
       const int length = RNA_property_array_length(&but.rnapoin, but.rnaprop);
       const bool color = is_color(&but.rnapoin, but.rnaprop);
-      /* Only what every selected item has. */
-      const auto found_others = others_of.find(&but);
-      const SelectedOthers others = execute                       ? SelectedOthers() :
-                                    found_others != others_of.end() ? found_others->second :
-                                                                      selected_others(C, but);
-      if (others.missing) {
-        /* Shown when it is the only item selected with it (B2). */
-        decide(&but, fate_dropped("selection"));
-        continue;
-      }
+      /* The other selected items with it, with the switch on: a dash where they differ. */
+      const SelectedOthers others = execute ? SelectedOthers() : selected_others(C, but);
       const int begin = !color && length ? std::max(0, but.rnaindex) : -1;
       const int end = !color && length && but.rnaindex < 0 ? std::min(length, 16) : begin + 1;
       for (int index = begin; index < end; index++) {
@@ -4821,7 +4793,7 @@ static std::string panels_walk(bContext *C,
       }
     }
     node = panel_node_id;
-    if (writer && !dropped) {
+    if (writer) {
       /* The census of this panel: what became of each button, and what it could not show,
        * which the row at the foot of its node says (R6-9). */
       Said *panel_said = panel_nodes.count(candidate.id) ? &said[node] : nullptr;

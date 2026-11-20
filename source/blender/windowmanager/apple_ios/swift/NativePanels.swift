@@ -218,6 +218,10 @@ final class PanelsModel {
     return view.children(of: top).filter { $0.kind == .panel }
   }
 
+  /** With several objects selected, which of them an edit goes to, and the switch for all of
+   * them (decision R6-10, ROUND6 PANEL-6). */
+  var editSelected: NativeNode? { view.node("edit_selected") }
+
   /** What the tab could not show, such as a whole panel, said at its foot (ROUND6 PANEL-1). */
   var elsewhere: NativeNode? {
     guard let top = view.top else { return nil }
@@ -691,6 +695,12 @@ struct PanelsForm: View {
     PanelColumn(spacing: 6) {
       let style = model.textStyle
       let first = model.panels.first?.key
+      if let editSelected = model.editSelected {
+        PanelBox {
+          EditSelectedRow(model: model, node: editSelected)
+            .padding(8)
+        }
+      }
       ForEach(model.panels) { panel in
         if let style, panel.key == "panel:DATA_PT_font" {
           /* A text object's font, styles and spacing together; Blender's Font panel stays below
@@ -1046,6 +1056,30 @@ struct PanelNote: View {
     }
     .padding(.vertical, 2)
     .accessibilityElement(children: .combine)
+  }
+}
+
+/** With several objects selected (decision R6-10, ROUND6 PANEL-6): Blender's line saying which
+ * of them an edit goes to, "Editing the active object of 3 selected" or "Editing 3 objects", and
+ * the switch between the two, as the desktop's Alt. */
+struct EditSelectedRow: View {
+  let model: PanelsModel
+  let node: NativeNode
+
+  var body: some View {
+    let on = model.bool(node)
+    Toggle(isOn: Binding(get: { on }, set: { model.set(node, .bool($0)); Haptics.selection() })) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Edit All Selected")
+          .font(.subheadline)
+        Text(node.label)
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .disabled(!node.enabled)
+    .accessibilityIdentifier("blender.edit-selected")
   }
 }
 

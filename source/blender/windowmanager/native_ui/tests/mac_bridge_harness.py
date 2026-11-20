@@ -4250,9 +4250,9 @@ def tick_margins():
 CENSUS_KNOWN = {
     # Dropped, and said by the panel's (or the tab's) row. Labels are lines of their own
     # (PANEL-2), sections sub-panels (PANEL-3) and menus Blender builds in C menu buttons
-    # (PANEL-4): one dropped is a failure. Popups Blender builds in C are not menus yet.
+    # (PANEL-4), and the active object's panels stay with others selected (PANEL-6): one dropped
+    # is a failure. Popups Blender builds in C are not menus yet.
     "c_block": ("B4", "PANEL-4 (popups)"),
-    "selection": ("B2", "PANEL-6"),
     "curve": ("B7", "PANEL-7"),
     "callback": ("B7, B18", "PANEL-7, PANEL-14"),
     "header_preset": ("B8", "PANEL-8"),
@@ -4431,6 +4431,35 @@ def tick_census():
                 state["problems"].append("Subdivision's header menu offers Duplicate greyed: %r" % items[0])
             else:
                 invoke(state["menu"], items[0]["key"], 77)
+        if stage == "selection" and at == 15:
+            # Two objects selected (B2, R6-10, PANEL-6): the active one's modifiers are there, the
+            # switch says which an edit goes to, and Location X goes to the active one alone.
+            obj = tree(subs.get("OBJECT")) or {}
+            switch = next((n for n in _census_nodes(obj) if n["key"] == "edit_selected"), None)
+            if not switch or switch.get("value") is not False:
+                state["problems"].append("selection: no switch off at the top of Object: %r" % switch)
+            if not any("MOD_PT_Bevel" in n["key"] for n in _census_nodes(tree(subs.get("MODIFIER")) or {})):
+                state["problems"].append("selection: the active object's Bevel panel is gone: %r" % [
+                    n["key"] for n in _census_nodes(tree(subs.get("MODIFIER")) or {}) if n.get("content") == "Panel"])
+            state["location_x"] = next((n["key"] for n in _census_nodes(obj)
+                                        if n.get("content") == "Number" and n.get("property") == "location"
+                                        and n.get("label") == "X"), None)
+            if state["location_x"]:
+                set_float(subs["OBJECT"], state["location_x"], 2.5, 91)
+        if stage == "selection" and at == 18 and state.get("location_x"):
+            cube, lamp = bpy.data.objects["Cube"], bpy.data.objects["Lamp"]
+            if (cube.location.x, lamp.location.x) != (2.5, 0.0):
+                state["problems"].append("selection, switch off: Location X moved %r, %r (ack %r)" % (
+                    cube.location.x, lamp.location.x, acks.get(91)))
+            set_bool(subs["OBJECT"], "edit_selected", True, 92)
+        if stage == "selection" and at == 21 and state.get("location_x"):
+            set_float(subs["OBJECT"], state["location_x"], 3.5, 93)
+        if stage == "selection" and at == 24 and state.get("location_x"):
+            cube, lamp = bpy.data.objects["Cube"], bpy.data.objects["Lamp"]
+            if (cube.location.x, lamp.location.x) != (3.5, 3.5):
+                state["problems"].append("selection, switch on: Location X moved %r, %r (acks %r %r)" % (
+                    cube.location.x, lamp.location.x, acks.get(92), acks.get(93)))
+            set_bool(subs["OBJECT"], "edit_selected", False, 94)
         if stage == "object" and at == 21:
             # The cloth cache's Bake, a job (B1, PANEL-5): from its button, as a tap runs it, after
             # the menu's item, as a running job refuses taps (R6-12).
@@ -4458,6 +4487,11 @@ def tick_census():
                 subs["PREFERENCES_INTERFACE"] = subscribe("properties", tab="PREFERENCES_INTERFACE")
             elif not subs:
                 subs["OBJECT"] = subscribe("properties", tab="OBJECT", properties=True)
+        elif at == 1 and stage != "preferences":
+            # Each view on its own tab again: a view whose tab the last stage's object lacked (a
+            # rig has no Modifiers) shows the tab it fell back to until it is asked again.
+            for i, (tab, sub) in enumerate(subs.items()):
+                set_text(sub, "tabs", tab, 60000 + 100 * state["stage"] + i)
         elif at == 3:
             # Every tab the first lists, each a view of its own, as the shell's tab bar asks.
             top = tree(next(iter(subs.values()))) or {}
@@ -4521,7 +4555,7 @@ def tick_census():
             report["steps"].append({"name": stage, "views": len(walks), "fates": sum(len(w) for w in walks.values()),
                                     "dropped": counted, "rows": shown})
         # The object stage runs its header menu's item before the next stage changes the scene.
-        if at == (27 if stage == "object" else 16):
+        if at == {"object": 27, "selection": 26}.get(stage, 16):
             state["stage"] += 1
             state["start"] = step + 1
             if state["stage"] == len(CENSUS_STAGES):

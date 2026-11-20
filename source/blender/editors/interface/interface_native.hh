@@ -112,6 +112,17 @@ struct PanelsData : public wm::native_ui::ViewData {
     return subpanels;
   }
 
+  /**
+   * With several objects selected, an edit goes to every selected item that has the property, as
+   * Alt does on the desktop, rather than to the active one alone (decision R6-10, ROUND6
+   * PANEL-6): the switch at the top of Properties. Off, as on the desktop.
+   */
+  static bool &edit_selected()
+  {
+    static bool edit_selected = false;
+    return edit_selected;
+  }
+
   /** The tab's open panels: those open now, the first time one is opened or closed. */
   std::set<std::string> &expanded_panels()
   {

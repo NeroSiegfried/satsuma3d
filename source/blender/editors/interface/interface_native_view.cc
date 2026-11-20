@@ -183,6 +183,17 @@ CommandResult panels_command(bContext *C,
     return CommandResult::Done;
   }
 
+  if (target == "edit_selected" && op == protocol::Op::Set) {
+    /* Edits to the active item, or to every selected one (R6-10, PANEL-6). */
+    const protocol::BoolValue *value = command.value_as_BoolValue();
+    if (value == nullptr) {
+      r_error = "The switch takes on or off";
+      return CommandResult::Failed;
+    }
+    PanelsData::edit_selected() = value->value();
+    return CommandResult::Done;
+  }
+
   if (const PanelState *panel = data.panels.lookup_ptr(target)) {
     if (ELEM(op, protocol::Op::Open, protocol::Op::Close)) {
       const bool open = op == protocol::Op::Open;
