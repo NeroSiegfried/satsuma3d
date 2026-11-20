@@ -63,6 +63,9 @@ final class NativeView {
   @ObservationIgnored var showsErrors = false
   /** After a command of it failed: put back what Blender has, where the screen guessed ahead. */
   @ObservationIgnored var failed: (() -> Void)?
+  /** What a canvas shows, as its `state` last set: Blender keeps it per subscription, so it is sent
+   * again whenever the view is subscribed again (ROUND6 EDIT-4, D8). */
+  @ObservationIgnored fileprivate var state: [String: NativeValue]?
   /** Commands Blender has yet to answer. */
   @ObservationIgnored fileprivate var unanswered = 0
   /** Called once Blender answered every command sent, and the view shows what they did. */
@@ -315,6 +318,9 @@ final class NativeViews {
     guard view.subscription == 0 else { return }
     view.subscription = request(view.name, params: view.params)
     views[view.subscription] = view
+    /* A new subscription starts from Blender's default state: a canvas opened from closed showed
+     * a spinner for ever, its state having been sent while it was paused (ROUND6 EDIT-4, D8). */
+    if let state = view.state { send(view, target: "state", params: state) }
   }
 
   private static func write(_ params: [String: NativeValue], _ builder: inout FlatBufferBuilder) -> Offset {
@@ -423,9 +429,13 @@ final class NativeCanvas {
     if shown { NativeViews.shared.resume(view) } else { NativeViews.shared.pause(view) }
   }
 
-  /** What to show, as the canvas's query takes it. */
+  /** What to show, as the canvas's query takes it: kept, and sent now if it shows, else as it
+   * resumes (a paused view has no subscription, and Blender would answer "No such view"). */
   func setState(_ state: [String: Any]) {
-    NativeViews.shared.send(view, target: "state", params: NativeValue.params(state))
+    let params = NativeValue.params(state)
+    view.state = params
+    guard view.subscription != 0 else { return }
+    NativeViews.shared.send(view, target: "state", params: params)
   }
 
   func edit(_ request: [String: Any]) {

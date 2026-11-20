@@ -1953,4 +1953,19 @@ check(all(re.search(r'Operators\.run\("anim\.native_key_%s"[^\n]*(\n[^\n]*){0,2}
 storyboard_e3 = (SWIFT.parents[2] / 'editors/space_sequencer/sequencer_native.cc').read_text(encoding='utf-8')
 check(not re.search(r'return "(No |Could not)', storyboard_e3) and 'edit_failure.empty()' in storyboard_e3,
       "R6 EDIT-3 (D7): a storyboard failure is not returned as an undo step's name")
+# ROUND6 EDIT-4 (D8): a canvas's state reaches Blender whatever the order it is set and shown in:
+# kept on the view, not sent while paused, and sent again with every new subscription. Nothing
+# else sends a `state`.
+views_e4 = (SWIFT / 'NativeViews.swift').read_text(encoding='utf-8')
+resume_e4 = views_e4[views_e4.index('func resume(_ view: NativeView) {'):]
+resume_e4 = resume_e4[:resume_e4.index('\n  }\n')]
+set_state_e4 = views_e4[views_e4.index('func setState(_ state: [String: Any]) {'):]
+set_state_e4 = set_state_e4[:set_state_e4.index('\n  }\n')]
+check('if let state = view.state { send(view, target: "state", params: state) }' in resume_e4 and
+      'view.state = params' in set_state_e4 and 'guard view.subscription != 0 else { return }' in set_state_e4,
+      "R6 EDIT-4 (D8): a canvas's state is kept, and sent again as it resumes")
+state_senders_e4 = sorted(path.name for path in SWIFT.glob('*.swift')
+                          if re.search(r'target:\s*"state"', path.read_text(encoding='utf-8')))
+check(state_senders_e4 == ['NativeViews.swift'],
+      "R6 EDIT-4 (D8): only the canvas sends its state (%s)" % state_senders_e4)
 print('PASS: native shell sources ' + json.dumps(checks))
