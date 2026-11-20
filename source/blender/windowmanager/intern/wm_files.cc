@@ -2384,9 +2384,10 @@ static bool wm_autosave_write_try(Main *bmain, wmWindowManager *wm)
 
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
   /* iOS ends apps without warning, and work done in Sculpt or Edit Mode is lost with them: save
-   * in every mode, as the document's own last chance does, see #WM_apple_ios_autosave_now. */
-  WM_autosave_write(wm, bmain);
-  return true;
+   * in every mode, as the document's own last chance does, see #WM_apple_ios_autosave_now. A
+   * failure is said, and the timer tries again as Blender's does (ROUND7 U4d). */
+  return wm_apple_ios_autosave_write(
+      wm, bmain, "timer", "Auto-save failed: your latest changes are not kept yet. Save now");
 #endif
 
   char filepath[FILE_MAX];
@@ -2413,7 +2414,7 @@ bool WM_autosave_is_scheduled(wmWindowManager *wm)
   return wm->autosave_scheduled;
 }
 
-void WM_autosave_write(wmWindowManager *wm, Main *bmain)
+bool WM_autosave_write(wmWindowManager *wm, Main *bmain, ReportList *reports)
 {
   ED_editors_flush_edits(bmain);
 
@@ -2425,10 +2426,13 @@ void WM_autosave_write(wmWindowManager *wm, Main *bmain)
 
   /* Error reporting into console. */
   BlendFileWriteParams params{};
-  BLO_write_file(bmain, filepath, fileflags, &params, nullptr);
+  const bool success = BLO_write_file(bmain, filepath, fileflags, &params, reports);
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
-  /* Which file this auto-save belongs to, by its size and date (ROUND6 SAFE-5). */
-  wm_apple_ios_autosave_written(BKE_main_blendfile_path(bmain), filepath);
+  /* Which file this auto-save belongs to, by its size and date (ROUND6 SAFE-5): only for what was
+   * written. */
+  if (success) {
+    wm_apple_ios_autosave_written(BKE_main_blendfile_path(bmain), filepath);
+  }
 #endif
 
   /* Restart auto-save timer. */
@@ -2436,6 +2440,7 @@ void WM_autosave_write(wmWindowManager *wm, Main *bmain)
   wm_autosave_timer_begin(wm);
 
   wm->autosave_scheduled = false;
+  return success;
 }
 
 static void wm_autosave_timer_begin_ex(wmWindowManager *wm, double timestep)

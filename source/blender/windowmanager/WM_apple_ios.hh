@@ -74,8 +74,9 @@ void WM_apple_ios_reports(wmWindow *win, ReportList *reports, int minimum_level)
 void WM_apple_ios_report(wmWindow *win, const Report *report);
 /** Keep auto-save on: iOS ends apps without warning. Call after loading the preferences. */
 void WM_apple_ios_autosave_ensure();
-/** Write the auto-save now, in any mode, when the app goes to the background. */
-void WM_apple_ios_autosave_now(bContext *C);
+/** Write the auto-save now, in any mode, when the app goes to the background. False when it
+ * could not be written, which is said (ROUND7 U4d). */
+bool WM_apple_ios_autosave_now(bContext *C);
 /**
  * The iPad's memory preferences (ROUND6 BUSY-5, G10): undo memory, the cache and the texture
  * size capped by shares of what iOS lets the app use, see `wm_apple_ios_memory.hh`. Call as the
@@ -121,8 +122,10 @@ bool WM_apple_ios_document_reload_with_scripts(bContext *C);
  * the app ended twice in a row while a document was opening. */
 void WM_apple_ios_factory_preferences(bContext *C);
 /** The open document's auto-save, with the work as it is now, set aside as Recovered Work: for
- * Revert, Open as Last Saved and Restore Version from Opening (ROUND6 SAFE-5). */
-void WM_apple_ios_document_set_aside(bContext *C, const char *why);
+ * Revert, Open as Last Saved and Restore Version from Opening (ROUND6 SAFE-5). False when the work
+ * could not be written to the auto-save (said to the person): the caller must not go on, or the
+ * work is dropped (ROUND7 U4d). */
+bool WM_apple_ios_document_set_aside(bContext *C, const char *why);
 /** Write what Blender has loaded to `filepath` as a copy, for Save a Copy: the document and its
  * auto-save are left as they are. */
 bool WM_apple_ios_document_copy_write(bContext *C, const char *filepath, std::string &r_error);

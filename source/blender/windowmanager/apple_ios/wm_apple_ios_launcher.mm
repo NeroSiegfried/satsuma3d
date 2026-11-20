@@ -1404,18 +1404,27 @@ static void launcherKeepOpeningVersion(NSURL *document)
                        actionWithTitle:@"Restore"
                                  style:UIAlertActionStyleDestructive
                                handler:^(UIAlertAction *) {
-                                 GHOST_ios_engine_perform([](blender::bContext *C) {
-                                   if (C) {
-                                     blender::WM_apple_ios_document_set_aside(
-                                         C, "restore version from opening");
-                                   }
-                                 });
                                  [document retain];
                                  NSURL *target_url = [document.fileURL retain];
                                  /* Off the main queue: the document, as the file's presenter,
                                   * may save first, which needs the main queue. */
                                  dispatch_async(
                                      dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                                       /* The work since opening is kept first; when it cannot
+                                        * be (said by the engine), the file is left as it is
+                                        * (ROUND7 U4d). */
+                                       if (!wm_apple_ios_document_set_aside_wait(
+                                               "restore version from opening"))
+                                       {
+                                         dispatch_async(dispatch_get_main_queue(), ^{
+                                           WM_native_ui_log("document",
+                                                            "version from opening not restored: "
+                                                            "the work could not be kept first");
+                                           [document release];
+                                           [target_url release];
+                                         });
+                                         return;
+                                       }
                                        NSError *error = nil;
                                        __block BOOL replaced = NO;
                                        NSFileCoordinator *coordinator = [[[NSFileCoordinator alloc]

@@ -22,10 +22,12 @@ namespace blender {
 struct ARegion;
 struct Depsgraph;
 struct ImBuf;
+struct Main;
 struct ReportList;
 struct Scene;
 struct View3D;
 struct bContext;
+struct wmWindowManager;
 
 /**
  * The document's preview while iOS saves it: everything visible, framed from the 3D View's
@@ -44,6 +46,16 @@ ImBuf *wm_apple_ios_thumb_frame_all(const bContext *C,
  * launch.
  */
 bool wm_apple_ios_autosave_location(const char *blendfile_path, char filepath[FILE_MAX]);
+/**
+ * Blender's auto-save, written by the app: #WM_autosave_write says whether it was, and a failure
+ * is never silent (ROUND7 U4d). The session log names `what` and Blender's report; the person is
+ * told `consequence` with the report: every time for a person's command, once per cause until a
+ * write succeeds again for the background writers (the timer, the last chance).
+ */
+bool wm_apple_ios_autosave_write(wmWindowManager *wm,
+                                 Main *bmain,
+                                 const char *what,
+                                 const char *consequence);
 /** Remove the auto-save of a document, once its work is saved. */
 void wm_apple_ios_autosave_remove(const char *blendfile_path);
 /** Note the document file's size and date beside the auto-save just written (ROUND6 SAFE-5). */

@@ -499,7 +499,7 @@ void WM_apple_ios_memory_low(bContext *C)
   }
   last = now;
   /* What is not saved is kept first: iOS may end the app next. */
-  WM_apple_ios_autosave_now(C);
+  const bool kept = WM_apple_ios_autosave_now(C);
 
   /* Caches, which fill again as they are needed: the buffers of images read from files and not
    * changed since, the sequencer's frames, the movie cache and the generic memory cache. Not
@@ -531,7 +531,8 @@ void WM_apple_ios_memory_low(bContext *C)
   }
   WM_native_ui_session_log(
       "memory",
-      fmt::format("low: auto-save written; {}; undo kept to {} steps",
+      fmt::format("low: auto-save {}; {}; undo kept to {} steps",
+                  kept ? "written" : "NOT written",
                   job_running ? std::string("caches kept while a job runs") :
                                 fmt::format("{} images' buffers and the caches freed", images),
                   steps_kept)
@@ -545,16 +546,49 @@ void WM_apple_ios_memory_low(bContext *C)
   }
 }
 
-void WM_apple_ios_autosave_now(bContext *C)
+bool wm_apple_ios_autosave_write(wmWindowManager *wm,
+                                 Main *bmain,
+                                 const char *what,
+                                 const char *consequence)
+{
+  /* The cause last told by a background writer, so a timer failing every interval is said once,
+   * not every time. */
+  static std::string told;
+  if (WM_autosave_write(wm, bmain, &wm->runtime->reports)) {
+    told.clear();
+    return true;
+  }
+  const Report *report = BKE_reports_last_displayable(&wm->runtime->reports);
+  const std::string why = (report && report->message) ? report->message :
+                                                        "the auto-save could not be written";
+  WM_native_ui_session_log("document",
+                           fmt::format("auto-save not written ({}): {}", what, why).c_str());
+  const std::string notice = fmt::format("{} ({})", consequence, why);
+  /* The background writers (the timer, the last chance before iOS ends the app) say a cause once:
+   * every interval would only nag. A person's command (Revert, Open as Last Saved, Restore Version
+   * from Opening, Reload with Scripts) that stops says so every time, or a second press would do
+   * nothing silently (ROUND7 U4e, seen on the device). */
+  const bool background = STREQ(what, "timer") || STREQ(what, "last chance");
+  if (!background || notice != told) {
+    if (background) {
+      told = notice;
+    }
+    WM_native_ui_notice(RPT_ERROR, notice.c_str());
+  }
+  return false;
+}
+
+bool WM_apple_ios_autosave_now(bContext *C)
 {
   /* Unlike the timer, write in any mode: this may be the last chance before iOS ends the app. */
   wmWindowManager *wm = CTX_wm_manager(C);
   Main *bmain = CTX_data_main(C);
   /* A recovered document has unsaved work even before it is edited again. */
   if (wm == nullptr || bmain == nullptr || (wm->file_saved && !bmain->recovered)) {
-    return;
+    return true;
   }
-  WM_autosave_write(wm, bmain);
+  return wm_apple_ios_autosave_write(
+      wm, bmain, "last chance", "Your changes could not be kept in case the app is ended. Save now");
 }
 
 /**
@@ -701,18 +735,27 @@ bool WM_apple_ios_document_is_loaded()
   return false;
 }
 
-void WM_apple_ios_document_set_aside(bContext *C, const char *why)
+bool WM_apple_ios_document_set_aside(bContext *C, const char *why)
 {
   if (document_path.empty()) {
-    return;
+    return true;
   }
-  /* The work as it is now goes into the auto-save first, so what is set aside is all of it. */
+  /* The work as it is now goes into the auto-save first, so what is set aside is all of it. When
+   * it cannot be written (no room), nothing is set aside and the caller does not go on: going on
+   * would drop the work the person was told is kept (ROUND7 U4d). */
   wmWindowManager *wm = CTX_wm_manager(C);
   Main *bmain = CTX_data_main(C);
-  if (wm && bmain && WM_apple_ios_document_is_loaded() && (!wm->file_saved || bmain->recovered)) {
-    WM_autosave_write(wm, bmain);
+  if (wm && bmain && WM_apple_ios_document_is_loaded() && (!wm->file_saved || bmain->recovered) &&
+      !wm_apple_ios_autosave_write(wm,
+                                   bmain,
+                                   why,
+                                   "Your changes could not be kept as Recovered Work, so the "
+                                   "document was left as it is"))
+  {
+    return false;
   }
   wm_apple_ios_autosave_set_aside(document_path.c_str(), why);
+  return true;
 }
 
 void WM_apple_ios_factory_preferences(bContext *C)
@@ -732,8 +775,15 @@ bool WM_apple_ios_document_reload_with_scripts(bContext *C)
    * itself, as Blender's own reload does, would drop it. */
   wmWindowManager *wm = CTX_wm_manager(C);
   Main *bmain = CTX_data_main(C);
-  if (wm && bmain && (!wm->file_saved || bmain->recovered)) {
-    WM_autosave_write(wm, bmain);
+  if (wm && bmain && (!wm->file_saved || bmain->recovered) &&
+      !wm_apple_ios_autosave_write(wm,
+                                   bmain,
+                                   "reload with scripts",
+                                   "Your changes could not be kept first, so the document was not "
+                                   "reloaded with scripts"))
+  {
+    /* Handled: Blender's own reload would read the file and drop the work (ROUND7 U4d). */
+    return true;
   }
   document_open_with_scripts = true;
   return WM_apple_ios_document_command(C, wmDocumentCommand::Reload, "");

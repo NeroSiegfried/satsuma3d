@@ -320,8 +320,12 @@ class DocumentIdentityTest(unittest.TestCase):
         self.assertIn('WM_apple_ios_document_reload_with_scripts(C)', body[:body.index('#endif')])
         doc = functions((WM / 'intern/wm_apple_ios_document.cc').read_text(encoding='utf-8'))
         reload = doc['WM_apple_ios_document_reload_with_scripts']
-        self.assertLess(reload.index('WM_autosave_write('), reload.index('wmDocumentCommand::Reload'),
+        self.assertLess(reload.index('wm_apple_ios_autosave_write('), reload.index('wmDocumentCommand::Reload'),
                         "The work since the save is dropped: the auto-save must be written first")
+        # ROUND7 U4d: when it could not be written, the reload does not happen (and Blender's own,
+        # which reads the file, is not reached either: handled).
+        failed = reload[reload.index('wm_apple_ios_autosave_write('):]
+        self.assertLess(failed.index('return true;'), failed.index('wmDocumentCommand::Reload'))
         self.assertIn('RNA_boolean_set(&props, "use_scripts", true);',
                       doc['WM_apple_ios_document_open'], "The reopen must run the scripts")
 

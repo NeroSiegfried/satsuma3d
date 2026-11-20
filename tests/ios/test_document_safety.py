@@ -334,7 +334,9 @@ class RecoveryIsShownTest(unittest.TestCase):
         asked = body_of(self.document, '- (void)revertAsked')
         self.assertIn('Any unsaved changes will be lost.', asked)
         aside = body_of(self.document, '- (void)openAsLastSaved:(const char *)why')
-        self.assertLess(aside.index('WM_apple_ios_document_set_aside('), aside.index('[self reopen:YES]'))
+        # The work is kept first, and the file is read again only once it is (ROUND7 U4d).
+        self.assertLess(aside.index('wm_apple_ios_document_set_aside_wait('), aside.index('[self reopen:YES]'))
+        self.assertRegex(aside, r'if \(kept\) \{\s*\[self reopen:YES\];')
         command = body_of(self.doc, 'bool WM_apple_ios_document_command(')
         self.assertNotIn('wm_apple_ios_autosave_remove', command, "Revert deletes the auto-save")
 
@@ -351,8 +353,46 @@ class RecoveryIsShownTest(unittest.TestCase):
         newer = body_of(self.doc, 'bool wm_apple_ios_autosave_newer(')
         self.assertIn('autosave_source_path(r_autosave)', newer)
         files = (WM / 'intern/wm_files.cc').read_text(encoding='utf-8')
-        write = body_of(files, 'void WM_autosave_write(wmWindowManager *wm, Main *bmain)')
-        self.assertIn('wm_apple_ios_autosave_written(', write)
+        # It says whether it wrote, and the note is made only for what was written (ROUND7 U4d).
+        write = body_of(files, 'bool WM_autosave_write(wmWindowManager *wm, Main *bmain, ReportList *reports)')
+        self.assertRegex(write, r'if \(success\) \{\s*wm_apple_ios_autosave_written\(')
+        self.assertIn('return success;', write)
+
+    def test_a_failed_auto_save_is_said(self):
+        # ROUND7 U4d: WM_autosave_write says whether it wrote (5.1.2's returned nothing, a failure
+        # only on the console). Every iOS caller goes through the one helper that says a failure,
+        # and the ones that drop the work next (Revert, Open as Last Saved, Restore Version from
+        # Opening, the trust prompt's reload) do not go on when it failed.
+        helper = body_of(self.doc, 'bool wm_apple_ios_autosave_write(')
+        self.assertIn('WM_autosave_write(wm, bmain, &wm->runtime->reports)', helper)
+        self.assertIn('WM_native_ui_notice(RPT_ERROR', helper)
+        self.assertIn('WM_native_ui_session_log(', helper)
+        # Once per cause for the background writers only; a person's command says it every time.
+        self.assertIn('STREQ(what, "timer") || STREQ(what, "last chance")', helper)
+        self.assertIn('if (!background || notice != told)', helper)
+        callers = []
+        for path in sorted(APPLE.glob('*.mm')) + sorted((WM / 'intern').glob('wm_apple_ios*.cc')):
+            text = path.read_text(encoding='utf-8')
+            for match in re.finditer(r'\bWM_autosave_write\(', text):
+                callers.append((path.name, enclosing(text, match.start())))
+        self.assertEqual(callers, [('wm_apple_ios_document.cc', 'wm_apple_ios_autosave_write')],
+                         "An iOS caller of WM_autosave_write that does not say a failure")
+        files = (WM / 'intern/wm_files.cc').read_text(encoding='utf-8')
+        timer = body_of(files, 'static bool wm_autosave_write_try(')
+        ios = timer[timer.index('#if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS'):timer.index('#endif')]
+        self.assertIn('return wm_apple_ios_autosave_write(', ios, "The timer's failure is not said")
+        aside = body_of(self.doc, 'bool WM_apple_ios_document_set_aside(')
+        self.assertLess(aside.index('return false;'), aside.index('wm_apple_ios_autosave_set_aside('))
+        restore = body_of(self.launcher, '- (void)restoreOpeningVersion')
+        self.assertNotIn('GHOST_ios_engine_perform', restore)
+        self.assertLess(restore.index('if (!wm_apple_ios_document_set_aside_wait('),
+                        restore.index('coordinateWritingItemAtURL:'))
+        # No caller of the set-aside ignores its answer.
+        for path in sorted(APPLE.glob('*.mm')):
+            text = path.read_text(encoding='utf-8')
+            for match in re.finditer(r'\bWM_apple_ios_document_set_aside\(C', text):
+                line = text[text.rfind('\n', 0, match.start()):match.start()]
+                self.assertIn('return', line, "%s ignores whether the work was kept" % path.name)
 
     def test_nothing_opens_in_place_inside_the_app(self):
         commands = body_of(self.launcher, '- (void)documentCommand:(blender::wmDocumentCommand)command')

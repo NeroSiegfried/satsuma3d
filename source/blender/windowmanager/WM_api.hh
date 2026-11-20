@@ -2059,8 +2059,9 @@ int WM_main_playanim(int argc, const char **argv);
 bool write_crash_blend();
 
 bool WM_autosave_is_scheduled(wmWindowManager *wm);
-/** Flushes all changes from edit modes and stores the auto-save file. */
-void WM_autosave_write(wmWindowManager *wm, Main *bmain);
+/** Flushes all changes from edit modes and stores the auto-save file. False when it could not be
+ * written, with the cause in \a reports when given (iPad: a failed auto-save is never silent). */
+bool WM_autosave_write(wmWindowManager *wm, Main *bmain, ReportList *reports = nullptr);
 
 /**
  * Lock the interface for any communication.

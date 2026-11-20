@@ -30,7 +30,7 @@ bool WM_apple_ios_document_open(bContext *C,
 wmDocumentWrite WM_apple_ios_document_write(
     bContext *C, const char *filepath, bool preview, bool when_idle, std::string &r_error);
 bool WM_apple_ios_document_is_loaded();
-void WM_apple_ios_document_set_aside(bContext *C, const char *why);
+bool WM_apple_ios_document_set_aside(bContext *C, const char *why);
 bool WM_apple_ios_document_copy_write(bContext *C, const char *filepath, std::string &r_error);
 std::string WM_apple_ios_document_template_write(bContext *C,
                                                  const char *filepath,
@@ -78,6 +78,24 @@ static bool engine_wait(std::function<bool(blender::bContext *)> work, bool *r_t
     return false;
   }
   return wait->success;
+}
+
+bool wm_apple_ios_document_set_aside_wait(const char *why)
+{
+  const std::string reason = why;
+  bool timed_out = false;
+  const bool kept = engine_wait(
+      [reason](blender::bContext *C) {
+        return blender::WM_apple_ios_document_set_aside(C, reason.c_str());
+      },
+      &timed_out);
+  if (timed_out) {
+    WM_native_ui_log("document",
+                     (std::string("work not set aside (") + reason +
+                      "): the engine did not get to it in five minutes")
+                         .c_str());
+  }
+  return kept;
 }
 
 static void writeFreshCopy(NSString *name, UIViewController *presenter, void (^done)(NSURL *url));
@@ -526,14 +544,21 @@ static WMIOSFolderGrant *folder_grant_shown = nil;
 
 - (void)openAsLastSaved:(const char *)why
 {
-  /* The work is kept aside as Recovered Work, then the file is read again as saved. */
+  /* The work is kept aside as Recovered Work, then the file is read again as saved. Off the main
+   * queue, to wait for the engine: when the work could not be kept (said by the engine), the file
+   * is not read again, which would drop it (ROUND7 U4d). */
   const std::string reason = why;
-  GHOST_ios_engine_perform([reason](blender::bContext *C) {
-    if (C) {
-      blender::WM_apple_ios_document_set_aside(C, reason.c_str());
-    }
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    const bool kept = wm_apple_ios_document_set_aside_wait(reason.c_str());
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (kept) {
+        [self reopen:YES];
+      }
+      else {
+        WM_native_ui_log("document", "not reverted: the work could not be kept first");
+      }
+    });
   });
-  [self reopen:YES];
 }
 
 /** \} */

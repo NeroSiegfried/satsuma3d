@@ -62,6 +62,14 @@
 void wm_apple_ios_document_file_now(UIViewController *presenter, void (^done)(NSURL *url));
 
 /**
+ * The work set aside as Recovered Work (#WM_apple_ios_document_set_aside), waiting for the
+ * engine: off the main queue only. False when it could not be kept, which the engine has said
+ * (or, when it did not get to it in time, the session log): the caller must not go on
+ * (ROUND7 U4d).
+ */
+bool wm_apple_ios_document_set_aside_wait(const char *why);
+
+/**
  * Save As (ROUND5 9D.2, decision 63): the document saved, then a copy exported where the person
  * picks, the window staying on its document. Save a Copy when a write was refused: what is loaded,
  * written as a copy and exported. From the shell's menu, Blender's Save As in either interface and
