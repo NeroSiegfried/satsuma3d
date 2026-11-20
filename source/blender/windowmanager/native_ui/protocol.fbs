@@ -278,8 +278,20 @@ table MenuButton {
 }
 
 /// Text that cannot be edited, such as a property shown for information.
+/// How a line of text reads, as Blender's icon or alert marks it (ROUND6 PANEL-2).
+enum LabelStyle : ubyte {
+  Plain,
+  /// Blender's info icon: a note.
+  Info,
+  /// Blender's warning triangle (`ERROR`).
+  Warning,
+  /// Blender's red alert, or its cancel icon: something does not work, such as a modifier's error.
+  Error,
+}
+
 table Label {
   value: string;
+  style: LabelStyle;
 }
 
 /// A line between controls.

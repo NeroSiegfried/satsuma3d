@@ -29,7 +29,7 @@ STAND_INS = argv[4] if len(argv) > 4 else None
 import flatbuffers  # noqa: E402
 from Blender.NativeUI import (  # noqa: E402
     BoolValue, Button, ButtonStyle, Choice, Command, Commands, Content, Data, FloatsValue, FloatValue, Group, MenuButton, Node, Number,
-    Op, Param,
+    Label, Op, Param,
     Reference, Role,
     Subscribe, TextValue, TextsValue, Toggle, Updates, Value,
 )
@@ -276,6 +276,11 @@ def decode_node(raw):
                      can_unlink=reference.CanUnlink(), can_single_user=reference.CanSingleUser(),
                      can_fake_user=reference.CanFakeUser(), fake_user=reference.FakeUser(),
                      choices=reference.OptionsLength())
+    elif node.ContentType() == Content.Content.Label:
+        table = node.Content()
+        label = Label.Label()
+        label.Init(table.Bytes, table.Pos)
+        entry.update(value=s(label.Value()), style=getattr(label, "Style", lambda: None)())
     elif node.ContentType() == Content.Content.Toggle:
         table = node.Content()
         toggle = Toggle.Toggle()
@@ -4243,8 +4248,8 @@ def tick_margins():
 # must say as many items as the census counts it dropped, and the findings PANEL-1 is to show
 # first must each show.
 CENSUS_KNOWN = {
-    # Dropped, and said by the panel's (or the tab's) row.
-    "label": ("B6", "PANEL-2"),
+    # Dropped, and said by the panel's (or the tab's) row. Labels are lines of their own
+    # (PANEL-2): one dropped is a failure.
     "section": ("B3", "PANEL-3"),
     "c_menu": ("B4", "PANEL-4"),
     "selection": ("B2", "PANEL-6"),
@@ -4274,7 +4279,12 @@ CENSUS_KNOWN = {
     "palette": ("B17", "PANEL-14"),
     "tree": ("B18", "PANEL-14"),
 }
-CENSUS_FIRST = ("B3", "B4", "B6", "B7", "B8", "B10", "B11", "B16", "B17", "B18", "B21")
+# The findings PANEL-1 showed first whose packages are not built yet: each must still show.
+CENSUS_FIRST = ("B3", "B4", "B7", "B8", "B10", "B11", "B16", "B17", "B18", "B21")
+# Lines a panel says, which must reach the view as a Label (PANEL-2): by stage, tab and text,
+# with Blender's icon. Mesh Cache reading a file that is not there says so (`MOD_meshcache_pc2.cc`).
+CENSUS_LABELS = (("object", "MODIFIER", "No such file or directory", "ERROR"),
+                 ("object", "MODIFIER", "Settings are inside the Physics tab", "NONE"))
 CENSUS_STAGES = ("object", "armature", "texture_paint", "selection", "preferences")
 census_state = {"stage": 0, "start": 1, "rows": {}, "problems": [], "buttons": {}}
 
@@ -4301,6 +4311,9 @@ def _census_scene():
     decimate.delimit = {'NORMAL', 'UV'}
     cube.modifiers.new("Displace", 'DISPLACE').vertex_group = "Group"
     cube.modifiers.new("Cloth", 'CLOTH')
+    cache = cube.modifiers.new("Mesh Cache", 'MESH_CACHE')
+    cache.cache_format = 'PC2'
+    cache.filepath = "//no such cache.pc2"
     scene.view_settings.use_curve_mapping = True
     rig_data = bpy.data.armatures.new("Rig")
     body = rig_data.collections.new("Body")
@@ -4347,6 +4360,12 @@ def _census_said(node, out=None):
     for child in node.get("children", []):
         _census_said(child, out)
     return out
+
+
+def _census_nodes(node):
+    yield node
+    for child in node.get("children", []):
+        yield from _census_nodes(child)
 
 
 def _census_check(stage, entries):
@@ -4430,6 +4449,17 @@ def tick_census():
                     state["problems"].append("%s %s: the view's rows say %d, the census counts %d dropped" % (
                         stage, tab, sum(said.values()), counted_here))
             counted = sum(1 for walk in walks.values() for entry in walk if entry["counted"])
+            for label_stage, tab, text, icon in CENSUS_LABELS:
+                if label_stage != stage:
+                    continue
+                lines = [n for n in _census_nodes(tree(subs.get(tab)) or {}) if n.get("content") == "Label"]
+                found = [n for n in lines if n.get("value") == text]
+                if not found:
+                    state["problems"].append("%s %s: no line %r; its lines: %r" % (
+                        stage, tab, text, [n.get("value") for n in lines]))
+                elif found[0].get("icon") != icon:
+                    state["problems"].append("%s %s: %r has icon %r, not %r" % (
+                        stage, tab, text, found[0].get("icon"), icon))
             report["steps"].append({"name": stage, "views": len(walks), "fates": sum(len(w) for w in walks.values()),
                                     "dropped": counted, "rows": shown})
             state["stage"] += 1

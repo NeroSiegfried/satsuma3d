@@ -538,6 +538,8 @@ struct ControlRow: View {
           NativeMenuButton(model: model, node: node)
         case .button:
           NativeButton(model: model, node: node)
+        case .label where node.label.isEmpty:
+          PanelLabel(node: node, text: model.text(node))
         case .label:
           split(node.label) {
             Text(model.text(node))
@@ -559,6 +561,44 @@ struct ControlRow: View {
     BlenderPropertySplit(name: name, icon: node.node.leadingIcon,
                          locked: lock ? model.attached(node, .lock).map { model.bool($0) } ?? false : false,
                          control: control)
+  }
+}
+
+/** A line a panel says, such as a modifier's error or a note beside a button (ROUND6 PANEL-2),
+ * across the panel's width: Blender's icon before it, a warning and an error in their colours. */
+struct PanelLabel: View {
+  let node: NativeNode
+  let text: String
+
+  var body: some View {
+    let style = node.content(Blender_NativeUI_Label.self)?.style ?? .plain
+    HStack(alignment: .firstTextBaseline, spacing: 6) {
+      IconView(name: node.icon, symbol: Self.symbol(style), size: 14)
+      Text(text)
+        .font(.subheadline)
+        .fixedSize(horizontal: false, vertical: true)
+      Spacer(minLength: 0)
+    }
+    .foregroundStyle(Self.color(style))
+    .padding(.vertical, 2)
+    .accessibilityElement(children: .combine)
+  }
+
+  /** Where Blender draws no icon, a warning or an error still shows as one. */
+  static func symbol(_ style: Blender_NativeUI_LabelStyle) -> String? {
+    switch style {
+      case .error: "xmark.octagon"
+      case .warning: "exclamationmark.triangle"
+      default: nil
+    }
+  }
+
+  static func color(_ style: Blender_NativeUI_LabelStyle) -> AnyShapeStyle {
+    switch style {
+      case .error: AnyShapeStyle(Color.red)
+      case .warning: AnyShapeStyle(Color.orange)
+      default: AnyShapeStyle(.secondary)
+    }
   }
 }
 

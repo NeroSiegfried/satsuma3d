@@ -4360,6 +4360,34 @@ static std::string panels_walk(bContext *C,
       if (!execute && !open && !header_toggle && !header_operator && !header_name) {
         continue;
       }
+      if (but.type == ButtonType::Label) {
+        /* What the panel says, such as a modifier's error, a note beside a button or a section's
+         * heading: a line of its own, unless it names another control (a caption) or is a part
+         * of one (B6). */
+        if (writer && !(but.flag & UI_HIDDEN) && !fates.count(&but)) {
+          std::string text = but.str;
+          const size_t first = text.find_first_not_of(' ');
+          text = first == std::string::npos ? "" : text.substr(first);
+          while (!text.empty() && text.back() == ' ') {
+            text.pop_back();
+          }
+          if (!text.empty()) {
+            const int icon = button_icon(&but);
+            const protocol::LabelStyle style =
+                (but.flag & BUT_REDALERT) || icon == ICON_CANCEL ? protocol::LabelStyle::Error :
+                icon == ICON_ERROR                                ? protocol::LabelStyle::Warning :
+                icon == ICON_INFO                                 ? protocol::LabelStyle::Info :
+                                                                    protocol::LabelStyle::Plain;
+            writer->builder.add(
+                node, writer->key("label:" + candidate.id), [&](Buffer &buffer, NodeFields &fields) {
+                  fields.icon = icon_name(icon);
+                  return protocol::CreateLabelDirect(buffer, text.c_str(), style);
+                });
+            decide(&but, fate_projected("Label"));
+          }
+        }
+        continue;
+      }
       MenuType *menu = button_menutype_get(&but);
       if (!menu && but.optype && but.opptr && STREQ(but.optype->idname, "WM_OT_call_menu")) {
         /* Some panel menus are expressed as operators, including Add Modifier. */
