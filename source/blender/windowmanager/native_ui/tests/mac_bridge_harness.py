@@ -4930,7 +4930,28 @@ def tick_census():
                        if n["key"] == "panel:USERPREF_PT_saveload_autorun"]
             if not autorun:
                 state["problems"].append("contexts: Auto Run Python Scripts is not under Blend Files")
-        if at == {"object": 31, "selection": 44, "texture_paint": 44, "armature": 22}.get(stage, 16):
+            # Preferences (B15, PANEL-15): Interface and File Paths are sections again, Save & Load
+            # ends with Blender's Preferences menu, and an add-on's own preferences are drawn.
+            missing = [tab for tab in ("PREFERENCES_INTERFACE", "PREFERENCES_FILE_PATHS") if tab not in subs]
+            if missing:
+                state["problems"].append("preferences: sections missing %r" % missing)
+            menu = [n for n in _census_nodes(tree(subs.get("PREFERENCES_SAVE_LOAD")) or {})
+                    if n["key"] == "panel:native_preferences"]
+            labels = [c.get("label") for c in (menu[0].get("children", []) if menu else [])]
+            if "Load Factory Preferences" not in labels:
+                state["problems"].append("preferences: Save & Load has no Load Factory Preferences: %r" % labels)
+            state["addon_list"] = subscribe("preferences_list", list="addons")
+            state["addon_prefs"] = subscribe("properties", tab="PREFERENCES_ADDON:cycles")
+        if stage == "preferences" and at == 17:
+            flag = next((n for n in _census_nodes(tree(state["addon_list"]) or {}) if n["key"] == "cycles:preferences"), {})
+            if flag.get("value") is not True:
+                state["problems"].append("add-ons: Cycles is not listed with preferences: %r" % flag)
+            drawn = [n for n in _census_nodes(tree(state["addon_prefs"]) or {}) if n.get("content") not in ("Group", "Panel")]
+            if len(drawn) < 2:
+                state["problems"].append("add-ons: Cycles' preferences drew %r" % [(n["key"], n.get("label")) for n in drawn])
+            report["cycles_preferences"] = [n.get("label") for n in drawn][:12]
+        if at == {"object": 31, "selection": 44, "texture_paint": 44, "armature": 22,
+                  "preferences": 18}.get(stage, 16):
             state["stage"] += 1
             state["start"] = step + 1
             if state["stage"] == len(CENSUS_STAGES):

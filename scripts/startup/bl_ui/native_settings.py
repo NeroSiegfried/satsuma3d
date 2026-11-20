@@ -37,17 +37,21 @@ def addons(context):
     import addon_utils
     from bpy.app.translations import pgettext_iface as iface_
 
-    enabled = {addon.module for addon in context.preferences.addons}
+    enabled = {addon.module: addon for addon in context.preferences.addons}
     addons = []
     for mod in addon_utils.modules(refresh=False):
         info = addon_utils.module_bl_info(mod)
+        addon = enabled.get(mod.__name__)
+        preferences = addon.preferences if addon is not None else None
         addons.append({
             "module": mod.__name__,
             "name": iface_(info["name"]),
             "category": iface_(info["category"]),
             "description": iface_(info["description"]),
             "warning": iface_(info["warning"]),
-            "enabled": mod.__name__ in enabled,
+            "enabled": addon is not None,
+            # Its own preferences, which `USERPREF_PT_native_addon` draws (ROUND6 PANEL-15).
+            "preferences": preferences is not None and hasattr(type(preferences), "draw"),
         })
     addons.sort(key=lambda addon: (addon["category"].casefold(), addon["name"].casefold()))
     return addons
@@ -110,4 +114,50 @@ def keymap_item_active(context, keymap, item_id, active):
     context.preferences.is_dirty = True
 
 
-classes = ()
+class USERPREF_PT_native_addon(bpy.types.Panel):
+    """An add-on's own preferences, as Blender's Add-ons section draws them under it, for the
+    native interface's list of add-ons, which has no room for them (ROUND6 PANEL-15). The walker
+    sets the module to draw, see `preferences_tabs`."""
+    bl_space_type = 'PREFERENCES'
+    bl_region_type = 'WINDOW'
+    bl_context = "native_addon"
+    bl_label = "Preferences"
+    bl_options = {'HIDE_HEADER'}
+
+    @classmethod
+    def register(cls):
+        bpy.types.WindowManager.native_addon_module = bpy.props.StringProperty(
+            name="Add-on",
+            description="The add-on whose preferences the native interface shows",
+            options={'SKIP_SAVE'},
+        )
+
+    @classmethod
+    def unregister(cls):
+        del bpy.types.WindowManager.native_addon_module
+
+    @staticmethod
+    def _preferences(context):
+        addon = context.preferences.addons.get(context.window_manager.native_addon_module)
+        return addon.preferences if addon is not None else None
+
+    def draw(self, context):
+        preferences = self._preferences(context)
+        draw = getattr(preferences, "draw", None)
+        if draw is None:
+            self.layout.label(text="This add-on has no preferences")
+            return
+        # As Blender's Add-ons section draws them (`space_userpref.py`): the class's layout.
+        preferences_class = type(preferences)
+        preferences_class.layout = self.layout
+        try:
+            draw(context)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            self.layout.label(text="These preferences could not be drawn", icon='ERROR')
+        finally:
+            del preferences_class.layout
+
+
+classes = (USERPREF_PT_native_addon,)

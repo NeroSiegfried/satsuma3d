@@ -4429,6 +4429,8 @@ void bridge_preferences_list_view_build(bContext *C,
             buffer, 0, false, false, nullptr, bridge_text(*addon, "category").data());
       });
       toggle(row, module + ":enabled", bridge_flag(*addon, "enabled"));
+      /* Its own preferences, which the Preferences' panels draw (ROUND6 PANEL-15). */
+      toggle(row, module + ":preferences", bridge_flag(*addon, "preferences"));
       if (const std::string_view warning = bridge_text(*addon, "warning"); !warning.empty()) {
         builder.add(row, module + ":warning", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
           return views::protocol::CreateLabelDirect(buffer, std::string(warning).c_str());

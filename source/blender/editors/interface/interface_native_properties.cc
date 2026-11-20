@@ -3213,6 +3213,8 @@ constexpr const char *PREFERENCES_TAB_PREFIX = "PREFERENCES_";
 /* The 3D Viewport sidebar's tabs other than Tool, add-ons' among them (LoopTools' Edit and the
  * like), as Properties tabs named apart: `SIDEBAR:Edit`. */
 constexpr const char *SIDEBAR_TAB_PREFIX = "SIDEBAR:";
+/** After #PREFERENCES_TAB_PREFIX: an add-on's own preferences, by its module (PANEL-15). */
+constexpr const char *PREFERENCES_ADDON_PREFIX = "ADDON:";
 /** A popover a panel's button opens (PANEL-8): this, the popover's panel, and after a tab the tab
  * it is opened from. */
 constexpr const char *POPOVER_TAB_PREFIX = "POPOVER:";
@@ -3275,13 +3277,13 @@ std::string preferences_tabs(bContext *C,
       {"EXPERIMENTAL", "EXPERIMENTAL"},
   };
   static const std::set<std::string> external_sections = {"ADDONS"};
-  /* Getting extensions downloads code to run, which apps on iPad may not do. */
-  /* Getting extensions downloads code to run. Themes and the interface's own settings are for
-   * Blender's drawn interface, which the native one does not use, and file paths for folders on a
-   * desktop computer, where on the iPad documents are in Files. */
-  static const std::set<std::string> hidden_sections = {
-      "EXTENSIONS", "THEMES", "INTERFACE", "FILE_PATHS"};
+  /* Getting extensions downloads code to run. Themes are for Blender's drawn interface. Interface
+   * (Language, Developer Extras) and File Paths (Asset Libraries) are shown (B15, PANEL-15). */
+  static const std::set<std::string> hidden_sections = {"EXTENSIONS", "THEMES"};
   const std::string requested = requested_tab.substr(strlen(PREFERENCES_TAB_PREFIX));
+  /* An add-on's own preferences (`ADDON:<module>`, PANEL-15): drawn by the panel
+   * `USERPREF_PT_native_addon` (`bl_ui.native_settings`), which reads the module it draws. */
+  const bool addon_preferences = StringRef(requested).startswith(PREFERENCES_ADDON_PREFIX);
   PointerRNA prefs_ptr = RNA_pointer_create_discrete(nullptr, RNA_Preferences, &U);
   PropertyRNA *section_prop = RNA_struct_find_property(&prefs_ptr, "active_section");
   const EnumPropertyItem *sections;
@@ -3314,6 +3316,17 @@ std::string preferences_tabs(bContext *C,
     MEM_delete(sections);
   }
   panel_context.clear();
+  if (addon_preferences) {
+    if (wmWindowManager *wm = CTX_wm_manager(C)) {
+      PointerRNA wm_ptr = RNA_id_pointer_create(&wm->id);
+      if (PropertyRNA *module = RNA_struct_find_property(&wm_ptr, "native_addon_module")) {
+        RNA_property_string_set(
+            &wm_ptr, module, requested.substr(strlen(PREFERENCES_ADDON_PREFIX)).c_str());
+      }
+    }
+    panel_context = "native_addon";
+    return requested_tab;
+  }
   if (!external_sections.count(selected)) {
     panel_context = selected;
     std::transform(panel_context.begin(), panel_context.end(), panel_context.begin(), ::tolower);
@@ -3336,7 +3349,9 @@ bool preferences_hidden(const PointerRNA &ptr, PropertyRNA *prop)
   }
 #ifndef APPLE_TARGET_MACOS_NATIVE
   if (ptr.data == &U) {
-    static const std::set<std::string> set_by_ipad = {"show_tooltips",
+    /* The Resolution Scale is the iPad's Desktop Interface Size, in Settings (ROUND5 9C.4). */
+    static const std::set<std::string> set_by_ipad = {"ui_scale",
+                                                      "show_tooltips",
                                                       "show_tooltips_python",
                                                       "show_navigate_ui",
                                                       "show_gizmo",
@@ -3942,6 +3957,9 @@ static std::string panels_walk(bContext *C,
       }
     }
   }
+  /* Blender's Preferences menu (Revert, Load Factory), which its navigation bar holds, under Save
+   * & Load (B15, PANEL-15). Written after the section's panels, see below. */
+  const bool preferences_menu = writer && preferences && tab_id == "PREFERENCES_SAVE_LOAD";
   if (writer && !viewport && !preferences && !panel_popover && tab_id != "TOOL") {
     /* With several objects selected, which of them an edit goes to: the active one, or with the
      * switch on every selected one that has the property (R6-10, PANEL-6). */
@@ -5718,6 +5736,21 @@ static std::string panels_walk(bContext *C,
     }
     if (execute && target_panel) {
       break;
+    }
+  }
+  if (preferences_menu) {
+    const NodeId menu = writer->panel_node(
+        top, "native_preferences", true, "Preferences", is_open("native_preferences"));
+    for (const auto &[operator_id, label] :
+         {std::pair{"WM_OT_read_userpref", "Revert to Saved Preferences"},
+          std::pair{"WM_OT_read_factory_userpref", "Load Factory Preferences"}})
+    {
+      const std::string key = writer->key(std::string("preferences:") + operator_id);
+      data.edits.add_overwrite(key, {native::Edit::Kind::Call, "", operator_id});
+      writer->builder.add(menu, key, [&](Buffer &buffer, NodeFields &fields) {
+        fields.label = label;
+        return protocol::CreateButton(buffer);
+      });
     }
   }
   if (writer) {

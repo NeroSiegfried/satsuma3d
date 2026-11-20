@@ -174,6 +174,8 @@ final class PreferencesLists {
     let description: String
     let warning: String
     var enabled: Bool
+    /** It has preferences of its own (ROUND6 PANEL-15). */
+    var preferences = false
   }
 
   struct KeymapItem: Identifiable, Equatable {
@@ -246,7 +248,7 @@ final class PreferencesLists {
               description: row.node.description ?? "",
               warning: view.children(of: row).first { $0.kind == .label }
                 .flatMap { $0.content(Blender_NativeUI_Label.self)?.value } ?? "",
-              enabled: on(row, ":enabled"))
+              enabled: on(row, ":enabled"), preferences: on(row, ":preferences"))
       }
       if next != addons { addons = next }
     }
@@ -564,6 +566,7 @@ private struct AddonsPage: View {
   @State private var enabledOnly = false
   @State private var importing = false
   @State private var importError: String?
+  @State private var preferencesOf: PreferencesLists.Addon?
 
   /** Blender installs the picked file in-process, see `bl_ui.native_addons`: a copy in the app's
    * temporary folder, as the picked file may only be readable while the picker grants it. */
@@ -625,6 +628,12 @@ private struct AddonsPage: View {
                 }
               }
             }
+            if addon.enabled && addon.preferences {
+              /* Its own preferences, as Blender draws them under it (ROUND6 PANEL-15). */
+              Button("\(addon.name) Preferences…", systemImage: "slider.horizontal.3") {
+                preferencesOf = addon
+              }
+            }
           }
         }
       }
@@ -643,6 +652,36 @@ private struct AddonsPage: View {
       if lists.addons.isEmpty { ProgressView() }
       else if categories.isEmpty { ContentUnavailableView.search(text: search) }
     }
+    .sheet(item: $preferencesOf) { addon in
+      AddonPreferencesSheet(addon: addon)
+    }
+  }
+}
+
+/** An add-on's own preferences (ROUND6 PANEL-15, finding B15): Blender draws them with the add-on's
+ * `AddonPreferences.draw`, through the Preferences' panels, as its Add-ons section does. */
+private struct AddonPreferencesSheet: View {
+  let addon: PreferencesLists.Addon
+  @State private var model: PanelsModel?
+  @Environment(\.dismiss) private var dismiss
+
+  var body: some View {
+    NavigationStack {
+      ScrollView {
+        if let model { PanelsForm(model: model, scrolls: false) }
+      }
+      .navigationTitle(addon.name)
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+      }
+    }
+    .onAppear {
+      if model == nil { model = PanelsModel(mode: .preferences, tab: "PREFERENCES_ADDON:" + addon.id) }
+    }
+    .onDisappear {
+      if let model { NativeViews.shared.unsubscribe(model.view) }
+    }
   }
 }
 
@@ -653,6 +692,9 @@ private struct KeymapList: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
+      /* View only, and saying so (ROUND6 PANEL-15). */
+      PanelNote(text: "Keys are shown here and switched on or off; they are changed in the Desktop Interface.")
+        .padding(.bottom, 6)
       ForEach(lists.keymaps) { keymap in
         let searching = !lists.keymapSearch.isEmpty
         DisclosureGroup(isExpanded: Binding(
