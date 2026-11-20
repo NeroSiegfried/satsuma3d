@@ -17,7 +17,8 @@ extension PanelsModel {
   func stripControls(of panel: NativeNode) -> [NativeNode] {
     var controls: [NativeNode] = []
     func walk(_ node: NativeNode) {
-      for child in body(of: node) {
+      /* What the panel could not show is said in the full settings, not in the bar. */
+      for child in body(of: node) where child.role != .elsewhere {
         switch child.kind {
           case .panel:
             walk(child)

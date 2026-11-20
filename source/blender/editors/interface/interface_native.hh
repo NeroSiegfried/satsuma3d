@@ -196,3 +196,12 @@ std::string nodes_edit(bContext *C, NodesData &data, const io::serialize::Dictio
 std::string nodes_edit_control(bContext *C, NodesData &data, const EditRequest &request);
 
 }  // namespace blender::ui::native
+
+/**
+ * The panels' census (ROUND6 PANEL-1), for the Mac harness's `census` scenario, by name through
+ * the C API: while recording, every panel written notes what became of each button it drew;
+ * taking returns those notes since the last take, as a JSON array, and forgets them. The text
+ * stays valid until the next take.
+ */
+extern "C" void UI_native_panel_census_record(bool on);
+extern "C" const char *UI_native_panel_census_take();

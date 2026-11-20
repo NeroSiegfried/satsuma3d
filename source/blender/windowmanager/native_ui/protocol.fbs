@@ -427,6 +427,9 @@ enum Role : ubyte {
   /// Where a data-block it follows is linked, such as a material slot's Object or Data: drawn at
   /// the end of that data-block's row, as Blender draws it, by an interface that knows it.
   Link,
+  /// Says, as its label, what the panel or tab it is a child of could not show, and goes to the
+  /// Desktop Interface, where Blender draws all of it (ROUND6 PANEL-1, decision R6-9).
+  Elsewhere,
 }
 
 /// How a property is animated, as Blender colors its control.

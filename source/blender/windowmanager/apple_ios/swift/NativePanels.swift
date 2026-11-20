@@ -218,6 +218,12 @@ final class PanelsModel {
     return view.children(of: top).filter { $0.kind == .panel }
   }
 
+  /** What the tab could not show, such as a whole panel, said at its foot (ROUND6 PANEL-1). */
+  var elsewhere: NativeNode? {
+    guard let top = view.top else { return nil }
+    return view.children(of: top).first { $0.role == .elsewhere }
+  }
+
   func isOpen(_ panel: NativeNode) -> Bool {
     guard let content = panel.panel else { return true }
     return content.fixed || (expanding[panel.key] ?? content.expanded)
@@ -707,6 +713,12 @@ struct PanelsForm: View {
           PanelSection(model: model, panel: panel, shadingHint: panel.key == first && model.mode == .properties)
         }
       }
+      if let elsewhere = model.elsewhere {
+        PanelBox {
+          ElsewhereRow(model: model, node: elsewhere)
+            .padding(8)
+        }
+      }
       if !model.status.isEmpty {
         Text(model.status)
           .font(.footnote)
@@ -970,6 +982,9 @@ struct PanelBody: View {
         else if run[0] === reference {
           ControlRow(model: model, node: run[0], link: link)
         }
+        else if run[0].role == .elsewhere {
+          ElsewhereRow(model: model, node: run[0])
+        }
         else {
           ControlRow(model: model, node: run[0])
           if let note = Self.assignNote(model, run[0]) {
@@ -1000,7 +1015,8 @@ struct PanelBody: View {
   static func runs(_ nodes: [NativeNode]) -> [[NativeNode]] {
     var runs: [[NativeNode]] = []
     func joinable(_ node: NativeNode) -> Bool {
-      node.kind == .button && node.content(Blender_NativeUI_Button.self)?.iconOnly != true && !node.label.isEmpty
+      node.kind == .button && node.role == .none_ && node.content(Blender_NativeUI_Button.self)?.iconOnly != true
+        && !node.label.isEmpty
     }
     for node in nodes {
       if joinable(node), let last = runs.last, last.count < 4, last.allSatisfy(joinable) {
@@ -1030,6 +1046,29 @@ struct PanelNote: View {
     }
     .padding(.vertical, 2)
     .accessibilityElement(children: .combine)
+  }
+}
+
+/** What a panel, or the tab, could not show, and the way to where Blender draws all of it (ROUND6
+ * PANEL-1, decision R6-9): the bridge's line, such as "2 controls of this panel are only in the
+ * Desktop Interface.", and a button there. */
+struct ElsewhereRow: View {
+  let model: PanelsModel
+  let node: NativeNode
+
+  var body: some View {
+    PanelColumn(spacing: 4) {
+      PanelNote(text: node.label)
+      Button {
+        model.send(node, .invoke)
+        Haptics.selection()
+      } label: {
+        BlenderWidgetFace(icon: BlenderIcon.image(node.icon), text: "Show in Desktop Interface", on: false, fills: true)
+      }
+      .buttonStyle(.plain)
+      .disabled(!node.enabled)
+      .accessibilityIdentifier("blender.elsewhere")
+    }
   }
 }
 

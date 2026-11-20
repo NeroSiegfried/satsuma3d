@@ -86,6 +86,7 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <sstream>
 #include <vector>
 
 namespace blender::ui {
@@ -2667,6 +2668,313 @@ bool preferences_hidden(const PointerRNA &ptr, PropertyRNA *prop)
   return false;
 }
 
+/* -------------------------------------------------------------------- */
+/** \name The census (ROUND6 PANEL-1, decision R6-9)
+ *
+ * What became of each button a panel drew: shown as a node (`projected`, and as which kind),
+ * taken into another node (`consumed`: a caption, a template's part, a list's side buttons),
+ * shown in part (`reduced`), left out on purpose (`hidden`), or `dropped`, and why. Whatever a
+ * panel dropped, it says in one row at its foot, with a button to the Desktop Interface; a whole
+ * panel dropped is said at the foot of the tab. The Mac harness's `census` scenario reads every
+ * fate and fails on a reason it has no entry for.
+ * \{ */
+
+/** What became of one button, see above. The reason is a stable name the harness keys on. */
+struct Fate {
+  const char *outcome = "";
+  std::string kind;
+  const char *reason = "";
+  /** For a dropped one, what the row counts it as. */
+  enum class Counted : uint8_t { No, Control, Note, Section, Panel } counted = Counted::No;
+};
+
+Fate fate_projected(const std::string &kind)
+{
+  return {"projected", kind, ""};
+}
+
+Fate fate_consumed(const char *reason)
+{
+  return {"consumed", "", reason};
+}
+
+Fate fate_dropped(const char *reason, const Fate::Counted counted = Fate::Counted::Control)
+{
+  return {"dropped", "", reason, counted};
+}
+
+/** What a panel (or a tab) could not show, as its row says it. */
+struct Said {
+  int controls = 0, notes = 0, sections = 0, panels = 0;
+
+  void add(const Fate::Counted counted)
+  {
+    switch (counted) {
+      case Fate::Counted::Control: controls++; break;
+      case Fate::Counted::Note: notes++; break;
+      case Fate::Counted::Section: sections++; break;
+      case Fate::Counted::Panel: panels++; break;
+      case Fate::Counted::No: break;
+    }
+  }
+
+  int total() const
+  {
+    return controls + notes + sections + panels;
+  }
+
+  /** "2 controls and 1 note of this panel are only in the Desktop Interface." */
+  std::string text(const char *where) const
+  {
+    std::vector<std::string> parts;
+    const auto part = [&](const int count, const char *one, const char *many) {
+      if (count) {
+        parts.push_back(std::to_string(count) + " " + (count == 1 ? one : many));
+      }
+    };
+    part(controls, "control", "controls");
+    part(notes, "note", "notes");
+    part(sections, "section", "sections");
+    part(panels, "panel", "panels");
+    std::string text;
+    for (size_t i = 0; i < parts.size(); i++) {
+      text += (i == 0 ? "" : i + 1 == parts.size() ? " and " : ", ") + parts[i];
+    }
+    return text + " of this " + where + (total() == 1 ? " is" : " are") +
+           " only in the Desktop Interface.";
+  }
+};
+
+/** Every fate while the harness records them (`UI_native_panel_census_record`). */
+bool census_recording = false;
+std::shared_ptr<io::serialize::ArrayValue> census_log;
+
+const char *button_type_name(const ButtonType type)
+{
+  switch (type) {
+#define BUTTON_TYPE(name) \
+  case ButtonType::name: \
+    return #name;
+    BUTTON_TYPE(But)
+    BUTTON_TYPE(Row)
+    BUTTON_TYPE(Text)
+    BUTTON_TYPE(Menu)
+    BUTTON_TYPE(ButMenu)
+    BUTTON_TYPE(Num)
+    BUTTON_TYPE(NumSlider)
+    BUTTON_TYPE(Toggle)
+    BUTTON_TYPE(ToggleN)
+    BUTTON_TYPE(IconToggle)
+    BUTTON_TYPE(IconToggleN)
+    BUTTON_TYPE(ButToggle)
+    BUTTON_TYPE(Checkbox)
+    BUTTON_TYPE(CheckboxN)
+    BUTTON_TYPE(Color)
+    BUTTON_TYPE(Tab)
+    BUTTON_TYPE(Popover)
+    BUTTON_TYPE(Scroll)
+    BUTTON_TYPE(Block)
+    BUTTON_TYPE(Label)
+    BUTTON_TYPE(KeyEvent)
+    BUTTON_TYPE(HsvCube)
+    BUTTON_TYPE(Pulldown)
+    BUTTON_TYPE(Roundbox)
+    BUTTON_TYPE(ColorBand)
+    BUTTON_TYPE(Unitvec)
+    BUTTON_TYPE(Curve)
+    BUTTON_TYPE(CurveProfile)
+    BUTTON_TYPE(ListBox)
+    BUTTON_TYPE(ListRow)
+    BUTTON_TYPE(HsvCircle)
+    BUTTON_TYPE(TrackPreview)
+    BUTTON_TYPE(SearchMenu)
+    BUTTON_TYPE(Extra)
+    BUTTON_TYPE(PreviewTile)
+    BUTTON_TYPE(HotkeyEvent)
+    BUTTON_TYPE(Image)
+    BUTTON_TYPE(Histogram)
+    BUTTON_TYPE(Waveform)
+    BUTTON_TYPE(Vectorscope)
+    BUTTON_TYPE(Progress)
+    BUTTON_TYPE(NodeSocket)
+    BUTTON_TYPE(Sepr)
+    BUTTON_TYPE(SeprLine)
+    BUTTON_TYPE(SeprSpacer)
+    BUTTON_TYPE(Grip)
+    BUTTON_TYPE(Decorator)
+    BUTTON_TYPE(ViewItem)
+#undef BUTTON_TYPE
+  }
+  return "Unknown";
+}
+
+/** What a button is about, for the census: its property, operator, menu or text. */
+std::string button_detail(const Button &but)
+{
+  if (but.rnaprop) {
+    return std::string(but.rnapoin.type ? RNA_struct_identifier(but.rnapoin.type) : "") + "." +
+           RNA_property_identifier(but.rnaprop);
+  }
+  if (but.optype) {
+    return but.optype->idname;
+  }
+  if (const MenuType *menu = button_menutype_get(const_cast<Button *>(&but))) {
+    return menu->idname;
+  }
+  if (const PanelType *panel = button_paneltype_get(const_cast<Button *>(&but))) {
+    return panel->idname;
+  }
+  return but.str;
+}
+
+void census_record(const std::string &tab,
+                   const std::string &panel,
+                   const std::string &button,
+                   const std::string &detail,
+                   const Fate &fate)
+{
+  if (!census_recording) {
+    return;
+  }
+  if (!census_log) {
+    census_log = std::make_shared<io::serialize::ArrayValue>();
+  }
+  io::serialize::DictionaryValue &entry = *census_log->append_dict();
+  entry.append_str("tab", tab);
+  entry.append_str("panel", panel);
+  entry.append_str("button", button);
+  entry.append_str("detail", detail);
+  entry.append_str("outcome", fate.outcome);
+  entry.append_str("kind", fate.kind);
+  entry.append_str("reason", fate.reason);
+  entry.append_str("counted",
+                   fate.counted == Fate::Counted::Control ? "control" :
+                   fate.counted == Fate::Counted::Note    ? "note" :
+                   fate.counted == Fate::Counted::Section ? "section" :
+                   fate.counted == Fate::Counted::Panel   ? "panel" :
+                                                            "");
+}
+
+/** The node kind a property is written as, see #Writer::property. */
+std::string property_kind(const Button &but)
+{
+  if (is_color(const_cast<PointerRNA *>(&but.rnapoin), but.rnaprop)) {
+    return "Color";
+  }
+  switch (RNA_property_type(but.rnaprop)) {
+    case PROP_BOOLEAN: return "Toggle";
+    case PROP_INT:
+    case PROP_FLOAT: return "Number";
+    case PROP_STRING: return "TextField";
+    case PROP_ENUM: return "Choice";
+    case PROP_POINTER: return "Choice";
+    default: return "Label";
+  }
+}
+
+/** A property the walker writes, shown in part where its node cannot carry all of it. */
+Fate property_fate(const Button &but)
+{
+  Fate fate = fate_projected(property_kind(but));
+  const auto reduced = [&](const char *reason) {
+    fate.outcome = "reduced";
+    fate.reason = reason;
+  };
+  const PropertyType type = RNA_property_type(but.rnaprop);
+  if (but.type == ButtonType::Color && static_cast<const ButtonColor &>(but).is_pallete_color) {
+    /* A palette's swatch picks its colour in Blender; here it edits it (B17). */
+    reduced("palette");
+  }
+  else if (type == PROP_STRING &&
+           ELEM(RNA_property_subtype(but.rnaprop), PROP_FILEPATH, PROP_DIRPATH, PROP_FILENAME))
+  {
+    /* Typed, not chosen with a picker (B10). */
+    reduced("path");
+  }
+  else if (but.type == ButtonType::SearchMenu && type == PROP_STRING) {
+    /* A name to pick from a list, typed without the list (B11). */
+    reduced("search");
+  }
+  else if (type == PROP_ENUM && (RNA_property_flag(but.rnaprop) & PROP_ENUM_FLAG)) {
+    /* Several choices at once, shown as one (B16). */
+    reduced("enum_flag");
+  }
+  return fate;
+}
+
+/** A button the walker left without a decision: layout (nullopt), or dropped and why. */
+std::optional<Fate> unhandled_fate(const Button &but)
+{
+  switch (but.type) {
+    case ButtonType::Sepr:
+    case ButtonType::SeprLine:
+    case ButtonType::SeprSpacer:
+    case ButtonType::Roundbox:
+    case ButtonType::Decorator:
+    case ButtonType::Grip:
+    case ButtonType::Scroll:
+      return std::nullopt;
+    case ButtonType::Label:
+      /* An icon alone, or nothing, lays the panel out (B6 is about what labels say). */
+      if (but.str.empty()) {
+        return std::nullopt;
+      }
+      return fate_dropped("label", Fate::Counted::Note);
+    case ButtonType::Curve:
+    case ButtonType::CurveProfile:
+      return fate_dropped("curve");
+    case ButtonType::Popover:
+      return fate_dropped("popover");
+    case ButtonType::Image:
+    case ButtonType::Histogram:
+    case ButtonType::Waveform:
+    case ButtonType::Vectorscope:
+    case ButtonType::TrackPreview:
+      return fate_dropped("display");
+    case ButtonType::Progress:
+      return fate_dropped("progress");
+    case ButtonType::ViewItem:
+      /* The blank rows Blender pads a short tree with, see #tree_item. */
+      if (dynamic_cast<const AbstractTreeViewItem *>(
+              static_cast<const ButtonViewItem &>(but).view_item))
+      {
+        return std::nullopt;
+      }
+      return fate_dropped("grid");
+    case ButtonType::PreviewTile:
+      return fate_dropped("grid");
+    case ButtonType::KeyEvent:
+    case ButtonType::HotkeyEvent:
+      return fate_dropped("key");
+    case ButtonType::Extra:
+      return fate_dropped("preview");
+    default:
+      break;
+  }
+  if (but.menu_create_func || but.block_create_func) {
+    /* A menu or popup Blender builds in C (B4). */
+    return fate_dropped("c_menu");
+  }
+  if (but.rnaprop) {
+    /* A pointer to something other than a data-block, chosen by a search, such as an Action
+     * Slot (B11); else a kind of property the walker does not write, such as a collection. */
+    return fate_dropped(RNA_property_type(but.rnaprop) == PROP_POINTER ? "pointer" :
+                                                                         "property_type");
+  }
+  if (ELEM(but.type, ButtonType::Text, ButtonType::Num, ButtonType::NumSlider, ButtonType::SearchMenu))
+  {
+    /* A field whose value is not a property, such as a vertex's weight (B14). */
+    return fate_dropped("non_rna_field");
+  }
+  if (!but.optype) {
+    /* A button that runs a C callback, such as a curve's zoom or a light link's state. */
+    return fate_dropped("callback");
+  }
+  return fate_dropped("unknown");
+}
+
+/** \} */
+
 }  // namespace
 
 /**
@@ -2848,11 +3156,16 @@ static std::string panels_walk(bContext *C,
   }
   /* The panels' nodes, by the panels' ids; a viewport popover's sub-panels are their outer's. */
   std::map<std::string, NodeId> panel_nodes;
+  /* What each panel's node, and the tab, could not show, which their rows say (R6-9). */
+  std::map<NodeId, Said> said;
+  Said tab_said;
   NodeId top = 0;
   if (writer) {
     data.tab = tab_id;
     data.identity = identity;
     writer->object = object;
+    /* Where this walk's notes begin, as each build of the view walks again. */
+    census_record(tab_id, "", "Walk", identity, {"walk", "", ""});
     top = writer->builder.top("properties", [&](Buffer &buffer, NodeFields &fields) {
       fields.label = tool_settings ? "Tool Settings" :
                      shading       ? "Viewport Shading" :
@@ -3055,6 +3368,29 @@ static std::string panels_walk(bContext *C,
   for (size_t candidate_index = 0; candidate_index < candidates.size(); candidate_index++) {
     const Candidate candidate = candidates[candidate_index];
     PanelType &pt = *candidate.type;
+    /* Blender draws a sub-panel with its parent whatever its context, and a top-level panel that
+     * names none on every tab (#panel_add_check): those the test of the context below leaves out
+     * are said, at their parent's foot or the tab's (B21). */
+    if (STREQ(pt.idname, "PROPERTIES_PT_context")) {
+      /* Blender's context path, which the view sends as its `path` above. */
+      if (writer) {
+        census_record(tab_id, "", "Panel", pt.idname, fate_consumed("context_path"));
+      }
+      continue;
+    }
+    if (writer && pt.draw && !viewport && !tool_tab && !sidebar_tab && !candidate.instance &&
+        panel_context != pt.context && !(preferences && panel_context.empty()) &&
+        (candidate.parent.empty() ? !pt.context[0] : panel_nodes.count(candidate.parent) != 0) &&
+        panel_poll(C, &pt))
+    {
+      const Fate fate = fate_dropped("panel_context",
+                                     candidate.parent.empty() ? Fate::Counted::Panel :
+                                                                Fate::Counted::Section);
+      census_record(tab_id, candidate.parent, "Panel", pt.idname, fate);
+      (candidate.parent.empty() ? tab_said : said[panel_nodes.at(candidate.parent)])
+          .add(fate.counted);
+      continue;
+    }
     if (!pt.draw ||
         (!viewport && !tool_tab && !sidebar_tab && !candidate.instance && panel_context != pt.context) ||
         (preferences && panel_context.empty()) ||
@@ -3142,6 +3478,9 @@ static std::string panels_walk(bContext *C,
                                    0, 0, 320, 20, 0, style_get_dpi());
     panel->layout = &layout;
     layout.operator_context_set(wm::OpCallContext::ExecDefault);
+    /* The sections (`layout.panel`) this draw makes, as Blender's own draw starts them afresh
+     * (`area.cc`); a stack's panel keeps those of its last draw otherwise. */
+    panel->runtime->layout_panels.clear();
     if (pt.draw_header) {
       pt.draw_header(C, panel);
     }
@@ -3162,6 +3501,14 @@ static std::string panels_walk(bContext *C,
         body.prop(&ptr, "type", eUI_Item_Flag(0), "Shading", ICON_NONE);
       }
     }
+    /* What became of each button (the census, R6-9): the first decision taken for it stands;
+     * those without one are judged by #unhandled_fate once the panel is written. */
+    std::map<const Button *, Fate> fates;
+    const auto decide = [&](const Button *but, Fate fate) {
+      if (writer) {
+        fates.emplace(but, std::move(fate));
+      }
+    };
     const auto pairs = property_pairs(*block);
     std::map<Button *, std::string> tool_labels;
     std::map<PropertyRNA *, std::string> layout_names;
@@ -3175,6 +3522,7 @@ static std::string panels_walk(bContext *C,
           if (previous && previous->type == ButtonType::Label &&
               (previous->drawflag & BUT_TEXT_RIGHT)) {
             caption = previous->str;
+            decide(previous, fate_consumed("caption"));
           }
           else if (RNA_property_type(button->rnaprop) != PROP_ENUM &&
                    !RNA_property_array_check(button->rnaprop) && !button->str.empty()) {
@@ -3203,8 +3551,64 @@ static std::string panels_walk(bContext *C,
         }
         previous = button.get();
       }
+      /* A split layout's captions stand apart from their properties, in a column of their own,
+       * for a vector's rows ("Location X", "Y", "Z") and a column's heading: each property is
+       * written with its own name (B20 is the difference). */
+      for (const auto &button : block->buttons) {
+        if (button->type == ButtonType::Label && (button->drawflag & BUT_TEXT_RIGHT)) {
+          decide(button.get(), fate_consumed("caption"));
+        }
+      }
     }
     block_end(C, block);
+    /* A heading naming the property after it ("Location:"), and a name beside a checkbox drawn
+     * without one, on its line, as Preferences' Copy on Duplicate draws them. */
+    for (int64_t i = 0; writer && i < block->buttons.size(); i++) {
+      const Button &label = *block->buttons[i];
+      if (label.type != ButtonType::Label || label.str.empty()) {
+        continue;
+      }
+      std::string text = label.str;
+      while (!text.empty() && ELEM(text.back(), ':', ' ')) {
+        text.pop_back();
+      }
+      const Button *next = i + 1 < block->buttons.size() ? block->buttons[i + 1].get() : nullptr;
+      const Button *before = i > 0 ? block->buttons[i - 1].get() : nullptr;
+      const float line = BLI_rctf_cent_y(&label.rect);
+      if ((next && next->rnaprop && text == RNA_property_ui_name(next->rnaprop)) ||
+          (before && before->rnaprop && before->str.empty() &&
+           RNA_property_type(before->rnaprop) == PROP_BOOLEAN && line >= before->rect.ymin &&
+           line <= before->rect.ymax))
+      {
+        decide(&label, fate_consumed("caption"));
+      }
+    }
+    /* Blender's sections (`layout.panel`): a closed one shows its header alone, which is a label;
+     * an open one its body under it (B3). */
+    std::vector<std::pair<std::string, bool>> sections;
+    if (writer) {
+      for (const LayoutPanelHeader &header : panel->runtime->layout_panels.headers) {
+        PointerRNA owner = header.open_owner_ptr;
+        const bool section_open = owner.data && RNA_boolean_get(&owner, header.open_prop_name.c_str());
+        std::string title;
+        for (const auto &button : block->buttons) {
+          const float y = BLI_rctf_cent_y(&button->rect);
+          if (y < header.start_y || y > header.end_y) {
+            continue;
+          }
+          if (button->type == ButtonType::Label) {
+            if (title.empty() && !button->str.empty()) {
+              title = button->str;
+            }
+            decide(button.get(),
+                   button->str.empty() ? fate_consumed("section") :
+                   section_open        ? Fate{"reduced", "", "section_title"} :
+                                         fate_consumed("section"));
+          }
+        }
+        sections.emplace_back(title.empty() ? header.open_prop_name : title, section_open);
+      }
+    }
     for (const auto &button : block->buttons) {
       /* Icon templates keep their RNA target in callback data, not in the button itself. */
       if (template_icon_view_property_get(*button, button->rnapoin, button->rnaprop)) {
@@ -3215,6 +3619,10 @@ static std::string panels_walk(bContext *C,
       for (const auto &button : block->buttons) {
         if (!candidate.enabled) { button->flag |= BUT_DISABLED; }
         PanelType *nested = button_paneltype_get(button.get());
+        if (nested) {
+          /* Its panel is drawn into the popover, see below. */
+          decide(button.get(), fate_consumed("popover_flattened"));
+        }
         if (nested && std::none_of(candidates.begin(), candidates.end(), [&](const Candidate &item) {
               return item.id == nested->idname;
             })) {
@@ -3287,12 +3695,16 @@ static std::string panels_walk(bContext *C,
     std::map<const Button *, std::vector<const Button *>> row_items;
     if (preferences) {
       for (const auto &button : block->buttons) {
-        if ((button->rnaprop && preferences_hidden(button->rnapoin, button->rnaprop)) ||
-            /* Paths are typed: Blender's file browser has no place in the native interface. */
-            (button->optype && ELEM(StringRef(button->optype->idname),
-                                    "BUTTONS_OT_file_browse",
-                                    "BUTTONS_OT_directory_browse")))
+        if (button->rnaprop && preferences_hidden(button->rnapoin, button->rnaprop)) {
+          decide(button.get(), {"hidden", "", "preferences"});
+          combined.insert(button.get());
+        }
+        /* Paths are typed: Blender's file browser has no place in the native interface. */
+        else if (button->optype && ELEM(StringRef(button->optype->idname),
+                                        "BUTTONS_OT_file_browse",
+                                        "BUTTONS_OT_directory_browse"))
         {
+          decide(button.get(), fate_dropped("path_button"));
           combined.insert(button.get());
         }
       }
@@ -3306,6 +3718,14 @@ static std::string panels_walk(bContext *C,
         if (template_id_property_get(*button, template_ptr, template_prop, event)) {
           if (event != UI_ID_BROWSE) {
             combined.insert(button.get());
+            /* The parts the picker shows (#Writer::picker), and those it does not: Open but for a
+             * font, which the system's font picker opens (B10); making local, overriding. */
+            const bool font = RNA_type_to_ID_code(
+                                  RNA_property_pointer_type(&template_ptr, template_prop)) == ID_VF;
+            decide(button.get(),
+                   event == UI_ID_OPEN && !font                      ? fate_dropped("id_open") :
+                   ELEM(event, UI_ID_LOCAL, UI_ID_OVERRIDE, UI_ID_PIN) ? fate_dropped("id_part") :
+                                                                       fate_consumed("template"));
           }
           if (ID *id = RNA_property_pointer_get(&template_ptr, template_prop).owner_id) {
             template_ids.insert(id);
@@ -3320,6 +3740,7 @@ static std::string panels_walk(bContext *C,
               ELEM(StringRef(RNA_property_identifier(but.rnaprop)), "name", "use_fake_user")) ||
              (but.optype && STREQ(but.optype->idname, "ASSET_OT_clear_single"))))
         {
+          decide(&but, fate_consumed("template"));
           combined.insert(&but);
         }
         if (but.type != ButtonType::ListRow &&
@@ -3334,6 +3755,24 @@ static std::string panels_walk(bContext *C,
               !ELEM(item->type, ButtonType::ListRow, ButtonType::ListBox, ButtonType::ViewItem) &&
               BLI_rctf_isect_pt(&but.rect, BLI_rctf_cent_x(&item->rect), BLI_rctf_cent_y(&item->rect)))
           {
+            /* As #Writer::list_row takes them: its name, and the values beside it; any other
+             * button over a row, such as an operator's or a callback's, is not on it (B18). */
+            const PropertyType item_type = item->rnaprop ? RNA_property_type(item->rnaprop) :
+                                                           PROP_BOOLEAN;
+            decide(item.get(),
+                   (item->flag & UI_HIDDEN) ?
+                       Fate{"hidden", "", "row_hidden"} :
+                   item->rnaprop && item->rnapoin.data && !RNA_property_array_check(item->rnaprop) &&
+                           ELEM(item_type, PROP_BOOLEAN, PROP_INT, PROP_FLOAT, PROP_ENUM) ?
+                       fate_projected("RowControl") :
+                   (item->rnaprop && item_type == PROP_STRING) ||
+                           (ELEM(item->type, ButtonType::Label, ButtonType::Text) && !item->rnaprop) ?
+                       fate_consumed("row_name") :
+                   item->type == ButtonType::Label || ELEM(item->type, ButtonType::Sepr,
+                                                           ButtonType::SeprSpacer,
+                                                           ButtonType::Decorator) ?
+                       fate_consumed("row_layout") :
+                       fate_dropped("row_button"));
             combined.insert(item.get());
             row_items[&but].push_back(item.get());
           }
@@ -3375,6 +3814,10 @@ static std::string panels_walk(bContext *C,
         else {
           side.extras.push_back(&but);
         }
+        /* The list's own Add, Remove, arrows and menu; the rest stand beside it as buttons. */
+        decide(&but, std::find(side.extras.begin(), side.extras.end(), &but) != side.extras.end() ?
+                         fate_projected("Button") :
+                         fate_consumed("list_side"));
         combined.insert(&but);
       }
     };
@@ -3450,6 +3893,9 @@ static std::string panels_walk(bContext *C,
         else {
           side.extras.push_back(&but);
         }
+        decide(&but, std::find(side.extras.begin(), side.extras.end(), &but) != side.extras.end() ?
+                         fate_projected("Button") :
+                         fate_consumed("list_side"));
         combined.insert(&but);
       }
       empty_lists.emplace_back(&add, side);
@@ -3486,6 +3932,10 @@ static std::string panels_walk(bContext *C,
       if (toggles) {
         named_rows[&label] = items;
         combined.insert(items.begin(), items.end());
+        decide(&label, fate_projected("Row"));
+        for (const Button *item : items) {
+          decide(item, fate_projected(item->optype ? "Button" : "Toggle"));
+        }
       }
     }
     auto tree_key = [&](const size_t index) {
@@ -3564,6 +4014,9 @@ static std::string panels_walk(bContext *C,
           if (but.alignnr != group) {
             group = but.alignnr;
             caption = previous && previous->type == ButtonType::Label ? previous->str : "";
+            if (!caption.empty()) {
+              decide(previous, fate_consumed("caption"));
+            }
           }
           toggle_groups[&but] = {group, caption};
         }
@@ -3601,6 +4054,12 @@ static std::string panels_walk(bContext *C,
         }
       }
       dropped = missing && !common;
+      if (dropped) {
+        /* Shown when it is the only item selected (B2). */
+        const Fate fate = fate_dropped("selection", Fate::Counted::Panel);
+        census_record(tab_id, "", "Panel", candidate.id, fate);
+        tab_said.add(fate.counted);
+      }
     }
     if (writer && !physics_toggles && !dropped) {
       const auto physics = physics_panels.find(candidate.id);
@@ -3692,6 +4151,10 @@ static std::string panels_walk(bContext *C,
           }
           else if (seen.insert(key).second) {
             writer->picker(node, *block, template_ptr, template_prop);
+            decide(&but, fate_projected("Reference"));
+          }
+          else {
+            decide(&but, fate_consumed("duplicate"));
           }
         }
         continue;
@@ -3708,13 +4171,21 @@ static std::string panels_walk(bContext *C,
             seen.insert(property_key(but, -1)).second)
         {
           write_list(but);
+          decide(&but, fate_projected("List"));
         }
+        /* Otherwise its rows show it. */
+        decide(&but, fate_consumed("list"));
         continue;
       }
       if (but.type == ButtonType::ViewItem) {
         /* A tree, from its first item. */
         for (size_t index = 0; index < trees.size(); index++) {
           if (trees[index].items.front() != &but) {
+            if (std::find(trees[index].items.begin(), trees[index].items.end(), &but) !=
+                trees[index].items.end())
+            {
+              decide(&but, fate_consumed("tree"));
+            }
             continue;
           }
           const std::string key = tree_key(index);
@@ -3725,6 +4196,13 @@ static std::string panels_walk(bContext *C,
           }
           else if (seen.insert(key).second) {
             write_tree(trees[index], key);
+            /* Its items can neither be folded nor unfolded here (B18). */
+            const bool folds = std::any_of(
+                trees[index].items.begin(), trees[index].items.end(), [](const ButtonViewItem *item) {
+                  const AbstractTreeViewItem *tree_view_item = tree_item(*item);
+                  return tree_view_item && tree_view_item->is_collapsible();
+                });
+            decide(&but, folds ? Fate{"reduced", "List", "tree"} : fate_projected("List"));
           }
         }
         continue;
@@ -3757,7 +4235,9 @@ static std::string panels_walk(bContext *C,
       if (but.type == ButtonType::ListRow && writer) {
         if (seen.insert(property_key(but, -1)).second) {
           write_list(but);
+          decide(&but, fate_projected("List"));
         }
+        decide(&but, fate_consumed("list"));
         continue;
       }
       if (but.type == ButtonType::Extra && but.poin && StringRef(candidate.id).endswith("_PT_preview"))
@@ -3779,10 +4259,12 @@ static std::string panels_walk(bContext *C,
             {
               writer->property(picture, *shape, -1, {.role = protocol::Role::Shape});
               seen.insert(property_key(*shape, -1));
+              decide(shape.get(), fate_projected("Choice"));
               break;
             }
           }
         }
+        decide(&but, fate_projected("Picture"));
         continue;
       }
       PropertyRNA *menu_enum_prop = nullptr;
@@ -3843,11 +4325,14 @@ static std::string panels_walk(bContext *C,
                                           buffer.CreateVector(options),
                                           protocol::ChoiceStyle::Actions);
           });
+          decide(&but, fate_projected("Choice"));
         }
+        decide(&but, fate_consumed("duplicate"));
         continue;
       }
       if (physics_toggles && !but.optype) {
         /* Per-type viewport toggles beside the switches belong to each physics panel. */
+        decide(&but, fate_consumed("physics"));
         continue;
       }
       /* Keep only viewport enablement in modifier headers. Other display options belong
@@ -3855,6 +4340,7 @@ static std::string panels_walk(bContext *C,
       const bool header_operator = header_buttons.count(&but) && but.optype && !(but.flag & UI_HIDDEN);
       if (header_operator && StringRef(but.optype->idname).endswith("_set_active")) {
         /* Native headers show which item is active as state, not as a button. */
+        decide(&but, fate_consumed("active_state"));
         continue;
       }
       /* A modifier's or constraint's header: its name and the switches for where it applies,
@@ -3897,18 +4383,21 @@ static std::string panels_walk(bContext *C,
                 return protocol::CreateMenuButton(
                     buffer, buffer.CreateString("menu"), buffer.CreateVector(&param, 1));
               });
+          decide(&but, fate_projected("MenuButton"));
         }
         continue;
       }
       if (but.optype && !(but.flag & UI_HIDDEN)) {
         if (shading && STREQ(but.optype->idname, "SCREEN_OT_userpref_show")) {
           /* This opens an unrelated Blender window, not a viewport shading setting. */
+          decide(&but, {"hidden", "", "preferences_window"});
           continue;
         }
         if (STREQ(but.optype->idname, "FILE_OT_unpack_item") && but.opptr &&
             RNA_int_get(but.opptr, "id_type") == ID_VF)
         {
           /* Fonts from the font picker are packed on purpose: their files are only a cache. */
+          decide(&but, {"hidden", "", "font_cache"});
           continue;
         }
         const std::string key = operator_key(C, but, object);
@@ -3952,10 +4441,15 @@ static std::string panels_walk(bContext *C,
             fields.role = protocol::Role::Header;
             return protocol::CreateToggle(buffer, on);
           });
+          decide(&but, fate_projected("Toggle"));
         }
         else if (writer && seen.insert(key).second) {
           writer->button(node, but, header_operator ? protocol::Role::Header : protocol::Role::None);
+          /* Drawn greyed when it has no `exec` to run (B5, B13). */
+          decide(&but, but.optype->exec ? fate_projected("Button") :
+                                          Fate{"reduced", "Button", "operator_no_exec"});
         }
+        decide(&but, fate_consumed("duplicate"));
         continue;
       }
       if (but.type == ButtonType::ColorBand && but.poin && but.rnaprop) {
@@ -3967,6 +4461,7 @@ static std::string panels_walk(bContext *C,
         }
         else if (writer && seen.insert(key).second) {
           writer->ramp(node, but);
+          decide(&but, fate_projected("Ramp"));
         }
         continue;
       }
@@ -3986,6 +4481,8 @@ static std::string panels_walk(bContext *C,
                                     found_others != others_of.end() ? found_others->second :
                                                                       selected_others(C, but);
       if (others.missing) {
+        /* Shown when it is the only item selected with it (B2). */
+        decide(&but, fate_dropped("selection"));
         continue;
       }
       const int begin = !color && length ? std::max(0, but.rnaindex) : -1;
@@ -4004,11 +4501,14 @@ static std::string panels_walk(bContext *C,
           continue;
         }
         if (!seen.insert(key).second) {
+          decide(&but, fate_consumed("duplicate"));
           continue;
         }
         if (attached_locks.count(key) || attached_modes.count(key)) {
+          decide(&but, fate_consumed("attached"));
           continue;
         }
+        decide(&but, property_fate(but));
         Look look;
         look.others = &others;
         if (const auto pair = pairs.find(&but); pair != pairs.end()) {
@@ -4050,6 +4550,46 @@ static std::string panels_walk(bContext *C,
         writer->property(node, but, index, look);
       }
     }
+    if (writer && !dropped) {
+      /* The census of this panel: what became of each button, and what it could not show,
+       * which the row at the foot of its node says (R6-9). */
+      Said *panel_said = panel_nodes.count(candidate.id) ? &said[node] : nullptr;
+      const auto note = [&](const std::string &button, const std::string &detail, const Fate &fate) {
+        census_record(tab_id, candidate.id, button, detail, fate);
+        if (panel_said) {
+          panel_said->add(fate.counted);
+        }
+      };
+      if (pt.draw_header_preset) {
+        /* The presets Blender draws in the panel's header (B8). */
+        note("HeaderPreset", pt.idname, fate_dropped("header_preset"));
+      }
+      for (const auto &[title, section_open] : sections) {
+        if (!section_open) {
+          /* A closed section, which cannot be opened here (B3). */
+          note("Section", title, fate_dropped("section", Fate::Counted::Section));
+        }
+      }
+      for (const auto &button : block->buttons) {
+        const Button &but = *button;
+        if (but.flag & UI_HIDDEN) {
+          continue;
+        }
+        if (const auto fate = fates.find(&but); fate != fates.end()) {
+          note(button_type_name(but.type), button_detail(but), fate->second);
+        }
+        /* A closed panel shows its header alone, as Blender's does. */
+        else if (open) {
+          if (std::optional<Fate> fate = unhandled_fate(but)) {
+            if (preferences && candidate.id == "USERPREF_PT_keymap") {
+              /* The key maps, which the interface lists itself, view only (`native_settings`). */
+              fate = Fate{"hidden", "", "keymap"};
+            }
+            note(button_type_name(but.type), button_detail(but), *fate);
+          }
+        }
+      }
+    }
     panel->layout = nullptr;
     block->panel = nullptr;
     block_free(nullptr, block);
@@ -4076,6 +4616,36 @@ static std::string panels_walk(bContext *C,
     if (execute && target_panel) {
       break;
     }
+  }
+  if (writer) {
+    /* What a panel, or the tab, could not show: one row at its foot, with a button to the
+     * Desktop Interface, where Blender draws all of it (R6-9). */
+    std::map<NodeId, std::string> node_panels;
+    for (const auto &[id, panel_node] : panel_nodes) {
+      node_panels.emplace(panel_node, id);
+    }
+    const auto say = [&](const NodeId parent, const std::string &key, const Said &what, const char *where) {
+      if (what.total() == 0) {
+        return;
+      }
+      const std::string text = what.text(where);
+      const std::string node_key = writer->key(key);
+      data.edits.add_overwrite(node_key,
+                               {native::Edit::Kind::Call, "", "WM_OT_native_interface_toggle"});
+      writer->builder.add(parent, node_key, [&](Buffer &buffer, NodeFields &fields) {
+        fields.label = text;
+        fields.icon = icon_name(ICON_WINDOW);
+        fields.role = protocol::Role::Elsewhere;
+        return protocol::CreateButton(buffer);
+      });
+      census_record(tab_id, key, "Row", text, {"said", "Button", ""});
+    };
+    for (const auto &[panel_node, what] : said) {
+      const auto id = node_panels.find(panel_node);
+      say(panel_node, "elsewhere:" + (id == node_panels.end() ? std::to_string(panel_node) : id->second),
+          what, "panel");
+    }
+    say(top, "elsewhere", tab_said, "tab");
   }
   if (operator_type) {
     const bContextStore *previous = CTX_store_get(C);
@@ -6029,3 +6599,25 @@ void nodes_write(bContext *C, NodesData &data, ViewBuilder &builder)
 /** \} */
 
 }  // namespace blender::ui
+
+void UI_native_panel_census_record(const bool on)
+{
+  blender::ui::census_recording = on;
+  if (!on) {
+    blender::ui::census_log.reset();
+  }
+}
+
+const char *UI_native_panel_census_take()
+{
+  static std::string text;
+  std::stringstream stream;
+  blender::io::serialize::JsonFormatter formatter;
+  if (!blender::ui::census_log) {
+    blender::ui::census_log = std::make_shared<blender::io::serialize::ArrayValue>();
+  }
+  formatter.serialize(stream, *blender::ui::census_log);
+  blender::ui::census_log.reset();
+  text = stream.str();
+  return text.c_str();
+}

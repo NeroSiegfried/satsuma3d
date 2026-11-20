@@ -30,7 +30,7 @@ import flatbuffers  # noqa: E402
 from Blender.NativeUI import (  # noqa: E402
     BoolValue, Button, ButtonStyle, Choice, Command, Commands, Content, Data, FloatsValue, FloatValue, Group, MenuButton, Node, Number,
     Op, Param,
-    Reference,
+    Reference, Role,
     Subscribe, TextValue, TextsValue, Toggle, Updates, Value,
 )
 
@@ -190,6 +190,8 @@ def set_text(subscription, target, text, command_id):
     lib.WM_native_ui_send(data, len(data))
 
 
+# The row saying what a panel could not show (ROUND6 PANEL-1); absent from builds before it.
+ROLE_ELSEWHERE = getattr(Role.Role, "Elsewhere", None)
 CONTENT_NAMES = {value: name for name, value in vars(Content.Content).items() if not name.startswith("_")}
 STYLE_NAMES = {value: name for name, value in vars(ButtonStyle.ButtonStyle).items() if not name.startswith("_")}
 views = {}  # subscription -> {"top": key, "nodes": {key: dict}, "children": {key: [keys]}}
@@ -4234,6 +4236,226 @@ def tick_margins():
     return 0.3
 
 
+# ROUND6 PANEL-1 (decision R6-9): what became of every button each panel drew, over scenes made
+# to draw the findings' panels, each tab with all its panels and sub-panels opened. Every reason a
+# button was dropped or shown in part must be known here: the finding it is, and the package that
+# owes it, or None where only the Desktop Interface has it and the panel says so. A panel's row
+# must say as many items as the census counts it dropped, and the findings PANEL-1 is to show
+# first must each show.
+CENSUS_KNOWN = {
+    # Dropped, and said by the panel's (or the tab's) row.
+    "label": ("B6", "PANEL-2"),
+    "section": ("B3", "PANEL-3"),
+    "c_menu": ("B4", "PANEL-4"),
+    "selection": ("B2", "PANEL-6"),
+    "curve": ("B7", "PANEL-7"),
+    "callback": ("B7, B18", "PANEL-7, PANEL-14"),
+    "header_preset": ("B8", "PANEL-8"),
+    "popover": ("B14", "PANEL-8"),
+    "path_button": ("B10", "PANEL-10"),
+    "id_open": ("B10", "PANEL-10"),
+    "pointer": ("B11", "PANEL-11"),
+    "row_button": ("B18", "PANEL-14"),
+    "grid": ("B18", "PANEL-14"),
+    "panel_context": ("B21", "PANEL-14"),
+    "non_rna_field": ("B14", "PANEL-14"),
+    "id_part": ("B10", None),
+    "preview": ("B20", None),
+    "display": ("Table 1", None),
+    "progress": ("Table 1", None),
+    "key": ("Table 1", None),
+    "property_type": ("Table 1", None),
+    # Shown in part.
+    "section_title": ("B3", "PANEL-3"),
+    "operator_no_exec": ("B5, B13", "PANEL-5, PANEL-13"),
+    "path": ("B10", "PANEL-10"),
+    "search": ("B11", "PANEL-11"),
+    "enum_flag": ("B16", "PANEL-14"),
+    "palette": ("B17", "PANEL-14"),
+    "tree": ("B18", "PANEL-14"),
+}
+CENSUS_FIRST = ("B3", "B4", "B6", "B7", "B8", "B10", "B11", "B16", "B17", "B18", "B21")
+CENSUS_STAGES = ("object", "armature", "texture_paint", "selection", "preferences")
+census_state = {"stage": 0, "start": 1, "rows": {}, "problems": [], "buttons": {}}
+
+
+def _census_lib():
+    lib.UI_native_panel_census_record.argtypes = [ctypes.c_bool]
+    lib.UI_native_panel_census_take.restype = ctypes.c_char_p
+    return lib
+
+
+def _census_scene():
+    """Scenes that draw the findings' panels: a modifier stack with a custom profile, an error,
+    flags and a name searched; a constraint on a rig; cloth; curves in colour management; nested
+    bone collections; a palette."""
+    scene = bpy.context.scene
+    cube = bpy.data.objects["Cube"]
+    cube.vertex_groups.new(name="Group")
+    cube.shape_key_add(name="Basis")
+    cube.shape_key_add(name="Key 1")
+    cube.modifiers.new("Bevel", 'BEVEL').profile_type = 'CUSTOM'
+    cube.modifiers.new("Boolean", 'BOOLEAN')
+    decimate = cube.modifiers.new("Decimate", 'DECIMATE')
+    decimate.decimate_type = 'DISSOLVE'
+    decimate.delimit = {'NORMAL', 'UV'}
+    cube.modifiers.new("Displace", 'DISPLACE').vertex_group = "Group"
+    cube.modifiers.new("Cloth", 'CLOTH')
+    scene.view_settings.use_curve_mapping = True
+    rig_data = bpy.data.armatures.new("Rig")
+    body = rig_data.collections.new("Body")
+    rig_data.collections.new("Arm", parent=body)
+    rig = bpy.data.objects.new("Rig", rig_data)
+    scene.collection.objects.link(rig)
+    cube.constraints.new('COPY_LOCATION').target = rig
+    light = bpy.data.objects.new("Lamp", bpy.data.lights.new("Lamp", 'POINT'))
+    scene.collection.objects.link(light)
+    palette = bpy.data.palettes.new("Palette")
+    palette.colors.new()
+    scene.tool_settings.image_paint.palette = palette
+
+
+def _census_stage(stage):
+    if bpy.context.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+    cube = bpy.data.objects["Cube"]
+    bpy.ops.object.select_all(action='DESELECT')
+    active = bpy.data.objects["Rig"] if stage == "armature" else cube
+    active.select_set(True)
+    bpy.context.view_layer.objects.active = active
+    if stage == "selection":
+        bpy.data.objects["Lamp"].select_set(True)
+    if stage == "texture_paint":
+        bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
+    for area in bpy.context.screen.areas:
+        area.tag_redraw()
+
+
+def _census_open_all(sub, command_id):
+    """Every panel and sub-panel of the view opened, as a person would tap each."""
+    view = views.get(sub) or {}
+    keys = [key for key, node in view.get("nodes", {}).items() if node.get("content") == "Panel"]
+    if keys:
+        invoke_many(sub, [(key, command_id + i) for i, key in enumerate(keys)], op=Op.Op.Open)
+
+
+def _census_said(node, out=None):
+    """The numbers the rows under \a node say, by their keys."""
+    out = {} if out is None else out
+    if node.get("role") == ROLE_ELSEWHERE:
+        out[node["key"]] = sum(int(word) for word in (node.get("label") or "").split() if word.isdigit())
+    for child in node.get("children", []):
+        _census_said(child, out)
+    return out
+
+
+def _census_check(stage, entries):
+    """The last walk of each view: its fates, against the known reasons and its rows."""
+    walks, current = {}, None
+    for entry in entries:
+        if entry["button"] == "Walk":
+            current = walks[entry["detail"]] = []
+        elif current is not None:
+            current.append(entry)
+    problems = census_state["problems"]
+    for identity, walk in walks.items():
+        counted = sum(1 for entry in walk if entry["counted"])
+        said = sum(int(word) for entry in walk if entry["button"] == "Row"
+                   for word in entry["detail"].split() if word.isdigit())
+        if counted != said:
+            problems.append("%s %s: %d dropped, the rows say %d" % (stage, identity, counted, said))
+        for entry in walk:
+            key = (entry["button"], entry["outcome"], entry["kind"])
+            census_state["buttons"][key] = census_state["buttons"].get(key, 0) + 1
+            if entry["outcome"] not in ("dropped", "reduced"):
+                continue
+            known = CENSUS_KNOWN.get(entry["reason"])
+            if known is None:
+                problems.append("%s %s: %s %s %s for a reason not known: %r" % (
+                    stage, identity, entry["panel"], entry["button"], entry["detail"], entry["reason"]))
+                continue
+            row = census_state["rows"].setdefault(entry["reason"], {
+                "finding": known[0], "package": known[1], "outcome": entry["outcome"], "count": 0,
+                "examples": []})
+            row["count"] += 1
+            example = "%s %s: %s %s" % (stage, entry["panel"], entry["button"], entry["detail"])
+            if len(row["examples"]) < 4 and example not in row["examples"]:
+                row["examples"].append(example)
+    return walks
+
+
+def tick_census():
+    global step
+    try:
+        pump()
+        step += 1
+        state = census_state
+        stage = CENSUS_STAGES[state["stage"]]
+        at = step - state["start"]
+        if step == 1:
+            _census_lib().UI_native_panel_census_record(True)
+            _census_scene()
+        if at == 0:
+            _census_stage(stage)
+            if stage == "preferences":
+                subs.clear()
+                subs["PREFERENCES_INTERFACE"] = subscribe("properties", tab="PREFERENCES_INTERFACE")
+            elif not subs:
+                subs["OBJECT"] = subscribe("properties", tab="OBJECT", properties=True)
+        elif at == 3:
+            # Every tab the first lists, each a view of its own, as the shell's tab bar asks.
+            top = tree(next(iter(subs.values()))) or {}
+            tabs = next((n.get("options") for n in top.get("children", []) if n["key"] == "tabs"), [])
+            for tab in tabs:
+                if tab not in subs:
+                    subs[tab] = subscribe("properties", tab=tab, **({} if stage == "preferences" else {"properties": True}))
+        elif at in (6, 9, 12):
+            for i, sub in enumerate(subs.values()):
+                _census_open_all(sub, 10000 * at + 1000 * i)
+        elif at == 15:
+            entries = json.loads(_census_lib().UI_native_panel_census_take())
+            walks = _census_check(stage, entries)
+            # The rows each view holds, as the shell draws them, against its last walk's census
+            # (the view's top names what it shows, as the walk's marker does).
+            shown = {}
+            for tab, sub in subs.items():
+                top = tree(sub) or {}
+                said = _census_said(top)
+                shown.update({tab + " " + key: value for key, value in said.items()})
+                walk = walks.get(top.get("property"))
+                if walk is None:
+                    continue
+                counted_here = sum(1 for entry in walk if entry["counted"])
+                if sum(said.values()) != counted_here:
+                    state["problems"].append("%s %s: the view's rows say %d, the census counts %d dropped" % (
+                        stage, tab, sum(said.values()), counted_here))
+            counted = sum(1 for walk in walks.values() for entry in walk if entry["counted"])
+            report["steps"].append({"name": stage, "views": len(walks), "fates": sum(len(w) for w in walks.values()),
+                                    "dropped": counted, "rows": shown})
+            state["stage"] += 1
+            state["start"] = step + 1
+            if state["stage"] == len(CENSUS_STAGES):
+                _census_lib().UI_native_panel_census_record(False)
+                rows = state["rows"]
+                shown_findings = {f.strip() for row in rows.values() for f in row["finding"].split(",")}
+                missing = [f for f in CENSUS_FIRST if f not in shown_findings]
+                if missing:
+                    state["problems"].append("Findings PANEL-1 must show first, not shown: " + ", ".join(missing))
+                report["census"] = dict(sorted(rows.items(), key=lambda item: (item[1]["package"] or "~", item[0])))
+                report["buttons"] = {" ".join(k): v for k, v in sorted(state["buttons"].items())}
+                report["problems"] = state["problems"]
+                finish("done" if not state["problems"] else "error")
+                return None
+        if step > 400:
+            finish("timeout")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
 def _touchstart_enter_for(idname):
     mode, name = _touchstart_mode(idname)
     _touchstart_enter(mode, name)
@@ -4247,5 +4469,5 @@ bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets
                          "tolerance": tick_tolerance, "waiting": tick_waiting,
                          "touchstart": tick_touchstart, "jobs": tick_jobs,
                          "renderprogress": tick_render_progress, "busy": tick_busy,
-                         "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold, "typing": tick_typing, "windows": tick_windows, "margins": tick_margins}.get(SCENARIO, tick_actions),
+                         "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold, "typing": tick_typing, "windows": tick_windows, "margins": tick_margins, "census": tick_census}.get(SCENARIO, tick_actions),
                         first_interval=1.0)
