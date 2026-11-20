@@ -17,8 +17,9 @@ import UIKit
 
 extension Blender_NativeUI_Number {
   var isAngle: Bool { kind == .angle }
-  /** From Blender's value to what shows: degrees for an angle. */
-  var shownFactor: Double { isAngle ? 180.0 / .pi : 1 }
+  /** From Blender's value to what shows: degrees for an angle, the scene's unit for a length,
+   * a mass and the like (`unit_factor`, ROUND6 PANEL-9). */
+  var shownFactor: Double { isAngle ? 180.0 / .pi : (unitFactor.isFinite && unitFactor > 0 ? unitFactor : 1) }
 
   /** As Blender draws it: exactly the decimals Blender shows for this property and value
    * (`precision`, which the bridge sends from `ui_but_calc_float_precision`), so `1.143` and
@@ -279,6 +280,9 @@ struct NativeNumberField: View {
     /* A typed value sets every selected item, even one that already has it. */
     if model.isMixed(node) ? text.trimmingCharacters(in: .whitespaces).isEmpty : text == editingText { return }
     guard let parsed = number.parse(text) else {
+      /* An expression or a value with units, such as `1/3`, `20cm` or `2'6"`: read by Blender's
+       * own evaluator, which says so when it cannot (ROUND6 PANEL-9). */
+      model.set(node, .text(text.trimmingCharacters(in: .whitespaces)))
       return
     }
     model.set(node, .float(number.clamp(number.integer ? parsed.rounded() : parsed)))

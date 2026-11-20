@@ -154,10 +154,13 @@ table Number {
   /// Drawn as a slider over the soft range.
   slider: bool;
   scale: Scale;
-  /// Shown after the value, such as "px".
+  /// Shown after the value, such as "px", or the scene's unit, such as "m" (ROUND6 PANEL-9).
   unit: string;
   /// What it is reset to.
   default_value: double;
+  /// What the value is multiplied by to show it in `unit`, such as the scene's Unit Scale, or the
+  /// meters in a foot for imperial lengths; the value itself stays in Blender's units.
+  unit_factor: double = 1;
 }
 
 /// Text.

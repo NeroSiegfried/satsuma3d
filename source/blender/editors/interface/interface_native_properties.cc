@@ -77,6 +77,7 @@
 #include "WM_toolsystem.hh"
 #include "WM_keymap.hh"
 #include "BKE_colortools.hh"
+#include "BKE_unit.hh"
 #include "BKE_curveprofile.h"
 #include "DNA_curve_enums.h"
 #include "DNA_curveprofile_types.h"
@@ -919,6 +920,60 @@ bool apply_curve(bContext *C, Button &but, const native::EditRequest &request)
 
 /** \} */
 
+/** A number's unit, as Blender shows it in the scene's unit system (B9, ROUND6 PANEL-9): its
+ * kind, the factor from Blender's units to the system's base unit (the Unit Scale, a foot's
+ * meters), and that unit's symbol, as Blender writes it. None for a plain number, an angle (shown
+ * in degrees by its kind) or a time. */
+struct NumberUnit {
+  protocol::NumberKind kind = protocol::NumberKind::Plain;
+  double factor = 1.0;
+  std::string symbol;
+};
+
+NumberUnit number_unit(const Button &but)
+{
+  NumberUnit unit;
+  if (!but.block || !but.block->unit || !button_is_unit(&but)) {
+    return unit;
+  }
+  const UnitSettings &settings = *but.block->unit;
+  const int type = RNA_SUBTYPE_UNIT_VALUE(button_unit_type_get(&but));
+  if (settings.system == USER_UNIT_NONE ||
+      ELEM(type, B_UNIT_NONE, B_UNIT_ROTATION, B_UNIT_TIME, B_UNIT_TIME_ABSOLUTE))
+  {
+    return unit;
+  }
+  const double base = BKE_unit_base_scalar(settings.system, type);
+  unit.factor = BKE_unit_value_scale(settings, type, 1.0) / (base > 0.0 ? base : 1.0);
+  if (!std::isfinite(unit.factor) || unit.factor <= 0.0) {
+    unit.factor = 1.0;
+  }
+  /* The base unit's symbol, as Blender writes one of it: its own preferred units aside. */
+  UnitSettings plain = settings;
+  plain.scale_length = 1.0f;
+  plain.length_unit = plain.mass_unit = plain.time_unit = plain.temperature_unit = char(
+      USER_UNIT_ADAPTIVE);
+  char text[64] = "";
+  BKE_unit_value_as_string(text, sizeof(text), base, 0, type, plain, false);
+  const char *symbol = text;
+  while (*symbol && (std::isdigit(uchar(*symbol)) || ELEM(*symbol, '.', ',', '-', ' '))) {
+    symbol++;
+  }
+  unit.symbol = symbol;
+  unit.kind = type == B_UNIT_LENGTH      ? protocol::NumberKind::Distance :
+              type == B_UNIT_AREA        ? protocol::NumberKind::Area :
+              type == B_UNIT_VOLUME      ? protocol::NumberKind::Volume :
+              type == B_UNIT_MASS        ? protocol::NumberKind::Mass :
+              type == B_UNIT_TEMPERATURE ? protocol::NumberKind::Temperature :
+              type == B_UNIT_WAVELENGTH  ? protocol::NumberKind::Wavelength :
+                                           protocol::NumberKind::Plain;
+  return unit;
+}
+
+/** Why the last edit of a walk was refused, where its answer says more than "no longer
+ * available", such as text that is not a number (PANEL-9). */
+std::string native_edit_error;
+
 bool set_property(bContext *C,
                   Button &but,
                   int index,
@@ -935,11 +990,22 @@ bool set_property(bContext *C,
   }
   const bool array = RNA_property_array_check(prop);
   /* A row made active gives its list's active index its place. */
-  const std::optional<double> number = request.action == "activate" ?
-                                           std::optional<double>(request.index) :
-                                           command_number(request.command);
-  const double numeric = number.value_or(0);
+  std::optional<double> number = request.action == "activate" ?
+                                     std::optional<double>(request.index) :
+                                     command_number(request.command);
   const std::optional<std::string> text = command_text(request.command);
+  if (!number && text && ELEM(RNA_property_type(prop), PROP_FLOAT, PROP_INT)) {
+    /* Typed text, such as `1/3`, `20cm`, `45deg` or a plain number in an imperial scene: read by
+     * Blender's own evaluator, with the property's unit and the scene's units, as its field reads
+     * it (B9, PANEL-9). */
+    double value = 0.0;
+    if (!button_string_eval_number(C, &but, text->c_str(), &value) || !std::isfinite(value)) {
+      native_edit_error = "\u201C" + *text + "\u201D cannot be read as a number.";
+      return false;
+    }
+    number = value;
+  }
+  const double numeric = number.value_or(0);
   const std::string &phase = request.phase;
   const std::string &token = request.interaction;
   const bool slider = request.edit && request.edit->slider;
@@ -2036,13 +2102,14 @@ class Writer {
                             ELEM(but.type, ButtonType::Num, ButtonType::NumSlider) ?
                                                      ui_but_calc_float_precision(&but, value) :
                                                      3;
+      const NumberUnit unit = angle ? NumberUnit() : number_unit(but);
       node = builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
         common(fields);
         return protocol::CreateNumber(
             buffer,
             std::isfinite(value) ? value : 0.0,
             type == PROP_INT,
-            angle ? protocol::NumberKind::Angle : protocol::NumberKind::Plain,
+            angle ? protocol::NumberKind::Angle : unit.kind,
             min,
             max,
             slider ? but.softmin : min,
@@ -2054,8 +2121,9 @@ class Writer {
             scale == PROP_SCALE_LOG && but.softmin > 0      ? protocol::Scale::Logarithmic :
             scale == PROP_SCALE_CUBIC                       ? protocol::Scale::Cubic :
                                                               protocol::Scale::Linear,
-            0,
-            std::isfinite(fallback) ? fallback : 0.0);
+            unit.symbol.empty() ? 0 : buffer.CreateString(unit.symbol),
+            std::isfinite(fallback) ? fallback : 0.0,
+            unit.factor);
       });
     }
     else if (type == PROP_STRING) {
@@ -3442,6 +3510,7 @@ static std::string panels_walk(bContext *C,
                                const native::EditRequest *request)
 {
   const bool execute = request != nullptr;
+  native_edit_error.clear();
   /* With nothing to show, a view is its top alone. */
   const auto nothing = [&](const char *error) -> std::string {
     if (writer) {
@@ -5458,6 +5527,9 @@ static std::string panels_walk(bContext *C,
   if (execute) {
     if (!refused.empty()) {
       return refused;
+    }
+    if (!applied && !native_edit_error.empty()) {
+      return std::exchange(native_edit_error, std::string());
     }
     return applied || ran ? "" : "This property is no longer available or editable.";
   }

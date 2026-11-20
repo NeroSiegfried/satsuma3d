@@ -296,7 +296,9 @@ def decode_node(raw):
         table = node.Content()
         number = Number.Number()
         number.Init(table.Bytes, table.Pos)
-        entry.update(value=number.Value(), integer=bool(number.Integer()), precision=number.Precision())
+        entry.update(value=number.Value(), integer=bool(number.Integer()), precision=number.Precision(),
+                     kind=number.Kind(), unit=s(number.Unit()),
+                     unit_factor=getattr(number, "UnitFactor", lambda: 1.0)())
     elif node.ContentType() == Content.Content.Reference:
         table = node.Content()
         reference = Reference.Reference()
@@ -4655,7 +4657,36 @@ def tick_census():
             if (render.resolution_x, render.resolution_y) != (1280, 720):
                 state["problems"].append("HDTV 720p from the presets popover left %dx%d (ack %r)" % (
                     render.resolution_x, render.resolution_y, acks.get(99)))
-        if at == {"object": 31, "selection": 32}.get(stage, 16):
+        # Typed text (B9, PANEL-9): Blender's evaluator reads expressions and units, says when it
+        # cannot, and reads a plain number in the scene's unit system; the field shows its unit.
+        if stage == "selection" and at == 33 and state.get("location_x"):
+            node = next((n for n in _census_nodes(tree(subs.get("OBJECT")) or {}) if n["key"] == state["location_x"]), {})
+            if node.get("unit") != "m" or abs(node.get("unit_factor", 0) - 1.0) > 1e-9:
+                state["problems"].append("units: Location X shows %r x %r, not m x 1" % (node.get("unit"), node.get("unit_factor")))
+            set_text(subs["OBJECT"], state["location_x"], "1/4", 101)
+        if stage == "selection" and at == 35 and state.get("location_x"):
+            if abs(bpy.data.objects["Cube"].location.x - 0.25) > 1e-6:
+                state["problems"].append("units: 1/4 gave %r (ack %r)" % (bpy.data.objects["Cube"].location.x, acks.get(101)))
+            set_text(subs["OBJECT"], state["location_x"], "20cm", 102)
+        if stage == "selection" and at == 37 and state.get("location_x"):
+            if abs(bpy.data.objects["Cube"].location.x - 0.2) > 1e-6:
+                state["problems"].append("units: 20cm gave %r (ack %r)" % (bpy.data.objects["Cube"].location.x, acks.get(102)))
+            set_text(subs["OBJECT"], state["location_x"], "two meters", 103)
+        if stage == "selection" and at == 39 and state.get("location_x"):
+            if "cannot be read as a number" not in (acks.get(103) or ""):
+                state["problems"].append("units: an unreadable text answered %r" % acks.get(103))
+            bpy.context.scene.unit_settings.system = 'IMPERIAL'
+        if stage == "selection" and at == 41 and state.get("location_x"):
+            node = next((n for n in _census_nodes(tree(subs.get("OBJECT")) or {}) if n["key"] == state["location_x"]), {})
+            if abs(node.get("unit_factor", 0) - 1 / 0.3048) > 1e-6:
+                state["problems"].append("units: imperial Location X shows %r x %r" % (node.get("unit"), node.get("unit_factor")))
+            set_text(subs["OBJECT"], state["location_x"], "3", 104)
+        if stage == "selection" and at == 43 and state.get("location_x"):
+            if abs(bpy.data.objects["Cube"].location.x - 0.9144) > 1e-5:
+                state["problems"].append("units: 3 in an imperial scene gave %r (ack %r)" % (
+                    bpy.data.objects["Cube"].location.x, acks.get(104)))
+            bpy.context.scene.unit_settings.system = 'METRIC'
+        if at == {"object": 31, "selection": 44}.get(stage, 16):
             state["stage"] += 1
             state["start"] = step + 1
             if state["stage"] == len(CENSUS_STAGES):
