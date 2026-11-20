@@ -23,6 +23,8 @@
 #include "BKE_idtype.hh"
 #include "BKE_library.hh"
 #include "BKE_lib_id.hh"
+#include "BKE_material.hh"
+#include "BKE_modifier.hh"
 #include "BKE_main.hh"
 #include "BKE_object.hh"
 #include "BKE_packedFile.hh"
@@ -64,6 +66,8 @@
 #include "DNA_action_types.h"
 #include "DNA_asset_types.h"
 #include "DNA_brush_types.h"
+#include "DNA_material_types.h"
+#include "DNA_modifier_types.h"
 #include "DNA_node_types.h"
 #include "DNA_object_types.h"
 #include "DNA_scene_types.h"
@@ -2246,17 +2250,48 @@ void bridge_brush_activate(bContext *C, const std::string &key)
  * \{ */
 
 /**
- * Assets the viewport accepts as drops. Brushes have their own rail. Node groups are listed only
- * when they are Geometry Nodes modifiers, the same check as Blender's Add Modifier menu.
+ * The 3D View's drop boxes (`view3d_dropboxes.cc`), by operator, and the data-block types each
+ * takes: the pane lists what the viewport accepts as a drop, not a fixed set (ROUND6 EDIT-8, D20).
+ * A source sweep (`bl_native_shell_sources.py`) holds this to the drop boxes Blender registers.
+ */
+struct BridgeAssetDropbox {
+  const char *operator_name;
+  /** The types it takes; empty for one that takes no assets (a file's path). */
+  std::vector<ID_Type> types;
+};
+const BridgeAssetDropbox bridge_asset_dropboxes[] = {
+    {"OBJECT_OT_add_named", {ID_OB}},
+    {"OBJECT_OT_transform_to_mouse", {ID_OB}},
+    {"OBJECT_OT_collection_external_asset_drop", {ID_GR}},
+    {"OBJECT_OT_collection_instance_add", {ID_GR}},
+    {"OBJECT_OT_drop_named_material", {ID_MA}},
+    {"OBJECT_OT_drop_geometry_nodes", {ID_NT}},
+    {"VIEW3D_OT_camera_background_image_add", {ID_IM}},
+    {"OBJECT_OT_empty_image_add", {ID_IM}},
+    /* Object data, as `OB_DATA_SUPPORT_ID` has it. */
+    {"OBJECT_OT_data_instance_add",
+     {ID_ME, ID_CU_LEGACY, ID_MB, ID_LA, ID_SPK, ID_LP, ID_CA, ID_LT, ID_AR, ID_CV, ID_PT, ID_VO,
+      ID_GP}},
+    {"VIEW3D_OT_drop_world", {ID_WO}},
+};
+
+/**
+ * Assets the viewport accepts as drops, by its drop boxes. Brushes have their own rail. Node groups
+ * are listed only when they are Geometry Nodes modifiers, the same check as Blender's Add Modifier
+ * menu.
  */
 bool bridge_asset_listed(const asset_system::AssetRepresentation &asset)
 {
   const ID_Type type = asset.get_id_type();
-  if (ELEM(type, ID_OB, ID_GR, ID_MA, ID_WO)) {
-    return true;
+  bool dropped = false;
+  for (const BridgeAssetDropbox &dropbox : bridge_asset_dropboxes) {
+    dropped |= std::find(dropbox.types.begin(), dropbox.types.end(), type) != dropbox.types.end();
+  }
+  if (!dropped) {
+    return false;
   }
   if (type != ID_NT) {
-    return false;
+    return true;
   }
   const AssetMetaData &metadata = asset.get_metadata();
   const IDProperty *tree_type = BKE_asset_metadata_idprop_find(&metadata, "type");
@@ -2371,6 +2406,16 @@ asset_system::AssetRepresentation *bridge_asset_find(const std::string &key)
   return result;
 }
 
+/** How \a asset is brought into the file, as the Asset Browser and asset shelf do. */
+eAssetImportMethod bridge_asset_import_method(const asset_system::AssetRepresentation &asset)
+{
+  eAssetImportMethod import_method = asset.get_import_method().value_or(ASSET_IMPORT_PACK);
+  if (U.experimental.no_data_block_packing && import_method == ASSET_IMPORT_PACK) {
+    import_method = ASSET_IMPORT_APPEND_REUSE;
+  }
+  return import_method;
+}
+
 /** Start a drag of \a asset, as the Asset Browser and asset shelf do. */
 void bridge_asset_drag_start(bContext *C, asset_system::AssetRepresentation &asset)
 {
@@ -2378,12 +2423,8 @@ void bridge_asset_drag_start(bContext *C, asset_system::AssetRepresentation &ass
     WM_event_start_drag(C, ICON_NONE, WM_DRAG_ID, local_id, WM_DRAG_NOP);
     return;
   }
-  eAssetImportMethod import_method = asset.get_import_method().value_or(ASSET_IMPORT_PACK);
-  if (U.experimental.no_data_block_packing && import_method == ASSET_IMPORT_PACK) {
-    import_method = ASSET_IMPORT_APPEND_REUSE;
-  }
   AssetImportSettings import_settings{};
-  import_settings.method = import_method;
+  import_settings.method = bridge_asset_import_method(asset);
   import_settings.use_instance_collections = false;
   WM_event_start_drag(C,
                       ICON_NONE,
@@ -2408,25 +2449,101 @@ void bridge_asset_drag_event(wmWindow *win, const int xy[2], const wmEventType t
   WM_event_add(win, &event);
 }
 
-/** Where tapping an asset adds it: the 3D cursor, or the active object for data it takes. */
-bool bridge_asset_add_location(bContext *C, const ID_Type type, int r_xy[2])
+/**
+ * Why a material or modifier asset cannot be applied to the active object now, or empty: the
+ * material drop's poll (Object Mode) and what its assignment needs, and the Add Modifier asset
+ * operator's poll and what a Geometry Nodes modifier needs (ROUND6 EDIT-8, D20).
+ */
+std::string bridge_asset_apply_refusal(bContext *C, const ID_Type type)
+{
+  Object *object = CTX_data_active_object(C);
+  if (type == ID_MA) {
+    if (object == nullptr) {
+      return IFACE_("Select an object to apply the material to");
+    }
+    if (CTX_data_mode_enum(C) != CTX_MODE_OBJECT) {
+      return IFACE_("Materials are applied in Object Mode");
+    }
+    if (!OB_TYPE_SUPPORT_MATERIAL(object->type)) {
+      return IFACE_("The active object has no materials");
+    }
+    if (!BKE_id_is_editable(CTX_data_main(C), &object->id)) {
+      return IFACE_("The active object cannot be edited");
+    }
+    return "";
+  }
+  if (object == nullptr) {
+    return IFACE_("Select an object to add the modifier to");
+  }
+  wmOperatorType *ot = WM_operatortype_find("OBJECT_OT_modifier_add_node_group", false);
+  if (ot == nullptr || !WM_operator_poll(C, ot)) {
+    const char *why = CTX_wm_operator_poll_msg_get(C, nullptr);
+    return why && why[0] ? why : IFACE_("The active object cannot be edited");
+  }
+  if (!BKE_object_support_modifier_type_check(object, eModifierType_Nodes)) {
+    return IFACE_("The active object has no modifiers");
+  }
+  return "";
+}
+
+/**
+ * A material or modifier tapped in the pane, applied to the active object as its menu says: the
+ * material into the active slot, as dropping it on that object does; the modifier by the Add
+ * Modifier menu's own asset operator. Not a drop at the object's origin pixel, which can land on
+ * another object or none (ROUND6 EDIT-8, D20). A refusal is said.
+ */
+void bridge_asset_apply(bContext *C, asset_system::AssetRepresentation &asset)
+{
+  const ID_Type type = asset.get_id_type();
+  const std::string why = bridge_asset_apply_refusal(C, type);
+  if (!why.empty()) {
+    WM_native_ui_notice(RPT_WARNING, why.c_str(), nullptr);
+    return;
+  }
+  if (type == ID_NT) {
+    wmOperatorType *ot = WM_operatortype_find("OBJECT_OT_modifier_add_node_group", false);
+    PointerRNA ptr = WM_operator_properties_create_ptr(ot);
+    ed::asset::operator_asset_reference_props_set(asset, ptr);
+    RNA_boolean_set(&ptr, "use_selected_objects", false);
+    const wmOperatorStatus status = WM_operator_name_call_ptr(
+        C, ot, wm::OpCallContext::ExecDefault, &ptr, nullptr);
+    WM_operator_properties_free(&ptr);
+    if (!(status & OPERATOR_FINISHED)) {
+      WM_native_ui_notice(RPT_WARNING, IFACE_("The modifier could not be added"), nullptr);
+    }
+    return;
+  }
+  Main *bmain = CTX_data_main(C);
+  Object *object = CTX_data_active_object(C);
+  Material *material = id_cast<Material *>(ed::asset::asset_local_id_ensure_imported(
+      *bmain, asset, 0, bridge_asset_import_method(asset)));
+  if (material == nullptr) {
+    WM_native_ui_notice(RPT_WARNING, IFACE_("The material could not be loaded from its library"), nullptr);
+    return;
+  }
+  /* As `drop_named_material_invoke`: to the object when its data cannot be edited. */
+  int assign_type = BKE_MAT_ASSIGN_USERPREF;
+  if (object->data && !BKE_id_is_editable(bmain, static_cast<ID *>(object->data))) {
+    assign_type = BKE_MAT_ASSIGN_OBJECT;
+  }
+  BKE_object_material_assign(bmain, object, material, std::max<int>(object->actcol, 1), assign_type);
+  DEG_relations_tag_update(bmain);
+  DEG_id_tag_update(&object->id, ID_RECALC_TRANSFORM);
+  WM_event_add_notifier(C, NC_OBJECT | ND_OB_SHADING, object);
+  WM_event_add_notifier(C, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+  WM_event_add_notifier(C, NC_MATERIAL | ND_SHADING_LINKS, material);
+  ED_undo_push(C, IFACE_("Apply Material"));
+}
+
+/** Where tapping an asset adds it: the 3D cursor. */
+bool bridge_asset_add_location(bContext *C, const ID_Type /*type*/, int r_xy[2])
 {
   ARegion *region = CTX_wm_region(C);
   Scene *scene = CTX_data_scene(C);
   if (!region || region->regiontype != RGN_TYPE_WINDOW || !scene) {
     return false;
   }
-  float3 location = scene->cursor.location;
-  if (ELEM(type, ID_MA, ID_NT)) {
-    Object *object = CTX_data_active_object(C);
-    if (!object) {
-      WM_global_report(RPT_WARNING,
-                       type == ID_MA ? "Select an object to apply the material to" :
-                                       "Select an object to add the modifier to");
-      return false;
-    }
-    location = object->object_to_world().location();
-  }
+  const float3 location = scene->cursor.location;
   float2 region_xy;
   if (ED_view3d_project_float_global(region, location, region_xy, V3D_PROJ_TEST_NOP) !=
       V3D_PROJ_RET_OK)
@@ -2528,7 +2645,9 @@ static bool bridge_asset_outside_object_mode(bContext *C,
                                              const int *xy,
                                              const bool drag)
 {
-  if (!ELEM(asset.get_id_type(), ID_OB, ID_GR) || CTX_data_mode_enum(C) == CTX_MODE_OBJECT) {
+  /* Everything the pane lists but materials, modifiers and worlds adds an object, which the 3D
+   * View's drop boxes do in Object Mode only (ROUND6 EDIT-8). */
+  if (ELEM(asset.get_id_type(), ID_MA, ID_NT, ID_WO) || CTX_data_mode_enum(C) == CTX_MODE_OBJECT) {
     return false;
   }
   const char *primitive = CTX_data_mode_enum(C) == CTX_MODE_EDIT_MESH ?
@@ -2572,6 +2691,12 @@ void bridge_asset_drag(bContext *C, const BridgeAssetDragCommand &command)
           bridge_asset_outside_object_mode(
               C, *asset, nullptr, command.phase == BRIDGE_ASSET_DRAG_BEGIN))
       {
+        break;
+      }
+      if (asset && !dragging && command.phase == BRIDGE_ASSET_ADD &&
+          ELEM(asset->get_id_type(), ID_MA, ID_NT))
+      {
+        bridge_asset_apply(C, *asset);
         break;
       }
       if (!asset || dragging ||
@@ -3746,6 +3871,10 @@ void bridge_toolbar_view_build(bContext *C,
   data("select_menu", !edit_object && ELEM(mode, CTX_MODE_OBJECT, CTX_MODE_POSE));
   data("item_card", ELEM(mode, CTX_MODE_OBJECT, CTX_MODE_EDIT_MESH));
   data("adds_into_mesh", edit_object && edit_object->type == OB_MESH);
+  /* A material or modifier asset tapped now reaches the active object (ROUND6 EDIT-8): its tiles
+   * are dimmed otherwise, and a tap says why. */
+  data("applies_material", bridge_asset_apply_refusal(C, ID_MA).empty());
+  data("adds_modifier", bridge_asset_apply_refusal(C, ID_NT).empty());
   /* Moving, turning or scaling: the held buttons are Snap and Precision then. */
   data("transforming", bridge_constraint_operator(CTX_wm_window(C)) != nullptr);
   /* What the shell's Shift, Ctrl and Alt do now (ROUND6 TOUCH-8). */

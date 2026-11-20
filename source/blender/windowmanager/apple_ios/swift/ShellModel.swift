@@ -393,6 +393,9 @@ final class ShellModel {
   var itemCard: Bool { flag("item_card") }
   /** An asset shape dropped joins the mesh being edited. */
   var addsIntoMesh: Bool { flag("adds_into_mesh") }
+  /** A material or a modifier asset tapped now reaches the active object (ROUND6 EDIT-8). */
+  var appliesMaterial: Bool { flag("applies_material") }
+  var addsModifier: Bool { flag("adds_modifier") }
   /** Transform orientation, pivot, snapping and proportional editing, and the mode's mirror axes,
    * by name: `mirror_axes` the axes there are and `mirror` those on, as letters. */
   var transformSettings: [String: String] {

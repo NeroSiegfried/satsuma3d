@@ -33,7 +33,8 @@ SCENARIOS = ("actions", "tabs", "menus", "mirror", "reveal", "knife", "precision
              "extensions", "keys", "insets", "touch", "numinput", "render", "fingers", "undo",
              "tolerance", "waiting", "touchstart", "jobs", "renderprogress", "busy", "renderkeep",
              "desk", "hold", "typing", "windows", "margins", "census", "stale", "header",
-             "popups", "statuskeys", "answers", "animkeys", "nodegroups", "timelinekeys")
+             "popups", "statuskeys", "answers", "animkeys", "nodegroups", "timelinekeys",
+             "assettap")
 
 
 # A scenario that walks every menu item of every mode needs longer than the others' five minutes.

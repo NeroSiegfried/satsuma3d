@@ -24,7 +24,8 @@ let assetTile: CGFloat = 96
 private let startType = "Object"
 private let startCategory = "Primitives"
 
-/** Data-block types Blender publishes, with their Blender icon and a readable plural. */
+/** Data-block types the pane knows a Blender icon and a readable plural for, in the order it shows
+ * them; any other type the viewport's drop boxes take follows by its own name (ROUND6 EDIT-8). */
 private let assetTypes: [(type: String, icon: String, plural: String)] = [
   ("Object", "OBJECT_DATA", "Objects"), ("Collection", "OUTLINER_COLLECTION", "Collections"),
   ("Material", "MATERIAL", "Materials"), ("World", "WORLD", "Worlds"), ("Modifier", "MODIFIER", "Modifiers"),
@@ -40,13 +41,20 @@ func assetTypeIcon(_ type: String?) -> UIImage? {
 private let editMeshPrimitives: Set<String> = ["Plane", "Grid", "Cube", "UV Sphere", "Ico Sphere", "Cylinder",
                                                "Cone", "Torus", "Circle"]
 
-/** Whether Blender adds \a item in \a mode (the active object's, such as `EDIT`): objects and
- * collections only in Object Mode, as Blender's drop does, except the Starter shapes while a mesh
- * is edited (\a intoMesh, as the bridge says: ROUND6 MODE-2). A dimmed tile still answers a tap,
- * saying why. */
+/** Whether Blender adds \a item in \a mode (the active object's, such as `EDIT`): a material or a
+ * modifier where Blender would apply it to the active object (\a appliesMaterial, \a addsModifier,
+ * as the bridge says: ROUND6 EDIT-8); a world always; anything else adds an object, only in Object
+ * Mode, as Blender's drop does, except the Starter shapes while a mesh is edited (\a intoMesh:
+ * ROUND6 MODE-2). A dimmed tile still answers a tap, saying why. */
 @MainActor
-func assetAddable(_ item: AssetItem, mode: String, intoMesh: Bool) -> Bool {
-  guard item.type == "Object" || item.type == "Collection", mode != "OBJECT" else { return true }
+func assetAddable(_ item: AssetItem, mode: String, intoMesh: Bool, appliesMaterial: Bool, addsModifier: Bool) -> Bool {
+  switch item.type {
+    case "Material": return appliesMaterial
+    case "Modifier": return addsModifier
+    case "World": return true
+    default: break
+  }
+  guard mode != "OBJECT" else { return true }
   return intoMesh && item.type == "Object" && item.library == "Starter" && editMeshPrimitives.contains(item.name)
 }
 
@@ -94,7 +102,8 @@ final class AssetsStore: ObservableObject {
 
   var types: [String] {
     let present = Set(items.compactMap { $0.string("type") })
-    return assetTypes.map(\.type).filter(present.contains)
+    let known = assetTypes.map(\.type)
+    return known.filter(present.contains) + present.subtracting(known).sorted()
   }
 
   var categories: [String] {
@@ -297,7 +306,10 @@ struct AssetTile: View {
 
   var body: some View {
     let model = ShellModel.current
-    let addable = model.map { assetAddable(item, mode: $0.objectMode, intoMesh: $0.addsIntoMesh) } ?? true
+    let addable = model.map {
+      assetAddable(item, mode: $0.objectMode, intoMesh: $0.addsIntoMesh, appliesMaterial: $0.appliesMaterial,
+                   addsModifier: $0.addsModifier)
+    } ?? true
     Button {
       store.add(item)
     } label: {

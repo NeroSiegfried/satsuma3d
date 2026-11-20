@@ -2014,4 +2014,19 @@ check({'activate', 'restrict'} <= sent_e7 and {'activate', 'restrict'} <= offere
       "R6 EDIT-7 (D18, D19): rows offer and the shell sends activate and restrict (%s)" % sorted(offered_e7))
 check('blender.hierarchy.scope' in outliner_swift_e7 and 'Desktop Interface' in outliner_swift_e7,
       "R6 EDIT-7 (D19): the Outliner says what it does not show")
+# ROUND6 EDIT-8 (D20): the asset pane lists what the 3D View's drop boxes take, by a table that
+# names every drop box Blender registers there; a tap on a material or modifier applies it to the
+# active object by a direct call, and its tile is dimmed where that would be refused.
+drop_cc_e8 = (SWIFT.parents[2] / 'editors/space_view3d/view3d_dropboxes.cc').read_text(encoding='utf-8')
+registered_e8 = set(re.findall(r'WM_dropbox_add\(\s*lb,\s*"(\w+)"', drop_cc_e8))
+bridge_e8 = (SWIFT.parents[1] / 'intern/wm_native_ui.cc').read_text(encoding='utf-8')
+table_e8 = bridge_e8[bridge_e8.index('bridge_asset_dropboxes[] = {'):]
+table_e8 = set(re.findall(r'\{"(\w+_OT_\w+)"', table_e8[:table_e8.index('};')]))
+check(len(registered_e8) >= 8 and registered_e8 == table_e8,
+      "R6 EDIT-8 (D20): the pane's drop-box table names the 3D View's drop boxes (missing %s, extra %s)" %
+      (sorted(registered_e8 - table_e8), sorted(table_e8 - registered_e8)))
+assets_swift_e8 = (SWIFT / 'Assets.swift').read_text(encoding='utf-8')
+check('bridge_asset_apply(C, *asset);' in bridge_e8 and 'appliesMaterial' in assets_swift_e8 and
+      'addsModifier' in assets_swift_e8 and 'private let assetTypes' in assets_swift_e8,
+      "R6 EDIT-8 (D20): a material or modifier tap is a direct call, its tile dimmed by Blender's answer")
 print('PASS: native shell sources ' + json.dumps(checks))

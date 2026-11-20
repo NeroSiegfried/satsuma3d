@@ -6705,6 +6705,100 @@ def tick_timelinekeys():
     return 0.3
 
 
+# ROUND6 EDIT-8 (D20): a tap on a material or modifier asset applies it to the active object by a
+# direct call, not as a drop at its origin's pixel. The active cube sits inside a bigger sphere, so
+# a drop at its origin lands on the sphere; the tap must still reach the cube. With no active
+# object the tap is refused with a notice and changes nothing.
+assettap_state = {"at": 0, "problems": [], "found": {}}
+
+
+def _assettap_keys():
+    top = tree(subs["assets"]) or {}
+    listed = next((n for n in top.get("children", []) if n["key"] == "assets"), top)
+    return {n.get("label"): n["key"] for n in listed.get("children", [])}
+
+
+def tick_assettap():
+    global step
+    state = assettap_state
+    problems = state["problems"]
+    found = state["found"]
+    try:
+        pump()
+        step += 1
+        at = state["at"]
+        state["at"] += 1
+        if at == 0:
+            lib.WM_native_ui_test_install_hooks()
+            enter("object")
+            subs["toolbar"] = subscribe("toolbar")
+            subs["assets"] = subscribe("assets")
+            cube = bpy.data.objects["Cube"]
+            material = bpy.data.materials.new("Tap Red")
+            material.asset_mark()
+            group = bpy.data.node_groups.new("Tap Modifier", "GeometryNodeTree")
+            group.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+            group.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+            group.links.new(group.nodes.new("NodeGroupInput").outputs[0], group.nodes.new("NodeGroupOutput").inputs[0])
+            group.is_modifier = True
+            group.asset_mark()
+            bpy.ops.mesh.primitive_uv_sphere_add(radius=3.0, location=cube.location)
+            blocker = bpy.context.view_layer.objects.active
+            blocker.name = "Blocker"
+            bpy.ops.object.select_all(action='DESELECT')
+            cube.select_set(True)
+            bpy.context.view_layer.objects.active = cube
+        elif at < 40 and "applied at" not in state:
+            # The libraries load in the background: wait until the two are listed.
+            keys = _assettap_keys()
+            found["listed"] = sorted(k for k in keys if k)
+            if not {"Tap Red", "Tap Modifier"} <= set(keys) and at < 39:
+                return 0.3
+            state["applied at"] = at
+            for label in ("Tap Red", "Tap Modifier"):
+                if label not in keys:
+                    problems.append("EDIT-8: %r is not listed in the pane: %r" % (label, sorted(k for k in keys if k)))
+            if "Tap Red" in keys:
+                invoke(subs["assets"], keys["Tap Red"], 7501)
+            if "Tap Modifier" in keys:
+                invoke(subs["assets"], keys["Tap Modifier"], 7502)
+        elif at == state.get("applied at", -10) + 4:
+            cube, blocker = bpy.data.objects["Cube"], bpy.data.objects["Blocker"]
+            found["cube"] = {"materials": [m.name for m in cube.data.materials if m],
+                             "modifiers": [(m.type, m.node_group.name if m.type == 'NODES' and m.node_group else None)
+                                           for m in cube.modifiers]}
+            found["blocker"] = {"materials": [m.name for m in blocker.data.materials if m],
+                                "modifiers": [m.type for m in blocker.modifiers]}
+            if "Tap Red" not in found["cube"]["materials"] or "Tap Red" in found["blocker"]["materials"]:
+                problems.append("EDIT-8: the material went to %r, not the active cube" % found)
+            if ('NODES', "Tap Modifier") not in found["cube"]["modifiers"] or found["blocker"]["modifiers"]:
+                problems.append("EDIT-8: the modifier went to %r, not the active cube" % found)
+            # No active object: refused, said, nothing changed.
+            bpy.ops.object.select_all(action='DESELECT')
+            bpy.context.view_layer.objects.active = None
+            state["before"] = len(_answers_notices())
+            keys = _assettap_keys()
+            if "Tap Red" in keys:
+                invoke(subs["assets"], keys["Tap Red"], 7503)
+        elif at == state.get("applied at", -10) + 8:
+            notices = _answers_notices()
+            said = notices[state["before"]:]
+            found["refusal"] = said
+            if not said:
+                problems.append("EDIT-8: a material tap with no active object said nothing")
+        elif at >= state.get("applied at", 100) + 9:
+            report["found"] = found
+            report["problems"] = problems
+            finish("done" if not problems else "error")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        report["found"] = found
+        finish("error")
+        return None
+    return 0.3
+
+
 # Every scenario, by the name `mac_bridge_check.py --scenario` takes: the one list (ROUND7 U4d).
 # `mac_bridge_check.py`'s SCENARIOS must name exactly these, which `bl_native_test_runners.py`
 # checks; a name not here ends the run with an error, never another scenario's run.
@@ -6719,7 +6813,7 @@ SCENARIOS = {
     "windows": tick_windows, "margins": tick_margins, "census": tick_census, "stale": tick_stale,
     "header": tick_header, "popups": tick_popups, "statuskeys": tick_statuskeys,
     "answers": tick_answers, "animkeys": tick_animkeys, "nodegroups": tick_nodegroups,
-    "timelinekeys": tick_timelinekeys,
+    "timelinekeys": tick_timelinekeys, "assettap": tick_assettap,
 }
 
 
