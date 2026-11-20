@@ -105,7 +105,7 @@ struct NativeBusyScope {
 #ifdef WITH_NATIVE_UI
   explicit NativeBusyScope(const wmOperatorType *ot)
   {
-    WM_native_ui_busy_push(CTX_IFACE_(ot->translation_context, ot->name));
+    WM_native_ui_busy_push(CTX_IFACE_(ot->translation_context, ot->name), ot->idname);
   }
   ~NativeBusyScope()
   {

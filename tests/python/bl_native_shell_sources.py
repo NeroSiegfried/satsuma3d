@@ -1743,4 +1743,81 @@ check('wm_finger_point_pixels' in query_d6[query_d6.index('int WM_event_finger_m
       'WM_event_finger_margin()' in update_d4,
       "R6 DESK-6: a finger's margin in points in every hit test with a tolerance, and in its map")
 
+# ROUND6 MODE-3 (D9): an operator the shell runs by name is executed unless its work is in its
+# invoke, where `operator_run` invokes it as a click on its menu item would. Every name the shell
+# runs is on one of the two lists: executed (a plain `exec` that needs nothing more) or invoked
+# (`operator_invoked_by_shell`, navigation, a file command). A new name on neither fails here.
+views_d9 = (SWIFT.parents[1] / 'intern/wm_native_ui_views.cc').read_text(encoding='utf-8')
+invoked_d9 = views_d9[views_d9.index('static bool operator_invoked_by_shell('):]
+invoked_d9 = set(re.findall(r'"(\w+_OT_\w+)"', invoked_d9[:invoked_d9.index('\n}\n')]))
+navigates_d9 = views_d9[views_d9.index('static bool operator_navigates('):]
+invoked_d9 |= set(re.findall(r'"(\w+_OT_\w+)"', navigates_d9[:navigates_d9.index('\n}\n')]))
+bridge_d9 = (SWIFT.parents[1] / 'intern/wm_native_ui.cc').read_text(encoding='utf-8')
+documents_d9 = bridge_d9[bridge_d9.index('static const char *bridge_document_command('):]
+invoked_d9 |= set(re.findall(r'\{"(\w+_OT_\w+)", "', documents_d9[:documents_d9.index('\n}\n')]))
+EXECUTED_D9 = {
+    'ED_OT_undo': 'steps back', 'ED_OT_redo': 'steps forward',
+    'SCREEN_OT_animation_play': 'plays or stops', 'SCREEN_OT_frame_jump': 'jumps to the start or end',
+    'SCREEN_OT_keyframe_jump': 'jumps to a key', 'VIEW3D_OT_toggle_shading': 'switches the shading',
+    'WM_OT_call_panel': 'its exec opens the panel (Rename Active Item)',
+    'WM_OT_collection_export_all': 'exports with the exporters the collections hold',
+    'WM_OT_context_toggle': 'flips the property it names',
+    'ANIM_OT_native_key_delete': 'the timeline\'s own', 'ANIM_OT_native_key_move': 'the timeline\'s own',
+    'ANIM_OT_native_key_select': 'the timeline\'s own', 'WM_OT_native_node_tree_new': 'the node editor\'s own',
+    'OBJECT_OT_location_clear': 'clears', 'OBJECT_OT_rotation_clear': 'clears', 'OBJECT_OT_scale_clear': 'clears',
+    'VIEW3D_OT_view_center_camera': 'frames the camera', 'VIEW3D_OT_localview': 'toggles Local View',
+}
+
+
+def idname_d9(name):
+    if '_OT_' in name:
+        return name
+    module, _, op = name.partition('.')
+    return module.upper() + '_OT_' + op
+
+
+run_d9 = set()
+for path in sources():
+    text = path.read_text(encoding='utf-8')
+    run_d9 |= {idname_d9(n) for n in re.findall(r'Operators\.run\("([\w.]+)"', text)}
+    run_d9 |= {idname_d9(n) for n in re.findall(r'operatorName: "([\w.]+)"', text)}
+    if path.name == 'ItemCard.swift':
+        run_d9 |= set(re.findall(r'case [^:]+: "(\w+_OT_\w+)"', text))
+unlisted_d9 = sorted(n for n in run_d9 if n not in invoked_d9 and n not in EXECUTED_D9)
+check(not unlisted_d9 and len(run_d9) >= 20,
+      "R6 MODE-3 (D9): every operator the shell runs by name (%d) is executed or invoked by a reviewed "
+      "list (%s)" % (len(run_d9), unlisted_d9))
+check({'ED_OT_undo_history', 'SCREEN_OT_repeat_history', 'SCREEN_OT_redo_last', 'WM_OT_batch_rename',
+       'WM_OT_link', 'WM_OT_append'} <= invoked_d9,
+      "R6 MODE-3 (D9): the Edit menu's four dialog commands, Link and Append are invoked as a click would")
+both_d9 = sorted(set(EXECUTED_D9) & invoked_d9)
+check(not both_d9, "R6 MODE-3 (D9): no operator is on both lists (%s)" % both_d9)
+
+# ROUND6 MODE-3 (C6, E7): every popup of Blender's is taken where it is made. The iPad installs the
+# hooks; the three functions every popup ends in ask them; the one function that creates every popup
+# region counts what was not taken; a panel any command asks for opens as the interface's popover.
+native_m3 = (SWIFT.parents[1] / 'intern/wm_apple_ios_native.cc').read_text(encoding='utf-8')
+menu_popup_m3 = (ROOT / 'source/blender/editors/interface/regions/interface_region_menu_popup.cc').read_text(encoding='utf-8')
+region_popup_m3 = (ROOT / 'source/blender/editors/interface/regions/interface_region_popup.cc').read_text(encoding='utf-8')
+
+
+def body_m3(text, signature):
+    at = text.index(signature)
+    return text[at:text.index('\n}\n', at)]
+
+
+check('native.popup_take = bridge_popup_take;' in native_m3 and 'native.popup_drawn = bridge_popup_drawn;' in native_m3,
+      "R6 MODE-3: the iPad takes Blender's popups and counts what it did not take")
+check(all('native->popup_take(' in body_m3(menu_popup_m3, signature) for signature in
+          ('void popup_menu_end(bContext *C, PopupMenu *pup)', 'void popup_block_invoke_ex(', 'void popup_block_ex(')),
+      "R6 MODE-3: popup_menu_end, popup_block_invoke_ex and popup_block_ex ask the interface first")
+check('native->popup_drawn(' in body_m3(region_popup_m3, 'PopupBlockHandle *popup_block_create('),
+      "R6 MODE-3: every popup region Blender creates is counted")
+panel_m3 = body_m3(bridge_d9, 'bool bridge_panel_popup(bContext *C, const char *panel)\n{')
+check('popup.panel = ' in panel_m3 and 'bridge_popup_refusal_say(' in panel_m3,
+      "R6 MODE-3 (E7): wm.call_panel opens the interface's popover, or says where the panel is")
+check('data("panel")' in (SWIFT / 'DocumentWindow.swift').read_text(encoding='utf-8') and
+      'struct CalledPanelPopover' in (SWIFT / 'NativeToolSettings.swift').read_text(encoding='utf-8'),
+      "R6 MODE-3 (E7): the shell shows a called panel as a popover")
+
 print('PASS: native shell sources ' + json.dumps(checks))

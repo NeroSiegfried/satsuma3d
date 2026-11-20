@@ -501,6 +501,18 @@ void popup_menu_but_set(PopupMenu *pup, ARegion *butregion, Button *but)
 
 void popup_menu_end(bContext *C, PopupMenu *pup)
 {
+  /* A native interface shows the menu an operator built as its own, or says why it cannot
+   * (ROUND6 MODE-3): Blender's would open under it. */
+  if (const wmNativeInterface *native = WM_native_interface(); native && native->popup_take) {
+    /* Its title is the block's first label: `pup->title` may name a string gone by now. */
+    if (native->popup_take(C, pup->block, nullptr, "", {})) {
+      block_layout_resolve(pup->block);
+      MEM_delete(pup->block->handle);
+      block_free(C, pup->block);
+      MEM_delete(pup);
+      return;
+    }
+  }
   wmWindow *window = CTX_wm_window(C);
 
   pup->popup = true;
@@ -675,6 +687,17 @@ wmOperatorStatus popup_menu_invoke(bContext *C, const char *idname, ReportList *
 void popup_block_invoke_ex(
     bContext *C, BlockCreateFunc func, void *arg, FreeArgFunc arg_free, const bool can_refresh)
 {
+  /* ROUND6 MODE-3: a block of Blender's own, such as Menu Search or Insert Unicode. */
+  if (const wmNativeInterface *native = WM_native_interface(); native && native->popup_take) {
+    if (native->popup_take(C, nullptr, nullptr, "", [arg, arg_free](bContext * /*C*/) {
+          if (arg_free) {
+            arg_free(arg);
+          }
+        }))
+    {
+      return;
+    }
+  }
   wmWindow *window = CTX_wm_window(C);
 
   PopupBlockHandle *handle = popup_block_create(
@@ -703,6 +726,18 @@ void popup_block_ex(bContext *C,
                     void *arg,
                     wmOperator *op)
 {
+  /* ROUND6 MODE-3: an operator's own settings popup, or an alert. What the popup's cancel would
+   * free is freed after the operator's invoke has returned, which still reads the operator. */
+  if (const wmNativeInterface *native = WM_native_interface(); native && native->popup_take) {
+    if (native->popup_take(C, nullptr, op, "", [arg, cancel_func](bContext *C) {
+          if (cancel_func) {
+            cancel_func(C, arg);
+          }
+        }))
+    {
+      return;
+    }
+  }
   wmWindow *window = CTX_wm_window(C);
 
   PopupBlockHandle *handle = popup_block_create(

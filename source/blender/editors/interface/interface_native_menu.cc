@@ -14,7 +14,10 @@
  * runs: nothing of Blender's is kept between drawing a menu and running its item.
  */
 
+#include "MEM_guardedalloc.h"
+
 #include "BKE_context.hh"
+#include "BKE_main.hh"
 #include "BKE_screen.hh"
 #include "BLI_listbase.h"
 #include "BLT_translation.hh"
@@ -596,10 +599,13 @@ static void native_menu(bContext *C,
     }
   }
   else if (PanelType *pt = WM_paneltype_find(resolved.c_str(), true)) {
-    /* A mode whose context menu is a panel of settings, such as Sculpt Mode's: opened as one. */
+    /* A mode whose context menu is a panel of settings, such as Sculpt Mode's: the panel, opened
+     * as the interface's own popover, then the mode's menus as its header has them (ROUND6
+     * MODE-3, E7), so a long press there is more than one item. */
     if (pt->poll && !pt->poll(C, pt)) {
       return;
     }
+    MenuType *mode_menus = WM_menutype_find("VIEW3D_MT_editor_menus", true);
     if (writer && path.is_empty()) {
       const std::string label = std::string(pt->label) + " Settings";
       writer->builder.add(
@@ -608,6 +614,22 @@ static void native_menu(bContext *C,
             return protocol::CreateButtonDirect(
                 buffer, protocol::ButtonStyle::Normal, "WM_OT_call_panel");
           });
+      if (mode_menus) {
+        writer->builder.add(writer->top,
+                            "separator:" + std::to_string(writer->separators++),
+                            [](auto &buffer, NodeFields & /*fields*/) {
+                              return protocol::CreateSeparator(buffer);
+                            });
+        project(C, mode_menus, nullptr, resolved, path, 0, writer, nullptr);
+      }
+    }
+    else if (!path.is_empty() && path[0] != "panel") {
+      if (mode_menus) {
+        project(C, mode_menus, nullptr, resolved, path, 0, writer, invocation);
+        if (invocation) {
+          invocation->execute(C);
+        }
+      }
     }
     else if (invocation && path.size() == 1 && path[0] == "panel") {
       PointerRNA properties = WM_operator_properties_create("WM_OT_call_panel");
@@ -708,6 +730,142 @@ void menu_write(bContext *C, const StringRef route, ViewBuilder &builder)
     return;
   }
   in_properties_tab(C, tab, [&]() { native_menu(C, route, &writer, nullptr); });
+}
+
+/**
+ * A menu an operator built for Blender to pop up (`popup_menu_end`), taken by the interface (ROUND6
+ * MODE-3): what its items run, kept from when it was built to when one is chosen, as Blender's
+ * popup keeps its buttons. Only the last one is kept.
+ */
+struct TakenPopup {
+  Main *bmain = nullptr;
+  Vector<std::unique_ptr<Invocation>> invocations;
+  Vector<std::string> menus;
+};
+
+static TakenPopup &taken_popup()
+{
+  static TakenPopup taken;
+  return taken;
+}
+
+wmNativePopupMenu popup_menu_take(bContext *C, Block *block, const StringRef title)
+{
+  wmNativePopupMenu result;
+  TakenPopup &taken = taken_popup();
+  taken = TakenPopup();
+  taken.bmain = CTX_data_main(C);
+  result.title = title;
+  for (const int64_t i : block->buttons.index_range()) {
+    Button &but = *block->buttons[i];
+    if (ELEM(but.type, ButtonType::Sepr, ButtonType::SeprLine, ButtonType::SeprSpacer)) {
+      continue;
+    }
+    std::string text = label(but);
+    if (but.type == ButtonType::Label) {
+      /* The title Blender writes above its items (a label, then a line: `popup_menu_begin`),
+       * then headings and lines of text. */
+      std::string trimmed = text;
+      while (!trimmed.empty() && trimmed.front() == ' ') {
+        trimmed.erase(trimmed.begin());
+      }
+      if (i == 0 && block->buttons.size() > 1 &&
+          ELEM(block->buttons[1]->type, ButtonType::Sepr, ButtonType::SeprLine))
+      {
+        if (result.title.empty()) {
+          result.title = trimmed;
+        }
+        continue;
+      }
+      if (!trimmed.empty()) {
+        result.items.append({trimmed, "", ""});
+        result.text += (result.text.empty() ? "" : "\n") + trimmed;
+      }
+      continue;
+    }
+    const int icon = button_icon(&but);
+    const char *icon_name = "";
+    if (ELEM(icon, ICON_NONE, ICON_BLANK1) ||
+        !RNA_enum_identifier(rna_enum_icon_items, icon, &icon_name))
+    {
+      icon_name = "";
+    }
+    const bool disabled = but.flag & (BUT_DISABLED | BUT_INACTIVE);
+    if (MenuType *mt = button_menutype_get(&but); mt && !disabled) {
+      if (text.empty()) {
+        text = CTX_IFACE_(mt->translation_context, mt->label);
+      }
+      result.items.append({text, "m" + std::to_string(taken.menus.size()), icon_name});
+      taken.menus.append(mt->idname);
+      result.actions++;
+      continue;
+    }
+    if (is_submenu(but) || !is_action(but) || disabled) {
+      /* A submenu Blender builds in place, a field, or an item that cannot run now. */
+      result.left_out++;
+      continue;
+    }
+    if (text.empty() && but.optype) {
+      text = WM_operatortype_name(but.optype, but.opptr);
+    }
+    if (text.empty()) {
+      result.left_out++;
+      continue;
+    }
+    auto invocation = std::make_unique<Invocation>();
+    invocation->capture(but);
+    result.items.append({text, std::to_string(taken.invocations.size()), icon_name});
+    taken.invocations.append(std::move(invocation));
+    result.actions++;
+  }
+  return result;
+}
+
+std::string popup_menu_choose(bContext *C, const StringRef value)
+{
+  TakenPopup &taken = taken_popup();
+  if (taken.bmain != CTX_data_main(C)) {
+    return IFACE_("This menu belonged to another document");
+  }
+  if (value.startswith("m")) {
+    const int index = std::atoi(std::string(value.drop_prefix(1)).c_str());
+    if (index < 0 || index >= taken.menus.size()) {
+      return IFACE_("This menu has changed");
+    }
+    WM_menu_name_call(C, taken.menus[index].c_str(), wm::OpCallContext::InvokeRegionWin);
+    return "";
+  }
+  const int index = std::atoi(std::string(value).c_str());
+  if (index < 0 || index >= taken.invocations.size()) {
+    return IFACE_("This menu has changed");
+  }
+  Invocation &invocation = *taken.invocations[index];
+  if (invocation.type) {
+    const bContextStore *previous = CTX_store_get(C);
+    CTX_store_set(C, invocation.context.get());
+    std::string why;
+    if (!WM_operator_poll_context(C, invocation.type, invocation.opcontext)) {
+      bool free = false;
+      const char *message = CTX_wm_operator_poll_msg_get(C, &free);
+      why = WM_operatortype_name(invocation.type, nullptr) + ": " +
+            (message && message[0] ? message : IFACE_("it cannot run here now"));
+      if (free) {
+        MEM_SAFE_DELETE(message);
+      }
+    }
+    CTX_store_set(C, previous);
+    if (!why.empty()) {
+      return why;
+    }
+  }
+  if (!invocation.type && invocation.rnapoin.owner_id) {
+    ID *id = invocation.rnapoin.owner_id;
+    if (BLI_findindex(which_libbase(CTX_data_main(C), GS(id->name)), id) == -1) {
+      return IFACE_("What this item changes is gone");
+    }
+  }
+  invocation.execute(C);
+  return "";
 }
 
 void menu_run(bContext *C, const StringRef route)

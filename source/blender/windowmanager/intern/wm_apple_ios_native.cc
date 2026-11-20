@@ -52,6 +52,12 @@ extern "C" void wm_apple_ios_open_web_url(const char *url);
 bool bridge_menu_popup(bContext *C, const char *menu);
 bool bridge_enum_popup(bContext *C, wmOperator *op, PropertyRNA *prop);
 bool bridge_panel_popup(bContext *C, const char *panel);
+bool bridge_popup_take(bContext *C,
+                       ui::Block *block,
+                       wmOperator *op,
+                       const char *title,
+                       std::function<void(bContext *)> release);
+void bridge_popup_drawn(bContext *C, const char *what);
 
 namespace ui {
 bool native_operator_dialog_begin(bContext *C,
@@ -232,6 +238,9 @@ wmNativeInterface native_interface_create()
   native.menu_popup = bridge_menu_popup;
   native.enum_popup = bridge_enum_popup;
   native.panel_popup = bridge_panel_popup;
+  /* Every other popup of Blender's (ROUND6 MODE-3). */
+  native.popup_take = bridge_popup_take;
+  native.popup_drawn = bridge_popup_drawn;
   native.props_dialog = props_dialog;
   native.web_url_open = wm_apple_ios_open_web_url;
   native.interface_scale = WM_native_ui_interface_scale;

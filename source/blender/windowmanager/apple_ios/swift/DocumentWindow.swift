@@ -591,6 +591,20 @@ extension DocumentController: UIGestureRecognizerDelegate {
       runStandIn(command, at: popupAnchor(point))
       return
     }
+    /* A panel a command asked for, such as a paint mode's settings (ROUND6 MODE-3): its popover,
+     * drawn by Blender in the viewport as the header's popovers are, never Blender's own. */
+    if let panel = data("panel")?.value(type: Blender_NativeUI_TextValue.self)?.value, !panel.isEmpty {
+      var top: UIViewController = self
+      while let presented = top.presentedViewController { top = presented }
+      let host = UIHostingController(rootView: CalledPanelPopover(model: PanelsModel(mode: .popover, tab: panel)))
+      host.modalPresentationStyle = .popover
+      host.preferredContentSize = CGSize(width: 360, height: 420)
+      host.popoverPresentationController?.sourceView = metalView
+      host.popoverPresentationController?.sourceRect = popupAnchor(point)
+      top.present(host, animated: true)
+      WM_native_ui_log("menu", "panel \(panel)")
+      return
+    }
     guard let menu = data("menu")?.value(type: Blender_NativeUI_TextValue.self)?.value else {
       WM_native_ui_log("menu", "popup \(top.key) asked for nothing this interface knows")
       return

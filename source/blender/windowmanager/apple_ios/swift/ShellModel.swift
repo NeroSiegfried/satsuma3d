@@ -230,6 +230,10 @@ final class ShellModel {
     else if target.hasPrefix("action:") {
       send(target, .invoke)
     }
+    else if target == "interface:desktop" {
+      /* A message's Desktop Interface, beside what only that interface has (ROUND6 MODE-3). */
+      BlenderSettings.set("desktop", .bool(true))
+    }
     else if target == "fingers:tool" {
       /* A message's Keep Fingers on Tools (ROUND6 TOUCH-1). */
       ShellCommands.current?.chooseFingerUsesTool(true)

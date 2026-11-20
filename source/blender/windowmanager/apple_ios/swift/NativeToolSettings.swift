@@ -236,6 +236,24 @@ struct ToolSettingPanelPopover: View {
   }
 }
 
+/**
+ * A panel a command asked Blender to pop up (`wm.call_panel`, ROUND6 MODE-3, finding E7), such as
+ * a paint mode's settings: its view, drawn by Blender as a popover's, for as long as it shows.
+ */
+struct CalledPanelPopover: View {
+  let model: PanelsModel
+
+  var body: some View {
+    ScrollView {
+      PanelsForm(model: model, scrolls: false)
+    }
+    .frame(minWidth: 320, idealWidth: 360, minHeight: 120, idealHeight: 420)
+    .tint(PanelStyle.tint)
+    /* Blender stops building the view once it is gone. */
+    .onDisappear { NativeViews.shared.unsubscribe(model.view) }
+  }
+}
+
 /** The name of the menu a button opens. */
 @MainActor
 func menuName(_ node: NativeNode) -> String {

@@ -898,6 +898,24 @@ static bool operator_navigates(const std::string_view idname)
               "VIEW3D_OT_view_roll");
 }
 
+/**
+ * Operators the shell runs by name whose work is in their invoke (ROUND6 MODE-3, D9): run as a
+ * click on their menu item runs them, so their menu, dialog or file picker shows. Executed, Undo
+ * History did nothing, Repeat History repeated the oldest operation, Adjust Last Operation has no
+ * exec, Batch Rename failed, Link and Append opened no picker. `bl_native_shell_sources.py` fails on
+ * a name the shell runs that is on neither this list nor its list of executed operators.
+ */
+static bool operator_invoked_by_shell(const wmOperatorType *ot)
+{
+  return ot->exec == nullptr || ELEM(StringRef(ot->idname),
+                                     "ED_OT_undo_history",
+                                     "SCREEN_OT_repeat_history",
+                                     "SCREEN_OT_redo_last",
+                                     "WM_OT_batch_rename",
+                                     "WM_OT_link",
+                                     "WM_OT_append");
+}
+
 static std::string operator_idname(const std::string_view name)
 {
   char idname[OP_MAX_TYPENAME];
@@ -945,15 +963,16 @@ bool operator_run(bContext *C,
   }
   if (valid) {
     /* Navigation is invoked, so it animates; a file command is invoked, so it takes the
-     * document's route (ROUND5 9D.2); anything else runs as a button runs it. Why it failed, as
-     * it reports it, answers the command. */
+     * document's route (ROUND5 9D.2); so is an operator whose work is in its invoke (ROUND6
+     * MODE-3); anything else is executed. Why it failed, as it reports it, answers the command. */
     wmWindowManager *wm = CTX_wm_manager(C);
     ReportList *reports = CTX_wm_reports(C);
     const Report *before = reports ? BKE_reports_last_displayable(reports) : nullptr;
     WM_operator_name_call_ptr(C,
                               ot,
                               operator_navigates(idname) ||
-                                      WM_native_ui_is_document_command(ot->idname) ?
+                                      WM_native_ui_is_document_command(ot->idname) ||
+                                      operator_invoked_by_shell(ot) ?
                                   OpCallContext::InvokeRegionWin :
                                   OpCallContext::ExecRegionWin,
                               &ptr,

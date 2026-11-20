@@ -5535,6 +5535,386 @@ def tick_header():
     return 0.3
 
 
+# ROUND6 MODE-3 (E7, C6, D9): no Blender popup inside the iPad interface. With the hooks the iPad
+# installs for popups, the Edit menu's four dialog commands run as a click would (Undo History's menu,
+# Repeat History's list, Adjust Last Operation, Batch Rename's dialog), a settings popup runs and shows
+# its settings, Menu Search becomes Search, a paint mode's long press is its settings' popover and its
+# menus. Then every menu item of the 3D Viewport's menus and its context menu is run in each of the 22
+# modes (each operator call once): a popup region Blender creates itself fails, by the item.
+POPUP_COUNTS = None
+# Not run by the sweep, by what they do rather than what they show: file commands and pickers
+# (FILES), long work (renders, bakes), the window and screen layout, playback, the undo stack the
+# sweep restores with, preferences and links out of the app.
+POPUP_SKIP = re.compile(
+    r"^(WM_OT_(open|save|read|revert|recover|quit|link|append|url_open|doc_|console|window|"
+    r"splash|search_|call_asset|toolbar)|RENDER_OT_|SCREEN_OT_(screen|region_quadview|area|"
+    r"animation|userpref|workspace|back_to|frame_jump|info)|ED_OT_|OBJECT_OT_(bake|.*_bake)|"
+    r"PTCACHE_OT_|SOUND_OT_|SCRIPT_OT_|PREFERENCES_OT_|FLUID_OT_|CLOTH_OT_|DPAINT_OT_|"
+    r"VIEW3D_OT_(localview|walk|fly|navigate)|ANIM_OT_keying_set|GPENCIL_OT_bake)")
+
+
+def _popup_lib():
+    global POPUP_COUNTS
+    if POPUP_COUNTS is None:
+        POPUP_COUNTS = lib.WM_native_ui_test_popups
+        POPUP_COUNTS.argtypes = [ctypes.POINTER(ctypes.c_int)] * 3 + [ctypes.c_char_p, ctypes.c_size_t]
+    return POPUP_COUNTS
+
+
+def _popups():
+    counts = [ctypes.c_int() for _ in range(3)]
+    last = ctypes.create_string_buffer(256)
+    _popup_lib()(*[ctypes.byref(c) for c in counts], last, 256)
+    return {"drawn": counts[0].value, "taken": counts[1].value, "refused": counts[2].value,
+            "last": last.value.decode()}
+
+
+def _popup_top(sub):
+    top = tree(sub) or {}
+    data = {n["key"]: n.get("value") for n in top.get("children", []) if n.get("content") == "Data"}
+    choice = next((n for n in top.get("children", []) if n["key"] == "choice"), None)
+    return top, data, choice
+
+
+popups_state = {"stage": "edit", "at": 0, "problems": [], "found": {}, "mode": 0, "items": [], "ran": set(),
+                "walk": [], "notrun": {}, "counts": {}}
+
+
+def _popups_operator_call(name, command_id):
+    invoke(subs["operators"], name, command_id)
+
+
+def _popups_file_picker(operator):
+    """An operator that picks a file first: its file browser is FILES' business, not a popup."""
+    try:
+        module, _, name = operator.partition("_OT_")
+        props = getattr(getattr(bpy.ops, module.lower()), name).get_rna_type().properties
+    except (AttributeError, KeyError):
+        return False
+    return any(p in props for p in ("filepath", "directory", "filename"))
+
+
+def _popups_enter(index):
+    """The mode, on its object found again by name: an undo replaces the objects."""
+    names = popups_state.setdefault("names", {})
+    # After a file load a timer runs without a window: the objects are made in the viewport's.
+    with bpy.context.temp_override(**dict(zip(("window", "area", "region"), _view3d()))):
+        made = _header_objects()
+    if not names:
+        names.update({key: ob.name for key, ob in made.items()})
+    made.clear()
+    made.update({key: bpy.data.objects.get(name) for key, name in names.items()})
+    mode, name, object_mode = HEADER_MODES[index]
+    why = _header_enter(mode, name, object_mode)
+    if why is None and bpy.context.mode != mode:
+        # Out of the last mode by its own object first, then once more.
+        window, area, region = _view3d()
+        ob = bpy.context.view_layer.objects.active
+        with bpy.context.temp_override(window=window, area=area, region=region, active_object=ob, object=ob):
+            if bpy.context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+        why = _header_enter(mode, name, object_mode)
+    if why is None and bpy.context.mode != mode:
+        why = "entered %s instead" % bpy.context.mode
+    return why
+
+
+def _popups_cancel_waiting():
+    """What an item left waiting: a native dialog is cancelled, a modal operator gets Escape."""
+    top = tree(subs["dialog"]) or {}
+    if top.get("children"):
+        invoke_text(subs["dialog"], top["key"], "cancel", 9000)
+    window, _area, region = _view3d()
+    if window.modal_operators:
+        window.event_simulate(type='ESC', value='PRESS', x=region.x + region.width // 2,
+                              y=region.y + region.height // 2)
+        window.event_simulate(type='ESC', value='RELEASE', x=region.x + region.width // 2,
+                              y=region.y + region.height // 2)
+
+
+def _popups_reset():
+    """A fresh factory scene with one object of each type: what an item removed is back. Loading a
+    file removes timers, so the scenario's is registered again."""
+    bpy.ops.wm.read_homefile(use_factory_startup=True)
+    header_state["objects"] = {}
+    popups_state.pop("names", None)
+    for name in ("popup", "dialog"):
+        if name in subs:
+            lib.WM_native_ui_unsubscribe(subs.pop(name))
+        subs[name] = subscribe(name)
+    if not bpy.app.timers.is_registered(tick_popups):
+        bpy.app.timers.register(tick_popups, first_interval=0.2)
+
+
+def _popups_state_now():
+    return (bpy.context.mode, len(bpy.data.objects), getattr(bpy.context.view_layer.objects.active, "name", None))
+
+
+def _popups_restore(before, index):
+    """Back to the mode and objects the item started from: undone, or the mode entered again."""
+    window, area, region = _view3d()
+    if _popups_state_now() != before:
+        with bpy.context.temp_override(window=window, area=area, region=region):
+            try:
+                bpy.ops.ed.undo()
+            except RuntimeError:
+                pass
+    if bpy.context.mode != HEADER_MODES[index][0] or _popups_state_now()[1] != before[1]:
+        _popups_enter(index)
+
+
+def _popups_finish(status):
+    """`finish`, in a window: after a file load a timer runs without one, and quitting needs it."""
+    window = bpy.context.window_manager.windows[0]
+    with bpy.context.temp_override(window=window):
+        finish(status)
+
+
+def tick_popups():
+    """After a file load (`_popups_reset`) a timer runs without a window, and the context's mode
+    and view layer with it: each tick runs in the first window."""
+    if bpy.context.window is None and bpy.context.window_manager.windows:
+        with bpy.context.temp_override(window=bpy.context.window_manager.windows[0]):
+            return _tick_popups()
+    return _tick_popups()
+
+
+def _tick_popups():
+    global step
+    state = popups_state
+    problems = state["problems"]
+    try:
+        pump()
+        step += 1
+        at = state["at"]
+        state["at"] += 1
+        if step == 1:
+            lib.WM_native_ui_test_install_popup_hooks()
+            subs["operators"] = subscribe("operators")
+            subs["popup"] = subscribe("popup")
+            subs["dialog"] = subscribe("dialog")
+            enter("object")
+            return 0.2
+        if state["stage"] == "edit":
+            # The Edit menu's four dialog commands, as the shell runs them (D9).
+            if at == 1:
+                _popups_operator_call("MESH_OT_primitive_cube_add", 9101)
+            elif at == 3:
+                state["objects"] = len(bpy.data.objects)
+                _popups_operator_call("ED_OT_undo_history", 9102)
+            elif at == 5:
+                _top, data, _choice = _popup_top(subs["popup"])
+                state["found"]["Undo History"] = data.get("menu")
+                if data.get("menu") != "TOPBAR_MT_undo_history":
+                    problems.append("D9: Undo History opened %r, not its menu (ack %r)" % (data, acks.get(9102)))
+                _popups_operator_call("SCREEN_OT_repeat_history", 9103)
+            elif at == 7:
+                top, _data, choice = _popup_top(subs["popup"])
+                options = [o for o in (choice or {}).get("options", []) if o]
+                state["found"]["Repeat History"] = [top.get("label"), len(options)]
+                if not options:
+                    problems.append("D9/C6: Repeat History's list is not the interface's: %r (ack %r)" % (top, acks.get(9103)))
+                else:
+                    set_text(subs["popup"], "choice", options[0], 9104)
+            elif at == 9:
+                state["found"]["Repeat History chosen"] = [acks.get(9104), len(bpy.data.objects) - state["objects"]]
+                if len(bpy.data.objects) != state["objects"] + 1:
+                    problems.append("D9: Repeat History's first item did not add the cube again (ack %r)" % acks.get(9104))
+                _popups_operator_call("SCREEN_OT_redo_last", 9105)
+            elif at == 11:
+                state["found"]["Adjust Last Operation"] = acks.get(9105)
+                if acks.get(9105) != "ok":
+                    problems.append("D9: Adjust Last Operation answered %r" % acks.get(9105))
+                _popups_operator_call("WM_OT_batch_rename", 9106)
+            elif at == 13:
+                top = tree(subs["dialog"]) or {}
+                state["found"]["Batch Rename"] = [acks.get(9106), len(top.get("children", []))]
+                if acks.get(9106) != "ok" or not top.get("children"):
+                    problems.append("D9: Batch Rename's dialog did not open natively (ack %r): %r" % (acks.get(9106), top))
+                _popups_cancel_waiting()
+                window, area, region = _view3d()
+                with bpy.context.temp_override(window=window, area=area, region=region):
+                    bpy.ops.object.select_all(action='DESELECT')
+                    # A settings popup that applies as it is edited (C6's WM_operator_props_popup).
+                    bpy.ops.object.select_pattern('INVOKE_DEFAULT')
+                state["found"]["Select Pattern"] = len(bpy.context.selected_objects)
+                if not bpy.context.selected_objects:
+                    problems.append("C6: Select Pattern did not run before showing its settings")
+            elif at == 15:
+                window, area, region = _view3d()
+                with bpy.context.temp_override(window=window, area=area, region=region):
+                    bpy.ops.wm.search_menu('INVOKE_DEFAULT')
+            elif at == 17:
+                _top, data, _choice = _popup_top(subs["popup"])
+                state["found"]["Menu Search"] = data.get("command")
+                if data.get("command") != "search":
+                    problems.append("C6: Menu Search is not the interface's Search: %r" % data)
+                enter("sculpt")
+                subs["context"] = subscribe("menu", route="context")
+            elif at == 20:
+                items = (tree(subs["context"]) or {}).get("children", [])
+                state["found"]["Sculpt long press"] = [(n.get("label"), n.get("content")) for n in items]
+                if len([n for n in items if n.get("label")]) < 2 or not any(n.get("content") == "MenuButton" for n in items):
+                    problems.append("E7: Sculpt Mode's long press is not its settings and menus: %r" %
+                                    state["found"]["Sculpt long press"])
+                panel = next((n for n in items if n["key"].endswith("\npanel")), None)
+                if panel is None:
+                    problems.append("E7: Sculpt Mode's long press has no settings item")
+                else:
+                    invoke(subs["context"], panel["key"], 9107)
+            elif at == 22:
+                _top, data, _choice = _popup_top(subs["popup"])
+                state["found"]["Sculpt settings"] = data.get("panel")
+                if not (data.get("panel") or "").startswith("POPOVER:VIEW3D_PT_sculpt_context_menu"):
+                    problems.append("E7: Sculpt Settings did not open as the interface's popover: %r (ack %r)" %
+                                    (data, acks.get(9107)))
+                else:
+                    subs["panel"] = subscribe("properties", tab=data["panel"])
+                lib.WM_native_ui_unsubscribe(subs.pop("context"))
+            elif at == 24:
+                shown = [n for n in _census_nodes(tree(subs["panel"]) or {}) if n.get("content") not in ("Group", "Panel", None)] \
+                    if "panel" in subs else []
+                state["found"]["Sculpt settings controls"] = len(shown)
+                if "panel" in subs and not shown:
+                    problems.append("E7: Sculpt Settings' popover has nothing in it")
+                if "panel" in subs:
+                    lib.WM_native_ui_unsubscribe(subs.pop("panel"))
+                counts = _popups()
+                state["counts"]["targeted"] = counts
+                if counts["drawn"]:
+                    problems.append("C6: Blender drew %d popup(s) of its own in the targeted checks, the last %s" %
+                                    (counts["drawn"], counts["last"]))
+                state.update(stage="sweep", at=0, mode=0, phase="enter")
+            return 0.1
+        return _popups_sweep()
+    except Exception:
+        report["error"] = traceback.format_exc()
+        report["found"] = state["found"]
+        _popups_finish("error")
+        return None
+
+
+def _popups_sweep():
+    """Every menu item of the viewport's menus and context menu, in each mode, each call once."""
+    state = popups_state
+    problems = state["problems"]
+    if state["mode"] >= len(HEADER_MODES):
+        report["found"] = state["found"]
+        report["popups"] = _popups()
+        report["sweep"] = {"items run": len(state["ran"]), "not run": state["notrun"],
+                           "by mode": state["counts"].get("modes", {})}
+        report["problems"] = problems
+        _popups_finish("done" if not problems else "error")
+        return None
+    mode = HEADER_MODES[state["mode"]][0]
+    phase = state["phase"]
+    if phase == "enter":
+        # The file is loaded at the end of a tick: the windows of the tick that loads it are gone.
+        _popups_reset()
+        state["phase"] = "entered"
+        return 0.2
+    if phase == "entered":
+        why = _popups_enter(state["mode"])
+        if why:
+            problems.append("MODE-3: %s could not be entered: %s" % (mode, why))
+            state["mode"] += 1
+            return 0.05
+        state["walk"] = ["VIEW3D_MT_editor_menus", "context"]
+        state["menus"] = {}
+        state["items"] = []
+        state["seen_routes"] = set()
+        state.update(phase="subscribe")
+    if state["phase"] == "subscribe":
+        for route in state["walk"]:
+            state["menus"][route] = subscribe("menu", route=route)
+        state["walk"] = []
+        state.update(phase="read", wait=2)
+        return 0.05
+    if phase == "read":
+        if state["wait"] > 0:
+            state["wait"] -= 1
+            return 0.05
+        for route, sub in list(state["menus"].items()):
+            for node in (tree(sub) or {}).get("children", []):
+                if not node.get("enabled"):
+                    continue
+                if node.get("content") == "MenuButton":
+                    child = (node.get("params") or {}).get("route")
+                    if child and child not in state["seen_routes"] and child.count("\n") < 4:
+                        state["seen_routes"].add(child)
+                        state["walk"].append(child)
+                elif node.get("content") == "Button":
+                    state["items"].append((route, node["key"], node.get("label"), node.get("operator") or ""))
+            lib.WM_native_ui_unsubscribe(sub)
+        state["menus"] = {}
+        if state["walk"]:
+            state["phase"] = "subscribe"
+            return 0.05
+        state["counts"].setdefault("modes", {})[mode] = {"items": len(state["items"])}
+        state.update(phase="run", index=0)
+        return 0.05
+    if phase == "run":
+        if state["index"] >= len(state["items"]):
+            state.update(mode=state["mode"] + 1, phase="enter")
+            return 0.05
+        route, key, label, operator = state["items"][state["index"]]
+        state["index"] += 1
+        identity = key.split("\n")[-1]
+        call = identity.split("\t")[2:5] if "\t" in identity else [identity]
+        call = (operator or label, "\t".join(call))
+        if call in state["ran"]:
+            return 0.0
+        if operator and (POPUP_SKIP.match(operator) or _popups_file_picker(operator)):
+            state["notrun"][operator] = state["notrun"].get(operator, 0) + 1
+            state["ran"].add(call)
+            return 0.0
+        state["ran"].add(call)
+        state["before"] = _popups_state_now()
+        state["counted"] = _popups()
+        state["drawn"] = state["counted"]["drawn"]
+        sub = subscribe("menu", route=route)
+        pump()
+        invoke(sub, key, 9500)
+        pump()
+        lib.WM_native_ui_unsubscribe(sub)
+        state["current"] = (mode, label, operator)
+        state["phase"] = "settle"
+        return 0.05
+    if phase == "settle":
+        counts = _popups()
+        mode_, label, operator = state["current"]
+        if counts["drawn"] != state["drawn"]:
+            problems.append("C6: %s: %s (%s) opened Blender's own popup: %s" % (mode_, label, operator, counts["last"]))
+            state["drawn"] = counts["drawn"]
+        # What the interface showed its own way, and what it refused with a message, by item.
+        for kind in ("taken", "refused"):
+            if counts[kind] != state["counted"][kind]:
+                state["found"].setdefault("sweep " + kind, []).append("%s: %s (%s)" % (mode_, label, operator))
+        _popups_cancel_waiting()
+        state["phase"] = "restore"
+        return 0.05
+    if phase == "restore":
+        pump()
+        try:
+            _popups_restore(state["before"], state["mode"])
+        except (RuntimeError, ReferenceError, AttributeError, KeyError):
+            # What the item did could not be undone: the scene and mode from the start.
+            _popups_reset()
+            state["phase"] = "reenter"
+            return 0.2
+        state["phase"] = "run"
+        return 0.02
+    if phase == "reenter":
+        why = _popups_enter(state["mode"])
+        if why:
+            problems.append("MODE-3: %s could not be entered again: %s" % (mode, why))
+            state.update(mode=state["mode"] + 1, phase="enter")
+            return 0.05
+        state["phase"] = "run"
+        return 0.02
+    return 0.05
+
+
 # Every scenario, by the name `mac_bridge_check.py --scenario` takes: the one list (ROUND7 U4d).
 # `mac_bridge_check.py`'s SCENARIOS must name exactly these, which `bl_native_test_runners.py`
 # checks; a name not here ends the run with an error, never another scenario's run.
@@ -5547,7 +5927,7 @@ SCENARIOS = {
     "jobs": tick_jobs, "renderprogress": tick_render_progress, "busy": tick_busy,
     "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold, "typing": tick_typing,
     "windows": tick_windows, "margins": tick_margins, "census": tick_census, "stale": tick_stale,
-    "header": tick_header,
+    "header": tick_header, "popups": tick_popups,
 }
 
 

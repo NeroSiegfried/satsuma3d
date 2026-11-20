@@ -934,6 +934,12 @@ PopupBlockHandle *popup_block_create(bContext *C,
   wmWindow *window = CTX_wm_window(C);
   Button *activebut = context_active_but_get(C);
 
+  /* Every popup region of Blender's starts here: one in the native interface is one it did not
+   * take, which the interface counts (ROUND6 MODE-3). */
+  if (const wmNativeInterface *native = WM_native_interface(); native && native->popup_drawn) {
+    native->popup_drawn(C, handle_create_func ? "menu, pie or popover" : "block");
+  }
+
   /* disable tooltips from buttons below */
   if (activebut) {
     button_tooltip_timer_remove(C, activebut);

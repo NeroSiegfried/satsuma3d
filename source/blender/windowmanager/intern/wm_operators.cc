@@ -1202,6 +1202,14 @@ static ui::Block *wm_enum_search_menu(bContext *C, ARegion *region, void *arg)
 
 wmOperatorStatus WM_enum_search_invoke(bContext *C, wmOperator *op, const wmEvent * /*event*/)
 {
+  /* A native interface lists the choices as its own, as for #WM_menu_invoke_ex: a search box
+   * needs typing over Blender's popup (ROUND6 MODE-3). */
+  if (const wmNativeInterface *native = WM_native_interface(); native && native->enum_popup) {
+    PropertyRNA *prop = op->type->prop;
+    if (prop && RNA_property_type(prop) == PROP_ENUM && native->enum_popup(C, op, prop)) {
+      return OPERATOR_CANCELLED;
+    }
+  }
   static EnumSearchMenu search_menu;
   search_menu.op = op;
   /* Refreshing not supported, because operator might get freed. */
@@ -1865,10 +1873,11 @@ static wmOperatorStatus wm_operator_props_popup_ex(
         C, op, 300, title, confirm_text, cancel_default, message);
   }
 
-  /* An interface that shows the last operation's properties itself: run it, then show them. */
+  /* An interface that shows the last operation's properties itself: run it, then show them. Also
+   * for a settings popup that applies as it is edited (#WM_operator_props_popup, `do_call` false):
+   * its popup would be Blender's, under the interface (ROUND6 MODE-3, C6). */
   if (const wmNativeInterface *native = WM_native_interface();
-      do_call && native && native->replaces_redo_panel && native->replaces_redo_panel() &&
-      native->redo_show)
+      native && native->replaces_redo_panel && native->replaces_redo_panel() && native->redo_show)
   {
     const wmOperatorStatus status = op->type->exec(C, op);
     if (status & OPERATOR_FINISHED) {

@@ -19,7 +19,9 @@
 #include "BLI_function_ref.hh"
 #include "BLI_map.hh"
 #include "BLI_string_ref.hh"
+#include "BLI_vector.hh"
 
+#include "WM_native_interface.hh"
 #include "WM_native_ui_views.hh"
 
 namespace blender {
@@ -27,6 +29,7 @@ struct bContext;
 }
 
 namespace blender::ui {
+struct Block;
 struct Button;
 }
 
@@ -227,6 +230,11 @@ std::string dialog_edit(bContext *C, PanelsData &data, const EditRequest &reques
 void menu_write(bContext *C, StringRef route, wm::native_ui::ViewBuilder &builder);
 /** Run the menu item at \a route. */
 void menu_run(bContext *C, StringRef route);
+
+/** Takes the items of \a block, a popup menu titled \a title, for #popup_menu_choose. */
+wmNativePopupMenu popup_menu_take(bContext *C, Block *block, StringRef title);
+/** Runs the item of the last menu taken, as its button would: empty, or why nothing ran. */
+std::string popup_menu_choose(bContext *C, StringRef value);
 /**
  * Whether the interface draws the menu \a idname here, by itself or as the root of a route: the
  * menu exists, its poll passes in \a C, and it is one the interface shows (the menu bars, Add,

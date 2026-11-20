@@ -31,7 +31,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCENARIOS = ("actions", "tabs", "menus", "mirror", "reveal", "knife", "precision", "material",
              "extensions", "keys", "insets", "touch", "numinput", "render", "fingers", "undo",
              "tolerance", "waiting", "touchstart", "jobs", "renderprogress", "busy", "renderkeep",
-             "desk", "hold", "typing", "windows", "margins", "census", "stale", "header")
+             "desk", "hold", "typing", "windows", "margins", "census", "stale", "header",
+             "popups")
+
+
+# A scenario that walks every menu item of every mode needs longer than the others' five minutes.
+SCENARIO_SECONDS = {"popups": 1200}
 
 
 def last_report(text):
@@ -113,7 +118,8 @@ def main():
             env["BLENDER_SYSTEM_EXTENSIONS"] = root
             env["BLENDER_USER_RESOURCES"] = os.path.join(directory, "user")
             extra = ["--offline-mode"]
-        if args.scenario in ("fingers", "undo", "tolerance", "waiting", "touchstart", "desk", "hold", "typing", "margins"):
+        if args.scenario in ("fingers", "undo", "tolerance", "waiting", "touchstart", "desk", "hold", "typing", "margins",
+                             "popups"):
             # Events made by the scenario, as a finger's would arrive (ROUND6 TOUCH).
             extra = ["--enable-event-simulate"]
         subprocess.run([args.blender, "--factory-startup", *extra, "--python", os.path.join(HERE, "mac_bridge_harness.py"),
@@ -124,7 +130,7 @@ def main():
                         # an earlier run crashed. That alert is modal and stalled every run at
                         # startup, before the first step (seen 2026-11-19 from about 16:15).
                         "-ApplePersistenceIgnoreState", "YES"],
-                       check=True, timeout=300, env=env)
+                       check=True, timeout=SCENARIO_SECONDS.get(args.scenario, 300), env=env)
         with open(report) as f:
             result = json.load(f)
     print(json.dumps(result, indent=1))

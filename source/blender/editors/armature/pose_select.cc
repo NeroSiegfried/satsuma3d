@@ -857,6 +857,12 @@ static bool pose_select_same_color(bContext *C, const bool extend)
    * }
    * CTX_DATA_END;
    */
+  /* Refuse to do anything if there is no active pose bone, as #pose_select_same_collection does
+   * (Select Grouped › Color crashed here: found by ROUND6 MODE-3's sweep of every menu item). */
+  if (!CTX_data_active_pose_bone(C)) {
+    return false;
+  }
+
   if (!extend) {
     CTX_DATA_BEGIN_WITH_ID (C, bPoseChannel *, pchan, selected_pose_bones, Object *, ob) {
       animrig::bone_deselect(pchan);

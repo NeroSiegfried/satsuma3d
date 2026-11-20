@@ -28,6 +28,7 @@ namespace blender {
 
 namespace ui {
 enum class AlertIcon : int8_t;
+struct Block;
 }
 
 struct PropertyRNA;
@@ -56,6 +57,27 @@ struct wmNativeAlert {
   Vector<Toggle> toggles;
   /** The action Return chooses, or -1. */
   int preferred_action = -1;
+};
+
+/**
+ * A menu an operator built for Blender to pop up, as a native interface lists it (ROUND6 MODE-3):
+ * its items in order, a heading where an item has no value.
+ */
+struct wmNativePopupMenu {
+  struct Item {
+    std::string label;
+    /** What choosing it sends back, empty for a heading or a line of text. */
+    std::string value;
+    std::string icon;
+  };
+  /** Its title, as Blender writes it above the items, or empty. */
+  std::string title;
+  Vector<Item> items;
+  /** How many items run something; its lines of text, for a popup that only says something. */
+  int actions = 0;
+  std::string text;
+  /** Items it cannot list: fields, submenus built in place, items that cannot run now. */
+  int left_out = 0;
 };
 
 /** The chosen action and the toggles as bits, in the order of #wmNativeAlert::toggles. */
@@ -164,6 +186,24 @@ struct wmNativeInterface {
                        const std::string &message) = nullptr;
   /** Show one of Blender's panels natively, such as Rename Active Item's. False for Blender's. */
   bool (*panel_popup)(bContext *C, const char *panel) = nullptr;
+  /**
+   * Blender is about to pop up a region of its own (ROUND6 MODE-3): a menu an operator built
+   * (`popup_menu_end`: \a block holds its items and title, \a title is empty) or a block a function builds
+   * (`popup_block_invoke_ex`, `popup_block_ex`: \a block is null, \a op the operator that owns the
+   * popup, if any). True when the interface took it, shown its own way or refused with a message:
+   * Blender then opens nothing, and the interface calls \a release once, later, for what the popup
+   * would have freed. False for Blender's popup.
+   */
+  bool (*popup_take)(bContext *C,
+                     ui::Block *block,
+                     wmOperator *op,
+                     const char *title,
+                     std::function<void(bContext *C)> release) = nullptr;
+  /**
+   * Blender created a popup region of its own (any menu, popover, pie or block): what the
+   * interface did not take, counted and logged by it (ROUND6 MODE-3). \a what names its kind.
+   */
+  void (*popup_drawn)(bContext *C, const char *what) = nullptr;
 
   /**
    * A factor of the DPI Blender's interface is drawn at, see #WM_window_dpi_set_userdef: the

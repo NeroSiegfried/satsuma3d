@@ -155,6 +155,8 @@
 #include <fmt/format.h>
 
 namespace blender::ui::native {
+wmNativePopupMenu popup_menu_take(bContext *C, Block *block, StringRef title);
+std::string popup_menu_choose(bContext *C, StringRef value);
 void menu_write(bContext *C, StringRef route, wm::native_ui::ViewBuilder &builder);
 void menu_run(bContext *C, StringRef route);
 bool menu_can_show(bContext *C, StringRef idname);
@@ -772,15 +774,27 @@ std::string WM_native_ui_undo_refusal(bContext *C)
 
 static std::mutex bridge_busy_mutex;
 static std::array<const char *, 16> bridge_busy_names{};
+static std::array<const char *, 16> bridge_busy_idnames{};
 static int bridge_busy_depth = 0;
 
-void WM_native_ui_busy_push(const char *name)
+void WM_native_ui_busy_push(const char *name, const char *idname)
 {
   std::scoped_lock lock(bridge_busy_mutex);
   if (bridge_busy_depth < int(bridge_busy_names.size())) {
     bridge_busy_names[bridge_busy_depth] = name;
+    bridge_busy_idnames[bridge_busy_depth] = idname;
   }
   bridge_busy_depth++;
+}
+
+/** The innermost operator whose callback Blender is in: its name and identifier, or nulls. */
+static std::pair<const char *, const char *> bridge_busy_innermost()
+{
+  std::scoped_lock lock(bridge_busy_mutex);
+  if (bridge_busy_depth <= 0 || bridge_busy_depth > int(bridge_busy_names.size())) {
+    return {nullptr, nullptr};
+  }
+  return {bridge_busy_names[bridge_busy_depth - 1], bridge_busy_idnames[bridge_busy_depth - 1]};
 }
 
 void WM_native_ui_busy_pop()
@@ -4172,6 +4186,12 @@ struct BridgePopup {
     std::string label, value, icon;
   };
   std::vector<Item> items;
+  /** The items of a menu an operator built, taken from Blender's popup (ROUND6 MODE-3): chosen
+   * through #ui::native::popup_menu_choose rather than an operator's enum. */
+  bool taken_menu = false;
+  /** A panel a command asked for (`wm.call_panel`), as the `properties` view's tab that draws it
+   * as a popover: `POPOVER:<panel>\t<origin>` (ROUND6 MODE-3). */
+  std::string panel;
   bool rename = false;
   /** One of the interface's own commands, which a key stands in for, see
    * #WM_native_ui_keymap_item_answer: `search`, `settings`, `properties` or `interface`. */
@@ -4197,6 +4217,8 @@ void bridge_popup_show(bContext *C, BridgePopup popup)
    * here, then shown (`menu … at`) or empty (`menu … empty`) by the interface. */
   const std::string line = !popup.menu.empty()    ? popup.menu :
                            !popup.op_name.empty() ? "choice " + popup.op_name :
+                           popup.taken_menu       ? "taken menu " + popup.title :
+                           !popup.panel.empty()   ? "panel " + popup.panel :
                            popup.rename           ? std::string("rename") :
                            !popup.command.empty() ? "command " + popup.command :
                                                     std::string("nothing");
@@ -4229,6 +4251,11 @@ void bridge_popup_view_build(bContext * /*C*/,
       return bridge_data(buffer, std::string_view(popup.menu));
     });
   }
+  if (!popup.panel.empty()) {
+    builder.add(top, "panel", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      return bridge_data(buffer, std::string_view(popup.panel));
+    });
+  }
   if (popup.rename) {
     builder.add(top, "rename", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
       return bridge_data(buffer, true);
@@ -4239,7 +4266,7 @@ void bridge_popup_view_build(bContext * /*C*/,
       return bridge_data(buffer, std::string_view(popup.command));
     });
   }
-  if (!popup.op_name.empty()) {
+  if (!popup.op_name.empty() || popup.taken_menu) {
     /* Its items, with headings without a value between groups of them. */
     builder.add(top, "choice", [&](ViewBuffer &buffer, NodeFields &fields) {
       fields.label = popup.title;
@@ -4265,10 +4292,21 @@ views::CommandResult bridge_popup_view_command(bContext *C,
 {
   const views::protocol::TextValue *value = command.value_as_TextValue();
   if (command.target()->string_view() != "choice" || command.op() != views::protocol::Op::Set ||
-      value == nullptr || value->value() == nullptr || bridge_popup.op_name.empty())
+      value == nullptr || value->value() == nullptr ||
+      (bridge_popup.op_name.empty() && !bridge_popup.taken_menu))
   {
     r_error = "Not something the popup does";
     return views::CommandResult::Failed;
+  }
+  if (bridge_popup.taken_menu) {
+    /* An item of a menu an operator built (ROUND6 MODE-3): why nothing ran is said. */
+    const std::string why = ui::native::popup_menu_choose(C, value->value()->string_view());
+    if (!why.empty()) {
+      WM_native_ui_notice(RPT_WARNING, why.c_str());
+      r_error = why;
+      return views::CommandResult::Failed;
+    }
+    return views::CommandResult::Done;
   }
   bridge_operator_call_with_enum_property(C,
                                           bridge_popup.op_name.c_str(),
@@ -5938,7 +5976,35 @@ static void bridge_reveal_after(bContext *C, wmOperator *op, const std::string &
 
 /** \} */
 
+/** What became of each of Blender's popups (ROUND6 MODE-3, see #bridge_popup_take): drawn by Blender, taken as the interface's own, refused. */
+static int bridge_popups_drawn = 0;
+static int bridge_popups_taken = 0;
+static int bridge_popups_refused = 0;
+static std::string bridge_popup_last_drawn;
+/** What refused popups would have freed, freed at the next pass of the bridge, once the operator
+ * that asked for them has returned. */
+static Vector<std::function<void(bContext *)>> bridge_popup_releases;
+
 bool bridge_menu_popup(bContext *C, const char *menu);
+bool bridge_enum_popup(bContext *C, wmOperator *op, PropertyRNA *prop);
+bool bridge_panel_popup(bContext *C, const char *panel);
+bool bridge_popup_take(bContext *C,
+                       ui::Block *block,
+                       wmOperator *op,
+                       const char *title,
+                       std::function<void(bContext *)> release);
+void bridge_popup_drawn(bContext *C, const char *what);
+namespace ui {
+bool native_operator_dialog_begin(bContext *C,
+                                  wmOperator *op,
+                                  const std::string &title,
+                                  const std::string &confirm,
+                                  const std::string &message);
+void native_redo_operator_register(bContext *C, wmOperator *op);
+void native_redo_operator_free(wmOperator *op);
+void native_redo_operator_clear();
+void native_redo_show(bContext *C);
+}  // namespace ui
 
 /** For the Mac bridge harness: install the after-command hook the iPad interface installs, so
  * what is shown after each command can be checked without a device, its menu popups, so a key's
@@ -5955,9 +6021,11 @@ extern "C" int WM_native_ui_test_text_input_focus(int *r_count)
   return bridge_test_text_input;
 }
 
+static wmNativeInterface bridge_test_hooks;
+
 extern "C" void WM_native_ui_test_install_hooks()
 {
-  static wmNativeInterface hooks;
+  wmNativeInterface &hooks = bridge_test_hooks;
   if (WM_native_interface() == nullptr) {
     hooks.text_input_focus = [](wmWindow * /*win*/, const bool takes_text) {
       bridge_test_text_input = takes_text;
@@ -5970,6 +6038,81 @@ extern "C" void WM_native_ui_test_install_hooks()
     hooks.menu_popup = bridge_menu_popup;
     hooks.interface_scale = WM_native_ui_interface_scale;
     WM_native_interface_set(&hooks);
+  }
+}
+
+/**
+ * For the harness's `popups` scenario (ROUND6 MODE-3): besides #WM_native_ui_test_install_hooks,
+ * every hook the iPad installs for Blender's popups, menus, choices, panels, dialogs and the last
+ * operation's settings, so that what reaches Blender's own popup is what would on the iPad.
+ */
+extern "C" void WM_native_ui_test_install_popup_hooks()
+{
+  WM_native_ui_test_install_hooks();
+  wmNativeInterface &hooks = bridge_test_hooks;
+  if (WM_native_interface() != &hooks) {
+    return;
+  }
+  hooks.enum_popup = bridge_enum_popup;
+  hooks.panel_popup = bridge_panel_popup;
+  hooks.popup_take = bridge_popup_take;
+  hooks.popup_drawn = bridge_popup_drawn;
+  hooks.props_dialog = [](bContext *C,
+                          wmOperator *op,
+                          const std::string &title,
+                          const std::string &confirm,
+                          const std::string &message) {
+    return ui::native_operator_dialog_begin(C, op, title, confirm, message);
+  };
+  /* The iPad's alerts, confirmations and reports are its own (`wm_apple_ios_native.cc`): here
+   * counted as taken, and answered as Cancel. */
+  hooks.alert = [](bContext * /*C*/,
+                   const wmNativeAlert &alert,
+                   wmNativeAlertComplete /*complete*/,
+                   wmNativeAlertCancel cancel,
+                   const char * /*key*/) {
+    bridge_popups_taken++;
+    WM_native_ui_session_log("popup", ("alert " + alert.title).c_str());
+    if (cancel) {
+      bridge_popup_releases.append([cancel](bContext *C) { cancel(C); });
+    }
+    return true;
+  };
+  hooks.confirm = [](bContext * /*C*/,
+                     wmOperator *op,
+                     const char * /*title*/,
+                     const char * /*message*/,
+                     const char * /*confirm_text*/,
+                     ui::AlertIcon /*icon*/,
+                     bool /*cancel_default*/) -> std::optional<wmOperatorStatus> {
+    bridge_popups_taken++;
+    WM_native_ui_session_log("popup", (std::string("confirm ") + op->type->idname).c_str());
+    return OPERATOR_CANCELLED;
+  };
+  hooks.reports_added = [](wmWindow * /*win*/, ReportList *reports, const int minimum_type) {
+    for (const Report &report : reports->list) {
+      if (report.type >= minimum_type) {
+        WM_native_ui_notice(report.type >= RPT_WARNING ? RPT_WARNING : RPT_INFO, report.message);
+      }
+    }
+  };
+  hooks.replaces_redo_panel = [] { return !WM_native_ui_desktop_mode(); };
+  hooks.operator_registered = ui::native_redo_operator_register;
+  hooks.operator_freed = ui::native_redo_operator_free;
+  hooks.redo_cleared = ui::native_redo_operator_clear;
+  hooks.redo_show = ui::native_redo_show;
+}
+
+/** What became of Blender's popups since the start: drawn by Blender, taken, refused; and the
+ * last one drawn, as `<kind> for <operator>`. */
+extern "C" void WM_native_ui_test_popups(
+    int *r_drawn, int *r_taken, int *r_refused, char *r_last, const size_t size)
+{
+  *r_drawn = bridge_popups_drawn;
+  *r_taken = bridge_popups_taken;
+  *r_refused = bridge_popups_refused;
+  if (size > 0) {
+    BLI_strncpy(r_last, bridge_popup_last_drawn.c_str(), size);
   }
 }
 
@@ -6060,19 +6203,163 @@ bool bridge_enum_popup(bContext *C, wmOperator *op, PropertyRNA *prop)
   return true;
 }
 
-/** The panels #bridge_panel_popup shows natively: Rename Active Item's (F2). */
+/** The panel #bridge_panel_popup shows as a field of its own: Rename Active Item's (F2). */
 static bool bridge_panel_popup_takes(const StringRef panel)
 {
   return panel == "TOPBAR_PT_name";
 }
 
+/* -------------------------------------------------------------------- */
+/** \name Blender's Popups in the Native Interface (ROUND6 MODE-3)
+ *
+ * Findings E7, C6: a popup Blender draws in the native interface opens in the viewport, under the
+ * interface, where a finger may not reach it. Every one is taken where it is made: a menu an
+ * operator built is listed as the interface's own, a panel opens as its popover, a block of
+ * Blender's own is refused with a message, Menu Search becomes the interface's Search. What still
+ * reaches Blender's popup code is counted (#bridge_popup_drawn), which the harness's `popups`
+ * scenario requires to stay at none.
+ * \{ */
+
+
+static void bridge_popup_releases_run(bContext *C)
+{
+  Vector<std::function<void(bContext *)>> releases = std::move(bridge_popup_releases);
+  bridge_popup_releases.clear();
+  for (std::function<void(bContext *)> &release : releases) {
+    release(C);
+  }
+}
+
+/** "<what> is not in the iPad interface", with the Desktop Interface beside it. */
+static void bridge_popup_refusal_say(const std::string &what)
+{
+  const std::string text =
+      what.empty() ?
+          std::string(IFACE_("This command opens a window of its own, which is in the Desktop "
+                             "Interface.")) :
+          fmt::format(fmt::runtime(IFACE_("{} is not in the iPad interface. It is in the Desktop "
+                                          "Interface.")),
+                      what);
+  WM_native_ui_notice(RPT_WARNING, text.c_str(), "Desktop Interface\tinterface:desktop");
+}
+
+bool bridge_popup_take(bContext *C,
+                       ui::Block *block,
+                       wmOperator *op,
+                       const char *title,
+                       std::function<void(bContext *)> release)
+{
+  if (WM_native_ui_desktop_mode()) {
+    return false;
+  }
+  const auto [busy_name, busy_idname] = bridge_busy_innermost();
+  if (block) {
+    /* A menu an operator built: Repeat History, Armature › Parent, Add IK, Move to Bone
+     * Collection, an add-on's message. */
+    const wmNativePopupMenu menu = ui::native::popup_menu_take(C, block, title ? title : "");
+    std::string heading = menu.title;
+    if (heading.empty() && busy_name) {
+      heading = busy_name;
+    }
+    bridge_popups_taken++;
+    if (menu.left_out > 0) {
+      WM_native_ui_session_log(
+          "popup", fmt::format("{}: {} items not listed", heading, menu.left_out).c_str());
+    }
+    if (menu.actions == 0) {
+      /* It only says something, or has nothing that can run now: said as a message. */
+      const std::string text =
+          menu.text.empty() ?
+              fmt::format(fmt::runtime(IFACE_("{} has nothing to choose here")), heading) :
+          heading.empty() ? menu.text :
+                            heading + ": " + menu.text;
+      WM_native_ui_session_log("popup", ("said " + heading).c_str());
+      WM_native_ui_notice(menu.text.empty() ? RPT_WARNING : RPT_INFO, text.c_str());
+      return true;
+    }
+    BridgePopup popup;
+    popup.title = heading;
+    popup.taken_menu = true;
+    for (const wmNativePopupMenu::Item &item : menu.items) {
+      popup.items.push_back({item.label, item.value, item.icon});
+    }
+    bridge_popup_show(C, std::move(popup));
+    return true;
+  }
+  /* A block Blender builds itself: refused, by the name of what asked for it. */
+  const std::string what = op         ? WM_operatortype_name(op->type, op->ptr) :
+                           busy_name ? std::string(busy_name) :
+                                        std::string();
+  const std::string opener = op ? op->type->idname : busy_idname ? busy_idname : "";
+  if (release) {
+    bridge_popup_releases.append(std::move(release));
+  }
+  bridge_popups_refused++;
+  if (ELEM(StringRef(opener), "WM_OT_search_menu", "WM_OT_search_operator", "WM_OT_search_single_menu"))
+  {
+    /* Menu Search: the interface's own Search, which its key also opens. */
+    WM_native_ui_session_log("popup", ("refused " + opener + ", Search instead").c_str());
+    BridgePopup popup;
+    popup.command = "search";
+    bridge_popup_show(C, std::move(popup));
+    return true;
+  }
+  WM_native_ui_session_log("popup",
+                           fmt::format("refused {} ({})", what.empty() ? "a block" : what, opener)
+                               .c_str());
+  bridge_popup_refusal_say(what);
+  return true;
+}
+
+void bridge_popup_drawn(bContext * /*C*/, const char *what)
+{
+  if (WM_native_ui_desktop_mode()) {
+    return;
+  }
+  const auto [busy_name, busy_idname] = bridge_busy_innermost();
+  bridge_popups_drawn++;
+  bridge_popup_last_drawn = fmt::format("{} for {}", what, busy_idname ? busy_idname : "?");
+  WM_native_ui_session_log("popup", ("drawn by Blender: " + bridge_popup_last_drawn).c_str());
+}
+
+/** \} */
+
 bool bridge_panel_popup(bContext *C, const char *panel)
 {
-  if (WM_native_ui_desktop_mode() || !bridge_panel_popup_takes(panel)) {
+  if (WM_native_ui_desktop_mode()) {
     return false;
   }
   BridgePopup popup;
-  popup.rename = true;
+  if (bridge_panel_popup_takes(panel)) {
+    popup.rename = true;
+    bridge_popup_show(C, std::move(popup));
+    return true;
+  }
+  /* Any other panel opens as the interface's popover of it, drawn by Blender in the viewport as
+   * the header's popovers are (ROUND6 MODE-3, E7): a paint mode's context menu, a key's panel. */
+  PanelType *pt = WM_paneltype_find(panel, true);
+  if (pt == nullptr || (pt->poll && !pt->poll(C, pt))) {
+    /* Blender's says it does not exist, or opens nothing, as there. */
+    return false;
+  }
+  popup.title = CTX_IFACE_(pt->translation_context, pt->label);
+  if (ELEM(pt->space_type, SPACE_VIEW3D, SPACE_TOPBAR)) {
+    popup.panel = std::string("POPOVER:") + panel + "\tHEADER";
+  }
+  else if (pt->space_type == SPACE_PROPERTIES && pt->context[0]) {
+    std::string tab = pt->context;
+    for (char &c : tab) {
+      c = char(toupper(c));
+    }
+    popup.panel = std::string("POPOVER:") + panel + "\t" + tab;
+  }
+  else {
+    bridge_popups_refused++;
+    WM_native_ui_session_log("popup", (std::string("refused panel ") + panel).c_str());
+    bridge_popup_refusal_say(popup.title);
+    return true;
+  }
+  bridge_popups_taken++;
   bridge_popup_show(C, std::move(popup));
   return true;
 }
@@ -8505,6 +8792,7 @@ void WM_native_ui_flush_commands(bContext *C)
   if (C == nullptr) {
     return;
   }
+  bridge_popup_releases_run(C);
   bridge_viewport_regions_note(C);
 
   /* A job's modal operator (a render's, a bake's) sees that its job ended only at its next event,
