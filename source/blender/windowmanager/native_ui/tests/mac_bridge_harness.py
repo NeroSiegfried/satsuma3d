@@ -4249,8 +4249,7 @@ def tick_margins():
 # first must each show.
 CENSUS_KNOWN = {
     # Dropped, and said by the panel's (or the tab's) row. Labels are lines of their own
-    # (PANEL-2): one dropped is a failure.
-    "section": ("B3", "PANEL-3"),
+    # (PANEL-2) and sections sub-panels (PANEL-3): one dropped is a failure.
     "c_menu": ("B4", "PANEL-4"),
     "selection": ("B2", "PANEL-6"),
     "curve": ("B7", "PANEL-7"),
@@ -4271,7 +4270,6 @@ CENSUS_KNOWN = {
     "key": ("Table 1", None),
     "property_type": ("Table 1", None),
     # Shown in part.
-    "section_title": ("B3", "PANEL-3"),
     "operator_no_exec": ("B5, B13", "PANEL-5, PANEL-13"),
     "path": ("B10", "PANEL-10"),
     "search": ("B11", "PANEL-11"),
@@ -4280,7 +4278,11 @@ CENSUS_KNOWN = {
     "tree": ("B18", "PANEL-14"),
 }
 # The findings PANEL-1 showed first whose packages are not built yet: each must still show.
-CENSUS_FIRST = ("B3", "B4", "B7", "B8", "B10", "B11", "B16", "B17", "B18", "B21")
+CENSUS_FIRST = ("B4", "B7", "B8", "B10", "B11", "B16", "B17", "B18", "B21")
+# Sections opened by the census's taps, as sub-panels with their rows (PANEL-3): by stage, tab
+# and title, one kept by the view (Principled BSDF's Emission) and one by a modifier's property
+# (Subdivision's Advanced, `open_advanced_panel`).
+CENSUS_SECTIONS = (("object", "MATERIAL", "Emission"), ("object", "MODIFIER", "Advanced"))
 # Lines a panel says, which must reach the view as a Label (PANEL-2): by stage, tab and text,
 # with Blender's icon. Mesh Cache reading a file that is not there says so (`MOD_meshcache_pc2.cc`).
 CENSUS_LABELS = (("object", "MODIFIER", "No such file or directory", "ERROR"),
@@ -4311,6 +4313,7 @@ def _census_scene():
     decimate.delimit = {'NORMAL', 'UV'}
     cube.modifiers.new("Displace", 'DISPLACE').vertex_group = "Group"
     cube.modifiers.new("Cloth", 'CLOTH')
+    cube.modifiers.new("Subdivision", 'SUBSURF')
     cache = cube.modifiers.new("Mesh Cache", 'MESH_CACHE')
     cache.cache_format = 'PC2'
     cache.filepath = "//no such cache.pc2"
@@ -4460,6 +4463,17 @@ def tick_census():
                 elif found[0].get("icon") != icon:
                     state["problems"].append("%s %s: %r has icon %r, not %r" % (
                         stage, tab, text, found[0].get("icon"), icon))
+            for section_stage, tab, title in CENSUS_SECTIONS:
+                if section_stage != stage:
+                    continue
+                found = [n for n in _census_nodes(tree(subs.get(tab)) or {})
+                         if n.get("content") == "Panel" and n.get("label") == title and n["key"].startswith("panel:section:")]
+                if not found:
+                    state["problems"].append("%s %s: no section %r" % (stage, tab, title))
+                elif not found[0].get("children"):
+                    state["problems"].append("%s %s: section %r opened shows nothing" % (stage, tab, title))
+            if stage == "object" and not bpy.data.objects["Cube"].modifiers["Subdivision"].open_advanced_panel:
+                state["problems"].append("object: opening Subdivision's Advanced did not set open_advanced_panel")
             report["steps"].append({"name": stage, "views": len(walks), "fates": sum(len(w) for w in walks.values()),
                                     "dropped": counted, "rows": shown})
             state["stage"] += 1

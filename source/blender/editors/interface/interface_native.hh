@@ -71,6 +71,10 @@ struct PanelState {
   std::string id;
   bool outer = false;
   bool open = false;
+  /** A section of a panel (`layout.panel`, ROUND6 PANEL-3): the panel's id; and whether it opens
+   * by a property of what it belongs to, such as a modifier's, rather than a state the view keeps. */
+  std::string section_of;
+  bool section_property = false;
 };
 
 /** What a view of panels keeps between its builds and the commands that follow them. */

@@ -84,6 +84,7 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <optional>
 #include <map>
 #include <set>
 #include <sstream>
@@ -1554,6 +1555,21 @@ class Writer {
       fields.label = title;
       fields.icon = icon;
       return protocol::CreatePanel(buffer, open, fixed, active, position, openable);
+    });
+  }
+
+  /** A section of the panel (`layout.panel`), a sub-panel of it (ROUND6 PANEL-3). */
+  NodeId section_node(const NodeId parent,
+                      const std::string &id,
+                      const bool property,
+                      const std::string_view title,
+                      const bool open)
+  {
+    const std::string key = this->key("panel:" + id);
+    data.panels.add_overwrite(key, {id, false, open, panel, property});
+    return builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
+      fields.label = title;
+      return protocol::CreatePanel(buffer, open, false, false, -1, true);
     });
   }
 
@@ -3481,6 +3497,18 @@ static std::string panels_walk(bContext *C,
     /* The sections (`layout.panel`) this draw makes, as Blender's own draw starts them afresh
      * (`area.cc`); a stack's panel keeps those of its last draw otherwise. */
     panel->runtime->layout_panels.clear();
+    /* Its sections as the view left them, where their state is the panel's own (PANEL-3): the
+     * panel is drawn anew for every walk, so the view keeps them. */
+    if (subpanel_states) {
+      const std::string prefix = "section:" + candidate.id + ":";
+      for (const auto item : subpanel_states->items()) {
+        if (StringRef(item.key).startswith(prefix)) {
+          LayoutPanelState *state = BKE_panel_layout_panel_state_ensure(
+              panel, StringRef(item.key).drop_prefix(prefix.size()), !item.value);
+          SET_FLAG_FROM_TEST(state->flag, item.value, LAYOUT_PANEL_STATE_FLAG_OPEN);
+        }
+      }
+    }
     if (pt.draw_header) {
       pt.draw_header(C, panel);
     }
@@ -3583,30 +3611,130 @@ static std::string panels_walk(bContext *C,
         decide(&label, fate_consumed("caption"));
       }
     }
-    /* Blender's sections (`layout.panel`): a closed one shows its header alone, which is a label;
-     * an open one its body under it (B3). */
-    std::vector<std::pair<std::string, bool>> sections;
-    if (writer) {
-      for (const LayoutPanelHeader &header : panel->runtime->layout_panels.headers) {
-        PointerRNA owner = header.open_owner_ptr;
-        const bool section_open = owner.data && RNA_boolean_get(&owner, header.open_prop_name.c_str());
-        std::string title;
+    /* Blender's sections (`layout.panel`, B3), each a sub-panel of its panel or of the section
+     * it is in: its header's title and switch, its open state, and the rows of its body. A closed
+     * one draws its header alone. Its open state is a state of the panel, which the view keeps
+     * (see above), or a property of what it belongs to, such as a modifier's, which opening it
+     * sets as Blender's click on the header does (PANEL-3). */
+    struct Section {
+      std::string id;
+      std::string title;
+      bool open = false;
+      bool property = false;
+      PointerRNA owner;
+      std::string prop;
+      float header_min = 0, header_max = 0;
+      /* Its body, while open. */
+      float body_min = 1, body_max = 0;
+      int parent = -1;
+      std::optional<NodeId> node;
+    };
+    std::vector<Section> sections;
+    const bool section_request = execute && target_panel &&
+                                 StringRef(request->action).startswith("section_");
+    if (writer || section_request) {
+      const LayoutPanels &layout_panels = panel->runtime->layout_panels;
+      for (const LayoutPanelHeader &header : layout_panels.headers) {
+        Section section;
+        section.owner = header.open_owner_ptr;
+        section.prop = header.open_prop_name;
+        if (!section.owner.data || !RNA_struct_find_property(&section.owner, section.prop.c_str()))
+        {
+          continue;
+        }
+        section.open = RNA_boolean_get(&section.owner, section.prop.c_str());
+        section.header_min = header.start_y;
+        section.header_max = header.end_y;
+        std::string name;
+        if (RNA_struct_is_a(section.owner.type, RNA_LayoutPanelState)) {
+          const char *idname = static_cast<const LayoutPanelState *>(section.owner.data)->idname;
+          name = idname ? idname : "";
+        }
+        else {
+          section.property = true;
+          name = RNA_path_from_ID_to_struct(&section.owner).value_or("") + "." + section.prop;
+        }
+        section.id = "section:" + candidate.id + ":" + name;
         for (const auto &button : block->buttons) {
           const float y = BLI_rctf_cent_y(&button->rect);
-          if (y < header.start_y || y > header.end_y) {
+          if (y < header.start_y || y > header.end_y || button->type != ButtonType::Label) {
             continue;
           }
-          if (button->type == ButtonType::Label) {
-            if (title.empty() && !button->str.empty()) {
-              title = button->str;
+          if (section.title.empty() && !button->str.empty()) {
+            section.title = button->str;
+          }
+          /* Its header's arrow and title, which the sub-panel's header shows. */
+          decide(button.get(), fate_consumed("section"));
+        }
+        if (section.title.empty()) {
+          /* A header with a switch names it by the switch's text, which the switch shows. */
+          for (const auto &button : block->buttons) {
+            const float y = BLI_rctf_cent_y(&button->rect);
+            if (y >= header.start_y && y <= header.end_y && !button->str.empty()) {
+              section.title = button->str;
+              break;
             }
-            decide(button.get(),
-                   button->str.empty() ? fate_consumed("section") :
-                   section_open        ? Fate{"reduced", "", "section_title"} :
-                                         fate_consumed("section"));
           }
         }
-        sections.emplace_back(title.empty() ? header.open_prop_name : title, section_open);
+        if (section.open) {
+          /* Its body: the one just under its header. */
+          const float tolerance = 0.5f * UI_UNIT_Y;
+          for (const LayoutPanelBody &body : layout_panels.bodies) {
+            if (std::abs(body.end_y - header.start_y) <= tolerance) {
+              section.body_min = body.start_y;
+              section.body_max = body.end_y;
+              break;
+            }
+          }
+        }
+        sections.push_back(std::move(section));
+      }
+      /* Each in the innermost open section whose body holds its header. */
+      for (Section &section : sections) {
+        const float y = 0.5f * (section.header_min + section.header_max);
+        for (int i = 0; i < int(sections.size()); i++) {
+          const Section &outer = sections[i];
+          if (&outer != &section && y >= outer.body_min && y <= outer.body_max &&
+              (section.parent < 0 || outer.body_max - outer.body_min <
+                                         sections[section.parent].body_max -
+                                             sections[section.parent].body_min))
+          {
+            section.parent = i;
+          }
+        }
+      }
+    }
+    /* The section a button is in, by its header or by its body, innermost first; and whether it
+     * is in the section's header. */
+    const auto section_of = [&](const Button &but, bool *r_header = nullptr) -> int {
+      const float y = BLI_rctf_cent_y(&but.rect);
+      int found = -1;
+      for (int i = 0; i < int(sections.size()); i++) {
+        const Section &section = sections[i];
+        if (y >= section.header_min && y <= section.header_max) {
+          if (r_header) {
+            *r_header = true;
+          }
+          return i;
+        }
+        if (y >= section.body_min && y <= section.body_max &&
+            (found < 0 ||
+             section.body_max - section.body_min < sections[found].body_max - sections[found].body_min))
+        {
+          found = i;
+        }
+      }
+      return found;
+    };
+    if (section_request) {
+      /* Opened or closed by its property (#PanelState::section_property). */
+      for (Section &section : sections) {
+        if (section.id == *requested_key && section.property) {
+          RNA_boolean_set(&section.owner, section.prop.c_str(), request->action == "section_open");
+          RNA_property_update(
+              C, &section.owner, RNA_struct_find_property(&section.owner, section.prop.c_str()));
+          applied = true;
+        }
       }
     }
     for (const auto &button : block->buttons) {
@@ -4094,10 +4222,26 @@ static std::string panels_walk(bContext *C,
     std::set<std::string> seen;
     std::map<std::string, int> occurrences;
     int named_row_count = 0;
+    /* A section's rows go into its sub-panel, made as its first button comes (PANEL-3). */
+    const NodeId panel_node_id = node;
+    const std::function<NodeId(int)> section_target = [&](const int i) -> NodeId {
+      Section &section = sections[i];
+      if (!section.node) {
+        const NodeId parent = section.parent >= 0 ? section_target(section.parent) : panel_node_id;
+        section.node = writer->section_node(
+            parent, section.id, section.property, section.title, section.open);
+      }
+      return *section.node;
+    };
     for (const auto &button : block->buttons) {
       Button &but = *button;
-      if (dropped) {
+      if (dropped || section_request) {
         break;
+      }
+      bool in_section_header = false;
+      if (writer && !sections.empty() && panel_nodes.count(candidate.id)) {
+        const int section = section_of(but, &in_section_header);
+        node = section >= 0 ? section_target(section) : panel_node_id;
       }
       if (writer) {
         for (size_t index = 0; index < empty_lists.size(); index++) {
@@ -4573,11 +4717,12 @@ static std::string panels_walk(bContext *C,
         }
         look.role = header_name                          ? protocol::Role::Name :
                     header_toggle && candidate.instance ? protocol::Role::Visibility :
-                    header_toggle                       ? protocol::Role::Header :
+                    header_toggle || in_section_header  ? protocol::Role::Header :
                                                           protocol::Role::None;
         writer->property(node, but, index, look);
       }
     }
+    node = panel_node_id;
     if (writer && !dropped) {
       /* The census of this panel: what became of each button, and what it could not show,
        * which the row at the foot of its node says (R6-9). */
@@ -4592,11 +4737,9 @@ static std::string panels_walk(bContext *C,
         /* The presets Blender draws in the panel's header (B8). */
         note("HeaderPreset", pt.idname, fate_dropped("header_preset"));
       }
-      for (const auto &[title, section_open] : sections) {
-        if (!section_open) {
-          /* A closed section, which cannot be opened here (B3). */
-          note("Section", title, fate_dropped("section", Fate::Counted::Section));
-        }
+      for (const Section &section : sections) {
+        /* A sub-panel, opened and closed as Blender's (PANEL-3). */
+        note("Section", section.title, fate_projected("Panel"));
       }
       for (const auto &button : block->buttons) {
         const Button &but = *button;

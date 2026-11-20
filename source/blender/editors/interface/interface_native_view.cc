@@ -186,6 +186,11 @@ CommandResult panels_command(bContext *C,
   if (const PanelState *panel = data.panels.lookup_ptr(target)) {
     if (ELEM(op, protocol::Op::Open, protocol::Op::Close)) {
       const bool open = op == protocol::Op::Open;
+      if (panel->section_property) {
+        /* Its property, set as Blender's click on the section's header sets it (PANEL-3). */
+        request.action = open ? "section_open" : "section_close";
+        return run({Edit::Kind::Property, panel->section_of, panel->id});
+      }
       if (panel->outer) {
         std::set<std::string> &expanded = data.expanded_panels();
         open ? (void)expanded.insert(panel->id) : (void)expanded.erase(panel->id);
