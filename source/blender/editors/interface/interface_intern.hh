@@ -1622,6 +1622,12 @@ ARegion *screen_region_find_mouse_over(bScreen *screen, const wmEvent *event);
 
 bool popup_context_menu_for_button(bContext *C, Button *but, const wmEvent *event);
 /**
+ * The context menu of \a but, drawn into \a layout: what #popup_context_menu_for_button pops up.
+ * Without \a event, nothing that depends on where the pointer is (the list row under it), as for
+ * an interface that shows the menu itself (ROUND6 PANEL-12).
+ */
+void context_menu_for_button_draw(bContext *C, Button *but, const wmEvent *event, Layout &layout);
+/**
  * menu to show when right clicking on the panel header
  */
 void popup_context_menu_for_panel(bContext *C, ARegion *region, Panel *panel);

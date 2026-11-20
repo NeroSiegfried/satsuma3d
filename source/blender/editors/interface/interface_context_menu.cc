@@ -526,11 +526,16 @@ bool popup_context_menu_for_button(bContext *C, Button *but, const wmEvent *even
     return false;
   }
 
-  const bContextStore *previous_ctx = CTX_store_get(C);
   PopupMenu *pup = popup_menu_begin(
       C, button_context_menu_title_from_button(*but).c_str(), ICON_NONE);
   Layout &layout = *popup_menu_layout(pup);
+  context_menu_for_button_draw(C, but, event, layout);
+  return popup_menu_end_or_cancel(C, pup);
+}
 
+void context_menu_for_button_draw(bContext *C, Button *but, const wmEvent *event, Layout &layout)
+{
+  const bContextStore *previous_ctx = CTX_store_get(C);
   set_layout_context_from_button(C, layout, but);
   layout.operator_context_set(wm::OpCallContext::InvokeDefault);
 
@@ -970,8 +975,9 @@ bool popup_context_menu_for_button(bContext *C, Button *but, const wmEvent *even
     const ARegion *region = CTX_wm_region_popup(C) ? CTX_wm_region_popup(C) : CTX_wm_region(C);
     ButtonViewItem *view_item_but = (but->type == ButtonType::ViewItem) ?
                                         static_cast<ButtonViewItem *>(but) :
-                                        static_cast<ButtonViewItem *>(
-                                            view_item_find_mouse_over(region, event->xy));
+                                    event ? static_cast<ButtonViewItem *>(
+                                                view_item_find_mouse_over(region, event->xy)) :
+                                            nullptr;
     if (view_item_but) {
       BLI_assert(view_item_but->type == ButtonType::ViewItem);
 
@@ -1251,7 +1257,7 @@ bool popup_context_menu_for_button(bContext *C, Button *but, const wmEvent *even
 
   /* UI List item context menu. Scripts can add items to it, by default there's nothing shown. */
   const ARegion *region = CTX_wm_region_popup(C) ? CTX_wm_region_popup(C) : CTX_wm_region(C);
-  const bool is_inside_listbox = ui_list_find_mouse_over(region, event) != nullptr;
+  const bool is_inside_listbox = event && ui_list_find_mouse_over(region, event) != nullptr;
   const bool is_inside_listrow = is_inside_listbox ?
                                      list_row_find_mouse_over(region, event->xy) != nullptr :
                                      false;
@@ -1270,8 +1276,6 @@ bool popup_context_menu_for_button(bContext *C, Button *but, const wmEvent *even
   if (but->context) {
     CTX_store_set(C, previous_ctx);
   }
-
-  return popup_menu_end_or_cancel(C, pup);
 }
 
 /** \} */

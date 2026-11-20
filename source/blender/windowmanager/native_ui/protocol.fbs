@@ -525,6 +525,9 @@ table Node {
   short_label: string;
   /// An icon to show before its label.
   leading_icon: string;
+  /// The route of Blender's context menu for the control, which a hold opens as a menu view
+  /// (ROUND6 PANEL-12); the tab follows as for every route.
+  menu: string;
 }
 
 /* -------------------------------------------------------------------- */

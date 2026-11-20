@@ -276,6 +276,8 @@ def decode_node(raw):
         entry["property"] = s(node.Property())
     except AttributeError:
         pass
+    if hasattr(node, "Menu"):
+        entry["menu"] = s(node.Menu())
     if node.ContentType() == Content.Content.Button:
         table = node.Content()
         button = Button.Button()
@@ -4826,7 +4828,35 @@ def tick_census():
             if not rest or rest.name != "Key 1":
                 state["problems"].append("search: the rest shape key is %r (ack %r)" % (rest and rest.name, acks.get(121)))
             set_text(subs["CONSTRAINT"], state["group"], "Bone", 122)
-        if at == {"object": 31, "selection": 44, "texture_paint": 31}.get(stage, 16):
+        # A hold's menu is Blender's own for the control (B12, PANEL-12): Location X's has its
+        # keyframes, drivers, keying set and data path, and its items run on Location X.
+        if stage == "texture_paint" and at == 32:
+            location = next((n for n in _census_nodes(tree(subs.get("OBJECT")) or {})
+                             if n.get("content") == "Number" and n.get("property") == "location"
+                             and n.get("label") == "X"), None)
+            if not location or not location.get("menu"):
+                state["problems"].append("hold menu: Location X has no menu route: %r" % location)
+            else:
+                state["hold"] = subscribe("menu", route=location["menu"] + "\t" + "OBJECT")
+        if stage == "texture_paint" and at == 34 and state.get("hold"):
+            items = {n.get("label"): n["key"] for n in _census_nodes(tree(state["hold"]) or {}) if n.get("label")}
+            wanted = ("Insert Keyframes", "Add Driver...", "Add All to Keying Set", "Copy Data Path")
+            missing = [label for label in wanted if label not in items]
+            if missing:
+                state["problems"].append("hold menu: Location X's lacks %r; it has %r" % (missing, sorted(items)))
+            if "Copy Data Path" in items:
+                invoke(state["hold"], items["Copy Data Path"], 130)
+            if "Add All to Keying Set" in items:
+                invoke(state["hold"], items["Add All to Keying Set"], 131)
+        if stage == "texture_paint" and at == 36 and state.get("hold"):
+            clipboard = bpy.context.window_manager.clipboard
+            # The component's, as a click on X gives it.
+            if clipboard != "location[0]":
+                state["problems"].append("hold menu: Copy Data Path copied %r (ack %r)" % (clipboard, acks.get(130)))
+            paths = [path.data_path for keying_set in bpy.context.scene.keying_sets for path in keying_set.paths]
+            if "location" not in paths:
+                state["problems"].append("hold menu: Add All to Keying Set made %r (ack %r)" % (paths, acks.get(131)))
+        if at == {"object": 31, "selection": 44, "texture_paint": 37}.get(stage, 16):
             state["stage"] += 1
             state["start"] = step + 1
             if state["stage"] == len(CENSUS_STAGES):

@@ -16,6 +16,7 @@
 
 #include "BKE_context.hh"
 #include "BKE_screen.hh"
+#include "BLI_listbase.h"
 #include "BLT_translation.hh"
 #include "BLI_set.hh"
 #include "BLI_string_utils.hh"
@@ -276,7 +277,8 @@ void project(bContext *C,
              const Span<std::string> path,
              int depth,
              MenuWriter *writer,
-             Invocation *invocation)
+             Invocation *invocation,
+             const FunctionRef<void(Layout &)> draw = {})
 {
   if (depth > 16) {
     return;
@@ -307,6 +309,9 @@ void project(bContext *C,
   block_flag_enable(block, BLOCK_SHOW_SHORTCUT_ALWAYS);
   if (mt) {
     menutype_draw(C, mt, &layout);
+  }
+  else if (draw) {
+    draw(layout);
   }
   else if (parent && parent->menu_create_func) {
     parent->menu_create_func(C, &layout, parent->poin);
@@ -527,6 +532,52 @@ static void native_menu(bContext *C,
     }
     return;
   }
+  if (StringRef(root).startswith(std::string(native::BUTTON_MENU_ROOT) + native::PANEL_MENU_PART)) {
+    /* Blender's context menu for a panel's control (ROUND6 PANEL-12): the panel drawn again, as
+     * its view draws it, the control found by its key, and the menu Blender pops up for it. While
+     * the menu is drawn and its item runs, the control is the button last clicked, as Blender's
+     * items find it (Copy Data Path, Add Driver, Add to Keying Set...). */
+    Vector<std::string> parts;
+    for (StringRef rest = root;;) {
+      const int64_t found = rest.find(native::PANEL_MENU_PART);
+      if (found == StringRef::not_found) {
+        parts.append(rest);
+        break;
+      }
+      parts.append(rest.substr(0, found));
+      rest = rest.substr(found + 1);
+    }
+    if (parts.size() != 5) {
+      return;
+    }
+    const StringRef tab = split(first, '\t').second;
+    native::panel_button(
+        C,
+        tab,
+        parts[1] == "1",
+        parts[2],
+        parts[3],
+        [&](Button &but) {
+          ARegion *region = CTX_wm_region(C);
+          const int old_flag = but.flag;
+          if (region) {
+            BLI_addtail(&region->runtime->uiblocks, but.block);
+            but.flag |= BUT_ACTIVE_OVERRIDE | BUT_LAST_ACTIVE;
+          }
+          project(C, nullptr, &but, std::string(first), path, 0, writer, invocation, [&](Layout &layout) {
+            context_menu_for_button_draw(C, &but, nullptr, layout);
+          });
+          if (invocation) {
+            invocation->execute(C);
+          }
+          if (region) {
+            BLI_remlink(&region->runtime->uiblocks, but.block);
+            but.flag = old_flag;
+          }
+        },
+        std::atoi(parts[4].c_str()));
+    return;
+  }
   const char *context_id = native_context_menu_id(C);
   const std::string resolved = root == "context" ? (context_id ? context_id : "") : root;
   /* Sculpt Mode's context menu, and the other modes' that are panels of settings, are opened as
@@ -650,7 +701,8 @@ void menu_write(bContext *C, const StringRef route, ViewBuilder &builder)
                       fields.label = heading;
                       return protocol::CreateMenu(buffer);
                     })};
-  if (split(first, '\t').first.startswith(std::string(PANEL_MENU_ROOT) + PANEL_MENU_PART)) {
+  if (split(first, '\t').first.startswith(std::string(PANEL_MENU_ROOT) + PANEL_MENU_PART) ||
+      split(first, '\t').first.startswith(std::string(BUTTON_MENU_ROOT) + PANEL_MENU_PART)) {
     /* Drawn in the panel's own view's context, see #panel_button. */
     native_menu(C, route, &writer, nullptr);
     return;
@@ -662,7 +714,8 @@ void menu_run(bContext *C, const StringRef route)
 {
   const StringRef first = split(route, '\n').first;
   const StringRef tab = split(first, '\t').second;
-  if (split(first, '\t').first.startswith(std::string(PANEL_MENU_ROOT) + PANEL_MENU_PART)) {
+  if (split(first, '\t').first.startswith(std::string(PANEL_MENU_ROOT) + PANEL_MENU_PART) ||
+      split(first, '\t').first.startswith(std::string(BUTTON_MENU_ROOT) + PANEL_MENU_PART)) {
     Invocation invocation;
     native_menu(C, route, nullptr, &invocation);
     return;

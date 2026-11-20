@@ -2116,13 +2116,19 @@ class Writer {
 
     const std::string edit_key = property_key(but, index);
     const std::string key = this->key(edit_key);
+    const int edit_occurrence = occurrence(edit_key);
     data.edits.add_overwrite(key,
                              {Edit::Kind::Property,
                               panel,
                               edit_key,
-                              occurrence(edit_key),
+                              edit_occurrence,
                               array && index >= 0,
                               but.type == ButtonType::NumSlider});
+    /* Blender's context menu for it, which a hold opens (B12, PANEL-12). */
+    const std::string menu = std::string(native::BUTTON_MENU_ROOT) + native::PANEL_MENU_PART +
+                             (data.tool_tab ? "1" : "0") + native::PANEL_MENU_PART + panel +
+                             native::PANEL_MENU_PART + edit_key + native::PANEL_MENU_PART +
+                             std::to_string(edit_occurrence);
     /* A material slot's link follows the slot's material in its row, as Blender draws it. */
     const protocol::Role role = look.role == protocol::Role::None &&
                                         RNA_struct_is_a(ptr->type, RNA_MaterialSlot) &&
@@ -2144,6 +2150,10 @@ class Writer {
       fields.property = RNA_property_identifier(prop);
       fields.short_label = look.short_label;
       fields.role = role;
+      /* Not for what is shown with another control, such as a lock or a mode. */
+      if (!attached) {
+        fields.menu = menu;
+      }
     };
 
     NodeId node;
@@ -5522,9 +5532,19 @@ static std::string panels_walk(bContext *C,
           if (target_panel && *requested_key == key && !applied &&
               occurrences[key]++ == request->edit->occurrence)
           {
-            applied = ELEM(request->action, "", "activate") ?
-                          set_property(C, but, index, *request) :
-                          animate_property(C, but, index, request->action);
+            if (request->action == "button" && request->with_button) {
+              /* Its context menu's component, as a click on it gives it (PANEL-12). */
+              const int old_index = but.rnaindex;
+              but.rnaindex = index;
+              request->with_button(but);
+              but.rnaindex = old_index;
+              applied = true;
+            }
+            else {
+              applied = ELEM(request->action, "", "activate") ?
+                            set_property(C, but, index, *request) :
+                            animate_property(C, but, index, request->action);
+            }
           }
           continue;
         }
@@ -5769,12 +5789,13 @@ bool panel_button(bContext *C,
                   const bool tool_tab,
                   const StringRef panel,
                   const StringRef key,
-                  const FunctionRef<void(Button &)> fn)
+                  const FunctionRef<void(Button &)> fn,
+                  const int occurrence)
 {
   PanelsData data;
   data.tab = tab;
   data.tool_tab = tool_tab;
-  const Edit edit{Edit::Kind::Property, panel, key};
+  const Edit edit{Edit::Kind::Property, panel, key, occurrence};
   EditRequest request;
   request.edit = &edit;
   request.action = "button";

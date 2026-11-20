@@ -174,6 +174,12 @@ struct EditRequest {
  */
 inline constexpr const char *PANEL_MENU_ROOT = "panel";
 inline constexpr char PANEL_MENU_PART = '\x1f';
+/**
+ * The root of a route to Blender's context menu for a panel's control (ROUND6 PANEL-12):
+ * `button`, then, each after #PANEL_MENU_PART, 1 for the Properties' Tool tab, the panel's id,
+ * the control's key and which of the buttons with that key it is.
+ */
+inline constexpr const char *BUTTON_MENU_ROOT = "button";
 
 /**
  * Calls \a fn with the button \a key names in the panel \a panel of \a tab, drawn as the
@@ -185,7 +191,8 @@ bool panel_button(bContext *C,
                   bool tool_tab,
                   StringRef panel,
                   StringRef key,
-                  FunctionRef<void(Button &)> fn);
+                  FunctionRef<void(Button &)> fn,
+                  int occurrence = 0);
 
 /** The node editor's view, see `interface_native_view.cc`: its tree's nodes as records, and their
  * values as controls. */

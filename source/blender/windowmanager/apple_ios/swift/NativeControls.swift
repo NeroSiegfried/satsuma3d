@@ -379,7 +379,16 @@ struct ControlActions: View {
 
   /** Whether a hold on \a node has anything to offer. */
   static func offered(_ model: PanelsModel, _ node: NativeNode) -> Bool {
-    node.number != nil || node.kind == .textfield || node.node.animatable || model.attached(node, .lock) != nil
+    node.number != nil || node.kind == .textfield || node.node.animatable || model.attached(node, .lock) != nil ||
+      route(model, node) != nil
+  }
+
+  /** Blender's own context menu for the control (ROUND6 PANEL-12, finding B12): its keyframes,
+   * drivers, keying sets, overrides, Reset to Default, Copy Data Path and the rest, as a right-click
+   * gives them, served by the menu walker. */
+  static func route(_ model: PanelsModel, _ node: NativeNode) -> String? {
+    guard let menu = node.node.menu, !menu.isEmpty else { return nil }
+    return BlenderMenus.route(menu, tab: model.currentTab)
   }
 
   /** Its value as text, as copied: what the field shows, without grouping. */
@@ -391,6 +400,41 @@ struct ControlActions: View {
   }
 
   var body: some View {
+    if let route = Self.route(model, node) {
+      if let copied = copiedText {
+        Section {
+          Button {
+            UIPasteboard.general.string = copied
+          } label: {
+            Label("Copy Value", systemImage: "doc.on.doc")
+          }
+          Button {
+            paste()
+          } label: {
+            Label("Paste Value", systemImage: "doc.on.clipboard")
+          }
+          .disabled(!node.enabled || !UIPasteboard.general.hasStrings)
+        }
+      }
+      if let lock = model.attached(node, .lock) {
+        let locked = model.bool(lock)
+        Button {
+          model.set(lock, .bool(!locked))
+        } label: {
+          Label(locked ? "Unlock" : "Lock", systemImage: locked ? "lock.open" : "lock")
+        }
+        .disabled(!lock.enabled)
+      }
+      BlenderMenuItems(route: route)
+    }
+    else {
+      ownActions
+    }
+  }
+
+  /** The iPad's own, where Blender gives no menu. */
+  @ViewBuilder
+  private var ownActions: some View {
     if let copied = copiedText {
       Section {
         if let number = node.number {
@@ -474,6 +518,12 @@ extension View {
   func controlActions(_ model: PanelsModel, _ node: NativeNode, component: Bool = false) -> some View {
     if ControlActions.offered(model, node) {
       self.contextMenu { ControlActions(model: model, node: node, component: component) }
+        /* Blender's menu asked for as the hold begins, ready when it opens (PANEL-12). */
+        .simultaneousGesture(LongPressGesture(minimumDuration: 0.2).onEnded { _ in
+          if let route = ControlActions.route(model, node) {
+            Task { _ = await BlenderMenus.shared.fetch(route) }
+          }
+        })
     }
     else {
       self

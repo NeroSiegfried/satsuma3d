@@ -46,6 +46,8 @@ struct NodeFields {
   std::string_view property;
   std::string_view short_label;
   std::string_view leading_icon;
+  /** The route of Blender's context menu for it, see `protocol.fbs`. */
+  std::string_view menu;
   bool enabled = true;
   bool mixed = false;
   bool animatable = false;
