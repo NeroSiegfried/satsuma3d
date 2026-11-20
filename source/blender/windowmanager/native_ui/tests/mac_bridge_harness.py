@@ -11,6 +11,7 @@ WM_native_ui_flush_commands, decodes updates into node trees, sends commands, wr
 import ctypes
 import json
 import os
+import re
 import sys
 import time
 import traceback
@@ -2230,8 +2231,31 @@ def _point_answering(rect, where):
 
 
 touch_state = {}
-# `ButtonType::ListRow`'s value (UI_interface_c.hh).
-BUTTON_LISTROW = 30
+
+
+def _button_types():
+    """`ButtonType`'s values by name, read from Blender's own header: the button map gives numbers
+    here, and a number written in a test goes stale when Blender adds a type (5.2's TextBox moved
+    every later one by one; ROUND7 U4e)."""
+    header = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "editors",
+                          "include", "UI_interface_c.hh")
+    with open(header, encoding="utf-8") as f:
+        text = f.read()
+    body = text[text.index("enum class ButtonType"):]
+    body = body[body.index("{") + 1:body.index("};")]
+    body = re.sub(r"/\*.*?\*/|//[^\n]*", "", body, flags=re.S)
+    values, value = {}, 0
+    for entry in (e.strip() for e in body.split(",")):
+        if not entry:
+            continue
+        name, _, given = (part.strip() for part in entry.partition("="))
+        value = int(given) if given else value + 1
+        values[name] = value
+    return values
+
+
+# Rows Blender drags away, by name (ROUND7 U4e, from move/5.3 cffd17345eb).
+BUTTON_DRAGGED_ROWS = tuple(_button_types()[name] for name in ("ListRow", "PreviewTile", "ViewItem"))
 # ROUND6 DESK-4 (H8): each editor's main region as a finger meets it. Lists of rows are interface (a
 # drag scrolls, a tap presses), as is text; what is drawn on, panned or zoomed is a canvas.
 TOUCH_EDITORS = [
@@ -2389,7 +2413,7 @@ def tick_touch():
             return 0.8
         if step == 9:
             # A row Blender drags away takes no drag: a scroll begins there, the drag after a hold.
-            rows = [rect for where, kind, _k, rect in buttons if kind in (BUTTON_LISTROW, 35, 48)]
+            rows = [rect for where, kind, _k, rect in buttons if kind in BUTTON_DRAGGED_ROWS]
             report["list rows in the map"] = len(rows)
             report["Properties' button types on Material"] = sorted({kind for where, kind, _k, _r in buttons
                                                                     if where == "PROPERTIES WINDOW"})
