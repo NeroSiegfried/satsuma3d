@@ -206,11 +206,16 @@ final class BlenderMenus {
   /** Run an item in Blender, with its cursor at a window position in pixels, for operators that
    * follow the pointer from there, such as Bevel. */
   func run(_ item: BlenderMenuItem, at position: CGPoint? = nil) {
+    run(route: item.route, at: position)
+  }
+
+  /** Run the item a route names, such as a pinned command's, without its menu being fetched. */
+  func run(route: String, at position: CGPoint? = nil) {
     var params: [String: NativeValue] = [:]
     if let position {
       params = ["x": .float(Double(position.x)), "y": .float(Double(position.y))]
     }
-    NativeViews.shared.send(runner, target: item.route, op: .invoke, params: params)
+    NativeViews.shared.send(runner, target: route, op: .invoke, params: params)
   }
 }
 

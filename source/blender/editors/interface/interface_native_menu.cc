@@ -14,6 +14,8 @@
  * runs: nothing of Blender's is kept between drawing a menu and running its item.
  */
 
+#include <fmt/format.h>
+
 #include "MEM_guardedalloc.h"
 
 #include "BKE_context.hh"
@@ -110,6 +112,8 @@ struct Invocation {
   int index = -1;
   int enum_value = 0;
   std::string title;
+  /** Only find the item, to say why it would not run (#menu_run): run nothing. */
+  bool check_only = false;
 
   ~Invocation()
   {
@@ -139,8 +143,35 @@ struct Invocation {
     }
   }
 
+  /** Why it would not run now: its operator's poll message (ROUND6 MODE-7, C8), or empty. */
+  std::string why_not(bContext *C)
+  {
+    if (type == nullptr) {
+      return rnaprop && !RNA_property_editable(&rnapoin, rnaprop) ?
+                 fmt::format(fmt::runtime(IFACE_("{} cannot be changed here now")), title) :
+                 "";
+    }
+    const bContextStore *previous = CTX_store_get(C);
+    CTX_store_set(C, context.get());
+    std::string why;
+    if (!WM_operator_poll_context(C, type, opcontext)) {
+      bool free = false;
+      const char *message = CTX_wm_operator_poll_msg_get(C, &free);
+      why = (title.empty() ? WM_operatortype_name(type, nullptr) : title) + ": " +
+            (message && message[0] ? message : IFACE_("it cannot run here now"));
+      if (free) {
+        MEM_SAFE_DELETE(message);
+      }
+    }
+    CTX_store_set(C, previous);
+    return why;
+  }
+
   void execute(bContext *C)
   {
+    if (check_only) {
+      return;
+    }
     const bContextStore *previous = CTX_store_get(C);
     CTX_store_set(C, context.get());
     if (type && WM_operator_poll_context(C, type, opcontext)) {
@@ -633,7 +664,7 @@ static void native_menu(bContext *C,
         }
       }
     }
-    else if (invocation && path.size() == 1 && path[0] == "panel") {
+    else if (invocation && !invocation->check_only && path.size() == 1 && path[0] == "panel") {
       PointerRNA properties = WM_operator_properties_create("WM_OT_call_panel");
       RNA_string_set(&properties, "name", resolved.c_str());
       WM_operator_name_call(
@@ -741,8 +772,9 @@ void menu_write(bContext *C, const StringRef route, ViewBuilder &builder)
  */
 struct TakenPopup {
   Main *bmain = nullptr;
-  Vector<std::unique_ptr<Invocation>> invocations;
-  Vector<std::string> menus;
+  /* Not Blender's allocator for the lists: one is kept until the program ends. */
+  std::vector<std::unique_ptr<Invocation>> invocations;
+  std::vector<std::string> menus;
 };
 
 static TakenPopup &taken_popup()
@@ -798,7 +830,7 @@ wmNativePopupMenu popup_menu_take(bContext *C, Block *block, const StringRef tit
         text = CTX_IFACE_(mt->translation_context, mt->label);
       }
       result.items.append({text, "m" + std::to_string(taken.menus.size()), icon_name});
-      taken.menus.append(mt->idname);
+      taken.menus.push_back(mt->idname);
       result.actions++;
       continue;
     }
@@ -817,10 +849,15 @@ wmNativePopupMenu popup_menu_take(bContext *C, Block *block, const StringRef tit
     auto invocation = std::make_unique<Invocation>();
     invocation->capture(but);
     result.items.append({text, std::to_string(taken.invocations.size()), icon_name});
-    taken.invocations.append(std::move(invocation));
+    taken.invocations.push_back(std::move(invocation));
     result.actions++;
   }
   return result;
+}
+
+void popup_menu_forget()
+{
+  taken_popup() = TakenPopup();
 }
 
 std::string popup_menu_choose(bContext *C, const StringRef value)
@@ -831,14 +868,14 @@ std::string popup_menu_choose(bContext *C, const StringRef value)
   }
   if (value.startswith("m")) {
     const int index = std::atoi(std::string(value.drop_prefix(1)).c_str());
-    if (index < 0 || index >= taken.menus.size()) {
+    if (index < 0 || index >= int(taken.menus.size())) {
       return IFACE_("This menu has changed");
     }
     WM_menu_name_call(C, taken.menus[index].c_str(), wm::OpCallContext::InvokeRegionWin);
     return "";
   }
   const int index = std::atoi(std::string(value).c_str());
-  if (index < 0 || index >= taken.invocations.size()) {
+  if (index < 0 || index >= int(taken.invocations.size())) {
     return IFACE_("This menu has changed");
   }
   Invocation &invocation = *taken.invocations[index];
@@ -870,20 +907,56 @@ std::string popup_menu_choose(bContext *C, const StringRef value)
   return "";
 }
 
-void menu_run(bContext *C, const StringRef route)
+std::string menu_run(bContext *C, const StringRef route, const wmOperatorType **r_ran)
 {
+  /* Why nothing ran is said (ROUND6 MODE-7, C8): the route no longer leads to an item (the menu
+   * changed since it was drawn, or a pin from another mode or session), or its poll fails now. */
+  std::string why;
+  /* A panel's or a control's menu is polled only while its panel is drawn again and its control
+   * is the active button, which is while it runs: there, only whether the route leads to an item. */
+  bool poll_check = true;
+  const auto run = [&](Invocation &invocation) {
+    invocation.check_only = true;
+    native_menu(C, route, nullptr, &invocation);
+    if (invocation.type == nullptr && invocation.rnaprop == nullptr) {
+      const Vector<std::string> steps = route_path(route);
+      if (steps.is_empty() || steps.last() != "panel") {
+        why = IFACE_("That command is not in this menu here now");
+      }
+      return;
+    }
+    if (poll_check) {
+      why = invocation.why_not(C);
+      if (!why.empty()) {
+        return;
+      }
+    }
+    if (r_ran) {
+      *r_ran = invocation.type;
+    }
+  };
   const StringRef first = split(route, '\n').first;
   const StringRef tab = split(first, '\t').second;
   if (split(first, '\t').first.startswith(std::string(PANEL_MENU_ROOT) + PANEL_MENU_PART) ||
       split(first, '\t').first.startswith(std::string(BUTTON_MENU_ROOT) + PANEL_MENU_PART)) {
-    Invocation invocation;
-    native_menu(C, route, nullptr, &invocation);
-    return;
+    poll_check = false;
+    Invocation check;
+    run(check);
+    if (why.empty()) {
+      Invocation invocation;
+      native_menu(C, route, nullptr, &invocation);
+    }
+    return why;
   }
   in_properties_tab(C, tab, [&]() {
-    Invocation invocation;
-    native_menu(C, route, nullptr, &invocation);
+    Invocation check;
+    run(check);
+    if (why.empty()) {
+      Invocation invocation;
+      native_menu(C, route, nullptr, &invocation);
+    }
   });
+  return why;
 }
 
 }  // namespace native

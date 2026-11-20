@@ -62,6 +62,8 @@ void WM_native_ui_document_held(bContext *C);
  */
 void WM_native_ui_busy_push(const char *name, const char *idname);
 void WM_native_ui_busy_pop();
+/** Free what the bridge keeps between commands, before Blender's allocator checks for leaks. */
+void WM_native_ui_exit();
 
 /** \} */
 

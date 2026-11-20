@@ -145,6 +145,7 @@
 #include <mutex>
 #include <functional>
 #include <map>
+#include <set>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -157,8 +158,9 @@
 namespace blender::ui::native {
 wmNativePopupMenu popup_menu_take(bContext *C, Block *block, StringRef title);
 std::string popup_menu_choose(bContext *C, StringRef value);
+void popup_menu_forget();
 void menu_write(bContext *C, StringRef route, wm::native_ui::ViewBuilder &builder);
-void menu_run(bContext *C, StringRef route);
+std::string menu_run(bContext *C, StringRef route, const wmOperatorType **r_ran);
 bool menu_can_show(bContext *C, StringRef idname);
 void menu_popup_asked(StringRef idname);
 }  // namespace blender::ui::native
@@ -175,6 +177,8 @@ namespace blender {
 
 /** The interface's short messages as JSON, see #WM_native_ui_notice. */
 static std::string bridge_notices_json();
+int bridge_notice_count();
+void bridge_id_counts_track(bContext *C);
 /** Why \a ot cannot run in \a C, in words for the person, after its poll failed. */
 static std::string bridge_operator_unavailable(bContext *C, wmOperatorType *ot);
 
@@ -4240,6 +4244,9 @@ void bridge_menu_view_build(bContext *C,
   });
 }
 
+/** How many popups the interface has been asked to show, see #bridge_popup_show. */
+static uint64_t bridge_popup_count();
+
 views::CommandResult bridge_menu_view_command(bContext *C,
                                               const views::Params & /*params*/,
                                               views::ViewData * /*data*/,
@@ -4255,7 +4262,37 @@ views::CommandResult bridge_menu_view_command(bContext *C,
     return views::CommandResult::Failed;
   }
   bridge_menu_cursor_set(C, views::Params(command.params()));
-  ui::native::menu_run(C, command.target()->string_view());
+  /* A tap on a menu item, a Search result or a pin is always answered (ROUND6 MODE-7, C8): why
+   * nothing ran, or that a command kept for redo finished, waits, asked, showed or said something;
+   * otherwise that it did nothing here. */
+  wmWindowManager *wm = CTX_wm_manager(C);
+  wmWindow *win = CTX_wm_window(C);
+  const void *last_registered = wm->runtime->operators.last;
+  const int modal_handlers = BLI_listbase_count(&win->runtime->modalhandlers);
+  ReportList *reports = CTX_wm_reports(C);
+  const Report *last_report = reports ? BKE_reports_last_displayable(reports) : nullptr;
+  const uint64_t popup_number = bridge_popup_count();
+  const int notice_number = bridge_notice_count();
+  const wmOperatorType *ran = nullptr;
+  const std::string why = ui::native::menu_run(C, command.target()->string_view(), &ran);
+  if (!why.empty()) {
+    WM_native_ui_session_log("menu", ("not run: " + why).c_str());
+    WM_native_ui_notice(RPT_WARNING, why.c_str());
+    r_error = why;
+    return views::CommandResult::Failed;
+  }
+  if (ran && (ran->flag & OPTYPE_REGISTER) && CTX_wm_manager(C) == wm &&
+      wm->runtime->operators.last == last_registered &&
+      BLI_listbase_count(&win->runtime->modalhandlers) == modal_handlers &&
+      (reports ? BKE_reports_last_displayable(reports) : nullptr) == last_report &&
+      bridge_popup_count() == popup_number && bridge_notice_count() == notice_number &&
+      WM_event_wait_for_input_operator(win) == nullptr)
+  {
+    const std::string text = fmt::format(fmt::runtime(IFACE_("{} did nothing here")),
+                                         WM_operatortype_name(const_cast<wmOperatorType *>(ran), nullptr));
+    WM_native_ui_session_log("menu", text.c_str());
+    WM_native_ui_notice(RPT_INFO, text.c_str());
+  }
   return views::CommandResult::Done;
 }
 
@@ -4284,6 +4321,11 @@ struct BridgePopup {
   float x = 0.5f, y = 0.5f;
 };
 BridgePopup bridge_popup;
+
+static uint64_t bridge_popup_count()
+{
+  return bridge_popup.number;
+}
 
 /** Show \a popup, where the pointer is in \a C's window. */
 void bridge_popup_show(bContext *C, BridgePopup popup)
@@ -5777,6 +5819,12 @@ struct BridgeNotice {
  * TOUCH-3's harness). */
 static std::vector<BridgeNotice> bridge_notices;
 static int bridge_notice_number = 0;
+
+/** How many messages the interface has been given, see #WM_native_ui_notice. */
+int bridge_notice_count()
+{
+  return bridge_notice_number;
+}
 static double bridge_notice_time = 0.0;
 
 /**
@@ -6023,8 +6071,83 @@ static std::string bridge_operator_unavailable(bContext *C, wmOperatorType *ot)
  * the latest as `reveal`, numbered so each is acted on once.
  * \{ */
 
+/**
+ * What a command changed that the screen may not show (ROUND6 MODE-7, C13): data-blocks added or
+ * removed, counted by type after each command the reveal hook sees, in the file they were counted
+ * in. A command shown nowhere (`none`) that changed them says so: "New Text: Text added".
+ */
+struct BridgeIdCounts {
+  const Main *bmain = nullptr;
+  /* Not Blender's allocator: the last count lives until the program ends. */
+  std::map<short, int> counts;
+};
+
+static BridgeIdCounts bridge_id_counts(Main *bmain)
+{
+  BridgeIdCounts result;
+  result.bmain = bmain;
+  ListBaseT<ID> *lb;
+  FOREACH_MAIN_LISTBASE_BEGIN (bmain, lb) {
+    /* Not screens or the window manager, which the interface's own views make and free. */
+    if (const ID *first = static_cast<const ID *>(lb->first); first && !ELEM(GS(first->name), ID_SCR, ID_WM)) {
+      result.counts[GS(first->name)] = BLI_listbase_count(lb);
+    }
+  }
+  FOREACH_MAIN_LISTBASE_END;
+  return result;
+}
+
+/** What changed between \a before and \a after, said for a person, or empty. */
+static std::string bridge_id_counts_said(const BridgeIdCounts &before, const BridgeIdCounts &after)
+{
+  if (before.bmain == nullptr || before.bmain != after.bmain) {
+    return "";
+  }
+  std::set<short> codes;
+  for (const auto &[code, count] : before.counts) {
+    codes.insert(code);
+  }
+  for (const auto &[code, count] : after.counts) {
+    codes.insert(code);
+  }
+  const auto count_of = [](const BridgeIdCounts &counts, const short code) {
+    const auto found = counts.counts.find(code);
+    return found == counts.counts.end() ? 0 : found->second;
+  };
+  std::string said;
+  for (const short code : codes) {
+    const int delta = count_of(after, code) - count_of(before, code);
+    if (delta == 0) {
+      continue;
+    }
+    const int count = std::abs(delta);
+    const std::string kind = count == 1 ? BKE_idtype_idcode_to_name(code) :
+                                          BKE_idtype_idcode_to_name_plural(code);
+    /* "Text added", "2 Collections removed". */
+    const std::string what = count == 1 ? kind : std::to_string(count) + " " + kind;
+    said += (said.empty() ? "" : ", ") +
+            fmt::format(fmt::runtime(delta > 0 ? IFACE_("{} added") : IFACE_("{} removed")), what);
+  }
+  return said;
+}
+
+static BridgeIdCounts bridge_id_counts_last;
+
+void bridge_id_counts_track(bContext *C)
+{
+  /* The first count of a file, as it opened: a pointer compared each pass, counted only when the
+   * file changed. */
+  Main *bmain = CTX_data_main(C);
+  if (bmain && bridge_id_counts_last.bmain != bmain) {
+    bridge_id_counts_last = bridge_id_counts(bmain);
+  }
+}
+
 static void bridge_reveal_after(bContext *C, wmOperator *op, const std::string &call)
 {
+  /* What it changed, counted whether or not the reveal shows something. */
+  const BridgeIdCounts before = std::move(bridge_id_counts_last);
+  bridge_id_counts_last = bridge_id_counts(CTX_data_main(C));
 #ifdef WITH_PYTHON
   if (G.background || CTX_wm_window(C) == nullptr) {
     return;
@@ -6041,6 +6164,16 @@ static void bridge_reveal_after(bContext *C, wmOperator *op, const std::string &
     return;
   }
   const std::string show(bridge_text(*answer, "show"));
+  if (show == "none") {
+    /* Nothing is shown for it: what it added or removed is said, as nothing else on screen may
+     * (a text block, a collection, a workspace, a marked asset's catalog). */
+    const std::string changed = bridge_id_counts_said(before, bridge_id_counts_last);
+    if (!changed.empty()) {
+      const std::string text = WM_operatortype_name(op->type, op->ptr) + ": " + changed;
+      WM_native_ui_session_log("reveal", (std::string(op->type->idname) + " changed " + changed).c_str());
+      WM_native_ui_notice(RPT_INFO, text.c_str());
+    }
+  }
   std::string json = "{\"number\":" + std::to_string(++bridge_reveal_number) + ",\"operator\":\"" +
                      bridge_json_escape(op->type->idname) + "\"";
   for (const char *key : {"show", "focus", "text", "button", "why", "level"}) {
@@ -6068,7 +6201,7 @@ static int bridge_popups_refused = 0;
 static std::string bridge_popup_last_drawn;
 /** What refused popups would have freed, freed at the next pass of the bridge, once the operator
  * that asked for them has returned. */
-static Vector<std::function<void(bContext *)>> bridge_popup_releases;
+static std::vector<std::function<void(bContext *)>> bridge_popup_releases;
 
 bool bridge_menu_popup(bContext *C, const char *menu);
 bool bridge_enum_popup(bContext *C, wmOperator *op, PropertyRNA *prop);
@@ -6107,6 +6240,14 @@ extern "C" int WM_native_ui_test_text_input_focus(int *r_count)
 }
 
 static wmNativeInterface bridge_test_hooks;
+
+void WM_native_ui_exit()
+{
+  /* What a menu an operator built still holds (ROUND6 MODE-3), freed before Blender's allocator
+   * checks for leaks. */
+  ui::native::popup_menu_forget();
+  bridge_popup_releases.clear();
+}
 
 extern "C" void WM_native_ui_test_install_hooks()
 {
@@ -6159,7 +6300,7 @@ extern "C" void WM_native_ui_test_install_popup_hooks()
     bridge_popups_taken++;
     WM_native_ui_session_log("popup", ("alert " + alert.title).c_str());
     if (cancel) {
-      bridge_popup_releases.append([cancel](bContext *C) { cancel(C); });
+      bridge_popup_releases.push_back([cancel](bContext *C) { cancel(C); });
     }
     return true;
   };
@@ -6332,8 +6473,8 @@ static bool bridge_panel_popup_takes(const StringRef panel)
 
 static void bridge_popup_releases_run(bContext *C)
 {
-  Vector<std::function<void(bContext *)>> releases = std::move(bridge_popup_releases);
-  bridge_popup_releases.clear();
+  std::vector<std::function<void(bContext *)>> releases;
+  releases.swap(bridge_popup_releases);
   for (std::function<void(bContext *)> &release : releases) {
     release(C);
   }
@@ -6401,7 +6542,7 @@ bool bridge_popup_take(bContext *C,
                                         std::string();
   const std::string opener = op ? op->type->idname : busy_idname ? busy_idname : "";
   if (release) {
-    bridge_popup_releases.append(std::move(release));
+    bridge_popup_releases.push_back(std::move(release));
   }
   bridge_popups_refused++;
   if (ELEM(StringRef(opener), "WM_OT_search_menu", "WM_OT_search_operator", "WM_OT_search_single_menu"))
@@ -8911,6 +9052,7 @@ void WM_native_ui_flush_commands(bContext *C)
     return;
   }
   bridge_popup_releases_run(C);
+  bridge_id_counts_track(C);
   bridge_viewport_regions_note(C);
 
   /* A job's modal operator (a render's, a bake's) sees that its job ended only at its next event,

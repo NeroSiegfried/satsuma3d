@@ -6108,6 +6108,63 @@ def tick_statuskeys():
     return 0.3
 
 
+
+# ROUND6 MODE-7 (C8, C13): a tap on a menu item is always answered. A route that no longer leads to
+# an item (a stale pin) says so; a command shown nowhere that added a data-block says what it added.
+answers_state = {"at": 0, "problems": [], "found": {}}
+
+
+def _answers_notices():
+    top = tree(subs["toolbar"]) or {}
+    raw = next((n.get("value") for n in top.get("children", []) if n["key"] == "notices"), "") or "[]"
+    try:
+        return [n.get("text") for n in json.loads(raw)]
+    except ValueError:
+        return []
+
+
+def tick_answers():
+    global step
+    state = answers_state
+    problems = state["problems"]
+    try:
+        pump()
+        step += 1
+        at = state["at"]
+        state["at"] += 1
+        if at == 0:
+            lib.WM_native_ui_test_install_hooks()
+            subs["toolbar"] = subscribe("toolbar")
+            subs["menu"] = subscribe("menu", route="VIEW3D_MT_object")
+            subs["operators"] = subscribe("operators")
+            enter("object")
+        elif at == 3:
+            # A pin whose item is gone: its route leads nowhere now.
+            invoke(subs["menu"], "VIEW3D_MT_object\nNo Such Item\t1", 7101)
+        elif at == 5:
+            notices = _answers_notices()
+            state["found"]["stale route"] = [acks.get(7101), notices[-1:] if notices else None]
+            if acks.get(7101) in (None, "ok") or not any("not in this menu" in (n or "") for n in notices):
+                problems.append("MODE-7: a stale route was not answered: ack %r, notices %r" % (acks.get(7101), notices))
+            # A command nothing shows (a text block): what it added is said.
+            invoke(subs["operators"], "TEXT_OT_new", 7102)
+        elif at == 7:
+            notices = _answers_notices()
+            state["found"]["New Text"] = [acks.get(7102), notices[-1:] if notices else None]
+            if not any("Text added" in (n or "") for n in notices):
+                problems.append("MODE-7: New Text said nothing of what it added: %r" % notices)
+        elif at >= 8:
+            report["found"] = state["found"]
+            report["problems"] = problems
+            finish("done" if not problems else "error")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
 # Every scenario, by the name `mac_bridge_check.py --scenario` takes: the one list (ROUND7 U4d).
 # `mac_bridge_check.py`'s SCENARIOS must name exactly these, which `bl_native_test_runners.py`
 # checks; a name not here ends the run with an error, never another scenario's run.
@@ -6121,6 +6178,7 @@ SCENARIOS = {
     "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold, "typing": tick_typing,
     "windows": tick_windows, "margins": tick_margins, "census": tick_census, "stale": tick_stale,
     "header": tick_header, "popups": tick_popups, "statuskeys": tick_statuskeys,
+    "answers": tick_answers,
 }
 
 

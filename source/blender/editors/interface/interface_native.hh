@@ -26,6 +26,7 @@
 
 namespace blender {
 struct bContext;
+struct wmOperatorType;
 }
 
 namespace blender::ui {
@@ -229,12 +230,16 @@ std::string dialog_edit(bContext *C, PanelsData &data, const EditRequest &reques
  * their own routes. */
 void menu_write(bContext *C, StringRef route, wm::native_ui::ViewBuilder &builder);
 /** Run the menu item at \a route. */
-void menu_run(bContext *C, StringRef route);
+/** Runs the menu item \a route names, as its button would: empty, or why nothing ran (ROUND6
+ * MODE-7). \a r_ran is the operator it ran, if any. */
+std::string menu_run(bContext *C, StringRef route, const wmOperatorType **r_ran = nullptr);
 
 /** Takes the items of \a block, a popup menu titled \a title, for #popup_menu_choose. */
 wmNativePopupMenu popup_menu_take(bContext *C, Block *block, StringRef title);
 /** Runs the item of the last menu taken, as its button would: empty, or why nothing ran. */
 std::string popup_menu_choose(bContext *C, StringRef value);
+/** Frees the last menu taken, at exit. */
+void popup_menu_forget();
 /**
  * Whether the interface draws the menu \a idname here, by itself or as the root of a route: the
  * menu exists, its poll passes in \a C, and it is one the interface shows (the menu bars, Add,

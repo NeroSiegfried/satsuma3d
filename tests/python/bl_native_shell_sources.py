@@ -1881,4 +1881,20 @@ check('pose.rotation_mode_set' not in key_only_m6 and
           ('paintcurve.add_point_slide', 'brush.stencil_control', 'paint.grab_clone')),
       "R6 MODE-6 (C10): Set Rotation Mode has an action; paint curves, the stencil and the clone source say desktop only")
 
+# ROUND6 MODE-7 (C8, C13, X4): a menu item, Search result or pin is always answered. `menu_run` says
+# why nothing ran and the bridge says it; a registered command that changed nothing says so; a pin
+# runs by its route, not through a table filled only once Search has been opened.
+menu_view_m7 = bridge_d9[bridge_d9.index('views::CommandResult bridge_menu_view_command('):]
+menu_view_m7 = menu_view_m7[:menu_view_m7.index('\n}\n')]
+check('ui::native::menu_run(C, command.target()->string_view(), &ran)' in menu_view_m7 and
+      'WM_native_ui_notice(RPT_WARNING, why.c_str())' in menu_view_m7 and 'did nothing here' in menu_view_m7,
+      "R6 MODE-7 (C8): a menu item that did not run, or did nothing, says so")
+search_m7 = (SWIFT / 'CommandSearch.swift').read_text(encoding='utf-8')
+run_m7 = search_m7[search_m7.index('func run(id: String) {'):]
+run_m7 = run_m7[:run_m7.index('\n  }\n')]
+check('BlenderMenus.shared.run(route:' in run_m7 and 'menuItems[' not in run_m7,
+      "R6 MODE-7 (C8): a pin runs by its route")
+check('bridge_id_counts_said(before, bridge_id_counts_last)' in bridge_d9,
+      "R6 MODE-7 (C13): a command shown nowhere says what it added or removed")
+
 print('PASS: native shell sources ' + json.dumps(checks))

@@ -677,11 +677,36 @@ ACTIONS = [
 _BY_ID = {action.id: action for action in ACTIONS}
 _INDEX = {action.id: index for index, action in enumerate(ACTIONS)}
 
+# The tools on the toolbar, by mode: read once per mode, as the strip asks on every refresh.
+_TOOLS_BY_MODE = {}
+
+
+def _tool_available(context, idname):
+    """Whether the tool `idname` is on the toolbar of the current mode: a tool action elsewhere
+    would only warn "Tool ... not found for space" (ROUND6 MODE-7, X4)."""
+    tools = _TOOLS_BY_MODE.get(context.mode)
+    if tools is None:
+        from bl_ui.space_toolsystem_common import ToolSelectPanelHelper
+        cls = ToolSelectPanelHelper._tool_class_from_space_type('VIEW_3D')
+        tools = set()
+        for item in (cls.tools_from_context(context) if cls is not None else ()):
+            for tool in (item if isinstance(item, tuple) else (item,)):
+                if tool is not None and getattr(tool, "idname", None):
+                    tools.add(tool.idname)
+        _TOOLS_BY_MODE[context.mode] = tools
+    return idname in tools
+
+
 def _poll(action):
     # The shell opens a menu natively by its route, so `wm.call_menu`'s need for a window does not
     # apply; the menu existing is enough.
     if action.menu:
         return hasattr(bpy.types, action.menu)
+    if action.tool:
+        try:
+            return _tool_available(bpy.context, action.tool)
+        except (AttributeError, KeyError, RuntimeError, ReferenceError):
+            return False
     try:
         return bool(action.operator().poll())
     except (AttributeError, KeyError, RuntimeError, ReferenceError):
@@ -943,7 +968,7 @@ def run(context, action_id, tool=""):
     if not action.applies(state):
         return False
     operator = action.operator()
-    if not operator.poll():
+    if not _poll(action):
         return False
     context_type = 'INVOKE_REGION_WIN' if action.invoke else 'EXEC_REGION_WIN'
     return 'FINISHED' in operator(context_type, True, **action.properties(state))
@@ -996,6 +1021,8 @@ def run_reported(context, action_id, tool="", at_tap=False):
     reason = action.reason(state)
     if reason:
         return reason
+    if action.tool and not _poll(action):
+        return "{:s} is not a tool of {:s}".format(action.label, _mode_name(context))
     if not at_tap and needs_place(action):
         return NEEDS_PLACE + action.label
     operator = action.operator()

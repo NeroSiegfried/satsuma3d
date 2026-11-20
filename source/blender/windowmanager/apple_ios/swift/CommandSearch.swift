@@ -135,13 +135,10 @@ final class CommandSearch {
       ShellModel.current?.send(id, .invoke)
     }
     else if id.hasPrefix("menu:") {
-      let route = String(id.dropFirst("menu:".count))
-      if let item = menuItems[route] {
-        BlenderMenus.shared.run(item)
-      }
-      else {
-        ShellModel.current?.messages.say("That command is not in this mode's menus", level: "warning")
-      }
+      /* By its route, as its menu item runs (ROUND6 MODE-7, C8): a pin works before Search has
+       * been opened in this session and mode. Blender says why when the route no longer leads to
+       * an item here, or when it cannot run now. */
+      BlenderMenus.shared.run(route: String(id.dropFirst("menu:".count)))
     }
   }
 

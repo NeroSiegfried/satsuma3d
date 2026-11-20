@@ -264,6 +264,15 @@ bpy.context.object.pose.bones[0].select = True
 check(applies('object.keyframe'), "Pose Mode offers the first keyframe before an action exists")
 check("Clear Transforms" in titles(), "Pose Mode offers pose actions")
 
+# ROUND6 MODE-7 (X4): a tool action is offered only where its tool is on the toolbar; elsewhere it
+# would only warn "Tool ... not found for space", which the person saw four times in one second.
+bpy.ops.object.mode_set(mode='OBJECT')
+loop_cut = actions._BY_ID["mesh.loop_cut"]
+check(not actions._poll(loop_cut), "Loop Cut's tool is not offered in Object Mode")
+why = actions.run_reported(bpy.context, "mesh.loop_cut")
+check(why and "Tool" not in why, "Run outside its mode, a tool action says why in words: " + why)
+bpy.ops.object.mode_set(mode='POSE')
+
 # Desktop staples bound to keys: what Ctrl+C, Ctrl+V, Ctrl+X, Shift+D and Shift+R run in the 3D
 # View's keymaps is a registry action, or an exception says why not.
 import sys

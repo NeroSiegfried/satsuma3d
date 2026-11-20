@@ -468,6 +468,7 @@ void WM_exit_ex(bContext *C, const bool do_python_exit, const bool do_user_exit_
   BLI_assert(G.background ? (do_user_exit_actions == false) : true);
 
 #ifdef WITH_NATIVE_UI
+  WM_native_ui_exit();
   WM_native_ui_session_log_flush(true);
   if (BLI_getenv("PLATYPUS_SESSION_LOG")) {
     printf("Session log writes: %d\n", WM_native_ui_session_log_writes());
