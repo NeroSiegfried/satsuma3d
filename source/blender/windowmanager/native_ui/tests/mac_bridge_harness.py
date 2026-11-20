@@ -359,6 +359,15 @@ def decode_node(raw):
         label = Label.Label()
         label.Init(table.Bytes, table.Pos)
         entry.update(value=s(label.Value()), style=getattr(label, "Style", lambda: None)())
+    elif node.ContentType() == Content.Content.TextField:
+        from Blender.NativeUI import TextField as TextFieldTable
+        table = node.Content()
+        field = TextFieldTable.TextField()
+        field.Init(table.Bytes, table.Pos)
+        entry.update(value=s(field.Value()), path=bool(field.Path()))
+        if hasattr(field, "SuggestionsLength"):
+            entry.update(suggestions=[s(field.Suggestions(i)) for i in range(field.SuggestionsLength())],
+                         invalid=bool(field.Invalid()))
     elif node.ContentType() == Content.Content.Toggle:
         table = node.Content()
         toggle = Toggle.Toggle()
@@ -4347,13 +4356,13 @@ CENSUS_KNOWN = {
     "key": ("Table 1", None),
     "property_type": ("Table 1", None),
     # Shown in part.
-    "search": ("B11", "PANEL-11"),
+    "search": ("B11", "PANEL-11 (searches of no collection)"),
     "enum_flag": ("B16", "PANEL-14"),
     "palette": ("B17", "PANEL-14"),
     "tree": ("B18", "PANEL-14"),
 }
 # The findings PANEL-1 showed first whose packages are not built yet: each must still show.
-CENSUS_FIRST = ("B4", "B11", "B16", "B17", "B18", "B21")
+CENSUS_FIRST = ("B4", "B16", "B17", "B18", "B21")
 # Sections opened by the census's taps, as sub-panels with their rows (PANEL-3): by stage, tab
 # and title, one kept by the view (Principled BSDF's Emission) and one by a modifier's property
 # (Subdivision's Advanced, `open_advanced_panel`).
@@ -4398,6 +4407,14 @@ def _census_scene():
     rig_data.collections.new("Arm", parent=body)
     rig = bpy.data.objects.new("Rig", rig_data)
     scene.collection.objects.link(rig)
+    # A bone, which the Copy Location constraint's bone field picks from.
+    with bpy.context.temp_override(active_object=rig, object=rig, selected_objects=[rig]):
+        bpy.context.view_layer.objects.active = rig
+        bpy.ops.object.mode_set(mode='EDIT')
+        bone = rig_data.edit_bones.new("Bone")
+        bone.tail = (0, 0, 1)
+        bpy.ops.object.mode_set(mode='OBJECT')
+    bpy.context.view_layer.objects.active = cube
     cube.constraints.new('COPY_LOCATION').target = rig
     light = bpy.data.objects.new("Lamp", bpy.data.lights.new("Lamp", 'POINT'))
     scene.collection.objects.link(light)
@@ -4780,7 +4797,36 @@ def tick_census():
             if not texture.image or texture.image.name != "forest.exr":
                 state["problems"].append("files: Open left the Image Texture's image %r (images %r, ack %r, browser %r)" % (
                     texture.image, [i.name for i in bpy.data.images], acks.get(111), state.get("open_browser")))
-        if at == {"object": 31, "selection": 44, "texture_paint": 26}.get(stage, 16):
+        # Names picked from a list (B11, PANEL-11): a modifier's vertex group lists the object's,
+        # a name that is none of them is marked, and a rest shape key is chosen by its name.
+        if stage == "texture_paint" and at == 27:
+            nodes = list(_census_nodes(tree(subs.get("MODIFIER")) or {}))
+            group = next((n for n in nodes if n.get("content") == "TextField" and n.get("property") == "vertex_group"
+                          and "Displace" in n["key"]), None)
+            if not group or "Group" not in group.get("suggestions", []):
+                state["problems"].append("search: the Displace's vertex group lists %r" % (group and group.get("suggestions")))
+            bone = next((n for n in _census_nodes(tree(subs.get("CONSTRAINT")) or {})
+                         if n.get("content") == "TextField" and n.get("property") == "subtarget"), None)
+            if not bone or bone.get("suggestions") != ["Bone"]:
+                state["problems"].append("search: the constraint's bone lists %r" % (bone and bone.get("suggestions")))
+            else:
+                state["group"] = bone["key"]
+                set_text(subs["CONSTRAINT"], bone["key"], "Nope", 120)
+            shape = next((n for n in _census_nodes(tree(subs.get("PHYSICS")) or {})
+                          if n.get("content") == "TextField" and n.get("property") == "rest_shape_key"), None)
+            if not shape or "Key 1" not in shape.get("suggestions", []):
+                state["problems"].append("search: the cloth's rest shape key lists %r" % (shape and shape.get("suggestions")))
+            else:
+                set_text(subs["PHYSICS"], shape["key"], "Key 1", 121)
+        if stage == "texture_paint" and at == 29 and state.get("group"):
+            group = next((n for n in _census_nodes(tree(subs.get("CONSTRAINT")) or {}) if n["key"] == state["group"]), {})
+            if not group.get("invalid"):
+                state["problems"].append("search: \"Nope\" is not marked as no bone (ack %r, %r)" % (acks.get(120), group))
+            rest = bpy.data.objects["Cube"].modifiers["Cloth"].settings.rest_shape_key
+            if not rest or rest.name != "Key 1":
+                state["problems"].append("search: the rest shape key is %r (ack %r)" % (rest and rest.name, acks.get(121)))
+            set_text(subs["CONSTRAINT"], state["group"], "Bone", 122)
+        if at == {"object": 31, "selection": 44, "texture_paint": 31}.get(stage, 16):
             state["stage"] += 1
             state["start"] = step + 1
             if state["stage"] == len(CENSUS_STAGES):

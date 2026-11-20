@@ -169,6 +169,11 @@ table TextField {
   multiline: bool;
   /// A file or folder path, which an interface may pick with its own browser.
   path: bool;
+  /// The names it is picked from, as Blender's search lists them (`prop_search`, ROUND6
+  /// PANEL-11); the text can still be typed. And whether the text is none of them, which Blender
+  /// draws red.
+  suggestions: [string];
+  invalid: bool;
 }
 
 /// One choice of a `Choice`, or a heading between groups of them.

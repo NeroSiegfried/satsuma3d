@@ -970,6 +970,66 @@ NumberUnit number_unit(const Button &but)
   return unit;
 }
 
+/** The names a search field picks from (`prop_search`, B11, ROUND6 PANEL-11): its search
+ * collection's items, as Blender's search lists them, up to as many as a list can show; nothing
+ * where its search is not a collection, such as an attribute search. */
+std::optional<Vector<std::string>> search_names(const Button &but)
+{
+  if (but.type != ButtonType::SearchMenu) {
+    return std::nullopt;
+  }
+  const ButtonSearch &search = static_cast<const ButtonSearch &>(but);
+  if (!search.rnasearchprop || !search.rnasearchpoin.data ||
+      RNA_property_type(search.rnasearchprop) != PROP_COLLECTION)
+  {
+    return std::nullopt;
+  }
+  Vector<std::string> names;
+  PointerRNA search_ptr = search.rnasearchpoin;
+  RNA_PROP_BEGIN (&search_ptr, item, search.rnasearchprop) {
+    if (names.size() >= 1000) {
+      break;
+    }
+    char buffer[256];
+    char *name = RNA_struct_name_get_alloc(&item, buffer, sizeof(buffer), nullptr);
+    if (name) {
+      names.append(name);
+      if (name != buffer) {
+        MEM_delete(name);
+      }
+    }
+  }
+  RNA_PROP_END;
+  return names;
+}
+
+/** Whether \a but is a search for a pointer to something other than a data-block, such as an
+ * Action Slot or a rest shape key, which its search's names choose (PANEL-11). */
+bool search_pointer(const Button &but)
+{
+  return but.type == ButtonType::SearchMenu && but.rnaprop &&
+         RNA_property_type(but.rnaprop) == PROP_POINTER &&
+         !RNA_struct_is_ID(RNA_property_pointer_type(const_cast<PointerRNA *>(&but.rnapoin),
+                                                     but.rnaprop)) &&
+         static_cast<const ButtonSearch &>(but).rnasearchprop;
+}
+
+/** The name of what a pointer points to, as its search shows it. */
+std::string pointer_name(PointerRNA *ptr, PropertyRNA *prop)
+{
+  PointerRNA target = RNA_property_pointer_get(ptr, prop);
+  if (!target.data) {
+    return "";
+  }
+  char buffer[256];
+  char *name = RNA_struct_name_get_alloc(&target, buffer, sizeof(buffer), nullptr);
+  std::string result = name ? name : "";
+  if (name && name != buffer) {
+    MEM_delete(name);
+  }
+  return result;
+}
+
 /** Why the last edit of a walk was refused, where its answer says more than "no longer
  * available", such as text that is not a number (PANEL-9). */
 std::string native_edit_error;
@@ -1146,6 +1206,33 @@ bool set_property(bContext *C,
     }
     case PROP_POINTER: {
       const std::optional<std::string> &value = text;
+      if (value && search_pointer(but)) {
+        /* Chosen by its name among its search's (PANEL-11), or none. */
+        const ButtonSearch &search = static_cast<const ButtonSearch &>(but);
+        PointerRNA search_ptr = search.rnasearchpoin;
+        PointerRNA target = PointerRNA_NULL;
+        if (!value->empty()) {
+          RNA_PROP_BEGIN (&search_ptr, item, search.rnasearchprop) {
+            char buffer[256];
+            char *name = RNA_struct_name_get_alloc(&item, buffer, sizeof(buffer), nullptr);
+            const bool match = name && *value == name;
+            if (name && name != buffer) {
+              MEM_delete(name);
+            }
+            if (match) {
+              target = item;
+              break;
+            }
+          }
+          RNA_PROP_END;
+          if (!target.data) {
+            native_edit_error = "There is no \u201C" + *value + "\u201D to choose.";
+            return false;
+          }
+        }
+        RNA_property_pointer_set(ptr, prop, target, nullptr);
+        break;
+      }
       if (!value || !RNA_struct_is_ID(RNA_property_pointer_type(ptr, prop))) {
         return false;
       }
@@ -2150,9 +2237,31 @@ class Writer {
       /* A file or folder, whose folder button beside it opens the system's picker (PANEL-10). */
       const bool path = ELEM(
           RNA_property_subtype(prop), PROP_FILEPATH, PROP_DIRPATH, PROP_FILENAME);
+      /* A name picked from a list, such as a vertex group's (PANEL-11). */
+      const std::optional<Vector<std::string>> names = search_names(but);
+      const bool invalid = names && !value.empty() &&
+                           std::find(names->begin(), names->end(), value) == names->end();
       node = builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
         common(fields);
-        return protocol::CreateTextFieldDirect(buffer, value.c_str(), false, path);
+        std::vector<flatbuffers::Offset<flatbuffers::String>> suggestions;
+        for (const std::string &name : names.value_or(Vector<std::string>())) {
+          suggestions.push_back(buffer.CreateString(name));
+        }
+        return protocol::CreateTextFieldDirect(
+            buffer, value.c_str(), false, path, names ? &suggestions : nullptr, invalid);
+      });
+    }
+    else if (type == PROP_POINTER && search_pointer(but)) {
+      /* Something other than a data-block, chosen by name from its search (PANEL-11). */
+      const std::string value = pointer_name(ptr, prop);
+      const std::optional<Vector<std::string>> names = search_names(but);
+      node = builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
+        common(fields);
+        std::vector<flatbuffers::Offset<flatbuffers::String>> suggestions;
+        for (const std::string &name : names.value_or(Vector<std::string>())) {
+          suggestions.push_back(buffer.CreateString(name));
+        }
+        return protocol::CreateTextFieldDirect(buffer, value.c_str(), false, false, &suggestions);
       });
     }
     else if (type == PROP_ENUM) {
@@ -3373,7 +3482,7 @@ std::string property_kind(const Button &but)
     case PROP_FLOAT: return "Number";
     case PROP_STRING: return "TextField";
     case PROP_ENUM: return "Choice";
-    case PROP_POINTER: return "Choice";
+    case PROP_POINTER: return search_pointer(but) ? "TextField" : "Choice";
     default: return "Label";
   }
 }
@@ -3391,8 +3500,10 @@ Fate property_fate(const Button &but)
     /* A palette's swatch picks its colour in Blender; here it edits it (B17). */
     reduced("palette");
   }
-  else if (but.type == ButtonType::SearchMenu && type == PROP_STRING) {
-    /* A name to pick from a list, typed without the list (B11). */
+  else if (but.type == ButtonType::SearchMenu && type == PROP_STRING && !search_names(but))
+  {
+    /* A name picked by a search that is not a collection, such as an attribute's, typed without
+     * its list (B11). */
     reduced("search");
   }
   else if (type == PROP_ENUM && (RNA_property_flag(but.rnaprop) & PROP_ENUM_FLAG)) {
@@ -5394,7 +5505,8 @@ static std::string panels_walk(bContext *C,
       }
       if (!ELEM(RNA_property_type(but.rnaprop), PROP_BOOLEAN, PROP_INT, PROP_FLOAT, PROP_STRING, PROP_ENUM, PROP_POINTER) ||
           (RNA_property_type(but.rnaprop) == PROP_POINTER &&
-           !RNA_struct_is_ID(RNA_property_pointer_type(&but.rnapoin, but.rnaprop)))) {
+           !RNA_struct_is_ID(RNA_property_pointer_type(&but.rnapoin, but.rnaprop)) &&
+           !search_pointer(but))) {
         continue;
       }
       const int length = RNA_property_array_length(&but.rnapoin, but.rnaprop);

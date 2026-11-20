@@ -1119,18 +1119,46 @@ struct NativeTextField: View {
     /* Blender's text widget (`wcol_text`): dark inside, its outline, the text leading. */
     let glass = style == ShellStyle.glass.rawValue
     let shape = WidgetShape(join: .alone, glass: glass)
-    TextField(node.label, text: $text, prompt: model.isMixed(node) ? Text("—") : nil)
-      .font(.subheadline)
-      .multilineTextAlignment(.leading)
-      .autocorrectionDisabled()
-      .focused($focused)
-      .selectsAllOnFocus(focused)
-      .liftsAboveKeyboard(focused)
-      .submitLabel(.done)
+    let field = node.content(Blender_NativeUI_TextField.self)
+    /* A name picked from a list, such as a vertex group's (ROUND6 PANEL-11): the names in a menu
+     * at its end, the text still typed; red where it is none of them, as Blender draws it. */
+    let suggestions = field.map { field in (0..<field.suggestionsCount).compactMap { field.suggestions(at: $0) } } ?? []
+    let invalid = field?.invalid == true
+    HStack(spacing: 0) {
+      TextField(node.label, text: $text, prompt: model.isMixed(node) ? Text("—") : nil)
+        .font(.subheadline)
+        .foregroundStyle(invalid ? AnyShapeStyle(Color.red) : AnyShapeStyle(.primary))
+        .multilineTextAlignment(.leading)
+        .autocorrectionDisabled()
+        .textInputAutocapitalization(suggestions.isEmpty ? nil : .never)
+        .focused($focused)
+        .selectsAllOnFocus(focused)
+        .liftsAboveKeyboard(focused)
+        .submitLabel(.done)
+      if !suggestions.isEmpty {
+        Menu {
+          Button("None") { choose("") }
+          ForEach(Array(suggestions.enumerated()), id: \.offset) { _, name in
+            Button(name) { choose(name) }
+          }
+        } label: {
+          Image(systemName: "chevron.down")
+            .font(.system(size: 12, weight: .semibold))
+            .frame(width: 28, height: 28)
+            .contentShape(Rectangle())
+        }
+        .menuIndicator(.hidden)
+        .foregroundStyle(.secondary)
+        .accessibilityLabel("Choose \(node.label)")
+      }
+    }
       .padding(.horizontal, 8)
       .frame(minHeight: 32)
       .background(glass ? Color.primary.opacity(focused ? 0.18 : 0.08) : BlenderWidgetColors.textInner, in: shape)
-      .overlay { if !glass { shape.strokeBorder(BlenderWidgetColors.outline, lineWidth: 1) } }
+      .overlay {
+        if invalid { shape.strokeBorder(Color.red, lineWidth: 1) }
+        else if !glass { shape.strokeBorder(BlenderWidgetColors.outline, lineWidth: 1) }
+      }
       .disabled(!node.enabled)
       .onAppear { text = shown }
       .onChange(of: shown) { _, newValue in
@@ -1145,6 +1173,12 @@ struct NativeTextField: View {
 
   private func commit() {
     if text != shown { model.set(node, .text(text)) }
+  }
+
+  private func choose(_ name: String) {
+    text = name
+    focused = false
+    if name != shown { model.set(node, .text(name)) }
   }
 }
 
