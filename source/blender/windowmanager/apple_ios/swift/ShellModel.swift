@@ -376,9 +376,19 @@ final class ShellModel {
   var shading: String { text("shading") ?? "solid" }
   /** In mesh edit mode: `VERT`, `EDGE` or `FACE`. */
   var meshSelectMode: String { node("select_mode")?.choice?.value ?? "VERT" }
-  /** Whether the mode's header has Transform Orientation and Pivot Point in Blender: Object Mode,
-   * the edit modes, Pose Mode, Weight Paint on a posed armature. Blender decides, not mode names. */
-  var hasTransformSettings: Bool { flag("transform_settings") }
+  /** What the mode has, as Blender says it (ROUND6 MODE-2, finding E5): the shell never compares
+   * the mode's name. Edit Mesh's select mode, where the bridge sends it. */
+  var hasMeshSelectMode: Bool { node("select_mode") != nil }
+  /** The active tool strokes with a brush: a stroke from the screen's bottom edge is its. */
+  var brushStrokes: Bool { flag("brush_strokes") }
+  /** The object being edited is text, which the keyboard types into. */
+  var textEditing: Bool { flag("text_editing") }
+  /** The objects or bones under a point can be listed (Blender's Alt-click list). */
+  var selectMenu: Bool { flag("select_menu") }
+  /** The Item card's fields exist in this mode. */
+  var itemCard: Bool { flag("item_card") }
+  /** An asset shape dropped joins the mesh being edited. */
+  var addsIntoMesh: Bool { flag("adds_into_mesh") }
   /** Transform orientation, pivot, snapping and proportional editing, and the mode's mirror axes,
    * by name: `mirror_axes` the axes there are and `mirror` those on, as letters. */
   var transformSettings: [String: String] {

@@ -2911,16 +2911,9 @@ void bridge_transform_build(const Scene *scene,
   if (!scene || !scene->toolsettings) {
     return;
   }
-  /* The modes whose header has Transform Orientation and Pivot Point, as `draw_xform_template`
-   * decides: Object Mode, the edit modes, Pose Mode and Weight Paint on a posed armature. The shell
-   * shows its row of transform settings by this, not by mode names of its own (R6 E5). */
-  if (mode == CTX_MODE_OBJECT || mode <= CTX_MODE_EDIT_POINTCLOUD || mode == CTX_MODE_POSE ||
-      (mode == CTX_MODE_PAINT_WEIGHT && ob && BKE_object_pose_armature_get(ob)))
-  {
-    builder.add(top, "transform_settings", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
-      return bridge_data(buffer, true);
-    });
-  }
+  /* Which of these the mode's header has (orientation, pivot, snapping, proportional editing) is
+   * Blender's header's to say: the panels' `HEADER` view publishes it as drawn (ROUND6 MODE-2). */
+  UNUSED_VARS(ob, mode);
   const ToolSettings *settings = scene->toolsettings;
   const auto choice = [&](const char *key,
                           const char *label,
@@ -3633,6 +3626,21 @@ void bridge_toolbar_view_build(bContext *C,
     bridge_direction_build(C, mode, builder, top);
     bridge_brush_build(C, builder, top);
   }
+  /* What the mode has, as Blender says it, for the shell's own controls (ROUND6 MODE-2, finding E5):
+   * never a mode's name compared in Swift. A stroke of the active tool is a brush's (its tool uses
+   * brushes), so a stroke from the screen's bottom edge is the stroke's; the edit object is text,
+   * so the keyboard types into it; the objects or bones under a point can be listed, as
+   * `view3d_select_exec` enumerates them outside the edit and paint modes; the Item card's fields
+   * are the sidebar's Transform in Object Mode and the native median in Edit Mesh; and an asset
+   * shape dropped joins the mesh being edited. */
+  const Object *edit_object = CTX_data_edit_object(C);
+  data("brush_strokes",
+       bool(active_tool && active_tool->runtime &&
+            (active_tool->runtime->flag & TOOLREF_FLAG_USE_BRUSHES)));
+  data("text_editing", edit_object && edit_object->type == OB_FONT);
+  data("select_menu", !edit_object && ELEM(mode, CTX_MODE_OBJECT, CTX_MODE_POSE));
+  data("item_card", ELEM(mode, CTX_MODE_OBJECT, CTX_MODE_EDIT_MESH));
+  data("adds_into_mesh", edit_object && edit_object->type == OB_MESH);
   /* Moving, turning or scaling: the held buttons are Snap and Precision then. */
   data("transforming", bridge_constraint_operator(CTX_wm_window(C)) != nullptr);
   /* What the shell's Shift, Ctrl and Alt do now (ROUND6 TOUCH-8). */

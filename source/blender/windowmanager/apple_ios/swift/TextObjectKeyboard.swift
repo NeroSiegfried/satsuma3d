@@ -23,7 +23,7 @@ struct TextObjectKeyboard: View {
   @State private var focusRequest = 0
   @State private var hardwareKeyboard = GCKeyboard.coalesced != nil
 
-  private var editing: Bool { model.mode == "text_edit" }
+  private var editing: Bool { model.textEditing }
   private var active: Bool { editing && !hardwareKeyboard }
 
   var body: some View {

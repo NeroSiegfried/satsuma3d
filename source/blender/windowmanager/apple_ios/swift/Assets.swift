@@ -41,13 +41,13 @@ private let editMeshPrimitives: Set<String> = ["Plane", "Grid", "Cube", "UV Sphe
                                                "Cone", "Torus", "Circle"]
 
 /** Whether Blender adds \a item in \a mode (the active object's, such as `EDIT`): objects and
- * collections only in Object Mode, as Blender's drop does, except the Starter shapes in Edit Mode
- * of a mesh. A dimmed tile still answers a tap, saying why. */
+ * collections only in Object Mode, as Blender's drop does, except the Starter shapes while a mesh
+ * is edited (\a intoMesh, as the bridge says: ROUND6 MODE-2). A dimmed tile still answers a tap,
+ * saying why. */
 @MainActor
-func assetAddable(_ item: AssetItem, mode: String, contextMode: String) -> Bool {
+func assetAddable(_ item: AssetItem, mode: String, intoMesh: Bool) -> Bool {
   guard item.type == "Object" || item.type == "Collection", mode != "OBJECT" else { return true }
-  return contextMode == "mesh_edit" && item.type == "Object" && item.library == "Starter" &&
-    editMeshPrimitives.contains(item.name)
+  return intoMesh && item.type == "Object" && item.library == "Starter" && editMeshPrimitives.contains(item.name)
 }
 
 /** What tapping an asset does, matching where Blender's drop boxes accept it. */
@@ -297,7 +297,7 @@ struct AssetTile: View {
 
   var body: some View {
     let model = ShellModel.current
-    let addable = model.map { assetAddable(item, mode: $0.objectMode, contextMode: $0.mode) } ?? true
+    let addable = model.map { assetAddable(item, mode: $0.objectMode, intoMesh: $0.addsIntoMesh) } ?? true
     Button {
       store.add(item)
     } label: {

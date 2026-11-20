@@ -1069,14 +1069,29 @@ for path in sources():
         mode_uses += len(literals)
         wrong_modes += ['%s:%d %s' % (path.name, text.count('\n', 0, start) + 1, literal)
                         for literal in literals if literal not in mode_strings]
-check(mode_uses >= 5 and not wrong_modes,
+check(not wrong_modes,
       "R6 0.4: every string the shell compares with Blender's mode is one Blender gives (%d uses; %s)"
       % (mode_uses, wrong_modes))
+# ROUND6 MODE-2 (E5): what a mode has comes from Blender, never from the mode's name in Swift. The
+# general case of 0.4: no literal at all is compared with the mode, listed with it or used as its
+# affix (0.4 allowed Blender's own strings); the transform settings the row shows are those
+# Blender's header draws in the mode, one by one (the `HEADER` walk's `shell:` parts), and the
+# bridge's flags say the rest (brush strokes, text editing, the select menu, the Item card,
+# shapes into a mesh, mesh select mode).
+check(mode_uses == 0,
+      "R6 MODE-2: the shell compares no string with Blender's mode (%d uses: %s)"
+      % (mode_uses, wrong_modes))
 row_text = (SWIFT / 'ToolSettingsRow.swift').read_text(encoding='utf-8')
-check('model.hasTransformSettings' in row_text and 'flag("transform_settings")' in
-      (SWIFT / 'ShellModel.swift').read_text(encoding='utf-8') and
-      'builder.add(top, "transform_settings"' in bridge_text,
-      "R6 0.4: the row of transform settings shows where Blender says the mode has them")
+model_text = (SWIFT / 'ShellModel.swift').read_text(encoding='utf-8')
+properties_text = (ROOT / 'source/blender/editors/interface/interface_native_properties.cc').read_text(
+    encoding='utf-8')
+check('shell.panels.header.headerHas($0)' in row_text and 'transform_settings' not in model_text and
+      'transform_settings' not in bridge_text and 'static const char *header_shell_part(' in properties_text and
+      '"shell:" + part' in properties_text,
+      "R6 MODE-2: the row's transform settings are those Blender's header draws in the mode")
+flags_mode2 = ('brush_strokes', 'text_editing', 'select_menu', 'item_card', 'adds_into_mesh')
+check(all('data("%s"' % flag in bridge_text and 'flag("%s")' % flag in model_text for flag in flags_mode2),
+      "R6 MODE-2: the bridge publishes what a mode has, and the shell reads it")
 
 # ROUND6 0.7 (C1, part): Settings › Quick Actions hides the actions, never a waiting operation's
 # Confirm and Cancel, which are the way out of it. Every place the shell reads the setting to hide
@@ -1423,12 +1438,11 @@ check('key == GHOST_kKeyPeriod && (ui_key.modifierFlags & UIKeyModifierCommand)'
       '[self blenderTakesKeyboard]' in repeat_body and
       'wm_apple_ios_key_name(' in blender_key and 'case ' not in blender_key,
       "R6 TOUCH-11: Cmd+. is Escape, a repeat asks the gate, one rule names keys for the viewport and the editors")
-edges = window_t8[window_t8.index('private static let strokeModes: Set<String> = ['):]
-edges = set(re.findall(r'"(\w+)"', edges[:edges.index(']')]))
-check(edges and edges <= mode_strings and 'setNeedsUpdateOfScreenEdgesDeferringSystemGestures()' in window_t8 and
+check('model.brushStrokes ? .bottom : []' in window_t8 and 'TOOLREF_FLAG_USE_BRUSHES' in bridge_text and
+      'setNeedsUpdateOfScreenEdgesDeferringSystemGestures()' in window_t8 and
       'if !controlsShown && model.viewportReady {\n          TextObjectKeyboard(model: model)' in window_t8,
-      "R6 TOUCH-11: the bottom edge defers while a mode strokes (%s); the text keyboard shows with controls hidden"
-      % sorted(edges - mode_strings))
+      "R6 TOUCH-11: the bottom edge defers while the tool strokes with a brush (MODE-2: Blender says); "
+      "the text keyboard shows with controls hidden")
 
 # ROUND6 BUSY-1 (G6, G13, B1, D12): one view of running work. Every job the status bar would show is
 # in the `jobs` view, whose Stop is live (it reaches work whose operator holds a modal handler); the

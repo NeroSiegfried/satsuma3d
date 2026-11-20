@@ -322,6 +322,10 @@ def decode_node(raw):
             tv = TextValue.TextValue()
             tv.Init(data.Value().Bytes, data.Value().Pos)
             entry.update(value=s(tv.Value()))
+        elif data.ValueType() == Value.Value.BoolValue:
+            bv = BoolValue.BoolValue()
+            bv.Init(data.Value().Bytes, data.Value().Pos)
+            entry.update(value=bool(bv.Value()))
         elif data.ValueType() == Value.Value.FloatValue:
             fv = FloatValue.FloatValue()
             fv.Init(data.Value().Bytes, data.Value().Pos)
@@ -5263,6 +5267,25 @@ def _touchstart_enter_for(idname):
 # (`header_owner`): one dropped, or hidden for a reason not named here, fails. The rig's bone
 # selection in Weight Paint is set from the row, and a 3D Viewport popover opens as a view.
 HEADER_OWNERS = ("shell_menus", "shell_header")
+# ROUND6 MODE-2 (E5): what the shell shows of its own comes from Blender, by mode: the transform
+# settings and select mode its header draws (`shell:` parts of the HEADER view), and the bridge's
+# flags in the toolbar view. Expected here as Blender 5.1's header has them.
+HEADER_PARTS = {
+    "OBJECT": {"orientation", "pivot", "snap", "proportional"},
+    "EDIT_MESH": {"orientation", "pivot", "snap", "proportional", "select_mode"},
+    "POSE": {"orientation", "pivot", "snap"},
+    "EDIT_ARMATURE": {"orientation", "pivot", "snap"},
+    "PARTICLE": {"snap", "proportional"},
+    "SCULPT": set(), "PAINT_WEIGHT": set(), "SCULPT_GREASE_PENCIL": set(),
+}
+MODE_FLAGS = {
+    "OBJECT": {"select_menu": True, "item_card": True, "text_editing": False, "brush_strokes": False},
+    "EDIT_MESH": {"select_menu": False, "item_card": True, "adds_into_mesh": True},
+    "POSE": {"select_menu": True, "item_card": False},
+    "EDIT_TEXT": {"text_editing": True, "adds_into_mesh": False},
+    "SCULPT": {"brush_strokes": True, "select_menu": False},
+    "PAINT_GREASE_PENCIL": {"brush_strokes": True},
+}
 header_state = {"stage": 0, "at": 0, "problems": [], "modes": {}, "sub": None, "objects": {}}
 
 
@@ -5404,6 +5427,7 @@ def tick_header():
                 return 0.1
             if state["sub"] is None:
                 state["sub"] = subscribe("tool_settings", tab="HEADER")
+                state["toolbar"] = subscribe("toolbar")
         elif at == 4:
             entries = json.loads(_census_lib().UI_native_panel_census_take())
             walks, current = {}, None
@@ -5430,6 +5454,16 @@ def tick_header():
                     problems.append("MODE-1: %s: %s %s (%s): neither in the row nor the shell's" % (
                         mode, what, entry["outcome"], entry["reason"]))
             state["modes"][mode] = {"shown": shown, "shell": owned}
+            parts = {n["key"][len("shell:"):] for n in _census_nodes(top) if n["key"].startswith("shell:")}
+            state["modes"][mode]["parts"] = sorted(parts)
+            if mode in HEADER_PARTS and parts != HEADER_PARTS[mode]:
+                problems.append("MODE-2: %s: the header's own parts are %r, Blender's header has %r" % (
+                    mode, sorted(parts), sorted(HEADER_PARTS[mode])))
+            flags = {n["key"]: n.get("value") for n in _census_nodes(tree(state["toolbar"]) or {})}
+            for flag, expected in MODE_FLAGS.get(mode, {}).items():
+                if bool(flags.get(flag)) != expected:
+                    problems.append("MODE-2: %s: the bridge says %s=%r, expected %r" % (
+                        mode, flag, flags.get(flag), expected))
             if os.environ.get("HARNESS_HEADER_TREES"):
                 def shape(node):
                     return [node.get("content"), node.get("label"), [shape(c) for c in node.get("children", [])]]

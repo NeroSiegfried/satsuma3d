@@ -178,8 +178,8 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
     if desktop != model.desktop { desktopChanged() }
     desktopScaleChanged()
     refreshMenuBar()
-    if edgesMode != model.mode {
-      edgesMode = model.mode
+    if edgesDeferred != model.brushStrokes {
+      edgesDeferred = model.brushStrokes
       setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
     }
   }
@@ -239,14 +239,11 @@ public final class DocumentController: UIHostingController<DocumentWindow> {
   /** While a mode strokes with a brush, a stroke that begins at the bottom edge is the stroke's,
    * not the system's Home swipe at once: the system asks for a second swipe (ROUND6 TOUCH-11, A15). */
   override public var preferredScreenEdgesDeferringSystemGestures: UIRectEdge {
-    Self.strokeModes.contains(model.mode) ? .bottom : []
+    /* Blender says when the active tool strokes with a brush (ROUND6 MODE-2). */
+    model.brushStrokes ? .bottom : []
   }
-  private static let strokeModes: Set<String> = [
-    "sculpt_mode", "weightpaint", "vertexpaint", "imagepaint", "particlemode", "curves_sculpt",
-    "grease_pencil_paint", "grease_pencil_sculpt", "grease_pencil_weight", "grease_pencil_vertex",
-  ]
-  /** The mode the edges were last deferred for. */
-  private var edgesMode = ""
+  /** Whether the edges were last deferred for a brush's strokes. */
+  private var edgesDeferred = false
   override public var prefersStatusBarHidden: Bool { model.interfaceHidden }
 
   override public func viewDidLoad() {
@@ -654,7 +651,7 @@ extension DocumentController: UIGestureRecognizerDelegate {
     var menu = wm_apple_ios_context_menu()
     /* What is under the finger, to pick one of several or what is behind (ROUND6 TOUCH-4): the
      * desktop's Alt-click list, for objects and, in Pose Mode, bones. */
-    if ["objectmode", "posemode"].contains(model.mode), metalView.bounds.width > 0, metalView.bounds.height > 0 {
+    if model.selectMenu, metalView.bounds.width > 0, metalView.bounds.height > 0 {
       let fraction = CGPoint(x: point.x / metalView.bounds.width, y: point.y / metalView.bounds.height)
       let target = "select_menu:\(fraction.x),\(fraction.y)"
       let pick = UIAction(title: "Select Menu…", image: UIImage(systemName: "square.stack.3d.up")) { [weak model] _ in

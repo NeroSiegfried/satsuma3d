@@ -29,8 +29,12 @@ struct ToolSettingsRow: View {
 
   private var glass: Bool { style == ShellStyle.glass.rawValue }
 
-  /** The modes whose header has the transform settings in Blender, as Blender says (R6 E5). */
-  private var transformMode: Bool { model.hasTransformSettings }
+  /** The transform settings Blender's header has in this mode, as it draws them (R6 E5, MODE-2):
+   * Particle Edit has snapping and proportional editing alone. */
+  private var transformParts: Set<String> {
+    Set(["orientation", "pivot", "snap", "proportional"].filter { shell.panels.header.headerHas($0) })
+  }
+  private var transformMode: Bool { !transformParts.isEmpty }
 
   private var modeSettings: Bool {
     MirrorToggles.available(model) || model.transformSettings["automerge"] != nil
@@ -48,7 +52,7 @@ struct ToolSettingsRow: View {
       }
       if transformMode {
         BlenderWidgetSeparator()
-        ToolSettingsTransformItems(model: model)
+        ToolSettingsTransformItems(model: model, parts: transformParts)
       }
       /* Mirror, X-Axis Mirror or Symmetry, and Auto Merge, in every mode whose header has them. */
       if modeSettings {

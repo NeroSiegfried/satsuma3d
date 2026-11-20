@@ -229,6 +229,10 @@ final class PanelsModel {
     return view.children(of: top).filter { $0.kind == .panel }
   }
 
+  /** Which of the shell's own controls Blender's 3D Viewport header has in this mode, from the
+   * `HEADER` view: `orientation`, `pivot`, `snap`, `proportional`, `select_mode` (ROUND6 MODE-2). */
+  func headerHas(_ part: String) -> Bool { view.node("shell:" + part) != nil }
+
   /** With several objects selected, which of them an edit goes to, and the switch for all of
    * them (decision R6-10, ROUND6 PANEL-6). */
   var editSelected: NativeNode? { view.node("edit_selected") }

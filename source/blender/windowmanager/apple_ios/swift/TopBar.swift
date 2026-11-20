@@ -357,7 +357,7 @@ struct DocumentToolbar: ToolbarContent {
             .sheetDetents()
         }
     }
-    if model.mode == "mesh_edit" && shown.selectMode {
+    if model.hasMeshSelectMode && shown.selectMode {
 #if os(visionOS)
       ToolbarItem(placement: .topBarLeading) { meshSelection }
 #else
@@ -689,7 +689,7 @@ struct DocumentToolbar: ToolbarContent {
       }
     }
     Section {
-      if model.mode == "mesh_edit" && !shown.selectMode {
+      if model.hasMeshSelectMode && !shown.selectMode {
         Menu {
           ForEach([("VERT", "Vertex Select", "circle.fill"), ("EDGE", "Edge Select", "line.diagonal"),
                    ("FACE", "Face Select", "square.fill")], id: \.0) { value, title, symbol in
@@ -703,7 +703,8 @@ struct DocumentToolbar: ToolbarContent {
       /* The tool settings row is hidden in a compact window: its settings are here. */
       if model.compact {
         if transformTools.contains(model.activeTool) {
-          ForEach(TransformSetting.all, id: \.key) { setting in
+          /* Those Blender's header has in this mode (ROUND6 MODE-2). */
+          ForEach(TransformSetting.all.filter { shell.panels.header.headerHas($0.key) }, id: \.key) { setting in
             Menu {
               ForEach(setting.options, id: \.value) { option in
                 sidebarToggle(option.title, icon: setting.image(option),
@@ -902,6 +903,8 @@ private struct ShareSource: UIViewRepresentable {
  * and proportional editing each a toggle joined to a dropdown of what it uses. See #ToolSettingsRow. */
 struct ToolSettingsTransformItems: View {
   @Bindable var model: ShellModel
+  /** Which of them Blender's header has in this mode (ROUND6 MODE-2). */
+  let parts: Set<String>
 
   private func picker(_ key: String, _ title: String, _ options: [SettingOption]) -> some View {
     let value = model.transformSettings[key]
@@ -924,17 +927,21 @@ struct ToolSettingsTransformItems: View {
     let all = TransformSetting.all
     let orientations = all[0].options, pivots = all[1].options
     let orientation = option(orientations, "orientation")
-    BlenderDropdown(name: "Transform Orientation", icon: orientation.flatMap(TransformSetting.blenderImage),
-                    text: orientation?.title ?? "Orientation") {
-      picker("orientation", "Transform Orientation", orientations)
+    if parts.contains("orientation") {
+      BlenderDropdown(name: "Transform Orientation", icon: orientation.flatMap(TransformSetting.blenderImage),
+                      text: orientation?.title ?? "Orientation") {
+        picker("orientation", "Transform Orientation", orientations)
+      }
+      .accessibilityIdentifier("blender.setting.Transform Orientation")
     }
-    .accessibilityIdentifier("blender.setting.Transform Orientation")
     let pivot = option(pivots, "pivot")
-    BlenderDropdown(name: "Pivot Point: " + (pivot?.title ?? ""), icon: pivot.flatMap(TransformSetting.blenderImage)) {
-      picker("pivot", "Pivot Point", pivots)
+    if parts.contains("pivot") {
+      BlenderDropdown(name: "Pivot Point: " + (pivot?.title ?? ""), icon: pivot.flatMap(TransformSetting.blenderImage)) {
+        picker("pivot", "Pivot Point", pivots)
+      }
+      .accessibilityIdentifier("blender.setting.Pivot Point")
     }
-    .accessibilityIdentifier("blender.setting.Pivot Point")
-    if let snapOn = model.transformSettings["snap_on"] {
+    if parts.contains("snap"), let snapOn = model.transformSettings["snap_on"] {
       let on = snapOn == "on"
       let element = option(TransformSetting.snapElements, "snap_element")
       HStack(spacing: 1) {
@@ -951,7 +958,7 @@ struct ToolSettingsTransformItems: View {
       .accessibilityElement(children: .contain)
       .accessibilityIdentifier("blender.setting.Snapping")
     }
-    if let proportionalOn = model.transformSettings["proportional_on"] {
+    if parts.contains("proportional"), let proportionalOn = model.transformSettings["proportional_on"] {
       let on = proportionalOn == "on"
       let kind = model.transformSettings["proportional"] ?? "off"
       let falloff = option(TransformSetting.falloffs, "proportional_falloff")

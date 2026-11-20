@@ -3290,6 +3290,41 @@ static PanelType *view3d_header_panel_type()
 }
 
 /**
+ * Which of the shell's own controls a header's button is, for the shell to show it where Blender's
+ * header has it in this mode (ROUND6 MODE-2, finding E5): the transform settings one by one (Particle
+ * Edit has snapping and proportional editing, not orientation or pivot) and Edit Mesh's select mode.
+ * Null for the others.
+ */
+static const char *header_shell_part(const Button &but)
+{
+  if (but.optype && STREQ(but.optype->idname, "MESH_OT_select_mode")) {
+    return "select_mode";
+  }
+  if (!but.rnaprop || !but.rnapoin.type) {
+    return nullptr;
+  }
+  const std::string id = std::string(RNA_struct_identifier(but.rnapoin.type)) + "." +
+                         RNA_property_identifier(but.rnaprop);
+  if (id == "TransformOrientationSlot.type") {
+    return "orientation";
+  }
+  if (id == "ToolSettings.transform_pivot_point") {
+    return "pivot";
+  }
+  if (id == "ToolSettings.use_snap") {
+    return "snap";
+  }
+  if (ELEM(id,
+           "ToolSettings.use_proportional_edit",
+           "ToolSettings.use_proportional_edit_objects",
+           "ToolSettings.proportional_edit_falloff"))
+  {
+    return "proportional";
+  }
+  return nullptr;
+}
+
+/**
  * Why the shell, not the header's row, shows one of the header's buttons, or null: the editor's
  * type and the mode, which the shell's header has; the menus, which are its menu bar; the
  * transform settings, its row's own items (their popovers are still the row's, see
@@ -4217,6 +4252,8 @@ static std::string panels_walk(bContext *C,
     operator_button = nullptr;
   };
   std::set<std::string> open_panels;
+  /* The shell's own controls Blender's header has in this mode, see #header_shell_part. */
+  std::set<std::string> header_parts;
   /* Whether each candidate's body is visible, so nested sub-panels follow their parent. */
   std::map<std::string, bool> visible_panels;
   std::map<std::string, std::string> outer_panels;
@@ -5269,6 +5306,9 @@ static std::string panels_walk(bContext *C,
         /* What the shell's own header and row show (MODE-1): left out, but for the popover an
          * owned property opens (Transform Orientations, Proportional Editing), which is the row's. */
         if (const char *owner = header_owner(but)) {
+          if (const char *part = header_shell_part(but)) {
+            header_parts.insert(part);
+          }
           PanelType *popover = button_menu_draw_as_popover(&but) ? button_popover_panel(but) :
                                                                    nullptr;
           if (writer && popover && viewport_popover_space(*popover) && !(but.flag & UI_HIDDEN)) {
@@ -5936,6 +5976,15 @@ static std::string panels_walk(bContext *C,
     }
     if (execute && target_panel) {
       break;
+    }
+  }
+  if (writer && header_tab) {
+    /* Which of its own controls the shell shows, as Blender's header has them (MODE-2). */
+    for (const std::string &part : header_parts) {
+      writer->builder.add(top, "shell:" + part, [](Buffer &buffer, NodeFields & /*fields*/) {
+        return protocol::CreateData(
+            buffer, protocol::Value::BoolValue, protocol::CreateBoolValue(buffer, true).Union());
+      });
     }
   }
   if (preferences_menu) {

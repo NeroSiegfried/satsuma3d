@@ -446,10 +446,10 @@ struct QuickActionsRow: View {
   @State private var actionItemsWidth: CGFloat = 0
   @AppStorage(SettingsModel.showQuickActionsKey) private var showQuickActions = true
 
-  /** The Item card shows with a transform tool, in Object and Edit Mode. */
+  /** The Item card shows with a transform tool, where Blender has its fields (Object Mode, Edit
+   * Mesh: the bridge says, ROUND6 MODE-2). */
   private var itemWanted: Bool {
-    itemCardEnabled && ItemCardTools.properties(for: model.activeTool) != nil &&
-      ["objectmode", "mesh_edit"].contains(model.mode)
+    itemCardEnabled && ItemCardTools.properties(for: model.activeTool) != nil && model.itemCard
   }
 
   private var actions: [QuickAction] {

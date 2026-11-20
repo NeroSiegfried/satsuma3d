@@ -185,7 +185,7 @@ struct HeaderLadderTracker: ViewModifier {
     guard width > 0 else { return }
     let phone = UIDevice.current.userInterfaceIdiom == .phone || sizeClass == .compact && width < 500
     let widthClass = WidthClass.of(width: width, phone: phone, previous: model.widthClass)
-    let editMesh = model.mode == "mesh_edit"
+    let editMesh = model.hasMeshSelectMode
     let previous = HeaderLadder.State(rung: model.headerRung, menus: model.headerMenus)
     let state = widthClass == .compact ? HeaderLadder.State(rung: 0, menus: 0) :
       HeaderLadder.state(width: width, phone: phone, previous: previous, menus: menus, editMesh: editMesh,
