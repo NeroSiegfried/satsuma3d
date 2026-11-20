@@ -129,6 +129,12 @@ std::string WM_native_ui_undo_refusal(bContext *C);
 /** Whether \a idname is one of the undo commands the gate above answers for. */
 bool WM_native_ui_is_undo_command(std::string_view idname);
 /**
+ * Why an operator cannot run here, as a person reads it: its name and its poll's message, or the
+ * mode it is not available in ("Reveal Hidden is not available in Edit Mode"). The answer of a
+ * command that names one (ROUND6 EDIT-3).
+ */
+std::string WM_native_ui_operator_unavailable(bContext *C, wmOperatorType *ot);
+/**
  * A line of the session's log, a text file in the temporary folder that says what was run and
  * shown, for finding out afterwards what happened on a device. Written in both interfaces.
  */

@@ -80,6 +80,8 @@ final class TimelineStore {
   @ObservationIgnored var toggleExpanded: () -> Void = {}
   @ObservationIgnored var toggleCurves: () -> Void = {}
   @ObservationIgnored var toggleStoryboard: () -> Void = {}
+  /** Shows Blender's keys again after an edit drawn ahead of it was refused (ROUND6 EDIT-3). */
+  @ObservationIgnored var resync: () -> Void = {}
 
   /** Observers redraw on every assignment, even of the same value. */
   func set<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<TimelineStore, Value>, _ value: Value) {
@@ -128,7 +130,8 @@ final class TimelineStore {
   func select(_ frames: [Int]) {
     keys = keys.map { TimelineKey(frame: $0.frame, selected: frames.contains($0.frame)) }
     Operators.run("anim.native_key_select",
-                  ["frames": .text(frames.map(String.init).joined(separator: ",")), "extend": .bool(false)])
+                  ["frames": .text(frames.map(String.init).joined(separator: ",")), "extend": .bool(false)],
+                  failed: resync)
   }
 
   func moveSelected(by delta: Int) {
@@ -140,12 +143,12 @@ final class TimelineStore {
     keys = result.keys.sorted().map { TimelineKey(frame: $0, selected: result[$0]!) }
     var properties = drawnFrames
     properties["delta"] = .int(Int64(delta))
-    Operators.run("anim.native_key_move", properties)
+    Operators.run("anim.native_key_move", properties, failed: resync)
   }
 
   func deleteSelected() {
     keys = keys.filter { !$0.selected || $0.frame < start || $0.frame > end }
-    Operators.run("anim.native_key_delete", drawnFrames)
+    Operators.run("anim.native_key_delete", drawnFrames, failed: resync)
   }
 
   /** The frames the strip draws keys in: its edits leave a key selected elsewhere, outside them,
@@ -768,6 +771,10 @@ final class SwiftTimeline {
     store.toggleCurves = { [weak self] in self?.setCurvesShown(!(self?.store.curvesShown ?? true)) }
     store.toggleStoryboard = { [weak self] in self?.setStoryboardShown(!(self?.store.storyboardShown ?? true)) }
     store.storyboard.enteredChanged = { [weak self] in self?.timeChanged() }
+    store.resync = { [weak self] in
+      self?.state = nil
+      self?.update()
+    }
 #if os(visionOS)
     Self.current = self
 #endif

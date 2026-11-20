@@ -750,6 +750,11 @@ Scene *new_story_scene(bContext *C)
   return story;
 }
 
+/** Why the edit being applied failed, where there is more to say than that it did: said instead of
+ * the general refusal. Three of these were returned as successes, and became undo steps named
+ * "No shot" (ROUND6 EDIT-3, D7). */
+std::string edit_failure;
+
 std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
 {
   const std::string action = query.lookup_str("action").value_or("");
@@ -1077,7 +1082,8 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     /* A shot's scene kept as a template new shots can start from, or no longer. */
     Strip *strip = find_strip(scene, query);
     if (!strip || !strip->scene) {
-      return "No shot";
+      edit_failure = IFACE_("This strip is not a shot");
+      return std::nullopt;
     }
     ID *id = &strip->scene->id;
     if (lookup_flag(query, "value", true)) {
@@ -1122,7 +1128,8 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
                              return true;
                            });
       if (!found) {
-        return "No such template";
+        edit_failure = IFACE_("This template is gone");
+        return std::nullopt;
       }
       Main *bmain = CTX_data_main(C);
       Scene *shot = reinterpret_cast<Scene *>(
@@ -1135,7 +1142,8 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
                                    LIB_ID_DUPLICATE_IS_ROOT_ID);
       }
       if (!shot) {
-        return "Could not add the template";
+        edit_failure = IFACE_("The template could not be added");
+        return std::nullopt;
       }
       /* A shot of its own, not another template. */
       asset::clear_id(&shot->id);
@@ -1200,9 +1208,11 @@ std::shared_ptr<DictionaryValue> native_storyboard_read(bContext *C, const Dicti
 std::string native_storyboard_edit(bContext *C, const DictionaryValue &edit)
 {
   SequencerSpaceContext space(C);
+  edit_failure.clear();
   const std::optional<std::string> undo = apply_edit(C, edit);
   if (!undo) {
-    return "This storyboard change could not be made.";
+    return edit_failure.empty() ? IFACE_("This storyboard change could not be made.") :
+                                  edit_failure;
   }
   if (!undo->empty()) {
     ED_undo_push(C, undo->c_str());

@@ -942,7 +942,8 @@ bool operator_run(bContext *C,
     }
   }
   if (!WM_operator_poll(C, ot)) {
-    r_error = "It cannot run here";
+    /* Said by the interface as it is answered (ROUND6 EDIT-3): which command, and why. */
+    r_error = WM_native_ui_operator_unavailable(C, ot);
     return false;
   }
   PointerRNA ptr = WM_operator_properties_create_ptr(ot);

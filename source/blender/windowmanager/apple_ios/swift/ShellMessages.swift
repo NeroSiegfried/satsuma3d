@@ -65,6 +65,8 @@ final class ShellMessages {
   }
 
   private func show(_ message: ShellMessage) {
+    /* Said once: a refusal Blender says as a notice is also the refused command's answer. */
+    guard !shown.contains(where: { $0.text == message.text }) else { return }
     withAnimation(.easeOut(duration: 0.2)) {
       shown.append(message)
       /* Three at most: the oldest goes. */

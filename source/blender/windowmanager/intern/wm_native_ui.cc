@@ -6084,6 +6084,11 @@ static std::string bridge_operator_unavailable(bContext *C, wmOperatorType *ot)
   return text;
 }
 
+std::string WM_native_ui_operator_unavailable(bContext *C, wmOperatorType *ot)
+{
+  return bridge_operator_unavailable(C, ot);
+}
+
 /* -------------------------------------------------------------------- */
 /** \name What Shows After a Command
  *

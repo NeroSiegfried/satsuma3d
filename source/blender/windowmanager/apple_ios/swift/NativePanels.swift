@@ -152,6 +152,8 @@ final class PanelsModel {
       default: "properties"
     }
     view = NativeViews.shared.subscribe(name, params: params)
+    /* Its status line, or the operation's alert, says why a change failed. */
+    view.showsErrors = true
     view.settled = { [weak self] in self?.settle() }
   }
 

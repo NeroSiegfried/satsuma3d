@@ -58,6 +58,11 @@ final class NativeView {
   @ObservationIgnored private(set) var revision = 0
   /** Why its latest command failed, until another works. */
   private(set) var error: String?
+  /** Its own screen says why a command failed (Properties, the Outliner, an operation's settings):
+   * the shared message is not said for it too (ROUND6 EDIT-3). */
+  @ObservationIgnored var showsErrors = false
+  /** After a command of it failed: put back what Blender has, where the screen guessed ahead. */
+  @ObservationIgnored var failed: (() -> Void)?
   /** Commands Blender has yet to answer. */
   @ObservationIgnored fileprivate var unanswered = 0
   /** Called once Blender answered every command sent, and the view shows what they did. */
@@ -79,8 +84,14 @@ final class NativeView {
   /** The nodes under `node`, in order. */
   func children(of node: NativeNode) -> [NativeNode] { node.children.compactMap { nodes[$0] } }
 
+  /** The one place a command's answer is read (ROUND6 EDIT-3, D7): a refusal is said, and what
+   * the screen showed ahead of Blender is put back. */
   fileprivate func answered(_ failure: String?) {
     if error != failure { error = failure }
+    if let failure, !failure.isEmpty {
+      failed?()
+      if !showsErrors { ShellModel.current?.messages.say(failure, level: "warning") }
+    }
     unanswered = max(0, unanswered - 1)
     if unanswered == 0 { settled?() }
   }
@@ -273,6 +284,8 @@ final class NativeViews {
   private var acks: [UInt32: String?] = [:]
   /** Commands whose answers are kept for `outcome(of:)`. */
   private var answers = Set<UInt32>()
+  /** What puts a screen back should a command fail, by its number (ROUND6 EDIT-3). */
+  private var failures: [UInt32: () -> Void] = [:]
 
   /** Show a view: it fills in as Blender sends it. */
   func subscribe(_ name: String, params: [String: NativeValue] = [:]) -> NativeView {
@@ -332,11 +345,12 @@ final class NativeViews {
   @discardableResult
   func send(_ view: NativeView, target: String, op: Blender_NativeUI_Op = .set_, value: NativeValue? = nil,
             phase: Blender_NativeUI_Phase = .once, params: [String: NativeValue] = [:],
-            answer: Bool = false) -> UInt32
+            answer: Bool = false, failed: (() -> Void)? = nil) -> UInt32
   {
     lastCommand += 1
     let id = lastCommand
     sentTo[id] = view
+    if let failed { failures[id] = failed }
     view.unanswered += 1
     if answer { answers.insert(id) }
     var builder = FlatBufferBuilder(initialSize: 128)
@@ -377,6 +391,8 @@ final class NativeViews {
       }
       for index in 0..<updates.acksCount {
         guard let ack = updates.acks(at: index) else { continue }
+        let failed = failures.removeValue(forKey: ack.command)
+        if let error = ack.error, !error.isEmpty { failed?() }
         sentTo.removeValue(forKey: ack.command)?.answered(ack.error)
         if answers.remove(ack.command) != nil { acks[ack.command] = .some(ack.error) }
       }
@@ -397,6 +413,9 @@ final class NativeCanvas {
   init(_ name: String) {
     view = NativeViews.shared.subscribe(name)
     NativeViews.shared.pause(view)
+    /* A refused edit: the next take gives Blender's state again, over what the canvas drew ahead
+     * of it, as a moved node or strip (ROUND6 EDIT-3). */
+    view.failed = { [weak self] in self?.taken = -1 }
   }
 
   /** Blender reads it only while it shows. */
@@ -428,8 +447,8 @@ enum Operators {
 
   /** Run an operator, such as `VIEW3D_OT_view_axis` or `view3d.view_axis`, with properties set, as
    * a button runs it. */
-  static func run(_ name: String, _ properties: [String: NativeValue] = [:]) {
-    NativeViews.shared.send(view, target: name, op: .invoke, params: properties)
+  static func run(_ name: String, _ properties: [String: NativeValue] = [:], failed: (() -> Void)? = nil) {
+    NativeViews.shared.send(view, target: name, op: .invoke, params: properties, failed: failed)
   }
 }
 

@@ -1924,4 +1924,33 @@ check(frame_e2.index('bridge_timeline_rendering(C)') < frame_e2.index('RNA_prope
 check('next.rendering = flag("rendering")' in (SWIFT / 'Timeline.swift').read_text(encoding='utf-8') and
       'guard !store.rendering else { return }' in (SWIFT / 'Timeline.swift').read_text(encoding='utf-8'),
       "R6 EDIT-2 (D2): the scrubber shows it cannot move while rendering")
+# ROUND6 EDIT-3 (D7): every command goes through `NativeViews.send`, and its answer through
+# `NativeView.answered`, the one place a refusal is said and a screen drawn ahead of Blender is put
+# back. Only the screens that say errors themselves read a view's `error`, and they are marked so.
+swift_e3 = {path.name: path.read_text(encoding='utf-8') for path in SWIFT.glob('*.swift')}
+senders_e3 = sorted(name for name, text in swift_e3.items() if 'WM_native_ui_send(' in text)
+check(senders_e3 == ['NativeViews.swift'] and swift_e3['NativeViews.swift'].count('WM_native_ui_send(') == 1,
+      "R6 EDIT-3 (D7): commands reach Blender only through NativeViews.send (%s)" % senders_e3)
+views_e3 = swift_e3['NativeViews.swift']
+answered_e3 = views_e3[views_e3.index('fileprivate func answered(_ failure: String?) {'):]
+answered_e3 = answered_e3[:answered_e3.index('\n  }\n')]
+check('failed?()' in answered_e3 and 'messages.say(failure' in answered_e3 and '!showsErrors' in answered_e3,
+      "R6 EDIT-3 (D7): an answer that is a refusal is said and puts the screen back")
+check('.answered(ack.error)' in views_e3 and 'failures.removeValue(forKey: ack.command)' in views_e3,
+      "R6 EDIT-3 (D7): every answer is read where commands are answered")
+canvas_e3 = views_e3[views_e3.index('final class NativeCanvas {'):]
+check('view.failed = { [weak self] in self?.taken = -1 }' in canvas_e3[:canvas_e3.index('func setShown')],
+      "R6 EDIT-3 (D7): a canvas takes Blender's state again after a refused edit")
+readers_e3 = sorted(name for name, text in swift_e3.items()
+                    if name != 'NativeViews.swift' and re.search(r'\b(view|outlinerEdits)\??\.error\b', text))
+check(readers_e3 == ['NativePanels.swift', 'ScenePanels.swift'] and
+      all('showsErrors = true' in swift_e3[name] for name in readers_e3),
+      "R6 EDIT-3 (D7): the screens that read a view's error say so with showsErrors (%s)" % readers_e3)
+timeline_e3 = swift_e3['Timeline.swift']
+check(all(re.search(r'Operators\.run\("anim\.native_key_%s"[^\n]*(\n[^\n]*){0,2}failed: resync\)' % op, timeline_e3)
+          for op in ('select', 'move', 'delete')),
+      "R6 EDIT-3 (D7): the strip's key edits shown ahead of Blender are put back when refused")
+storyboard_e3 = (SWIFT.parents[2] / 'editors/space_sequencer/sequencer_native.cc').read_text(encoding='utf-8')
+check(not re.search(r'return "(No |Could not)', storyboard_e3) and 'edit_failure.empty()' in storyboard_e3,
+      "R6 EDIT-3 (D7): a storyboard failure is not returned as an undo step's name")
 print('PASS: native shell sources ' + json.dumps(checks))

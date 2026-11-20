@@ -545,7 +545,12 @@ struct ImageEditorPanel: View {
       try FileManager.default.createDirectory(at: copy.deletingLastPathComponent(), withIntermediateDirectories: true)
       try FileManager.default.copyItem(at: url, to: copy)
     }
-    catch { return }
+    catch {
+      /* Said, not dropped (ROUND6 EDIT-3, D7). */
+      ShellModel.current?.messages.say("\(url.lastPathComponent) could not be opened: \(error.localizedDescription)",
+                                       level: "warning")
+      return
+    }
     model.send("open", ["path": copy.path])
   }
 
@@ -568,6 +573,8 @@ struct ImageEditorPanel: View {
         }
         try? await Task.sleep(for: .milliseconds(100))
       }
+      /* Blender says why when it refused; a write that is merely slow is said too (EDIT-3). */
+      ShellModel.current?.messages.say("The image was not ready to share. Try Share again.", level: "warning")
     }
   }
 }

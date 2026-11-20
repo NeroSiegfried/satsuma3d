@@ -48,7 +48,12 @@ final class SwiftScenePanels {
     return view
   }()
   /** Where its edits run, whose error the Outliner shows until one works. */
-  private let outlinerEdits = NativeViews.shared.subscribe("operators")
+  private let outlinerEdits: NativeView = {
+    let view = NativeViews.shared.subscribe("operators")
+    /* The Outliner's own status line says why an edit failed. */
+    view.showsErrors = true
+    return view
+  }()
 
   private var showInspector = false
   private var showHierarchy = false
