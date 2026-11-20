@@ -323,6 +323,8 @@ static void launcherMarkerClear(const char *why)
     return;
   }
   [NSUserDefaults.standardUserDefaults removeObjectForKey:launcher_marker_key];
+  /* A document's session ends: what the message guard did in it, said once (ROUND7 U4b). */
+  WM_native_ui_msgbus_guard_report(why, strcmp(why, "closed") == 0);
   WM_native_ui_log("session", (std::string("marker cleared: ") + why).c_str());
 }
 

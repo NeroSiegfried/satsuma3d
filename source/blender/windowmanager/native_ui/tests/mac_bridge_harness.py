@@ -392,8 +392,36 @@ def decode_node(raw):
 decoded = [0]
 
 
+# ROUND7 UF-1, UF-2: no message is handled while a message-bus subscription names a freed area.
+# Full-screen toggles (the shell's, Blender's maximize and Focus Mode, Back to Previous, the
+# full-screen temporary editors) free an area that a moved region's subscriptions still name; the
+# guard where messages are handled points them at the region's area now. Asking for its numbers
+# turns on its recount, which counts any such subscription left when a message is about to be
+# handled: checked after every pass.
+STALE_AREAS = getattr(lib, "WM_native_ui_test_stale_area_subscriptions", None)
+GUARD = getattr(lib, "WM_native_ui_test_msgbus_guard", None)
+
+
+def guard_numbers():
+    if GUARD is None:
+        return None
+    values = [ctypes.c_int() for _ in range(5)] + [ctypes.c_double()]
+    GUARD(*[ctypes.byref(v) for v in values])
+    return dict(zip(("passes", "checked", "retargeted", "dropped", "violations", "seconds"),
+                    [v.value for v in values]))
+
+
+guard_numbers()
+
+
 def pump():
     flush(bpy.context.as_pointer())
+    numbers = guard_numbers()
+    if numbers and numbers["violations"] and not report.get("guard violations"):
+        report["guard violations"] = numbers["violations"]
+        report.setdefault("problems", []).append(
+            "UF-2: %d message-bus subscription(s) named a freed area when a message was handled"
+            % numbers["violations"])
     while True:
         handle = lib.WM_native_ui_take_updates()
         if not handle:
@@ -447,6 +475,16 @@ step = 0
 
 
 def finish(status):
+    # ROUND7 UF-2: what the message-bus guard did, and what it cost.
+    numbers = guard_numbers()
+    if numbers:
+        report["msgbus guard"] = numbers
+        if numbers["violations"] and not report.get("guard violations"):
+            report.setdefault("problems", []).append(
+                "UF-2: %d message-bus subscription(s) named a freed area when a message was handled"
+                % numbers["violations"])
+        if numbers["violations"]:
+            status = "error"
     report["status"] = status
     with open(REPORT, "w") as f:
         json.dump(report, f, indent=1)
@@ -3813,12 +3851,21 @@ def tick_desk():
             desk_state["phase"] = "restore"
             return 0.1
         if phase == "restore":
+            # The mode in one pass, the way back from Focus Mode in the next (ROUND7 UF-1):
+            # leaving full screen frees the area the 3D View's tool refresh still names until the
+            # view draws again, and a mode change's message, handled at the end of the same pass
+            # whichever came first, then reads and writes the freed area (Blender 5.3.0's own;
+            # the cause of the first `desk` run's abort). The shell drops those subscriptions
+            # after its own toggles; a script that toggles with `bpy.ops` has to wait a pass.
+            if _desk_object().mode != 'OBJECT':
+                _desk_mode('OBJECT')
+            desk_state["phase"] = "restore screen"
+            return 0.3
+        if phase == "restore screen":
             window, area, region = _desk_only_area()
             if len(window.screen.areas) == 1:
                 with bpy.context.temp_override(window=window, area=area, region=region):
                     bpy.ops.screen.screen_full_area(use_hide_panels=True)
-            if _desk_object().mode != 'OBJECT':
-                _desk_mode('OBJECT')
             desk_state["phase"] = "next"
             return 0.6
         if phase == "back":
@@ -3920,6 +3967,192 @@ def _hold_places():
         # The edge between the Outliner and Properties, below it.
         places.append(("the edge between the Outliner and Properties", ((outliner[0] + outliner[2]) / 2, outliner[1] - 1)))
     return places
+
+
+# ROUND7 UF-2: every way Blender leaves a full-screen area, each followed by a mode change in the
+# same pass. Leaving frees the full-screen area while the moved 3D View region's subscriptions
+# still name it; the mode's message is handled at the end of that pass. "stale before handling"
+# is what the guard has to mend (more than 0 shows the path frees such an area); the recount
+# after every pass (`pump`) fails the run if one is left when the message is handled.
+def _stale_full(window, area, hide):
+    region = next(r for r in area.regions if r.type == 'WINDOW')
+    with bpy.context.temp_override(window=window, area=area, region=region):
+        bpy.ops.screen.screen_full_area(use_hide_panels=hide)
+
+
+def _stale_only():
+    window = bpy.context.window_manager.windows[0]
+    area = window.screen.areas[0]
+    return window, area, next(r for r in area.regions if r.type == 'WINDOW')
+
+
+def _stale_back():
+    window, area, region = _stale_only()
+    with bpy.context.temp_override(window=window, area=area, region=region):
+        bpy.ops.screen.back_to_previous()
+
+
+def _stale_enter(path):
+    window, area, region = _view3d()
+    prefs = bpy.context.preferences.view
+    if path in ("maximize", "back to previous"):
+        _stale_full(window, area, False)
+    elif path == "focus mode":
+        _stale_full(window, area, True)
+    elif path == "render":
+        # As the iPad opens it: maximized, in place of a window (ED_screen_temp_space_open).
+        prefs.render_display_type = 'SCREEN'
+        with bpy.context.temp_override(window=window, area=area, region=region):
+            bpy.ops.render.render('INVOKE_DEFAULT')
+    elif path == "preferences":
+        prefs.preferences_display_type = 'SCREEN'
+        with bpy.context.temp_override(window=window, area=area, region=region):
+            bpy.ops.screen.userpref_show()
+    elif path == "file browser":
+        prefs.filebrowser_display_type = 'SCREEN'
+        with bpy.context.temp_override(window=window, area=area, region=region):
+            bpy.ops.wm.open_mainfile('INVOKE_DEFAULT')
+
+
+def _stale_leave(path):
+    """Leave the full-screen area; True when it is left in this pass (else in the next one)."""
+    window, area, region = _stale_only()
+    if path in ("maximize", "focus mode"):
+        _stale_full(window, area, path == "focus mode")
+    elif path in ("back to previous", "preferences"):
+        _stale_back()
+    elif path == "render":
+        with bpy.context.temp_override(window=window, area=area, region=region):
+            bpy.ops.render.view_cancel()
+    elif path == "file browser":
+        # Cancelling closes the File Browser when its event is handled, early in the next pass.
+        with bpy.context.temp_override(window=window, area=area, region=region):
+            bpy.ops.file.cancel()
+        return False
+    return True
+
+
+STALE_PATHS = ["maximize", "focus mode", "back to previous", "render", "preferences", "file browser"]
+# The temporary editors are opened from the native interface too: there the 3D View is already
+# full screen, so ED_screen_temp_space_open stacks the editor in that area instead of making one.
+STALE_NATIVE_PATHS = ["render", "preferences", "file browser"]
+# One path alone, to see what each does without the guard (it aborts at the first that faults).
+if os.environ.get("HARNESS_STALE_PATHS"):
+    STALE_PATHS = os.environ["HARNESS_STALE_PATHS"].split(",")
+    STALE_NATIVE_PATHS = [path for path in STALE_NATIVE_PATHS if path in STALE_PATHS]
+stale_state = {}
+
+
+def _stale_mode(mode):
+    ob = bpy.data.objects["Cube"]
+    found = _view3d()
+    override = dict(active_object=ob, object=ob)
+    if found:
+        override.update(window=found[0], area=found[1], region=found[2])
+    with bpy.context.temp_override(**override):
+        bpy.ops.object.mode_set(mode=mode)
+
+
+def tick_stale():
+    global step
+    try:
+        pump()
+        step += 1
+        problems = report.setdefault("problems", [])
+        cases = report.setdefault("cases", {})
+        if step == 1:
+            # First the native interface (its 3D View full screen), then Blender's own interface
+            # (the Desktop Interface), where its own screens show.
+            lib.WM_native_ui_test_install_hooks()
+            subs["settings"] = subscribe("settings")
+            cube = bpy.data.objects["Cube"]
+            bpy.context.view_layer.objects.active = cube
+            cube.select_set(True)
+            render = bpy.context.scene.render
+            render.resolution_x, render.resolution_y, render.resolution_percentage = 64, 64, 100
+            return 0.5
+        if step < 4:
+            return 0.5
+        phase = stale_state.get("phase", "next")
+        if phase == "desktop":
+            set_bool(subs["settings"], "desktop", True, 1500)
+            stale_state["phase"] = "desktop wait"
+            return 1.0
+        if phase == "desktop wait":
+            stale_state["waited"] = stale_state.get("waited", 0) + 1
+            if stale_state["waited"] < 3:
+                return 0.5
+            stale_state["phase"] = phase = "next"
+        if phase == "next":
+            if "queue" not in stale_state:
+                stale_state["queue"] = [("native", path) for path in STALE_NATIVE_PATHS]
+                stale_state["interface"] = "native"
+            queue = stale_state["queue"]
+            if not queue and stale_state["interface"] == "native":
+                stale_state["queue"] = queue = [("desktop", path) for path in STALE_PATHS]
+                stale_state["interface"] = "desktop"
+                if queue:
+                    stale_state["phase"] = "desktop"
+                    return 0.1
+            if not queue:
+                numbers = guard_numbers() or {}
+                report["mended"] = {path: entry.get("mended") for path, entry in cases.items()}
+                if not any(entry.get("stale before handling") for entry in cases.values()):
+                    problems.append("UF-2: no path left a subscription naming a freed area; the "
+                                    "scenario proves nothing")
+                finish("done" if not problems else "error")
+                return None
+            interface, path = queue.pop(0)
+            key = path if interface == "desktop" else "native interface: " + path
+            stale_state.update(path=path, key=key, before=guard_numbers())
+            cases[key] = {"screen before": bpy.context.window_manager.windows[0].screen.name}
+            _stale_enter(path)
+            # What shows right after (a File Browser opens when its event is handled, later).
+            cases[key]["editor after entering"] = _stale_only()[1].type
+            stale_state["phase"] = "leave"
+            return 0.8
+        path = stale_state["path"]
+        entry = cases[stale_state["key"]]
+        if phase == "leave":
+            if bpy.app.is_job_running('RENDER'):
+                return 0.3
+            entry["full screen"] = bpy.context.window_manager.windows[0].screen.show_fullscreen or \
+                len(bpy.context.window_manager.windows[0].screen.areas) == 1
+            entry["editor"] = _stale_only()[1].type
+            if stale_state["interface"] == "native" and entry["editor"] == 'VIEW_3D':
+                # The native interface shows only the 3D View: the shell left the temporary
+                # editor in this pass's commands (WM_native_ui_ensure_layout); the mode follows.
+                entry["left by"] = "the shell"
+                _stale_mode('EDIT')
+                entry["stale before handling"] = STALE_AREAS() if STALE_AREAS else None
+                stale_state["phase"] = "check"
+                return 0.6
+            if _stale_leave(path):
+                _stale_mode('EDIT')
+                entry["stale before handling"] = STALE_AREAS() if STALE_AREAS else None
+                stale_state["phase"] = "check"
+                return 0.6
+            stale_state["phase"] = "mode"
+            return 0.001
+        if phase == "mode":
+            _stale_mode('EDIT')
+            entry["stale before handling"] = STALE_AREAS() if STALE_AREAS else None
+            stale_state["phase"] = "check"
+            return 0.6
+        if phase == "check":
+            before, after = stale_state["before"] or {}, guard_numbers() or {}
+            entry["mended"] = {k: after.get(k, 0) - before.get(k, 0) for k in ("retargeted", "dropped")}
+            entry["back"] = [a.type for a in bpy.context.window_manager.windows[0].screen.areas]
+            entry["mode"] = bpy.data.objects["Cube"].mode
+            if 'VIEW_3D' not in entry["back"]:
+                problems.append("UF-2 %s: the 3D View did not come back" % stale_state["key"])
+            _stale_mode('OBJECT')
+            stale_state["phase"] = "next"
+            return 0.6
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
 
 
 def tick_hold():
@@ -4991,5 +5224,6 @@ bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets
                          "tolerance": tick_tolerance, "waiting": tick_waiting,
                          "touchstart": tick_touchstart, "jobs": tick_jobs,
                          "renderprogress": tick_render_progress, "busy": tick_busy,
-                         "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold, "typing": tick_typing, "windows": tick_windows, "margins": tick_margins, "census": tick_census}.get(SCENARIO, tick_actions),
+                         "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold, "typing": tick_typing, "windows": tick_windows, "margins": tick_margins, "census": tick_census,
+                         "stale": tick_stale}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

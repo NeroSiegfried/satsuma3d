@@ -872,6 +872,11 @@ void wm_event_do_notifiers(bContext *C)
 
   /* Handle message bus. */
   {
+#ifdef WITH_NATIVE_UI
+    /* iPad (ROUND7 UF-2): a full-screen toggle leaves subscriptions naming the area it freed;
+     * none may be handled. */
+    WM_native_ui_msgbus_guard(C);
+#endif
     for (wmWindow &win : wm->windows) {
       CTX_wm_window_set(C, &win);
       WM_msgbus_handle(wm->runtime->message_bus, C);

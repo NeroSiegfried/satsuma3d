@@ -128,6 +128,10 @@ bool WM_native_ui_busy_label(char *label, size_t size);
 /** A line of the session's log (see `WM_native_ui_session_log`), from the interface's own code:
  * \a kind such as "layout" or "reveal". Safe from any thread. */
 void WM_native_ui_log(const char *kind, const char *text);
+/** One `msgbus` line in the session's log: what the message guard (#WM_native_ui_msgbus_guard)
+ * did this session, \a when ("closed", "leaving"). Only when it handled a message since the last
+ * such line, unless \a always. Safe from any thread (ROUND7 U4b). */
+void WM_native_ui_msgbus_guard_report(const char *when, bool always);
 /** Write the session's log out now and give its file's path in \a path, for About's Share
  * Session Log (ROUND5 8C). False when there is no log to share. */
 bool WM_native_ui_session_log_file(char *path, size_t path_size);

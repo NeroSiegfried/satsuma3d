@@ -731,6 +731,7 @@ LOG_KINDS = {
     'exit': 'why iOS ended the app when it reports it',
     'render': 'whether a render could go on in the background and why it paused',
     'memory': 'the memory limits set at launch and what was freed when memory ran low',
+    'msgbus': 'how often the app mended links to closed parts of the window',
 }
 writers = ''.join(path.read_text(encoding='utf-8', errors='replace')
                   for path in (SWIFT.parents[3]).rglob('*') if path.suffix in ('.cc', '.mm', '.swift'))
@@ -1569,6 +1570,49 @@ check('pressInterface' not in hold_d2 and 'interface_state = IOS_INTERFACE_HELD;
       moved_d2.index('IOS_INTERFACE_HELD') < moved_d2.index('[self pressInterface];') and
       'GHOST_ios_sticky_action_ended(window);' in buttons_d2,
       "R6 DESK-2: a hold on Blender's interface is a right-click if it lifts there, the control's drag if it moves")
+
+# ROUND7 UF-1, UF-2: leaving full screen frees an area that a moved region's message-bus
+# subscriptions still name until it draws again (Blender 5.3.0's own, 5.1.2's too); a mode change
+# handled in the same pass read and wrote the freed area. Whoever toggles (the shell, Blender's
+# maximize, Focus Mode, Back to Previous, the full-screen temporary editors), one guard mends the
+# subscriptions where messages are handled: `WM_native_ui_msgbus_guard` right before the only
+# `WM_msgbus_handle`. No caller resets subscriptions beside it, and every subscription that keeps
+# an area as its user data has a notify the guard knows.
+REPO_UF2 = Path(__file__).resolve().parents[2]
+events_uf2 = c_code_only((REPO_UF2 / 'source/blender/windowmanager/intern/wm_event_system.cc').read_text(
+    encoding='utf-8'))
+handle_at_uf2 = events_uf2.find('WM_msgbus_handle(')
+guard_at_uf2 = events_uf2.rfind('WM_native_ui_msgbus_guard(C);', 0, max(handle_at_uf2, 0))
+handlers_uf2, area_notifies_uf2, resets_uf2 = [], [], []
+for path in sorted(REPO_UF2.glob('source/blender/**/*')):
+    if path.suffix not in ('.cc', '.mm', '.c'):
+        continue
+    code = c_code_only(path.read_text(encoding='utf-8', errors='replace'))
+    if 'WM_msgbus_handle(' in code and path.name not in ('wm_event_system.cc', 'wm_message_bus.cc'):
+        handlers_uf2.append(path.name)
+    for match in re.finditer(r'\b(\w+)\.user_data = area;', code):
+        if not re.search(r'wmMsgSubscribeValue %s\b' % match.group(1), code):
+            continue  # Not a subscription being made (the guard pointing one at an area).
+        notify = re.search(r'\b%s\.notify = (\w+);' % match.group(1), code[match.end():match.end() + 200])
+        area_notifies_uf2.append((path.name, notify.group(1) if notify else None))
+    if re.search(r'(native|apple_ios)', path.name) and path.name != 'wm_native_ui.cc' and \
+            'WM_msgbus_clear_by_owner(' in code:
+        resets_uf2.append(path.name)
+bridge_uf2 = c_code_only(bridge_text)
+guard_body_uf2 = bridge_uf2[bridge_uf2.find('void WM_native_ui_msgbus_guard(bContext *C)'):]
+guard_body_uf2 = guard_body_uf2[:guard_body_uf2.find('\n}\n')]
+names_uf2 = bridge_uf2[bridge_uf2.find('bool msgbus_names_area('):]
+names_uf2 = names_uf2[:names_uf2.find('\n}\n')]
+unknown_uf2 = ['%s: %s' % (name, notify) for name, notify in area_notifies_uf2
+               if notify is None or notify not in names_uf2]
+check(handle_at_uf2 >= 0 and guard_at_uf2 >= 0 and
+      handle_at_uf2 - guard_at_uf2 < 400 and not handlers_uf2 and
+      'bridge_screen_subscriptions_reset' not in bridge_uf2 and
+      bridge_uf2.count('WM_msgbus_clear_by_owner(') == guard_body_uf2.count('WM_msgbus_clear_by_owner(') and
+      not resets_uf2 and len(area_notifies_uf2) >= 2 and not unknown_uf2,
+      "R7 UF-2: one guard, where messages are handled, mends every subscription naming a freed area "
+      "(other handlers %s, resets beside it %s, area notifies it does not know %s)" %
+      (handlers_uf2, resets_uf2, unknown_uf2))
 
 # ROUND6 DESK-3 (A6, A7, H6, H7, D6): typing reaches everything Blender draws. A field's text reaches
 # Blender on every change (null-safe, the cursor at its end, live updates only where the button asks);

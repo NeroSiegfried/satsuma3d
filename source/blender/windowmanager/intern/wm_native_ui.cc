@@ -125,6 +125,9 @@
 #include "wm_gizmo_wmapi.hh"
 #include "wm_window.hh"
 
+#include "message_bus/intern/wm_message_bus_intern.hh"
+#include "message_bus/wm_message_bus.hh"
+
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
 #  include "WM_apple_ios.hh"
 #  include "wm_apple_ios_file.hh"
@@ -5771,6 +5774,10 @@ void WM_native_ui_session_log_flush(const bool force)
   if (!session_log_enabled()) {
     return;
   }
+  if (force) {
+    /* Going to the background or ending: what the message guard did, if anything new. */
+    WM_native_ui_msgbus_guard_report("leaving", false);
+  }
   SessionLog &log = session_log();
   std::unique_lock lock(log.mutex, std::try_to_lock);
   if (!lock.owns_lock() || log.lines.empty()) {
@@ -6506,6 +6513,208 @@ void bridge_desktop_scale_set(bContext *C, const float scale)
   WM_event_add_notifier(C, NC_WM | ND_DATACHANGED, nullptr);
   views::view_type_dirty("settings");
 }
+
+/* -------------------------------------------------------------------- */
+/** \name Message-bus subscriptions that name a freed area (ROUND7 UF-1, UF-2)
+ *
+ * Two kinds of message-bus subscription keep an area as their user data while a region owns
+ * them: the 3D View's tool refresh (#WM_toolsystem_do_msg_notify_tag_refresh) and the File
+ * Browser's area refresh (#ED_area_do_msg_notify_tag_refresh). #ED_screen_state_toggle moves
+ * regions between areas (#ED_area_data_swap) and, leaving full screen, frees the full-screen
+ * area; the moved region keeps its subscriptions until it draws again. A message handled before
+ * that, such as an object's mode, reads the freed area and writes into it. That is Blender
+ * 5.3.0's own (5.1.2 has it too), reached by every full-screen toggle: the shell's, Blender's own
+ * maximize and Focus Mode, Back to Previous, and the full-screen temporary editors. The guard
+ * is one: #WM_native_ui_msgbus_guard runs where messages are handled, before
+ * #WM_msgbus_handle, and points each such subscription at the area its region is in now, or
+ * drops it when its region is in none.
+ * \{ */
+
+namespace {
+
+/** The kinds of subscription whose user data is an area. A sweep in
+ * `tests/python/bl_native_shell_sources.py` fails on a subscription that keeps an area with a
+ * notify not listed here. */
+bool msgbus_names_area(const wmMsgSubscribeValue &params)
+{
+  return ELEM(params.notify, WM_toolsystem_do_msg_notify_tag_refresh, ED_area_do_msg_notify_tag_refresh);
+}
+
+struct MsgbusGuardStats {
+  /* Read by #WM_native_ui_msgbus_guard_report from the interface's thread. */
+  std::atomic<int> passes = 0;
+  std::atomic<int> checked = 0;
+  std::atomic<int> retargeted = 0;
+  std::atomic<int> dropped = 0;
+  /** With #msgbus_guard_verify: subscriptions naming a freed area found when a message was about
+   * to be handled, after the guard. Never more than 0. */
+  int violations = 0;
+  double seconds = 0.0;
+  /** The guard's first act is said in the session's log once; what it did in all, at the session's
+   * end (#WM_native_ui_msgbus_guard_report). Never a line per pass. */
+  std::atomic<bool> first_said = false;
+  std::atomic<int> reported_passes = -1;
+};
+MsgbusGuardStats msgbus_guard_stats;
+/** Set by the Mac harness: recount after the guard in every pass that handles a message. */
+bool msgbus_guard_verify = false;
+
+/** Every area a window shows or a screen keeps, with the area each shown region is in. */
+void msgbus_live_areas(Main *bmain,
+                       wmWindowManager *wm,
+                       Set<const void *> &r_areas,
+                       Map<const void *, ScrArea *> &r_region_areas)
+{
+  auto add = [&](ScrArea &area) {
+    r_areas.add(&area);
+    for (ARegion &region : area.regionbase) {
+      r_region_areas.add(&region, &area);
+    }
+  };
+  for (wmWindow &win : wm->windows) {
+    for (ScrArea &area : win.global_areas.areabase) {
+      add(area);
+    }
+  }
+  for (bScreen &screen : bmain->screens) {
+    for (ScrArea &area : screen.areabase) {
+      add(area);
+    }
+  }
+}
+
+int msgbus_stale_count(Main *bmain, wmWindowManager *wm)
+{
+  Set<const void *> areas;
+  Map<const void *, ScrArea *> region_areas;
+  msgbus_live_areas(bmain, wm, areas, region_areas);
+  int stale = 0;
+  for (wmMsgSubscribeKey &key : wm->runtime->message_bus->messages) {
+    for (wmMsgSubscribeValueLink &link : key.values) {
+      if (msgbus_names_area(link.params) && !areas.contains(link.params.user_data)) {
+        stale++;
+      }
+    }
+  }
+  return stale;
+}
+
+}  // namespace
+
+void WM_native_ui_msgbus_guard(bContext *C)
+{
+  wmWindowManager *wm = CTX_wm_manager(C);
+  Main *bmain = CTX_data_main(C);
+  wmMsgBus *mbus = wm ? wm->runtime->message_bus : nullptr;
+  /* Only a pass that handles a message can reach a freed area. */
+  if (mbus == nullptr || bmain == nullptr || mbus->messages_tag_count == 0) {
+    return;
+  }
+  const double start = BLI_time_now_seconds();
+  msgbus_guard_stats.passes++;
+  Set<const void *> areas;
+  Map<const void *, ScrArea *> region_areas;
+  msgbus_live_areas(bmain, wm, areas, region_areas);
+  Vector<void *> owners_to_drop;
+  for (wmMsgSubscribeKey &key : mbus->messages) {
+    for (wmMsgSubscribeValueLink &link : key.values) {
+      if (!msgbus_names_area(link.params)) {
+        continue;
+      }
+      msgbus_guard_stats.checked++;
+      if (areas.contains(link.params.user_data)) {
+        continue;
+      }
+      /* The region moved: the message is for the area it is in now. */
+      if (ScrArea *area = region_areas.lookup_default(link.params.owner, nullptr)) {
+        link.params.user_data = area;
+        ED_region_tag_redraw(static_cast<ARegion *>(link.params.owner));
+        msgbus_guard_stats.retargeted++;
+      }
+      else {
+        owners_to_drop.append_non_duplicates(link.params.owner);
+      }
+    }
+  }
+  for (void *owner : owners_to_drop) {
+    WM_msgbus_clear_by_owner(mbus, owner);
+    msgbus_guard_stats.dropped++;
+  }
+  msgbus_guard_stats.seconds += BLI_time_now_seconds() - start;
+  if (!msgbus_guard_stats.first_said && msgbus_guard_stats.retargeted + msgbus_guard_stats.dropped > 0)
+  {
+    msgbus_guard_stats.first_said = true;
+    WM_native_ui_session_log(
+        "msgbus",
+        fmt::format("guard acted for the first time this session (pass {}): {} subscriptions "
+                    "pointed at their region's area, {} owners dropped",
+                    msgbus_guard_stats.passes.load(),
+                    msgbus_guard_stats.retargeted.load(),
+                    msgbus_guard_stats.dropped.load())
+            .c_str());
+  }
+  if (msgbus_guard_verify) {
+    msgbus_guard_stats.violations += msgbus_stale_count(bmain, wm);
+  }
+}
+
+extern "C" void WM_native_ui_msgbus_guard_report(const char *when, const bool always)
+{
+  const int passes = msgbus_guard_stats.passes;
+  /* Nothing new since the last line: said once is enough, unless asked (a document closing). */
+  if (!always && passes == msgbus_guard_stats.reported_passes) {
+    return;
+  }
+  msgbus_guard_stats.reported_passes = passes;
+  const int retargeted = msgbus_guard_stats.retargeted;
+  const int dropped = msgbus_guard_stats.dropped;
+  WM_native_ui_session_log(
+      "msgbus",
+      fmt::format("guard this session ({}): acted on {} subscriptions ({} pointed at their "
+                  "region's area, {} owners dropped) in {} passes that handled messages",
+                  when ? when : "now",
+                  retargeted + dropped,
+                  retargeted,
+                  dropped,
+                  passes)
+          .c_str());
+}
+
+/** For the Mac harness (ROUND7 UF-1): how many message-bus subscriptions name, as their user
+ * data, an area that no window or screen has, now. Between a full-screen toggle and the end of
+ * the pass this may be more than 0; #WM_native_ui_msgbus_guard makes it 0 before any message is
+ * handled. */
+extern "C" int WM_native_ui_test_stale_area_subscriptions()
+{
+  wmWindowManager *wm = G_MAIN ? static_cast<wmWindowManager *>(G_MAIN->wm.first) : nullptr;
+  if (wm == nullptr || wm->runtime->message_bus == nullptr) {
+    return 0;
+  }
+  return msgbus_stale_count(G_MAIN, wm);
+}
+
+/** For the Mac harness (ROUND7 UF-2): what #WM_native_ui_msgbus_guard did so far: the passes it
+ * checked, the subscriptions it looked at, pointed at their region's area, dropped, the
+ * violations a recount found before a message was handled (from the first call on), and the time
+ * it took. */
+extern "C" void WM_native_ui_test_msgbus_guard(int *r_passes,
+                                              int *r_checked,
+                                              int *r_retargeted,
+                                              int *r_dropped,
+                                              int *r_violations,
+                                              double *r_seconds)
+{
+  /* Asking is what turns the recount on: only the harness asks. */
+  msgbus_guard_verify = true;
+  *r_violations = msgbus_guard_stats.violations;
+  *r_passes = msgbus_guard_stats.passes;
+  *r_checked = msgbus_guard_stats.checked;
+  *r_retargeted = msgbus_guard_stats.retargeted;
+  *r_dropped = msgbus_guard_stats.dropped;
+  *r_seconds = msgbus_guard_stats.seconds;
+}
+
+/** \} */
 
 /** Switch between the native interface and Blender's own, as on a Mac. */
 void bridge_interface_set(bContext *C, const bool desktop)

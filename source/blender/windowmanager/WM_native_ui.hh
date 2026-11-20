@@ -127,6 +127,11 @@ bool WM_native_ui_is_undo_command(std::string_view idname);
  * shown, for finding out afterwards what happened on a device. Written in both interfaces.
  */
 void WM_native_ui_session_log(const char *kind, const char *text);
+/**
+ * Before messages are handled in a pass: no message-bus subscription may name a freed area
+ * (ROUND7 UF-2). Points each one that names an area at the area its region is in now, or drops it.
+ */
+void WM_native_ui_msgbus_guard(bContext *C);
 /** Write what the session's log holds: at once with \a force, as the app goes to the background
  * or ends, otherwise only when it last wrote ten seconds ago. */
 void WM_native_ui_session_log_flush(bool force);
