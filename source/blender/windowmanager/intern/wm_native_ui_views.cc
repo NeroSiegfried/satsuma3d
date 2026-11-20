@@ -1126,9 +1126,21 @@ void WM_native_ui_views_flush(bContext *C)
   flatbuffers::FlatBufferBuilder buffer;
   const auto now = std::chrono::steady_clock::now();
   std::vector<flatbuffers::Offset<protocol::Update>> updates;
+  /* While a job locks Blender's interface (a point cache bake, a render with Lock Interface),
+   * Blender draws neither Properties nor the 3D View (`REGION_DRAW_LOCK_ALL`): a view built then
+   * would evaluate what the job is changing, as a cloth bake started from its panel did, freeing a
+   * mesh under it (ROUND6 PANEL-7). Built once the lock ends, but for the job's own views, as
+   * #command_locked lets their commands through. */
+  const wmWindowManager *wm = CTX_wm_manager(C);
+  const bool locked = wm && wm->runtime->is_interface_locked;
   for (const auto item : subscriptions().items()) {
     Subscription &subscription = item.value;
     if (!subscription.dirty && !subscription.reset) {
+      continue;
+    }
+    if (locked && !ELEM(subscription.type->name, "render", "jobs")) {
+      /* Later, still dirty. */
+      any_dirty = true;
       continue;
     }
     if (!subscription.reset && !subscription.urgent &&

@@ -46,6 +46,8 @@ struct Edit {
     Call,
     /** A color ramp's stops. */
     Ramp,
+    /** A curve's points (ROUND6 PANEL-7). */
+    Curve,
   };
   Kind kind = Kind::Property;
   /** The panel drawing it, by its id. */

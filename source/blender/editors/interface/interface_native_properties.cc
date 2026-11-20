@@ -76,8 +76,13 @@
 #include "WM_types.hh"
 #include "WM_toolsystem.hh"
 #include "WM_keymap.hh"
+#include "BKE_colortools.hh"
+#include "BKE_curveprofile.h"
+#include "DNA_curve_enums.h"
+#include "DNA_curveprofile_types.h"
 #include "interface_intern.hh"
 #include "interface_native.hh"
+#include "templates/interface_templates_intern.hh"
 #include "wm_event_system.hh"
 
 #include <algorithm>
@@ -622,6 +627,297 @@ bool apply_ramp(bContext *C, Button &but, const native::EditRequest &request)
   }
   return true;
 }
+
+/* -------------------------------------------------------------------- */
+/** \name Curves (ROUND6 PANEL-7, B7)
+ *
+ * A curve mapping's or a profile's button (#ButtonType::Curve, #ButtonType::CurveProfile), as
+ * `template_curve_mapping` and `template_curveprofile` draw it: edited by its points, and updated
+ * as their template updates it, through the owner's property its callback data names.
+ * \{ */
+
+/** The property the curve's template updates (its buttons' `RNAUpdateCb`), if it has one. */
+const RNAUpdateCb *curve_update(const Button &but)
+{
+  return but.funcN && but.func_argN ? static_cast<const RNAUpdateCb *>(but.func_argN) : nullptr;
+}
+
+std::string curve_key(const Button &but)
+{
+  const RNAUpdateCb *cb = curve_update(but);
+  if (cb && cb->ptr.data && cb->prop) {
+    PointerRNA ptr = cb->ptr;
+    return "curve:" + std::to_string(ptr.owner_id ? ptr.owner_id->session_uid : 0) + ":" +
+           RNA_path_from_ID_to_struct(&ptr).value_or("") + ":" + RNA_property_identifier(cb->prop);
+  }
+  return "curve:" + std::to_string(uintptr_t(but.poin));
+}
+
+/** A mapping's curves, as the tabs over it name them (X, Y, Z; C, R, G, B), in order. */
+Vector<std::string> curve_channels(const Block &block, const Button &but)
+{
+  Vector<std::pair<int, std::string>> found;
+  if (but.type == ButtonType::Curve) {
+    const CurveMapping *cumap = reinterpret_cast<const CurveMapping *>(but.poin);
+    for (const auto &button : block.buttons) {
+      if (button->type == ButtonType::Row &&
+          button->poin == reinterpret_cast<const char *>(&cumap->cur))
+      {
+        found.append({int(button->hardmax), button->str});
+      }
+    }
+  }
+  std::sort(found.begin(), found.end());
+  Vector<std::string> channels;
+  for (const auto &item : found) {
+    channels.append(item.second);
+  }
+  return channels;
+}
+
+/** The floats a command carries, as a curve's x and y. */
+std::optional<std::pair<float, float>> command_point(const protocol::Command *command)
+{
+  const protocol::FloatsValue *floats = command ? command->value_as_FloatsValue() : nullptr;
+  if (!floats || !floats->value() || floats->value()->size() < 2) {
+    return std::nullopt;
+  }
+  const float x = float(floats->value()->Get(0)), y = float(floats->value()->Get(1));
+  if (!std::isfinite(x) || !std::isfinite(y)) {
+    return std::nullopt;
+  }
+  return std::pair{x, y};
+}
+
+/** \a text's numbers after \a prefix, comma separated; none where one is not a number. */
+Vector<float> tool_numbers(const StringRef text, const StringRef prefix)
+{
+  Vector<float> numbers;
+  const std::string rest = text.drop_prefix(prefix.size());
+  size_t start = 0;
+  while (true) {
+    const size_t end = rest.find(',', start);
+    const std::string part = rest.substr(start,
+                                         end == std::string::npos ? std::string::npos :
+                                                                    end - start);
+    char *parsed = nullptr;
+    const float value = std::strtof(part.c_str(), &parsed);
+    if (parsed == part.c_str() || !std::isfinite(value)) {
+      return {};
+    }
+    numbers.append(value);
+    if (end == std::string::npos) {
+      return numbers;
+    }
+    start = end + 1;
+  }
+}
+
+bool apply_curve(bContext *C, Button &but, const native::EditRequest &request)
+{
+  const RNAUpdateCb *cb = curve_update(but);
+  if (!but.poin || (but.flag & BUT_DISABLED) ||
+      (cb && cb->ptr.owner_id && !ID_IS_EDITABLE(cb->ptr.owner_id)))
+  {
+    return false;
+  }
+  const std::optional<double> number = command_number(request.command);
+  const std::optional<std::pair<float, float>> point = command_point(request.command);
+  /* A drag taken back leaves nothing to undo. */
+  const bool drag_ends = ELEM(request.phase, "", "end");
+  const StringRef tool = request.text;
+  const char *undo = nullptr;
+  if (but.type == ButtonType::CurveProfile) {
+    CurveProfile *profile = reinterpret_cast<CurveProfile *>(but.poin);
+    int active = -1;
+    for (int i = 0; i < profile->path_len; i++) {
+      if (profile->path[i].flag & PROF_SELECT) {
+        active = i;
+        break;
+      }
+    }
+    int update = PROF_UPDATE_NONE;
+    if (request.action == "activate") {
+      if (!number || *number < 0 || *number >= profile->path_len) {
+        return false;
+      }
+      for (int i = 0; i < profile->path_len; i++) {
+        SET_FLAG_FROM_TEST(profile->path[i].flag, i == int(*number), PROF_SELECT);
+      }
+    }
+    else if (request.action == "add") {
+      if (!point || !BKE_curveprofile_insert(profile, point->first, point->second)) {
+        return false;
+      }
+      undo = "Add Profile Point";
+    }
+    else if (request.action == "remove") {
+      /* Its ends stay, as Blender keeps them. */
+      if (active <= 0 || active >= profile->path_len - 1 ||
+          !BKE_curveprofile_remove_point(profile, &profile->path[active]))
+      {
+        return false;
+      }
+      undo = "Delete Profile Point";
+    }
+    else if (request.action == "move") {
+      if (!point || active < 0) {
+        return false;
+      }
+      CurveProfilePoint &moved = profile->path[active];
+      const float delta[2] = {point->first - moved.x, point->second - moved.y};
+      BKE_curveprofile_move_point(profile, &moved, false, delta);
+      if (drag_ends) {
+        update = PROF_UPDATE_REMOVE_DOUBLES;
+        undo = "Move Profile Point";
+      }
+    }
+    else if (tool.startswith("handle:")) {
+      const Vector<float> type = tool_numbers(tool, "handle:");
+      if (type.size() != 1 || active < 0 ||
+          !ELEM(int(type[0]), HD_FREE, HD_AUTO, HD_VECT, HD_ALIGN))
+      {
+        return false;
+      }
+      BKE_curveprofile_selected_handle_set(profile, int(type[0]), int(type[0]));
+      undo = "Set Profile Handle Type";
+    }
+    else if (tool == "reset") {
+      BKE_curveprofile_reset(profile);
+      BKE_curveprofile_reset_view(profile);
+      undo = "Reset Profile";
+    }
+    else if (tool == "reverse") {
+      BKE_curveprofile_reverse(profile);
+      undo = "Reverse Profile";
+    }
+    else if (tool.startswith("clipping:")) {
+      SET_FLAG_FROM_TEST(profile->flag, tool.endswith("1"), PROF_USE_CLIP);
+      update = PROF_UPDATE_CLIP;
+      undo = "Profile Clipping";
+    }
+    else if (tool.startswith("clip:")) {
+      const Vector<float> clip = tool_numbers(tool, "clip:");
+      if (clip.size() != 4 || clip[0] >= clip[2] || clip[1] >= clip[3]) {
+        return false;
+      }
+      BLI_rctf_init(&profile->clip_rect, clip[0], clip[2], clip[1], clip[3]);
+      profile->view_rect = profile->clip_rect;
+      update = PROF_UPDATE_CLIP;
+      undo = "Profile Clipping";
+    }
+    else {
+      return false;
+    }
+    BKE_curveprofile_update(profile, update);
+  }
+  else {
+    CurveMapping *cumap = reinterpret_cast<CurveMapping *>(but.poin);
+    CurveMap *cuma = &cumap->cm[std::clamp(cumap->cur, 0, 3)];
+    int active = -1;
+    for (int i = 0; i < cuma->totpoint; i++) {
+      if (cuma->curve[i].flag & CUMA_SELECT) {
+        active = i;
+        break;
+      }
+    }
+    bool remove_doubles = false;
+    if (request.action == "activate") {
+      if (!number || *number < 0 || *number >= cuma->totpoint) {
+        return false;
+      }
+      for (int i = 0; i < cuma->totpoint; i++) {
+        SET_FLAG_FROM_TEST(cuma->curve[i].flag, i == int(*number), CUMA_SELECT);
+      }
+    }
+    else if (request.action == "add") {
+      if (!point) {
+        return false;
+      }
+      for (int i = 0; i < cuma->totpoint; i++) {
+        cuma->curve[i].flag &= ~CUMA_SELECT;
+      }
+      CurveMapPoint *added = BKE_curvemap_insert(cuma, point->first, point->second);
+      if (!added) {
+        return false;
+      }
+      added->flag |= CUMA_SELECT;
+      undo = "Add Curve Point";
+    }
+    else if (request.action == "remove") {
+      if (active < 0 || cuma->totpoint <= 2 ||
+          !BKE_curvemap_remove_point(cuma, &cuma->curve[active]))
+      {
+        return false;
+      }
+      undo = "Delete Curve Point";
+    }
+    else if (request.action == "move") {
+      if (!point || active < 0) {
+        return false;
+      }
+      float x = point->first, y = point->second;
+      if (cumap->flag & CUMA_DO_CLIP) {
+        x = std::clamp(x, cumap->clipr.xmin, cumap->clipr.xmax);
+        y = std::clamp(y, cumap->clipr.ymin, cumap->clipr.ymax);
+      }
+      cuma->curve[active].x = x;
+      cuma->curve[active].y = y;
+      if (drag_ends) {
+        remove_doubles = true;
+        undo = "Move Curve Point";
+      }
+    }
+    else if (tool.startswith("handle:")) {
+      const Vector<float> type = tool_numbers(tool, "handle:");
+      if (type.size() != 1 || active < 0 || !ELEM(int(type[0]), HD_AUTO, HD_VECT, HD_AUTO_ANIM)) {
+        return false;
+      }
+      BKE_curvemap_handle_set(cuma, int(type[0]));
+      undo = "Set Curve Handle Type";
+    }
+    else if (tool.startswith("channel:")) {
+      const Vector<float> channel = tool_numbers(tool, "channel:");
+      if (channel.size() != 1 || channel[0] < 0 || channel[0] > 3) {
+        return false;
+      }
+      cumap->cur = int(channel[0]);
+    }
+    else if (tool == "reset") {
+      BKE_curvemap_reset(cuma, &cumap->clipr, cumap->preset, CurveMapSlopeType::Positive);
+      BKE_curvemapping_reset_view(cumap);
+      undo = "Reset Curve";
+    }
+    else if (tool.startswith("extrapolate:")) {
+      SET_FLAG_FROM_TEST(cumap->flag, tool.endswith("1"), CUMA_EXTEND_EXTRAPOLATE);
+      undo = "Curve Extension";
+    }
+    else if (tool.startswith("clipping:")) {
+      SET_FLAG_FROM_TEST(cumap->flag, tool.endswith("1"), CUMA_DO_CLIP);
+      undo = "Curve Clipping";
+    }
+    else if (tool.startswith("clip:")) {
+      const Vector<float> clip = tool_numbers(tool, "clip:");
+      if (clip.size() != 4 || clip[0] >= clip[2] || clip[1] >= clip[3]) {
+        return false;
+      }
+      BLI_rctf_init(&cumap->clipr, clip[0], clip[2], clip[1], clip[3]);
+      BKE_curvemapping_reset_view(cumap);
+      undo = "Curve Clipping";
+    }
+    else {
+      return false;
+    }
+    BKE_curvemapping_changed(cumap, remove_doubles);
+  }
+  button_apply_native(C, &but, false);
+  if (undo) {
+    ED_undo_push(C, undo);
+  }
+  return true;
+}
+
+/** \} */
 
 bool set_property(bContext *C,
                   Button &but,
@@ -1860,6 +2156,95 @@ class Writer {
                                   buffer.CreateVector(colors, samples * 4),
                                   buffer.CreateVector(stops.data(), stops.size()),
                                   coba.cur);
+    });
+  }
+
+  /** A curve, as #template_curve_mapping or #template_curveprofile draws it (PANEL-7): its
+   * points and their handles, the curve through them, its clipping and its channels. */
+  NodeId curve(const NodeId parent, Button &but, const Vector<std::string> &channels)
+  {
+    const std::string edit_key = curve_key(but);
+    const std::string key = this->key(edit_key);
+    data.edits.add_overwrite(key, {Edit::Kind::Curve, panel, edit_key, occurrence(edit_key)});
+    const bool profile = but.type == ButtonType::CurveProfile;
+    std::vector<double> points, samples, clip;
+    std::vector<uint8_t> handles;
+    int active = -1, channel = 0;
+    bool clipping = false, extrapolate = false;
+    const auto set_clip = [&](const rctf &rect) {
+      clip = {rect.xmin, rect.ymin, rect.xmax, rect.ymax};
+    };
+    if (profile) {
+      CurveProfile *curve = reinterpret_cast<CurveProfile *>(but.poin);
+      if (!curve->table) {
+        BKE_curveprofile_update(curve, PROF_UPDATE_NONE);
+      }
+      for (int i = 0; i < curve->path_len; i++) {
+        const CurveProfilePoint &point = curve->path[i];
+        points.insert(points.end(), {point.x, point.y});
+        handles.push_back(uint8_t(point.h1));
+        if (active < 0 && (point.flag & PROF_SELECT)) {
+          active = i;
+        }
+      }
+      for (int i = 0; curve->table && i < BKE_curveprofile_table_size(curve); i++) {
+        samples.insert(samples.end(), {curve->table[i].x, curve->table[i].y});
+      }
+      set_clip(curve->clip_rect);
+      clipping = curve->flag & PROF_USE_CLIP;
+    }
+    else {
+      CurveMapping *cumap = reinterpret_cast<CurveMapping *>(but.poin);
+      BKE_curvemapping_init(cumap);
+      channel = std::clamp(cumap->cur, 0, 3);
+      const CurveMap &cuma = cumap->cm[channel];
+      for (int i = 0; i < cuma.totpoint; i++) {
+        const CurveMapPoint &point = cuma.curve[i];
+        points.insert(points.end(), {point.x, point.y});
+        handles.push_back(point.flag & CUMA_HANDLE_VECTOR    ? HD_VECT :
+                          point.flag & CUMA_HANDLE_AUTO_ANIM ? HD_AUTO_ANIM :
+                                                               HD_AUTO);
+        if (active < 0 && (point.flag & CUMA_SELECT)) {
+          active = i;
+        }
+      }
+      /* Across its clipping, enough to look smooth, as Blender evaluates it. */
+      constexpr int count = 64;
+      for (int i = 0; i < count; i++) {
+        const float x = cumap->clipr.xmin +
+                        (cumap->clipr.xmax - cumap->clipr.xmin) * float(i) / (count - 1);
+        samples.insert(samples.end(), {x, BKE_curvemap_evaluateF(cumap, &cuma, x)});
+      }
+      set_clip(cumap->clipr);
+      clipping = cumap->flag & CUMA_DO_CLIP;
+      extrapolate = cumap->flag & CUMA_EXTEND_EXTRAPOLATE;
+    }
+    for (std::vector<double> *values : {&points, &samples, &clip}) {
+      for (double &value : *values) {
+        value = std::isfinite(value) ? value : 0.0;
+      }
+    }
+    const RNAUpdateCb *cb = curve_update(but);
+    const std::string label = cb && cb->prop ? RNA_property_ui_name(cb->prop) : but.str;
+    return builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
+      fields.label = label;
+      fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE)) &&
+                       (!cb || !cb->ptr.owner_id || ID_IS_EDITABLE(cb->ptr.owner_id));
+      std::vector<flatbuffers::Offset<flatbuffers::String>> names;
+      for (const std::string &name : channels) {
+        names.push_back(buffer.CreateString(name));
+      }
+      return protocol::CreateCurveDirect(buffer,
+                                         &points,
+                                         &handles,
+                                         active,
+                                         &samples,
+                                         &clip,
+                                         clipping,
+                                         &names,
+                                         channel,
+                                         profile,
+                                         extrapolate);
     });
   }
 
@@ -3408,6 +3793,32 @@ static std::string panels_walk(bContext *C,
   const auto is_open = [&](const std::string &id) {
     return expanded ? expanded->count(id) != 0 : viewport || preferences || outer_count == 0;
   };
+  /* A sub-panel follows its parent, as Blender draws it inside it: the region lists panels by
+   * `bl_order`, which can put sub-panels before their parent (Color Management's, order 100,
+   * whose Curves, White Balance, Working Space and Advanced were never reached). */
+  {
+    std::vector<Candidate> ordered;
+    std::set<std::string> placed;
+    const std::function<void(const std::string &)> place = [&](const std::string &parent) {
+      for (const Candidate &child : candidates) {
+        if (child.parent == parent && placed.insert(child.id).second) {
+          ordered.push_back(child);
+          place(child.id);
+        }
+      }
+    };
+    for (const Candidate &candidate : candidates) {
+      const bool has_parent = !candidate.parent.empty() &&
+                              std::any_of(candidates.begin(), candidates.end(), [&](const Candidate &other) {
+                                return other.id == candidate.parent;
+                              });
+      if (!has_parent && placed.insert(candidate.id).second) {
+        ordered.push_back(candidate);
+        place(candidate.id);
+      }
+    }
+    candidates = std::move(ordered);
+  }
   /* A physics' switch heads the panel of its settings, so the switches come first. */
   std::stable_partition(candidates.begin(), candidates.end(), [](const Candidate &candidate) {
     return candidate.id == "PHYSICS_PT_add";
@@ -4238,6 +4649,26 @@ static std::string panels_walk(bContext *C,
     std::set<std::string> seen;
     std::map<std::string, int> occurrences;
     int named_row_count = 0;
+    /* A curve template's own buttons around its curve (its channels, zoom, tools, clipping, the
+     * active point's handle types, position and delete, Reset): the curve editor does what they
+     * do, so they are part of the curve (PANEL-7). They are the buttons without a property, an
+     * operator or a menu next to it in the block. */
+    for (int64_t i = 0; writer && i < block->buttons.size(); i++) {
+      const Button &curve = *block->buttons[i];
+      if (!ELEM(curve.type, ButtonType::Curve, ButtonType::CurveProfile) || !curve.poin) {
+        continue;
+      }
+      const auto part = [&](const Button &item) {
+        return !item.rnaprop && !item.optype && !(item.type == ButtonType::Label && !item.str.empty()) &&
+               !button_menutype_get(const_cast<Button *>(&item));
+      };
+      for (int64_t j = i - 1; j >= 0 && part(*block->buttons[j]); j--) {
+        decide(block->buttons[j].get(), fate_consumed("curve"));
+      }
+      for (int64_t j = i + 1; j < block->buttons.size() && part(*block->buttons[j]); j++) {
+        decide(block->buttons[j].get(), fate_consumed("curve"));
+      }
+    }
     /* Menus Blender builds in C, by their order in the panel, which the menu walker finds them
      * by when it draws the panel again (PANEL-4). */
     std::map<const Button *, int> c_menus;
@@ -4712,6 +5143,20 @@ static std::string panels_walk(bContext *C,
         else if (writer && seen.insert(key).second) {
           writer->ramp(node, but);
           decide(&but, fate_projected("Ramp"));
+        }
+        continue;
+      }
+      if (ELEM(but.type, ButtonType::Curve, ButtonType::CurveProfile) && but.poin) {
+        /* A curve's points, edited by the interface's curve editor (B7, PANEL-7). */
+        const std::string key = curve_key(but);
+        if (execute) {
+          if (target_panel && *requested_key == key && !applied) {
+            applied = apply_curve(C, but, *request);
+          }
+        }
+        else if (writer && open && seen.insert(key).second) {
+          writer->curve(node, but, curve_channels(*block, but));
+          decide(&but, fate_projected("Curve"));
         }
         continue;
       }

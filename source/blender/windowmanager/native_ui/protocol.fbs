@@ -332,6 +332,37 @@ table Ramp {
   active: int;
 }
 
+/// A curve edited by its points (ROUND6 PANEL-7, B7): a curve mapping, such as a brush's falloff
+/// or colour management's curves, or a profile, such as a Bevel's custom profile. Commands:
+/// `Activate` with an int makes that point the active one; `Set` with floats x, y moves it there
+/// (with a phase, as one step to undo); `Add` with floats x, y adds a point there; `Remove`
+/// removes the active one; `Set` with a text: `handle:<type>` (the active point's, Blender's
+/// `HD_*`), `channel:<n>`, `reset`, `reverse` (a profile), `extrapolate:<0|1>` (a mapping),
+/// `clipping:<0|1>`, `clip:<min x>,<min y>,<max x>,<max y>`.
+table Curve {
+  /// Each point's x and y, in order.
+  points: [double];
+  /// Each point's handle type, as Blender's `HD_*`: 0 free, 1 automatic, 2 vector, 3 aligned,
+  /// 4 auto-clamped.
+  handles: [ubyte];
+  /// The active point, or -1.
+  active: int = -1;
+  /// The curve through them, x and y in order, as Blender evaluates it.
+  samples: [double];
+  /// The rectangle the points are kept in: minimum x, minimum y, maximum x, maximum y.
+  clip: [double];
+  /// Whether the points are kept in that rectangle.
+  clipping: bool;
+  /// A mapping's curves, as Blender's tabs over it name them (X, Y, Z; C, R, G, B), and the one
+  /// shown; none for one curve.
+  channels: [string];
+  channel: int;
+  /// A profile, whose handles can be free or aligned, rather than a mapping.
+  profile: bool;
+  /// A mapping's ends go on straight rather than level.
+  extrapolate: bool;
+}
+
 /// A value an interface uses as it sees fit, rather than a control: such as where Blender draws
 /// the navigation gizmo, for an interface to keep clear of it.
 table Data {
@@ -414,6 +445,7 @@ union Content {
   Asset,
   Record,
   Ramp,
+  Curve,
 }
 
 /* -------------------------------------------------------------------- */

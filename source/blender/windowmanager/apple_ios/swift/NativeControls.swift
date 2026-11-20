@@ -524,6 +524,8 @@ struct ControlRow: View {
         case .ramp:
           NativeRamp(model: model, node: node)
             .padding(.vertical, 6)
+        case .curve:
+          NativeCurve(model: model, node: node)
         case .reference:
           ReferenceRow(model: model, node: node, link: link)
         case .list:
@@ -1057,6 +1059,292 @@ struct NativeTextField: View {
 /* -------------------------------------------------------------------- */
 /** \name Colors
  * \{ */
+
+/**
+ * A curve edited by its points (ROUND6 PANEL-7, finding B7): a brush's falloff, colour management's
+ * curves, a modifier's or Bevel's custom profile. The curve as Blender evaluates it, over a grid of
+ * the rectangle it is kept in; its points as handles, the active one ringed. A tap on a point makes
+ * it the active one; dragged, it moves, as one step to undo; a tap elsewhere adds a point there.
+ * Under it: a mapping's curves (C, R, G, B), the active point's position, handle type and delete,
+ * and the curve's own commands (Reset, Reverse, Extend, Clipping), as Blender's buttons around its
+ * curve have them.
+ */
+struct NativeCurve: View {
+  let model: PanelsModel
+  let node: NativeNode
+  /** A point being dragged: which, and where it is now, in the curve's own units. */
+  @State private var drag: (index: Int, point: CGPoint, moved: Bool)?
+  @State private var editingClip = false
+  @State private var clipText = ["", "", "", ""]
+  @State private var pointText = ["", ""]
+
+  private static let height: CGFloat = 220
+  private static let reach: CGFloat = 22
+
+  private struct Shape {
+    var points: [CGPoint] = []
+    var handles: [UInt8] = []
+    var samples: [CGPoint] = []
+    var clip = CGRect(x: 0, y: 0, width: 1, height: 1)
+    var active = -1
+    var channels: [String] = []
+    var channel = 0
+    var profile = false
+    var clipping = false
+    var extrapolate = false
+  }
+
+  private var shape: Shape {
+    var shape = Shape()
+    guard let curve = node.content(Blender_NativeUI_Curve.self) else { return shape }
+    func pairs(_ count: Int32, _ value: (Int32) -> Double) -> [CGPoint] {
+      stride(from: Int32(0), to: count - 1, by: 2).map { CGPoint(x: value($0), y: value($0 + 1)) }
+    }
+    shape.points = pairs(curve.pointsCount) { curve.points(at: $0) }
+    shape.handles = (0..<curve.handlesCount).map { curve.handles(at: $0) }
+    shape.samples = pairs(curve.samplesCount) { curve.samples(at: $0) }
+    if curve.clipCount == 4, curve.clip(at: 2) > curve.clip(at: 0), curve.clip(at: 3) > curve.clip(at: 1) {
+      shape.clip = CGRect(x: curve.clip(at: 0), y: curve.clip(at: 1),
+                          width: curve.clip(at: 2) - curve.clip(at: 0), height: curve.clip(at: 3) - curve.clip(at: 1))
+    }
+    shape.active = Int(curve.active)
+    shape.channels = (0..<curve.channelsCount).compactMap { curve.channels(at: $0) }
+    shape.channel = Int(curve.channel)
+    shape.profile = curve.profile
+    shape.clipping = curve.clipping
+    shape.extrapolate = curve.extrapolate
+    return shape
+  }
+
+  /** The points, the one dragged where it is now. */
+  private func displayed(_ shape: Shape) -> [CGPoint] {
+    var points = shape.points
+    if let drag, points.indices.contains(drag.index) { points[drag.index] = drag.point }
+    return points
+  }
+
+  /** What the canvas shows: the clipping, and any point outside it, with a margin. */
+  private static func bounds(_ shape: Shape) -> CGRect {
+    var rect = shape.clip
+    for point in shape.points { rect = rect.union(CGRect(origin: point, size: .zero)) }
+    let margin = max(rect.width, rect.height) * 0.05
+    return rect.insetBy(dx: -margin, dy: -margin)
+  }
+
+  var body: some View {
+    let shape = self.shape
+    PanelColumn(spacing: 6) {
+      if shape.channels.count > 1 {
+        Picker(node.label, selection: Binding(get: { shape.channel },
+                                              set: { model.set(node, .text("channel:\($0)")) })) {
+          ForEach(Array(shape.channels.enumerated()), id: \.offset) { index, name in
+            Text(name).tag(index)
+          }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+      }
+      canvas(shape)
+        .frame(height: Self.height)
+      controls(shape)
+    }
+    .disabled(!node.enabled)
+    .opacity(node.enabled ? 1 : 0.5)
+    .padding(.vertical, 4)
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel(node.label)
+  }
+
+  private func canvas(_ shape: Shape) -> some View {
+    GeometryReader { proxy in
+      let bounds = Self.bounds(shape)
+      let size = proxy.size
+      let toView = { (point: CGPoint) -> CGPoint in
+        CGPoint(x: (point.x - bounds.minX) / bounds.width * size.width,
+                y: size.height - (point.y - bounds.minY) / bounds.height * size.height)
+      }
+      let toCurve = { (point: CGPoint) -> CGPoint in
+        CGPoint(x: bounds.minX + point.x / size.width * bounds.width,
+                y: bounds.minY + (size.height - point.y) / size.height * bounds.height)
+      }
+      let points = displayed(shape)
+      ZStack {
+        Canvas { context, _ in
+          /* The rectangle the points are kept in, and its quarters. */
+          let clip = CGRect(origin: toView(CGPoint(x: shape.clip.minX, y: shape.clip.maxY)),
+                            size: CGSize(width: shape.clip.width / bounds.width * size.width,
+                                         height: shape.clip.height / bounds.height * size.height))
+          context.fill(Path(clip), with: .color(.primary.opacity(0.05)))
+          var grid = Path()
+          for i in 1..<4 {
+            let x = clip.minX + clip.width * CGFloat(i) / 4, y = clip.minY + clip.height * CGFloat(i) / 4
+            grid.move(to: CGPoint(x: x, y: clip.minY)); grid.addLine(to: CGPoint(x: x, y: clip.maxY))
+            grid.move(to: CGPoint(x: clip.minX, y: y)); grid.addLine(to: CGPoint(x: clip.maxX, y: y))
+          }
+          context.stroke(grid, with: .color(.primary.opacity(0.12)), lineWidth: 0.5)
+          context.stroke(Path(clip), with: .color(.primary.opacity(0.25)), lineWidth: 0.5)
+          /* The curve as Blender evaluates it; while a point is dragged, straight through the points. */
+          var line = Path()
+          let through = drag == nil ? shape.samples : points
+          for (index, sample) in through.enumerated() {
+            index == 0 ? line.move(to: toView(sample)) : line.addLine(to: toView(sample))
+          }
+          context.stroke(line, with: .color(.primary), lineWidth: 1.5)
+          for (index, point) in points.enumerated() {
+            let centre = toView(point)
+            let active = index == (drag?.index ?? shape.active)
+            let radius: CGFloat = active ? 6 : 4.5
+            let dot = Path(ellipseIn: CGRect(x: centre.x - radius, y: centre.y - radius, width: 2 * radius, height: 2 * radius))
+            context.fill(dot, with: .color(active ? PanelStyle.tint : .primary))
+            if active {
+              context.stroke(dot, with: .color(.white), lineWidth: 1.5)
+            }
+          }
+        }
+        .contentShape(Rectangle())
+        .gesture(
+          DragGesture(minimumDistance: 0)
+            .onChanged { value in
+              if drag == nil {
+                /* The nearest point within reach, made the active one. */
+                let nearest = points.indices.min { hypot(toView(points[$0]).x - value.startLocation.x, toView(points[$0]).y - value.startLocation.y) <
+                                                   hypot(toView(points[$1]).x - value.startLocation.x, toView(points[$1]).y - value.startLocation.y) }
+                guard let nearest,
+                      hypot(toView(points[nearest]).x - value.startLocation.x,
+                            toView(points[nearest]).y - value.startLocation.y) <= Self.reach else { return }
+                if nearest != shape.active { model.send(node, .activate, .int(Int64(nearest))) }
+                drag = (nearest, points[nearest], false)
+              }
+              guard var current = drag else { return }
+              let moved = current.moved || hypot(value.translation.width, value.translation.height) >= 4
+              guard moved else { return }
+              current.point = toCurve(value.location)
+              current.moved = true
+              drag = current
+              model.send(node, .set_, .floats([current.point.x, current.point.y]), phase: .update)
+            }
+            .onEnded { value in
+              if let current = drag {
+                if current.moved {
+                  model.send(node, .set_, .floats([current.point.x, current.point.y]), phase: .end)
+                }
+                drag = nil
+              }
+              else if hypot(value.translation.width, value.translation.height) < 4 {
+                /* A tap away from the points adds one there. */
+                let point = toCurve(value.location)
+                model.send(node, .add, .floats([point.x, point.y]))
+                Haptics.selection()
+              }
+            }
+        )
+      }
+    }
+    .background(ShellStyle.panel.opacity(0.4), in: RoundedRectangle(cornerRadius: ShellStyle.radius, style: .continuous))
+    .clipShape(RoundedRectangle(cornerRadius: ShellStyle.radius, style: .continuous))
+  }
+
+  private struct HandleType: Identifiable {
+    let name: String
+    /** Blender's `HD_*`. */
+    let id: UInt8
+  }
+
+  /** Blender's handle types for the curve's kind. */
+  private static func handleTypes(profile: Bool) -> [HandleType] {
+    profile ? [HandleType(name: "Auto", id: 1), HandleType(name: "Vector", id: 2),
+               HandleType(name: "Free", id: 0), HandleType(name: "Aligned", id: 3)] :
+              [HandleType(name: "Auto", id: 1), HandleType(name: "Vector", id: 2),
+               HandleType(name: "Auto Clamped", id: 4)]
+  }
+
+  private func controls(_ shape: Shape) -> some View {
+    let active = shape.points.indices.contains(shape.active) ? shape.active : nil
+    return HStack(spacing: 8) {
+      if let active {
+        Text(String(format: "X %.3f   Y %.3f", shape.points[active].x, shape.points[active].y))
+          .font(.footnote.monospacedDigit())
+          .foregroundStyle(.secondary)
+      }
+      else {
+        Text("Tap the curve to add a point")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+      }
+      Spacer(minLength: 0)
+      Menu {
+        if let active {
+          Section("Handle") {
+            ForEach(Self.handleTypes(profile: shape.profile)) { handle in
+              Button {
+                model.set(node, .text("handle:\(handle.id)"))
+              } label: {
+                if shape.handles.indices.contains(active) && shape.handles[active] == handle.id {
+                  Label(handle.name, systemImage: "checkmark")
+                }
+                else {
+                  Text(handle.name)
+                }
+              }
+            }
+          }
+          Button("Position…") {
+            pointText = [String(format: "%.4f", shape.points[active].x), String(format: "%.4f", shape.points[active].y)]
+            positionEditing = true
+          }
+          Button("Delete Point", role: .destructive) { model.send(node, .remove) }
+        }
+        Section {
+          Button("Reset Curve") { model.set(node, .text("reset")) }
+          if shape.profile {
+            Button("Reverse Path") { model.set(node, .text("reverse")) }
+          }
+          else {
+            Picker("Extend", selection: Binding(get: { shape.extrapolate },
+                                                set: { model.set(node, .text("extrapolate:\($0 ? 1 : 0)")) })) {
+              Text("Extend Horizontal").tag(false)
+              Text("Extend Extrapolated").tag(true)
+            }
+          }
+          Toggle("Use Clipping", isOn: Binding(get: { shape.clipping },
+                                              set: { model.set(node, .text("clipping:\($0 ? 1 : 0)")) }))
+          Button("Clipping Range…") {
+            clipText = [shape.clip.minX, shape.clip.minY, shape.clip.maxX, shape.clip.maxY].map { String(format: "%.4f", $0) }
+            editingClip = true
+          }
+        }
+      } label: {
+        Image(systemName: "ellipsis.circle")
+          .font(.system(size: 17))
+          .frame(width: 36, height: 32)
+          .contentShape(Rectangle())
+      }
+      .accessibilityLabel("Curve Options")
+    }
+    .alert("Clipping Range", isPresented: $editingClip) {
+      TextField("Minimum X", text: $clipText[0]).keyboardType(.numbersAndPunctuation)
+      TextField("Minimum Y", text: $clipText[1]).keyboardType(.numbersAndPunctuation)
+      TextField("Maximum X", text: $clipText[2]).keyboardType(.numbersAndPunctuation)
+      TextField("Maximum Y", text: $clipText[3]).keyboardType(.numbersAndPunctuation)
+      Button("Cancel", role: .cancel) {}
+      Button("Set") {
+        let values = clipText.compactMap { Double($0.replacingOccurrences(of: ",", with: ".")) }
+        if values.count == 4 { model.set(node, .text("clip:" + values.map { String($0) }.joined(separator: ","))) }
+      }
+    }
+    .alert("Point Position", isPresented: $positionEditing) {
+      TextField("X", text: $pointText[0]).keyboardType(.numbersAndPunctuation)
+      TextField("Y", text: $pointText[1]).keyboardType(.numbersAndPunctuation)
+      Button("Cancel", role: .cancel) {}
+      Button("Set") {
+        let values = pointText.compactMap { Double($0.replacingOccurrences(of: ",", with: ".")) }
+        if values.count == 2 { model.send(node, .set_, .floats(values)) }
+      }
+    }
+  }
+
+  @State private var positionEditing = false
+}
 
 /** A color ramp: its colors in a bar, its stops as handles below. A tap on a stop makes it the
  * active one, whose position and color are the controls after it; dragged sideways it moves,

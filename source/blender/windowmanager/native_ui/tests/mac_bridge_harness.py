@@ -110,6 +110,35 @@ def subscribe(view, **params):
     return lib.WM_native_ui_subscribe(data, len(data))
 
 
+def send_floats(subscription, target, op, values, command_id):
+    """A command carrying floats, such as a curve point's x and y (ROUND6 PANEL-7)."""
+    builder = flatbuffers.Builder(256)
+    t = builder.CreateString(target)
+    FloatsValue.StartValueVector(builder, len(values))
+    for value in reversed(values):
+        builder.PrependFloat64(value)
+    vector = builder.EndVector()
+    FloatsValue.Start(builder)
+    FloatsValue.AddValue(builder, vector)
+    fv = FloatsValue.End(builder)
+    Command.Start(builder)
+    Command.AddId(builder, command_id)
+    Command.AddSubscription(builder, subscription)
+    Command.AddTarget(builder, t)
+    Command.AddOp(builder, op)
+    Command.AddValueType(builder, Value.Value.FloatsValue)
+    Command.AddValue(builder, fv)
+    c = Command.End(builder)
+    Commands.StartCommandsVector(builder, 1)
+    builder.PrependUOffsetTRelative(c)
+    vec = builder.EndVector()
+    Commands.Start(builder)
+    Commands.AddCommands(builder, vec)
+    builder.Finish(Commands.End(builder))
+    data = bytes(builder.Output())
+    lib.WM_native_ui_send(data, len(data))
+
+
 def invoke(subscription, target, command_id, op=None):
     invoke_many(subscription, [(target, command_id)], op=op, version=0)
 
@@ -276,6 +305,16 @@ def decode_node(raw):
                      can_unlink=reference.CanUnlink(), can_single_user=reference.CanSingleUser(),
                      can_fake_user=reference.CanFakeUser(), fake_user=reference.FakeUser(),
                      choices=reference.OptionsLength())
+    elif node.ContentType() == getattr(Content.Content, "Curve", -1):
+        from Blender.NativeUI import Curve as CurveTable
+        table = node.Content()
+        curve = CurveTable.Curve()
+        curve.Init(table.Bytes, table.Pos)
+        entry.update(points=[curve.Points(i) for i in range(curve.PointsLength())],
+                     handles=[curve.Handles(i) for i in range(curve.HandlesLength())],
+                     active=curve.Active(), samples=curve.SamplesLength() // 2,
+                     channels=[s(curve.Channels(i)) for i in range(curve.ChannelsLength())],
+                     channel=curve.Channel(), profile=curve.Profile(), clipping=curve.Clipping())
     elif node.ContentType() == Content.Content.Label:
         table = node.Content()
         label = Label.Label()
@@ -4250,11 +4289,11 @@ def tick_margins():
 CENSUS_KNOWN = {
     # Dropped, and said by the panel's (or the tab's) row. Labels are lines of their own
     # (PANEL-2), sections sub-panels (PANEL-3) and menus Blender builds in C menu buttons
-    # (PANEL-4), and the active object's panels stay with others selected (PANEL-6): one dropped
-    # is a failure. Popups Blender builds in C are not menus yet.
+    # (PANEL-4), the active object's panels stay with others selected (PANEL-6), and curves are
+    # curve nodes (PANEL-7): one dropped is a failure. Popups Blender builds in C are not menus
+    # yet.
     "c_block": ("B4", "PANEL-4 (popups)"),
-    "curve": ("B7", "PANEL-7"),
-    "callback": ("B7, B18", "PANEL-7, PANEL-14"),
+    "callback": ("B18, Table 1", "PANEL-14"),
     "header_preset": ("B8", "PANEL-8"),
     "popover": ("B14", "PANEL-8"),
     "path_button": ("B10", "PANEL-10"),
@@ -4278,7 +4317,7 @@ CENSUS_KNOWN = {
     "tree": ("B18", "PANEL-14"),
 }
 # The findings PANEL-1 showed first whose packages are not built yet: each must still show.
-CENSUS_FIRST = ("B4", "B7", "B8", "B10", "B11", "B16", "B17", "B18", "B21")
+CENSUS_FIRST = ("B4", "B8", "B10", "B11", "B16", "B17", "B18", "B21")
 # Sections opened by the census's taps, as sub-panels with their rows (PANEL-3): by stage, tab
 # and title, one kept by the view (Principled BSDF's Emission) and one by a modifier's property
 # (Subdivision's Advanced, `open_advanced_panel`).
@@ -4421,6 +4460,46 @@ def tick_census():
         if step == 1:
             _census_lib().UI_native_panel_census_record(True)
             _census_scene()
+        if stage == "object" and at == 16:
+            # Colour management's curves and Bevel's profile, curve nodes (PANEL-7); the first is
+            # edited as the editor edits it: a point added, moved, made sharp, another channel.
+            curves = [n for n in _census_nodes(tree(subs.get("RENDER")) or {}) if n.get("content") == "Curve"]
+            state["curve"] = next((n for n in curves if len(n.get("channels", [])) == 4), None)
+            profiles = [n for n in _census_nodes(tree(subs.get("MODIFIER")) or {})
+                        if n.get("content") == "Curve" and n.get("profile")]
+            if not state["curve"]:
+                state["problems"].append("object RENDER: colour management's curves are not a curve node: %r; panels %r" % (
+                    [(n["key"], n.get("channels")) for n in curves],
+                    [(n["key"], bool(n.get("children"))) for n in _census_nodes(tree(subs.get("RENDER")) or {})
+                     if n.get("content") == "Panel" and "color_management" in n["key"]]))
+            if not profiles or len(profiles[0].get("points", [])) < 4:
+                state["problems"].append("object MODIFIER: Bevel's custom profile is not a profile: %r" % profiles)
+            if state["curve"]:
+                send_floats(subs["RENDER"], state["curve"]["key"], Op.Op.Add, [0.5, 0.7], 95)
+        cumap = bpy.context.scene.view_settings.curve_mapping
+        shown = cumap.curves[state["curve"]["channel"]] if state.get("curve") else None
+        if stage == "object" and at == 18 and shown is not None:
+            points = shown.points
+            if len(points) != 3 or not any(p.select and abs(p.location[0] - 0.5) < 1e-4 for p in points):
+                state["problems"].append("curve: Add left %r (ack %r)" % (
+                    [(tuple(p.location), p.select) for p in points], acks.get(95)))
+            send_floats(subs["RENDER"], state["curve"]["key"], Op.Op.Set, [0.4, 0.6], 96)
+        if stage == "object" and at == 20 and shown is not None:
+            points = shown.points
+            if not any(p.select and abs(p.location[0] - 0.4) < 1e-4 and abs(p.location[1] - 0.6) < 1e-4
+                       for p in points):
+                state["problems"].append("curve: Set (move) left %r (ack %r)" % (
+                    [(tuple(p.location), p.select) for p in points], acks.get(96)))
+            set_text(subs["RENDER"], state["curve"]["key"], "handle:2", 97)
+        if stage == "object" and at == 22 and shown is not None:
+            if not any(p.select and p.handle_type == 'VECTOR' for p in shown.points):
+                state["problems"].append("curve: handle:2 left %r (ack %r)" % (
+                    [p.handle_type for p in shown.points], acks.get(97)))
+            set_text(subs["RENDER"], state["curve"]["key"], "channel:1", 98)
+        if stage == "object" and at == 24 and state.get("curve"):
+            node = next((n for n in _census_nodes(tree(subs.get("RENDER")) or {}) if n["key"] == state["curve"]["key"]), {})
+            if node.get("channel") != 1 or cumap.curves[1] is None:
+                state["problems"].append("curve: channel:1 shows %r (ack %r)" % (node.get("channel"), acks.get(98)))
         if stage == "object" and at == 17 and state["menu"] is not None:
             # Duplicate, as Apply refuses a mesh with shape keys, as the fixture's is.
             items = [n for n in _census_nodes(tree(state["menu"]) or {}) if n.get("label") == "Duplicate"]
@@ -4460,7 +4539,7 @@ def tick_census():
                 state["problems"].append("selection, switch on: Location X moved %r, %r (acks %r %r)" % (
                     cube.location.x, lamp.location.x, acks.get(92), acks.get(93)))
             set_bool(subs["OBJECT"], "edit_selected", False, 94)
-        if stage == "object" and at == 21:
+        if stage == "object" and at == 25:
             # The cloth cache's Bake, a job (B1, PANEL-5): from its button, as a tap runs it, after
             # the menu's item, as a running job refuses taps (R6-12).
             bakes = [n for n in _census_nodes(tree(subs.get("PHYSICS")) or {})
@@ -4471,7 +4550,7 @@ def tick_census():
             else:
                 invoke(subs["PHYSICS"], bakes[0]["key"], 88)
                 state["bake"] = True
-        if stage == "object" and at == 26 and state.get("bake"):
+        if stage == "object" and at == 30 and state.get("bake"):
             cache = bpy.data.objects["Cube"].modifiers["Cloth"].point_cache
             if acks.get(88) != "ok" or not cache.is_baked:
                 state["problems"].append("Bake from the cloth cache's button: answer %r, baked %r" % (
@@ -4555,7 +4634,7 @@ def tick_census():
             report["steps"].append({"name": stage, "views": len(walks), "fates": sum(len(w) for w in walks.values()),
                                     "dropped": counted, "rows": shown})
         # The object stage runs its header menu's item before the next stage changes the scene.
-        if at == {"object": 27, "selection": 26}.get(stage, 16):
+        if at == {"object": 31, "selection": 26}.get(stage, 16):
             state["stage"] += 1
             state["start"] = step + 1
             if state["stage"] == len(CENSUS_STAGES):

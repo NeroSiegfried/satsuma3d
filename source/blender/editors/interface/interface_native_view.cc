@@ -90,7 +90,31 @@ bool control_request(PanelsData &data,
         return false;
     }
   }
-  if (edit.kind == Edit::Kind::Ramp) {
+  if (edit.kind == Edit::Kind::Curve) {
+    /* A curve's points, see `protocol.fbs`'s `Curve` (ROUND6 PANEL-7). */
+    switch (op) {
+      case protocol::Op::Activate:
+        request.action = "activate";
+        return true;
+      case protocol::Op::Add:
+        request.action = "add";
+        return true;
+      case protocol::Op::Remove:
+        request.action = "remove";
+        return true;
+      case protocol::Op::Set:
+        if (command.value_type() == protocol::Value::TextValue) {
+          request.action = "tool";
+          request.text = text_of(command);
+          return true;
+        }
+        request.action = "move";
+        break;
+      default:
+        return false;
+    }
+  }
+  else if (edit.kind == Edit::Kind::Ramp) {
     switch (op) {
       case protocol::Op::Activate:
         request.action = "activate";
