@@ -6165,6 +6165,262 @@ def tick_answers():
     return 0.3
 
 
+def canvas_command(subscription, target, op, params, command_id):
+    """A command with parameters, as a canvas's `state` and `edit` (`NativeCanvas` in the shell):
+    booleans, integers, floats and texts; a dotted key is a value of a dictionary in it."""
+    from Blender.NativeUI import IntValue
+    builder = flatbuffers.Builder(512)
+    offsets = []
+    for key, value in params.items():
+        k = builder.CreateString(key)
+        if isinstance(value, bool):
+            BoolValue.Start(builder)
+            BoolValue.AddValue(builder, value)
+            kind, v = Value.Value.BoolValue, BoolValue.End(builder)
+        elif isinstance(value, int):
+            IntValue.Start(builder)
+            IntValue.AddValue(builder, value)
+            kind, v = Value.Value.IntValue, IntValue.End(builder)
+        elif isinstance(value, float):
+            FloatValue.Start(builder)
+            FloatValue.AddValue(builder, value)
+            kind, v = Value.Value.FloatValue, FloatValue.End(builder)
+        else:
+            text = builder.CreateString(str(value))
+            TextValue.Start(builder)
+            TextValue.AddValue(builder, text)
+            kind, v = Value.Value.TextValue, TextValue.End(builder)
+        Param.Start(builder)
+        Param.AddKey(builder, k)
+        Param.AddValueType(builder, kind)
+        Param.AddValue(builder, v)
+        offsets.append(Param.End(builder))
+    Command.StartParamsVector(builder, len(offsets))
+    for offset in reversed(offsets):
+        builder.PrependUOffsetTRelative(offset)
+    vector = builder.EndVector()
+    t = builder.CreateString(target)
+    Command.Start(builder)
+    Command.AddId(builder, command_id)
+    Command.AddSubscription(builder, subscription)
+    Command.AddTarget(builder, t)
+    Command.AddOp(builder, op)
+    Command.AddParams(builder, vector)
+    c = Command.End(builder)
+    Commands.StartCommandsVector(builder, 1)
+    builder.PrependUOffsetTRelative(c)
+    vec = builder.EndVector()
+    Commands.Start(builder)
+    Commands.AddCommands(builder, vec)
+    builder.Finish(Commands.End(builder))
+    data = bytes(builder.Output())
+    lib.WM_native_ui_send(data, len(data))
+
+
+# ROUND6 EDIT-1 (D1): keys inserted while the iPad interface shows (its screen a 3D View alone)
+# leave only the new keys selected, as desktop does with an animation editor open: the native
+# canvases count as one. Every caller of `ANIM_deselect_keys_in_animation_editors` is a case below
+# or excused with why; a new caller fails the run. Then the native edits touch only keys their
+# canvas drew: the strip's move and delete keep to its frames, the curve editor's typed frame skips
+# hidden curves.
+ANIMKEYS_CALLERS = {
+    "insert_key_exec": "anim.keyframe_insert",
+    "keyframe_insert_with_keyingset_exec": "anim.keyframe_insert_by_name",
+    "object_clear_transform_generic_exec": "object.location_clear (auto keying)",
+    "snap_sel_to_grid_exec": "view3d.snap_selected_to_grid (auto keying)",
+    "snap_selected_to_location_rotation": "view3d.snap_selected_to_cursor (auto keying)",
+    "special_aftertrans_update__object": "transform.translate (auto keying)",
+    "special_aftertrans_update__pose": "transform.translate in Pose Mode (auto keying)",
+    "graphkeys_insertkey_exec": "the curve editor's Insert Keyframe (GRAPH_OT_keyframe_insert)",
+}
+ANIMKEYS_EXCUSED = {
+    "insert_key_button_exec": "a property's Insert Keyframe: the same call, made from a button under the pointer",
+    "WM_gizmo_target_property_anim_autokey": "a gizmo drag with auto keying: the same call",
+    "actkeys_insertkey_exec": "the Dope Sheet's own Insert Keyframes: no Dope Sheet in the iPad interface",
+}
+animkeys_state = {"at": 0, "problems": [], "found": {}}
+
+
+def _animkeys_callers():
+    """Each function that calls `ANIM_deselect_keys_in_animation_editors`, read from the sources."""
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "..", "source")
+    found = set()
+    for folder, _dirs, files in os.walk(root):
+        for name in files:
+            if not name.endswith(".cc"):
+                continue
+            path = os.path.join(folder, name)
+            with open(path, encoding="utf-8", errors="replace") as f:
+                text = f.read()
+            if "ANIM_deselect_keys_in_animation_editors(C);" not in text:
+                continue
+            function = None
+            for line in text.splitlines():
+                head = re.match(r"^(?:static )?[A-Za-z].*?\b(\w+)\(", line)
+                if head and not line.startswith(" "):
+                    function = head.group(1)
+                if "ANIM_deselect_keys_in_animation_editors(C);" in line and function:
+                    found.add(function)
+    return found
+
+
+def _animkeys_selected(obj):
+    """(frame, selected) of every key in the actions \a obj and its data use."""
+    keys = []
+    for owner in (obj, obj.data):
+        adt = getattr(owner, "animation_data", None)
+        if adt is None or adt.action is None:
+            continue
+        for layer in adt.action.layers:
+            for strip in layer.strips:
+                for bag in strip.channelbags:
+                    for fcurve in bag.fcurves:
+                        keys += [(round(p.co.x), p.select_control_point) for p in fcurve.keyframe_points]
+    return keys
+
+
+def _animkeys_check(label, obj, frame):
+    keys = _animkeys_selected(obj)
+    selected = sorted({f for f, sel in keys if sel})
+    older = sorted({f for f, sel in keys if f != frame})
+    animkeys_state["found"][label] = {"frame": frame, "selected frames": selected, "other frames": older}
+    if selected != [frame]:
+        animkeys_state["problems"].append(
+            "EDIT-1: after %s at frame %d the selected keys are at %r (only %d's should be)" % (label, frame, selected, frame))
+
+
+def _animkeys_in_view(fn):
+    window, area, region = _view3d()
+    with bpy.context.temp_override(window=window, area=area, region=region):
+        return fn()
+
+
+def tick_animkeys():
+    global step
+    state = animkeys_state
+    problems = state["problems"]
+    scene = bpy.context.scene
+    try:
+        pump()
+        step += 1
+        at = state["at"]
+        state["at"] += 1
+        if at == 0:
+            lib.WM_native_ui_test_install_hooks()
+            areas = [a.type for w in bpy.context.window_manager.windows for a in w.screen.areas]
+            state["found"]["areas"] = areas
+            if {'GRAPH_EDITOR', 'DOPESHEET_EDITOR'} & set(areas):
+                problems.append("EDIT-1: the screen has an animation editor, so the case is not the iPad's: %r" % areas)
+            callers = _animkeys_callers()
+            state["found"]["callers"] = sorted(callers)
+            for name in sorted(callers - set(ANIMKEYS_CALLERS) - set(ANIMKEYS_EXCUSED)):
+                problems.append("EDIT-1: %s deselects keys and is neither a case nor excused" % name)
+            for name in sorted((set(ANIMKEYS_CALLERS) | set(ANIMKEYS_EXCUSED)) - callers):
+                problems.append("EDIT-1: %s is listed and no longer deselects keys" % name)
+            subs["graph"] = subscribe("graph")
+            enter("object")
+            cube = bpy.data.objects["Cube"]
+            scene.tool_settings.use_keyframe_insert_auto = False
+            scene.frame_start, scene.frame_end = 1, 30
+            scene.frame_set(1)
+            _animkeys_in_view(lambda: bpy.ops.anim.keyframe_insert(type='Location'))
+        elif at == 1:
+            cube = bpy.data.objects["Cube"]
+            cases = [
+                (5, "anim.keyframe_insert", lambda: bpy.ops.anim.keyframe_insert(type='Location')),
+                (9, "anim.keyframe_insert_by_name", lambda: bpy.ops.anim.keyframe_insert_by_name(type="Location")),
+                (13, "transform.translate", lambda: bpy.ops.transform.translate(value=(0.5, 0, 0))),
+                (17, "object.location_clear", lambda: bpy.ops.object.location_clear()),
+                (21, "view3d.snap_selected_to_grid", lambda: bpy.ops.view3d.snap_selected_to_grid()),
+                (25, "view3d.snap_selected_to_cursor", lambda: bpy.ops.view3d.snap_selected_to_cursor()),
+            ]
+            for frame, label, run in cases:
+                scene.frame_set(frame)
+                scene.tool_settings.use_keyframe_insert_auto = label not in ("anim.keyframe_insert",
+                                                                             "anim.keyframe_insert_by_name")
+                cube.location.x += 0.37
+                scene.cursor.location = (1.0 + frame, 0.5, 0.0)
+                _animkeys_in_view(run)
+                _animkeys_check(label, cube, frame)
+            scene.tool_settings.use_keyframe_insert_auto = False
+            scene.frame_set(29)
+            canvas_command(subs["graph"], "state", Op.Op.Set, {"only_selected": 1}, 7201)
+            canvas_command(subs["graph"], "edit", Op.Op.Invoke,
+                           {"action": "operator", "operator": "GRAPH_OT_keyframe_insert",
+                            "properties.type": "ALL", "sequence": 1}, 7202)
+        elif at == 3:
+            cube = bpy.data.objects["Cube"]
+            state["found"]["graph insert ack"] = acks.get(7202)
+            if acks.get(7202) != "ok":
+                problems.append("EDIT-1: the curve editor's Insert Keyframe was refused: %r" % acks.get(7202))
+            _animkeys_check("GRAPH_OT_keyframe_insert", cube, 29)
+            # Pose Mode: a bone's keys.
+            _animkeys_in_view(lambda: bpy.ops.object.armature_add(location=(4, 0, 0)))
+            rig = bpy.context.view_layer.objects.active
+            bpy.ops.object.mode_set(mode='POSE')
+            rig.data.bones.active = rig.data.bones[0]
+            pose_bone = rig.pose.bones[0]
+            if hasattr(pose_bone, "select"):
+                pose_bone.select = True
+            else:
+                pose_bone.bone.select = True
+            scene.tool_settings.use_keyframe_insert_auto = True
+            for frame in (3, 7):
+                scene.frame_set(frame)
+                _animkeys_in_view(lambda: bpy.ops.transform.translate(value=(0.2, 0, 0)))
+            _animkeys_check("transform.translate in Pose Mode", rig, 7)
+            scene.tool_settings.use_keyframe_insert_auto = False
+            bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.ops.object.select_all(action='DESELECT')
+            cube.select_set(True)
+            bpy.context.view_layer.objects.active = cube
+            # The strip draws frames 1 to 30; a key at 40, selected elsewhere, is not drawn.
+            scene.frame_set(40)
+            _animkeys_in_view(lambda: bpy.ops.anim.keyframe_insert(type='Location'))
+            bpy.ops.anim.native_key_select(frames="5", extend=True)
+            bpy.ops.anim.native_key_move(delta=2, frame_start=1, frame_end=30)
+            frames = sorted({f for f, sel in _animkeys_selected(cube) if sel})
+            state["found"]["strip move"] = frames
+            if frames != [7, 40]:
+                problems.append("EDIT-1: the strip's move moved %r, not only the drawn 5 to 7 (40 not drawn)" % frames)
+            bpy.ops.anim.native_key_delete(frame_start=1, frame_end=30)
+            left = sorted({f for f, _sel in _animkeys_selected(cube)})
+            state["found"]["strip delete"] = left
+            if 7 in left or 40 not in left:
+                problems.append("EDIT-1: the strip's delete left %r: 7 should go, 40 (not drawn) stay" % left)
+            # The curve editor: a hidden curve's selected key is not typed into.
+            bag = None
+            for layer in cube.animation_data.action.layers:
+                for strip in layer.strips:
+                    bag = strip.channelbags[0]
+            hidden = next(fc for fc in bag.fcurves if fc.array_index == 1)
+            hidden.hide = True
+            for fc in bag.fcurves:
+                for p in fc.keyframe_points:
+                    p.select_control_point = round(p.co.x) == 1
+            state["hidden"] = (hidden.data_path, hidden.array_index)
+            canvas_command(subs["graph"], "edit", Op.Op.Invoke, {"action": "set", "frame": 2, "sequence": 2}, 7203)
+        elif at == 5:
+            cube = bpy.data.objects["Cube"]
+            bag = next(strip.channelbags[0] for layer in cube.animation_data.action.layers for strip in layer.strips)
+            moved = {fc.array_index: sorted(round(p.co.x) for p in fc.keyframe_points) for fc in bag.fcurves
+                     if fc.data_path == "location"}
+            state["found"]["curve editor set"] = {"ack": acks.get(7203), "frames by axis": moved}
+            if 2 not in moved.get(0, []) or 1 not in moved.get(1, []) or 2 in moved.get(1, []):
+                problems.append("EDIT-1: typing frame 2 with Y hidden gave %r (X's key to 2, Y's to stay at 1)" % moved)
+        elif at >= 6:
+            report["found"] = state["found"]
+            report["problems"] = problems
+            finish("done" if not problems else "error")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        report["found"] = state["found"]
+        finish("error")
+        return None
+    return 0.3
+
+
 # Every scenario, by the name `mac_bridge_check.py --scenario` takes: the one list (ROUND7 U4d).
 # `mac_bridge_check.py`'s SCENARIOS must name exactly these, which `bl_native_test_runners.py`
 # checks; a name not here ends the run with an error, never another scenario's run.
@@ -6178,7 +6434,7 @@ SCENARIOS = {
     "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold, "typing": tick_typing,
     "windows": tick_windows, "margins": tick_margins, "census": tick_census, "stale": tick_stale,
     "header": tick_header, "popups": tick_popups, "statuskeys": tick_statuskeys,
-    "answers": tick_answers,
+    "answers": tick_answers, "animkeys": tick_animkeys,
 }
 
 

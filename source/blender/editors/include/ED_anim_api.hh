@@ -852,8 +852,20 @@ bool ANIM_is_active_channel(bAnimListElem *ale);
 /**
  * Deselects the keys displayed within the open animation editors. Depending on the display
  * settings of those editors, the keys may not be from an action of the selected objects.
+ * With a native interface (not its Desktop Interface), its key and curve canvases count as an
+ * open animation editor too, see #ED_graph_native_area.
  */
 void ANIM_deselect_keys_in_animation_editors(bContext *C);
+
+/**
+ * The hidden Graph Editor a native interface draws its curve and key canvases from
+ * (`graph_native.cc`): an area outside any screen, kept for the session, made on first use.
+ * The iPad interface's screen is a 3D View alone, so without it Blender would see no animation
+ * editor open and leave every older key selected when keys are inserted (ROUND6 EDIT-1).
+ */
+ScrArea *ED_graph_native_area(bContext *C);
+/** Free what the native curve editor keeps between reads, before Blender's allocator ends. */
+void ED_graph_native_exit();
 
 /* ************************************************ */
 /* DRAWING API */

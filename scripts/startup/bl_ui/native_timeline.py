@@ -89,6 +89,15 @@ def _redraw(context):
         area.tag_redraw()
 
 
+# The frames the strip draws, which its edits keep to (ROUND6 EDIT-1): a key selected elsewhere,
+# outside the scene's range, is not drawn and is neither moved nor deleted.
+_FRAME_LIMIT = 1048574
+
+
+def _drawn(frame, operator):
+    return operator.frame_start <= frame <= operator.frame_end
+
+
 def _set_selected(point, selected):
     point.select_control_point = selected
     point.select_left_handle = selected
@@ -129,6 +138,8 @@ class ANIM_OT_native_key_move(bpy.types.Operator):
     bl_options = {'INTERNAL', 'UNDO'}
 
     delta: IntProperty(options={'SKIP_SAVE'})
+    frame_start: IntProperty(default=-_FRAME_LIMIT, options={'SKIP_SAVE'})
+    frame_end: IntProperty(default=_FRAME_LIMIT, options={'SKIP_SAVE'})
 
     def execute(self, context):
         delta = self.delta
@@ -137,22 +148,25 @@ class ANIM_OT_native_key_move(bpy.types.Operator):
         moved = False
         for fcurve in _fcurves(context):
             points = fcurve.keyframe_points
-            targets = {round(point.co.x) + delta for point in points if point.select_control_point}
-            if not targets:
+            moving = [point for point in points
+                      if point.select_control_point and _drawn(round(point.co.x), self)]
+            if not moving:
                 continue
+            targets = {round(point.co.x) + delta for point in moving}
             # Moved keys replace unselected keys where they land, as when moving keys in Blender.
             for point in reversed([point for point in points
                                    if not point.select_control_point and round(point.co.x) in targets]):
                 points.remove(point, fast=True)
             for point in points:
-                if point.select_control_point:
+                if point.select_control_point and _drawn(round(point.co.x), self):
                     point.co.x += delta
                     point.handle_left.x += delta
                     point.handle_right.x += delta
             fcurve.update()
             moved = True
         for layer in _grease_pencil_layers(context):
-            selected = sorted((f.frame_number for f in layer.frames if f.select), reverse=delta > 0)
+            selected = sorted((f.frame_number for f in layer.frames if f.select and _drawn(f.frame_number, self)),
+                              reverse=delta > 0)
             if not selected:
                 continue
             # Drawings moved replace unselected ones where they land, as keys do.
@@ -174,12 +188,16 @@ class ANIM_OT_native_key_delete(bpy.types.Operator):
     bl_label = "Delete Keyframes"
     bl_options = {'INTERNAL', 'UNDO'}
 
+    frame_start: IntProperty(default=-_FRAME_LIMIT, options={'SKIP_SAVE'})
+    frame_end: IntProperty(default=_FRAME_LIMIT, options={'SKIP_SAVE'})
+
     def execute(self, context):
         deleted = False
         for channelbag in _channelbags(context):
             for fcurve in list(channelbag.fcurves):
                 points = fcurve.keyframe_points
-                selected = [point for point in points if point.select_control_point]
+                selected = [point for point in points
+                            if point.select_control_point and _drawn(round(point.co.x), self)]
                 if not selected:
                     continue
                 for point in reversed(selected):
@@ -191,7 +209,7 @@ class ANIM_OT_native_key_delete(bpy.types.Operator):
                 else:
                     channelbag.fcurves.remove(fcurve)
         for layer in _grease_pencil_layers(context):
-            for frame in [f.frame_number for f in layer.frames if f.select]:
+            for frame in [f.frame_number for f in layer.frames if f.select and _drawn(f.frame_number, self)]:
                 layer.frames.remove(frame)
                 deleted = True
         if not deleted:

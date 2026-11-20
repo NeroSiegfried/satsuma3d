@@ -132,15 +132,24 @@ final class TimelineStore {
   func moveSelected(by delta: Int) {
     /* Moved keys replace the unselected keys where they land, as in Blender. */
     var result: [Int: Bool] = [:]
-    for key in keys where !key.selected && result[key.frame] == nil { result[key.frame] = false }
-    for key in keys where key.selected { result[key.frame + delta] = true }
+    let moving = { (key: TimelineKey) in key.selected && key.frame >= self.start && key.frame <= self.end }
+    for key in keys where !moving(key) && result[key.frame] == nil { result[key.frame] = key.selected }
+    for key in keys where moving(key) { result[key.frame + delta] = true }
     keys = result.keys.sorted().map { TimelineKey(frame: $0, selected: result[$0]!) }
-    Operators.run("anim.native_key_move", ["delta": .int(Int64(delta))])
+    var properties = drawnFrames
+    properties["delta"] = .int(Int64(delta))
+    Operators.run("anim.native_key_move", properties)
   }
 
   func deleteSelected() {
-    keys = keys.filter { !$0.selected }
-    Operators.run("anim.native_key_delete")
+    keys = keys.filter { !$0.selected || $0.frame < start || $0.frame > end }
+    Operators.run("anim.native_key_delete", drawnFrames)
+  }
+
+  /** The frames the strip draws keys in: its edits leave a key selected elsewhere, outside them,
+   * alone (ROUND6 EDIT-1). */
+  private var drawnFrames: [String: NativeValue] {
+    ["frame_start": .int(Int64(start)), "frame_end": .int(Int64(end))]
   }
 }
 

@@ -59,6 +59,10 @@ if(WITH_PYTHON)
   add_definitions(-DWITH_PYTHON)
 endif()
 
+if(WITH_NATIVE_UI)
+  add_definitions(-DWITH_NATIVE_UI)
+endif()
+
 blender_add_lib(bf_editor_animation "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
 
 # RNA_prototypes.hh

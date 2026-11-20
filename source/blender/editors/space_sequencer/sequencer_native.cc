@@ -99,6 +99,9 @@ ScrArea *native_sequencer_area(bContext *C)
   if (area == nullptr) {
     area = MEM_new<ScrArea>("native sequencer");
     area->spacetype = SPACE_SEQ;
+    /* On no screen, as Blender's own off-screen areas: an operator run in it shows no redo panel
+     * there (ROUND6 EDIT-1: a registered operator crashed placing one). */
+    area->flag |= AREA_FLAG_OFFSCREEN;
     area->type = BKE_spacetype_from_id(SPACE_SEQ);
     SpaceLink *link = area->type->create(area, CTX_data_scene(C));
     BLI_addtail(&area->spacedata, link);

@@ -38,6 +38,10 @@
 #include "DEG_depsgraph.hh"
 
 #include "RNA_access.hh"
+
+#ifdef WITH_NATIVE_UI
+#  include "WM_native_ui.hh"
+#endif
 #include "RNA_path.hh"
 
 #include "SEQ_sequencer.hh"
@@ -484,6 +488,31 @@ void ANIM_deselect_keys_in_animation_editors(bContext *C)
   ARegion *ctx_region = CTX_wm_region(C);
 
   Set<bAction *> dna_actions;
+  const auto add_shown_actions = [&](wmWindow &win, ScrArea &area) {
+    ARegion *window_region = BKE_area_find_region_type(&area, RGN_TYPE_WINDOW);
+
+    if (!window_region) {
+      return;
+    }
+
+    CTX_wm_window_set(C, &win);
+    CTX_wm_area_set(C, &area);
+    CTX_wm_region_set(C, window_region);
+    bAnimContext ac;
+    if (!ANIM_animdata_get_context(C, &ac)) {
+      return;
+    }
+    ListBaseT<bAnimListElem> anim_data = {nullptr, nullptr};
+    eAnimFilter_Flags filter = (ANIMFILTER_DATA_VISIBLE | ANIMFILTER_FCURVESONLY);
+    ANIM_animdata_filter(&ac, &anim_data, filter, ac.data, eAnimCont_Types(ac.datatype));
+    for (bAnimListElem &ale : anim_data) {
+      if (!ale.adt || !ale.adt->action) {
+        continue;
+      }
+      dna_actions.add(ale.adt->action);
+    }
+    ANIM_animdata_freelist(&anim_data);
+  };
   for (wmWindow &win : CTX_wm_manager(C)->windows) {
     bScreen *screen = BKE_workspace_active_screen_get(win.workspace_hook);
 
@@ -491,31 +520,20 @@ void ANIM_deselect_keys_in_animation_editors(bContext *C)
       if (!ELEM(area.spacetype, SPACE_GRAPH, SPACE_ACTION)) {
         continue;
       }
-      ARegion *window_region = BKE_area_find_region_type(&area, RGN_TYPE_WINDOW);
-
-      if (!window_region) {
-        continue;
-      }
-
-      CTX_wm_window_set(C, &win);
-      CTX_wm_area_set(C, &area);
-      CTX_wm_region_set(C, window_region);
-      bAnimContext ac;
-      if (!ANIM_animdata_get_context(C, &ac)) {
-        continue;
-      }
-      ListBaseT<bAnimListElem> anim_data = {nullptr, nullptr};
-      eAnimFilter_Flags filter = (ANIMFILTER_DATA_VISIBLE | ANIMFILTER_FCURVESONLY);
-      ANIM_animdata_filter(&ac, &anim_data, filter, ac.data, eAnimCont_Types(ac.datatype));
-      for (bAnimListElem &ale : anim_data) {
-        if (!ale.adt || !ale.adt->action) {
-          continue;
-        }
-        dna_actions.add(ale.adt->action);
-      }
-      ANIM_animdata_freelist(&anim_data);
+      add_shown_actions(win, area);
     }
   }
+#ifdef WITH_NATIVE_UI
+  /* The native interface's timeline strip and curve editor show the keys of the selected objects
+   * as a Graph Editor would, and its screen has none: they count as one (ROUND6 EDIT-1). */
+  if (!WM_native_ui_desktop_mode()) {
+    wmWindow *win = ctx_window ? ctx_window :
+                                 static_cast<wmWindow *>(CTX_wm_manager(C)->windows.first);
+    if (win) {
+      add_shown_actions(*win, *ED_graph_native_area(C));
+    }
+  }
+#endif
 
   CTX_wm_window_set(C, ctx_window);
   CTX_wm_area_set(C, ctx_area);

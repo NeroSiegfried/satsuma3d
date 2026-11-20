@@ -74,6 +74,7 @@
 #include "DNA_workspace_types.h"
 
 #include "../asset/ED_asset_shelf.hh"
+#include "ED_anim_api.hh"
 #include "ED_asset.hh"
 #include "ED_asset_menu_utils.hh"
 #include "ED_image_native.hh"
@@ -6247,6 +6248,7 @@ void WM_native_ui_exit()
    * checks for leaks. */
   ui::native::popup_menu_forget();
   bridge_popup_releases.clear();
+  ED_graph_native_exit();
 }
 
 extern "C" void WM_native_ui_test_install_hooks()

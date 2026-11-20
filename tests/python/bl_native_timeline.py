@@ -75,4 +75,15 @@ check(bpy.ops.anim.native_key_delete() == {'FINISHED'} and frames() == []
 check(bpy.ops.anim.native_key_delete() == {'CANCELLED'}, 'Nothing selected deletes nothing')
 check(len(camera.animation_data.action.layers[0].strips[0].channelbags[0].fcurves[0].keyframe_points) == 1,
       'Unselected objects are untouched')
+# ROUND6 EDIT-1 (D1): the strip's edits keep to the frames it draws. A key at 40, selected
+# elsewhere, is outside a strip drawing 1 to 30: moving and deleting leave it alone.
+for frame in (5, 40):
+    cube.keyframe_insert('location', frame=frame)
+bpy.ops.anim.native_key_select(frames="5,40")
+check(bpy.ops.anim.native_key_move(delta=2, frame_start=1, frame_end=30) == {'FINISHED'}
+      and frames() == [7, 40] and selected() == [7, 40], 'A move keeps to the frames the strip draws')
+check(bpy.ops.anim.native_key_delete(frame_start=1, frame_end=30) == {'FINISHED'} and frames() == [40],
+      'A delete keeps to the frames the strip draws')
+check(bpy.ops.anim.native_key_move(delta=2, frame_start=1, frame_end=30) == {'CANCELLED'} and frames() == [40],
+      'A key selected outside them alone does not move')
 print('PASS: native timeline keys ' + json.dumps(checks))

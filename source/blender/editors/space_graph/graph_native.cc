@@ -59,6 +59,9 @@ ScrArea *native_graph_area(bContext *C)
   if (area == nullptr) {
     area = MEM_new<ScrArea>("native graph editor");
     area->spacetype = SPACE_GRAPH;
+    /* On no screen, as Blender's own off-screen areas: an operator run in it shows no redo panel
+     * there (ROUND6 EDIT-1: a registered operator crashed placing one). */
+    area->flag |= AREA_FLAG_OFFSCREEN;
     area->type = BKE_spacetype_from_id(SPACE_GRAPH);
     SpaceLink *link = area->type->create(area, CTX_data_scene(C));
     BLI_addtail(&area->spacedata, link);
@@ -406,8 +409,10 @@ void apply_drag(Curves &curves, const DictionaryValue &query)
     bAnimListElem *ale = curves.items[index];
     FCurve &fcu = *static_cast<FCurve *>(ale->key_data);
     auto found = drag.keys.find(&fcu);
+    /* Only what the canvas draws moves, as in the Graph Editor: a hidden curve's selected keys
+     * stay where they are (ROUND6 EDIT-1). */
     if (found == drag.keys.end() || int(found->second.size()) != fcu.totvert ||
-        (fcu.flag & FCURVE_PROTECTED))
+        (fcu.flag & FCURVE_PROTECTED) || !(fcu.flag & FCURVE_VISIBLE))
     {
       continue;
     }
@@ -755,7 +760,7 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
                                                  std::nullopt);
     for (bAnimListElem *ale : curves.items) {
       FCurve &fcu = *static_cast<FCurve *>(ale->key_data);
-      if (fcu.flag & FCURVE_PROTECTED) {
+      if ((fcu.flag & FCURVE_PROTECTED) || !(fcu.flag & FCURVE_VISIBLE)) {
         continue;
       }
       const ValueMapping mapping = value_mapping(curves, ale);
@@ -819,6 +824,29 @@ std::shared_ptr<DictionaryValue> native_graph_read(bContext *C, const Dictionary
   GraphSpaceContext space(C, &state);
   return read_curves(C, state);
 }
+
+}  // namespace blender::ed::graph
+
+namespace blender {
+
+void ED_graph_native_exit()
+{
+  /* Its read holds Blender's allocations, which must not outlive it at quit. */
+  ed::graph::last_read = {};
+  ed::graph::drag = {};
+}
+
+ScrArea *ED_graph_native_area(bContext *C)
+{
+  ScrArea *area = ed::graph::native_graph_area(C);
+  /* As `GraphSpaceContext` shows it: keys and curves, not drivers. */
+  static_cast<SpaceGraph *>(area->spacedata.first)->mode = SIPO_MODE_ANIMATION;
+  return area;
+}
+
+}  // namespace blender
+
+namespace blender::ed::graph {
 
 /** An edit of the curves, with the `state` they are shown in: why it failed, if it did. */
 std::string native_graph_edit(bContext *C, const DictionaryValue &edit)

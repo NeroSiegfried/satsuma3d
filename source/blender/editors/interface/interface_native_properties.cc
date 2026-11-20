@@ -419,7 +419,8 @@ bool others_differ(Button &but, int index, const SelectedOthers &others)
 struct SelectedDrag {
   std::string token;
   double original = 0;
-  Vector<double> others;
+  /* Not Blender's allocator: this outlives it at quit (ROUND6 EDIT-1's sweep of such statics). */
+  std::vector<double> others;
 };
 SelectedDrag selected_drag;
 
@@ -1081,7 +1082,7 @@ bool set_property(bContext *C,
     selected_drag.others.clear();
     for (auto &[other_ptr, other_prop] : others.items) {
       PointerRNA lptr = other_ptr;
-      selected_drag.others.append(numeric_get(&lptr, other_prop, index));
+      selected_drag.others.push_back(numeric_get(&lptr, other_prop, index));
     }
   }
   switch (RNA_property_type(prop)) {
@@ -6291,6 +6292,9 @@ ScrArea *native_node_area(bContext *C)
   if (area == nullptr) {
     area = MEM_new<ScrArea>("native node editor");
     area->spacetype = SPACE_NODE;
+    /* On no screen, as Blender's own off-screen areas: an operator run in it shows no redo panel
+     * there (ROUND6 EDIT-1: a registered operator crashed placing one). */
+    area->flag |= AREA_FLAG_OFFSCREEN;
     area->type = BKE_spacetype_from_id(SPACE_NODE);
     SpaceLink *link = area->type->create(area, CTX_data_scene(C));
     BLI_addtail(&area->spacedata, link);
