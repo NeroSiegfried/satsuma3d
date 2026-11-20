@@ -2029,4 +2029,13 @@ assets_swift_e8 = (SWIFT / 'Assets.swift').read_text(encoding='utf-8')
 check('bridge_asset_apply(C, *asset);' in bridge_e8 and 'appliesMaterial' in assets_swift_e8 and
       'addsModifier' in assets_swift_e8 and 'private let assetTypes' in assets_swift_e8,
       "R6 EDIT-8 (D20): a material or modifier tap is a direct call, its tile dimmed by Blender's answer")
+# ROUND6 EDIT-9 (D21): every image the editor reads or draws goes through one image user with the
+# scene and frame (a Render Result was blank without it), and Save As is Blender's own, invoked.
+image_cc_e9 = (SWIFT.parents[2] / 'editors/space_image/image_native.cc').read_text(encoding='utf-8')
+check('ImageUser user = {};' not in image_cc_e9.replace('ImageUser user = {};\n  BKE_imageuser_default', '')
+      and image_cc_e9.count('image_user(C, ') >= 4,
+      "R6 EDIT-9 (D21): every image user of the image editor has the scene")
+image_swift_e9 = (SWIFT / 'ImageEditor.swift').read_text(encoding='utf-8')
+check('model.send("save_as")' in image_swift_e9 and '"IMAGE_OT_save_as", wm::OpCallContext::InvokeDefault' in image_cc_e9,
+      "R6 EDIT-9 (D21): Save As runs Blender's own operator with its options and picker")
 print('PASS: native shell sources ' + json.dumps(checks))

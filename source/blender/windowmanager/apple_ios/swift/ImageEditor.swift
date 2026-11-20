@@ -486,6 +486,9 @@ struct ImageEditorPanel: View {
           .disabled(image == nil || (image?.bool("packed") == true && image?.bool("dirty") != true))
         Button("Reload", systemImage: "arrow.clockwise") { model.send("reload") }
           .disabled(image == nil || image?.string("source") == "GENERATED" || image?.bool("dirty") == true)
+        /* Blender's own Save As: its options, then where to save (ROUND6 EDIT-9). */
+        Button("Save As…", systemImage: "square.and.arrow.down") { model.send("save_as") }
+          .disabled(image == nil)
         Button("Share…", systemImage: "square.and.arrow.up") { share() }
           .disabled(image == nil)
       }

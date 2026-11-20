@@ -34,7 +34,7 @@ SCENARIOS = ("actions", "tabs", "menus", "mirror", "reveal", "knife", "precision
              "tolerance", "waiting", "touchstart", "jobs", "renderprogress", "busy", "renderkeep",
              "desk", "hold", "typing", "windows", "margins", "census", "stale", "header",
              "popups", "statuskeys", "answers", "animkeys", "nodegroups", "timelinekeys",
-             "assettap")
+             "assettap", "renderimage")
 
 
 # A scenario that walks every menu item of every mode needs longer than the others' five minutes.

@@ -6799,6 +6799,115 @@ def tick_assettap():
     return 0.3
 
 
+# ROUND6 EDIT-9 (D21): the image editor shows a Render Result: its size is the render's and it has
+# pixels (it was blank and 256 x 256 without the scene in its image user). Save As is Blender's own,
+# invoked with the image (its options and the picker follow, FILES-2); exec'd as the picker's
+# answer does, it writes the format chosen.
+renderimage_state = {"at": 0, "problems": [], "found": {}}
+lib.WM_native_ui_image_take_pixels.restype = ctypes.c_bool
+lib.WM_native_ui_image_take_pixels.argtypes = [
+    ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.POINTER(ctypes.c_uint8)),
+    ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int)]
+
+
+def _renderimage_pixels():
+    image_update(bpy.context.as_pointer())
+    name, rgba = ctypes.c_char_p(), ctypes.POINTER(ctypes.c_uint8)()
+    sizes = [ctypes.c_int() for _ in range(4)]
+    if not lib.WM_native_ui_image_take_pixels(ctypes.byref(name), ctypes.byref(rgba),
+                                               *[ctypes.byref(v) for v in sizes]):
+        return None
+    width, height, full_width, full_height = (v.value for v in sizes)
+    lit = 0
+    if rgba and width > 0:
+        lit = sum(1 for i in range(0, width * height * 4, 4) if rgba[i] or rgba[i + 1] or rgba[i + 2])
+    return {"name": name.value.decode() if name.value else "", "size": [width, height],
+            "full": [full_width, full_height], "lit pixels": lit}
+
+
+def tick_renderimage():
+    global step
+    state = renderimage_state
+    problems = state["problems"]
+    found = state["found"]
+    scene = bpy.context.scene
+    try:
+        pump()
+        step += 1
+        at = state["at"]
+        state["at"] += 1
+        if at == 0:
+            enter("object")
+            scene.render.engine = 'BLENDER_WORKBENCH'
+            scene.render.resolution_x, scene.render.resolution_y = 64, 48
+            scene.render.resolution_percentage = 100
+            # The format Save As starts from for a render: the scene's output.
+            scene.render.image_settings.file_format = 'JPEG'
+            bpy.ops.render.render()
+            subs["image"] = subscribe("image")
+            canvas_command(subs["image"], "state", Op.Op.Set,
+                           {"image": "Render Result", "pick": 1, "mode": "view"}, 7601)
+        elif at == 4:
+            records = [node.get("record", {}) for node in views.get(subs["image"], {"nodes": {}})["nodes"].values()]
+            shown = next((r for r in records if r.get("name") == "Render Result" and "height" in r), None)
+            shown = shown and {k: shown.get(k) for k in ("name", "width", "height", "source")}
+            found["shown"] = shown
+            if not shown or shown.get("name") != "Render Result" or [shown.get("width"), shown.get("height")] != [64, 48]:
+                problems.append("EDIT-9: the Render Result shows as %r, not 64 x 48" % (shown,))
+            pixels = None
+            for _ in range(3):
+                pixels = _renderimage_pixels() or pixels
+            found["pixels"] = pixels
+            if not pixels or pixels["full"] != [64, 48] or not pixels["lit pixels"]:
+                problems.append("EDIT-9: the Render Result's picture is %r: no pixels" % (pixels,))
+            canvas_command(subs["image"], "edit", Op.Op.Invoke, {"action": "save_as", "sequence": 1}, 7602)
+        elif at == 7:
+            found["save as answer"] = acks.get(7602)
+            if acks.get(7602) != "ok":
+                problems.append("EDIT-9: Save As was not invoked: %r" % acks.get(7602))
+            # Blender's Save As waits for its file (the picker on the iPad, the File Browser here),
+            # with the Render Result: answered with a .jpg name, it writes the format it holds
+            # (the scene's output for a render, JPEG here), not a PNG.
+            path = os.path.join(os.path.dirname(REPORT), "render.jpg")
+            window = bpy.context.window_manager.windows[0]
+            waiting = [op for op in window.modal_operators if op.bl_idname == "IMAGE_OT_save_as"]
+            browser = next((a for w in bpy.context.window_manager.windows for a in w.screen.areas
+                            if a.type == 'FILE_BROWSER'), None)
+            found["waiting"] = [op.bl_idname for op in window.modal_operators]
+            if not waiting or browser is None:
+                problems.append("EDIT-9: Save As is not waiting for its file: %r" % found["waiting"])
+            else:
+                params = browser.spaces.active.params
+                params.directory = os.path.dirname(path).encode()
+                params.filename = os.path.basename(path)
+                region = next(r for r in browser.regions if r.type == 'WINDOW')
+                owner = next(w for w in bpy.context.window_manager.windows if browser in w.screen.areas[:])
+                with bpy.context.temp_override(window=owner, area=browser, region=region):
+                    bpy.ops.file.execute()
+                state["path"] = path
+        elif at == 9 and "path" in state:
+            path = state["path"]
+            magic = b""
+            if os.path.exists(path):
+                with open(path, "rb") as f:
+                    magic = f.read(3)
+            found["written"] = magic.hex()
+            if magic != b"\xff\xd8\xff":
+                problems.append("EDIT-9: Save As to .jpg with JPEG chosen wrote %r, not a JPEG" % magic)
+        elif at >= 10:
+            report["found"] = found
+            report["problems"] = problems
+            finish("done" if not problems else "error")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        report["found"] = found
+        finish("error")
+        return None
+    return 0.3
+
+
 # Every scenario, by the name `mac_bridge_check.py --scenario` takes: the one list (ROUND7 U4d).
 # `mac_bridge_check.py`'s SCENARIOS must name exactly these, which `bl_native_test_runners.py`
 # checks; a name not here ends the run with an error, never another scenario's run.
@@ -6814,6 +6923,7 @@ SCENARIOS = {
     "header": tick_header, "popups": tick_popups, "statuskeys": tick_statuskeys,
     "answers": tick_answers, "animkeys": tick_animkeys, "nodegroups": tick_nodegroups,
     "timelinekeys": tick_timelinekeys, "assettap": tick_assettap,
+    "renderimage": tick_renderimage,
 }
 
 

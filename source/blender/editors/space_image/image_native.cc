@@ -35,6 +35,8 @@
 #include "BKE_attribute.hh"
 #include "BKE_brush.hh"
 #include "BKE_context.hh"
+#include "RNA_access.hh"
+#include "RNA_prototypes.hh"
 #include "BKE_editmesh.hh"
 #include "BKE_image.hh"
 #include "BKE_image_partial_update.hh"
@@ -139,6 +141,24 @@ Image *shown_image(bContext *C, const DictionaryValue *state)
    * UV Editor's unit square, or the Image Editor's No Image page, not whatever image comes first
    * (an empty Render Result, ROUND5 9B and 9G.4). */
   return nullptr;
+}
+
+/**
+ * The image user the Image Editor draws \a ima with: the scene, for a Render Result or a Viewer to
+ * have pixels at all, and the scene's frame for a movie or a sequence; the first render slot,
+ * layer and the combined pass, as a new Image Editor shows them. Without it a Render Result was
+ * blank and labelled 256 x 256 (ROUND6 EDIT-9, D21).
+ */
+ImageUser image_user(bContext *C, Image *ima)
+{
+  ImageUser user = {};
+  BKE_imageuser_default(&user);
+  Scene *scene = CTX_data_scene(C);
+  user.scene = scene;
+  if (scene && ima) {
+    BKE_image_user_frame_calc(ima, &user, scene->r.cfra);
+  }
+  return user;
 }
 
 const char *source_name(const Image &ima)
@@ -332,7 +352,7 @@ std::shared_ptr<DictionaryValue> read_images(bContext *C, const DictionaryValue 
     image->append_str("name", shown->id.name + 2);
     image->append_str("source", source_name(*shown));
     int width = 0, height = 0;
-    ImageUser user = {};
+    ImageUser user = image_user(C, shown);
     BKE_image_get_size(shown, &user, &width, &height);
     image->append_int("width", width);
     image->append_int("height", height);
@@ -462,7 +482,7 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
   if (action == "stroke") {
     const std::string phase = query.lookup_str("phase").value_or("");
     int width = 0, height = 0;
-    ImageUser user = {};
+    ImageUser user = image_user(C, ima);
     BKE_image_get_size(ima, &user, &width, &height);
     ImageSpaceContext space(C, ima, width, height);
     const std::vector<std::array<float, 3>> points = stroke_points(query);
@@ -511,10 +531,31 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     WM_event_add_notifier(C, NC_IMAGE | NA_EDITED, ima);
     return "";
   }
+  if (action == "save_as") {
+    /* Blender's own Save As, invoked: its options, then the system's file picker, as every file
+     * operator shows them (ROUND6 FILES-2), so the chosen format is written (ROUND6 EDIT-9, D21).
+     * The image is given as the Image Editor's templates give it, its user kept for the operator,
+     * which waits for the picker. */
+    static ImageUser save_user;
+    save_user = image_user(C, ima);
+    PointerRNA image_ptr = RNA_id_pointer_create(&ima->id);
+    PointerRNA user_ptr = RNA_pointer_create_discrete(&ima->id, RNA_ImageUser, &save_user);
+    Vector<std::unique_ptr<bContextStore>> stores;
+    CTX_store_add(stores, "edit_image", &image_ptr);
+    bContextStore *store = CTX_store_add(stores, "edit_image_user", &user_ptr);
+    const bContextStore *previous = CTX_store_get(C);
+    CTX_store_set(C, store);
+    const wmOperatorStatus status = WM_operator_name_call(
+        C, "IMAGE_OT_save_as", wm::OpCallContext::InvokeDefault, nullptr, nullptr);
+    CTX_store_set(C, previous);
+    /* Its own undo step, if any. */
+    return (status & (OPERATOR_RUNNING_MODAL | OPERATOR_FINISHED)) ? std::optional<std::string>("") :
+                                                                     std::nullopt;
+  }
   if (action == "export") {
     const std::string path = query.lookup_str("path").value_or("");
     void *lock;
-    ImageUser user = {};
+    ImageUser user = image_user(C, ima);
     ImBuf *ibuf = BKE_image_acquire_ibuf(ima, &user, &lock);
     bool saved = false;
     if (ibuf && !path.empty()) {
@@ -598,7 +639,7 @@ bool native_image_pixels(bContext *C, const DictionaryValue &state, NativeImageP
   r_pixels = {};
   r_pixels.name = ima->id.name + 2;
   void *lock;
-  ImageUser user = {};
+  ImageUser user = image_user(C, ima);
   ImBuf *ibuf = BKE_image_acquire_ibuf(ima, &user, &lock);
   if (ibuf && ibuf->x > 0 && ibuf->y > 0) {
     /* In the scene's view transform, as the Image Editor shows it. */
