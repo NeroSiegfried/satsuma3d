@@ -49,9 +49,12 @@ def export_error():
             return 'Pack external fonts before saving a template.'
     if bpy.data.movieclips or bpy.data.volumes or bpy.data.cache_files:
         return 'Templates cannot yet include external movies, volumes or simulation caches.'
+    # Strips that read files beside the document cannot travel in a template; strips made of the
+    # document's own data can (scene strips: the app's own Story template has two, ROUND7 U4e).
     for scene in bpy.data.scenes:
-        if scene.sequence_editor and scene.sequence_editor.strips:
-            return 'Templates cannot yet include video sequences.'
+        if scene.sequence_editor and any(strip.type in {'MOVIE', 'IMAGE'}
+                                         for strip in scene.sequence_editor.strips_all):
+            return 'Templates cannot yet include movie or image strips.'
     for obj in bpy.data.objects:
         caches = [system.point_cache for system in obj.particle_systems]
         for modifier in obj.modifiers:

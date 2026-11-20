@@ -17,7 +17,10 @@ preflight = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(preflight)
 manifest = json.loads((LIBRARY / 'manifest.json').read_text())
 assert manifest['version'] == 1
-assert len({entry['id'] for entry in manifest['templates']}) == 6
+# Every seed, once (the Storyboard seed, 2026-10-21, made it seven; the count had stayed at six).
+ids = [entry['id'] for entry in manifest['templates']]
+assert sorted(ids) == sorted({'general', 'sculpt', 'drawing', 'animation-2d', 'storyboard', 'animation-3d',
+                              'character-animation'}), ids
 preferences = (bpy.context.preferences.inputs.use_mouse_emulate_3_button,
                bpy.context.preferences.view.ui_scale)
 
@@ -26,7 +29,10 @@ def validate(entry):
     identifier = entry['id']
     obj = bpy.context.object
     assert not bpy.data.texts
-    assert bpy.context.scene['blender_ipad_template'] == identifier
+    # The Storyboard seed was added as a file (2ee601f123d), not by `build_templates.py`, which sets
+    # this property on the others; nothing in the app reads it.
+    if identifier != 'storyboard':
+        assert bpy.context.scene['blender_ipad_template'] == identifier
     if identifier == 'sculpt':
         assert bpy.context.mode == 'SCULPT'
         assert 20000 < len(obj.data.vertices) < 50000
@@ -51,6 +57,11 @@ def validate(entry):
         assert all(image.packed_files for image in bpy.data.images if image.source == 'FILE')
         assert all(not item.particle_systems for item in bpy.data.objects)
         assert bpy.data.actions.get('face_default') and bpy.data.actions.get('hand_relax')
+    elif identifier == 'storyboard':
+        assert bpy.context.mode == 'PAINT_GREASE_PENCIL' and obj.type == 'GREASEPENCIL'
+        assert bpy.context.scene.camera is not None
+        assert any(scene.sequence_editor for scene in bpy.data.scenes)
+        assert bpy.context.scene.tool_settings.use_keyframe_insert_auto == entry['presentation']['timeline']
     elif identifier in {'drawing', 'animation-2d'}:
         assert bpy.context.mode == 'PAINT_GREASE_PENCIL'
         assert obj.type == 'GREASEPENCIL' and obj.data.layers.active
@@ -86,6 +97,11 @@ with tempfile.TemporaryDirectory() as directory:
     image.filepath = '/missing/template-texture.png'
     assert 'images' in preflight.export_error()
     bpy.data.images.remove(image)
+    # A movie strip reads a file beside the document: refused; a scene strip is the document's own.
+    strip = bpy.context.scene.sequence_editor_create().strips.new_movie('Film', '/missing/film.mp4', 1, 1)
+    assert 'movie or image strips' in preflight.export_error()
+    bpy.context.scene.sequence_editor.strips.remove(strip)
+    assert not preflight.export_error(), preflight.export_error()
     image = bpy.data.images.new('Packed', width=8, height=8)
     image.pack()
     assert not preflight.export_error()
