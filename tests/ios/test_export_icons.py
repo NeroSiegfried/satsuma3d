@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 # The scripts under test are release tools, in `release/ios`.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "release" / "ios"))
 
-from export_icons import (SVG, export_catalog, geometry_color_pdf, geometry_template,
+from export_icons import (LOGO_GLYPHS, SVG, export_catalog, geometry_color_pdf, geometry_template,
                           invert_lightness, svg_template, vco_color_triangles, vco_triangles)
 
 
@@ -88,6 +88,9 @@ class ExportIconsTest(unittest.TestCase):
         mapping = json.loads(manifest.read_text())
         bridge = release.parent / "source/blender/windowmanager/intern/wm_native_ui.cc"
         tool_ids = set(re.findall(r'"(builtin(?:_brush)?\.[a-z_]+)"', bridge.read_text()))
+        # A literal ending in "_" is a family prefix for `startswith`, such as
+        # "builtin.primitive_", not a tool with an icon of its own.
+        tool_ids = {tool_id for tool_id in tool_ids if not tool_id.endswith("_")}
         for tool_id in tool_ids:
             self.assertIn("tool." + tool_id, mapping)
         # The transform settings' choices, as the toolbar lists them.
@@ -103,6 +106,10 @@ class ExportIconsTest(unittest.TestCase):
             tool_names.update(path.stem for path in (release / "datafiles/icons").glob("*.dat"))
             interface_names = set(mapping.values()) | {
                 path.stem for path in (release / "datafiles/icons_svg").glob("*.svg")}
+            # The app carries none of Blender's logo artwork (ROUND5 8B).
+            interface_names -= LOGO_GLYPHS
+            for name in LOGO_GLYPHS:
+                self.assertFalse((output / f"blender.{name}.imageset").exists())
             colored = list((release / 'datafiles/icons').glob('*.dat'))
             themed = list(output.glob("blender.themed.*.imageset"))
             multicolor = list(output.glob("blender.multicolor.*.imageset"))

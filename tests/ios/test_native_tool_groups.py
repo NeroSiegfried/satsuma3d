@@ -17,7 +17,8 @@ class NativeToolGroupsTest(unittest.TestCase):
         path = Path(__file__).resolve().parents[2] / "scripts/startup/bl_ui/space_toolsystem_common.py"
         tree = ast.parse(path.read_text())
         functions = [node for node in tree.body
-                     if isinstance(node, ast.FunctionDef) and node.name == "native_toolbar_json"]
+                     if isinstance(node, ast.FunctionDef) and node.name == "native_toolbar"]
+        # The bridge reads the list itself (`bridge_tools_build`), so there is no JSON step.
         self.tools = []
         self.active = None
         self.remembered = {}
@@ -32,15 +33,18 @@ class NativeToolGroupsTest(unittest.TestCase):
             _tool_active_from_context=lambda context, space: SimpleNamespace(idname=self.active),
         )}
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec"), namespace)
-        self.serialize = namespace["native_toolbar_json"]
+        self.serialize = namespace["native_toolbar"]
 
     def snapshot(self):
-        with patch.dict("sys.modules", {"bpy.app.translations": SimpleNamespace(pgettext_iface=lambda s: s)}):
-            return json.loads(self.serialize(SimpleNamespace(space_data=SimpleNamespace(type="VIEW_3D"))))
+        translations = SimpleNamespace(pgettext_iface=lambda s: s, pgettext_tip=lambda s: s)
+        with patch.dict("sys.modules", {"bpy.app.translations": translations}):
+            # Round-trip through JSON: the bridge needs plain values only.
+            return json.loads(json.dumps(self.serialize(SimpleNamespace(space_data=SimpleNamespace(type="VIEW_3D")))))
 
     @staticmethod
     def tool(name):
-        return SimpleNamespace(idname=name, label=name + " label", icon="icon." + name)
+        return SimpleNamespace(idname=name, label=name + " label", icon="icon." + name,
+                               description=name + " description")
 
     def test_groups_separators_icons_and_memory_match_definitions(self):
         box, circle, move = map(self.tool, ("box", "circle", "move"))
@@ -52,6 +56,7 @@ class NativeToolGroupsTest(unittest.TestCase):
         self.assertEqual(result[0]["id"], "circle")
         self.assertEqual(result[0]["group"], "box")
         self.assertEqual(result[0]["icon"], "icon.circle")
+        self.assertEqual(result[0]["description"], "circle description")
         self.assertEqual([item["id"] if item else None for item in result[0]["children"]],
                          ["box", None, "circle"])
         self.active = "move"
@@ -65,6 +70,14 @@ class NativeToolGroupsTest(unittest.TestCase):
         self.assertEqual([item["id"] for item in self.snapshot()], ["sculpt.brush"])
         self.tools = [(None,), None]
         self.assertEqual(self.snapshot(), [None])
+
+    def test_tweak_stands_alone_above_move(self):
+        tweak, box, move = map(self.tool, ("builtin.select", "builtin.select_box", "builtin.move"))
+        self.tools = [(tweak, box), None, move]
+        result = self.snapshot()
+        self.assertEqual([item["id"] if item else None for item in result],
+                         ["builtin.select_box", None, "builtin.select", "builtin.move"])
+        self.assertEqual([item["id"] for item in result[0]["children"]], ["builtin.select_box"])
 
 
 if __name__ == "__main__":
