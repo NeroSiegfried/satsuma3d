@@ -36,6 +36,7 @@ void ViewBuilder::finish_node(const NodeId parent,
   const auto short_label = text(fields.short_label);
   const auto leading_icon = text(fields.leading_icon);
   const auto menu = text(fields.menu);
+  const auto hint = text(fields.hint);
   buffer.Finish(protocol::CreateNode(buffer,
                                      key_offset,
                                      type,
@@ -51,7 +52,10 @@ void ViewBuilder::finish_node(const NodeId parent,
                                      fields.role,
                                      short_label,
                                      leading_icon,
-                                     menu));
+                                     menu,
+                                     fields.inactive,
+                                     hint,
+                                     fields.alert));
 
   const uint8_t *bytes = buffer.GetBufferPointer();
   const size_t size = buffer.GetSize();

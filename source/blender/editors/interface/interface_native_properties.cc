@@ -1327,14 +1327,14 @@ std::pair<protocol::Animation, bool> property_animation(bContext *C, Button &but
   return {state,
           state != protocol::Animation::Driven &&
               RNA_property_anim_editable(&but.rnapoin, but.rnaprop) &&
-              !(but.flag & (BUT_DISABLED | BUT_INACTIVE))};
+              !(but.flag & BUT_DISABLED)};
 }
 
 std::vector<PropertyAnimationAction> property_animation_actions(bContext *C, Button &but, int index)
 {
   if (!RNA_property_anim_editable(&but.rnapoin, but.rnaprop) ||
       !RNA_property_path_from_ID_check(&but.rnapoin, but.rnaprop) ||
-      (but.flag & (BUT_DISABLED | BUT_INACTIVE))) {
+      (but.flag & BUT_DISABLED)) {
     return {};
   }
   const int old_index = but.rnaindex, old_flag = but.flag, old_drawflag = but.drawflag;
@@ -2139,11 +2139,23 @@ class Writer {
     const bool mixed = others_differ(but, index, look.others ? *look.others : own);
     const auto [animation, animatable] = property_animation(C, but, index);
     const std::string icon = icon_name(button_icon(&but));
+    /* Its tooltip, why it cannot be edited, and whether it is only shown inactive (B13, C8,
+     * PANEL-13): an inactive setting stays editable, as on the desktop. */
+    const char *description = RNA_property_ui_description(prop, ptr);
+    const char *locked_info = nullptr;
+    const bool editable = RNA_property_editable_info(ptr, prop, &locked_info);
+    const std::string hint = !editable && locked_info && locked_info[0] ? locked_info :
+                             (but.flag & BUT_DISABLED) && but.disabled_info ?
+                                                       but.disabled_info :
+                                                       "";
     const auto common = [&](NodeFields &fields) {
       fields.label = label;
       fields.icon = icon;
-      fields.enabled = RNA_property_editable(ptr, prop) &&
-                       !(but.flag & (BUT_DISABLED | BUT_INACTIVE));
+      fields.enabled = editable && !(but.flag & BUT_DISABLED);
+      fields.inactive = (but.flag & BUT_INACTIVE) != 0;
+      fields.alert = (but.flag & BUT_REDALERT) != 0;
+      fields.description = description ? description : "";
+      fields.hint = hint;
       fields.mixed = mixed;
       fields.animation = animation;
       fields.animatable = animatable;
@@ -2358,7 +2370,8 @@ class Writer {
     }
     return builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
       fields.label = RNA_property_ui_name(but.rnaprop);
-      fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE)) &&
+      fields.inactive = (but.flag & BUT_INACTIVE) != 0;
+      fields.enabled = !(but.flag & BUT_DISABLED) &&
                        (!but.rnapoin.owner_id || ID_IS_EDITABLE(but.rnapoin.owner_id));
       fields.property = RNA_property_identifier(but.rnaprop);
       return protocol::CreateRamp(buffer,
@@ -2437,7 +2450,8 @@ class Writer {
     const std::string label = cb && cb->prop ? RNA_property_ui_name(cb->prop) : but.str;
     return builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
       fields.label = label;
-      fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE)) &&
+      fields.inactive = (but.flag & BUT_INACTIVE) != 0;
+      fields.enabled = !(but.flag & BUT_DISABLED) &&
                        (!cb || !cb->ptr.owner_id || ID_IS_EDITABLE(cb->ptr.owner_id));
       std::vector<flatbuffers::Offset<flatbuffers::String>> names;
       for (const std::string &name : channels) {
@@ -2544,11 +2558,37 @@ class Writer {
                              but.str.empty() ? WM_operatortype_name(but.optype, but.opptr) :
                                                but.str;
     const int icon = button_icon(&but);
+    /* Its tooltip, and why it cannot run, as Blender's tooltip says (B13, PANEL-13). */
+    const std::string description = WM_operatortype_description(
+        C, but.optype, but.opptr);
+    std::string hint;
+    if (but.flag & BUT_DISABLED) {
+      if (but.disabled_info) {
+        hint = but.disabled_info;
+      }
+      else {
+        const bContextStore *previous = CTX_store_get(C);
+        CTX_store_set(C, but.context);
+        if (!WM_operator_poll_context(C, but.optype, but.opcontext)) {
+          bool free_message = false;
+          const char *message = CTX_wm_operator_poll_msg_get(C, &free_message);
+          hint = message ? message : "";
+          if (free_message) {
+            MEM_SAFE_DELETE(message);
+          }
+          CTX_wm_operator_poll_msg_clear(C);
+        }
+        CTX_store_set(C, previous);
+      }
+    }
     const auto common = [&](NodeFields &fields) {
       fields.label = text;
       fields.icon = icon_name(icon);
-      fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE)) &&
-                       (but.optype->exec || but.optype->invoke);
+      fields.enabled = !(but.flag & BUT_DISABLED) && (but.optype->exec || but.optype->invoke);
+      fields.inactive = (but.flag & BUT_INACTIVE) != 0;
+      fields.alert = (but.flag & BUT_REDALERT) != 0;
+      fields.description = description;
+      fields.hint = hint;
       fields.role = role;
     };
     if (ELEM(icon, ICON_CHECKBOX_HLT, ICON_CHECKBOX_DEHLT)) {
@@ -2611,7 +2651,7 @@ class Writer {
           can_add,
           can_remove,
           reorder && side && side->up && side->down &&
-              !(side->up->flag & (BUT_DISABLED | BUT_INACTIVE)),
+              !(side->up->flag & BUT_DISABLED),
           tree,
           side && side->menu ? side->menu->idname : nullptr);
     });
@@ -4526,7 +4566,7 @@ static std::string panels_walk(bContext *C,
               return item.id == nested->idname;
             })) {
           candidates.push_back({nested, nullptr, nested->idname, "",
-                                !(button->flag & (BUT_DISABLED | BUT_INACTIVE))});
+                                !(button->flag & BUT_DISABLED)});
         }
       }
     }
@@ -5198,7 +5238,7 @@ static std::string panels_walk(bContext *C,
         if (execute) {
           const std::optional<std::string> value = command_text(request->command);
           if (target_panel && *requested_key == key && value && !operator_type &&
-              !(but.flag & (BUT_DISABLED | BUT_INACTIVE)))
+              !(but.flag & BUT_DISABLED))
           {
             operator_type = menu_ot;
             operator_properties = MEM_new<PointerRNA>(__func__, op_ptr);
@@ -5222,7 +5262,8 @@ static std::string panels_walk(bContext *C,
           writer->builder.add(node, node_key, [&](Buffer &buffer, NodeFields &fields) {
             fields.label = label;
             fields.icon = icon_name(button_icon(&but));
-            fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE));
+            fields.enabled = !(but.flag & BUT_DISABLED);
+            fields.inactive = (but.flag & BUT_INACTIVE) != 0;
             std::vector<flatbuffers::Offset<protocol::Option>> options;
             const EnumPropertyItem *items;
             int count;
@@ -5306,7 +5347,8 @@ static std::string panels_walk(bContext *C,
                               [&](Buffer &buffer, NodeFields &fields) {
                                 fields.label = label;
                                 fields.icon = icon_name(button_icon(&but));
-                                fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE));
+                                fields.enabled = !(but.flag & BUT_DISABLED);
+                                fields.inactive = (but.flag & BUT_INACTIVE) != 0;
                                 fields.role = in_header ? protocol::Role::Header :
                                                           protocol::Role::None;
                                 const auto param = protocol::CreateParamDirect(
@@ -5400,7 +5442,8 @@ static std::string panels_walk(bContext *C,
               node, writer->key(menu->idname), [&](Buffer &buffer, NodeFields &fields) {
                 fields.label = label;
                 fields.icon = icon_name(button_icon(&but));
-                fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE));
+                fields.enabled = !(but.flag & BUT_DISABLED);
+                fields.inactive = (but.flag & BUT_INACTIVE) != 0;
                 const auto param = protocol::CreateParamDirect(
                     buffer,
                     "menu",
@@ -5428,7 +5471,7 @@ static std::string panels_walk(bContext *C,
         }
         const std::string key = operator_key(C, but, object);
         if (execute && !operator_type && target_panel && *requested_key == key &&
-            !(but.flag & (BUT_DISABLED | BUT_INACTIVE)) && (but.optype->exec || but.optype->invoke))
+            !(but.flag & BUT_DISABLED) && (but.optype->exec || but.optype->invoke))
         {
           operator_type = but.optype;
           operator_properties = but.opptr;
@@ -5466,7 +5509,8 @@ static std::string panels_walk(bContext *C,
                                     settings ? settings : ""});
           writer->builder.add(physics, switch_key, [&](Buffer &buffer, NodeFields &fields) {
             fields.label = label;
-            fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE)) &&
+            fields.inactive = (but.flag & BUT_INACTIVE) != 0;
+            fields.enabled = !(but.flag & BUT_DISABLED) &&
                              (but.optype->exec || but.optype->invoke);
             fields.role = protocol::Role::Header;
             return protocol::CreateToggle(buffer, on);

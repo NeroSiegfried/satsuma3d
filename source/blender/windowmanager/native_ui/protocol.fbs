@@ -528,6 +528,13 @@ table Node {
   /// The route of Blender's context menu for the control, which a hold opens as a menu view
   /// (ROUND6 PANEL-12); the tab follows as for every route.
   menu: string;
+  /// Shown greyed but still editable, as Blender draws a setting whose parent is off
+  /// (`layout.active`, ROUND6 PANEL-13); `enabled` is whether it can be edited at all.
+  inactive: bool;
+  /// Why it cannot be edited or run, as Blender's tooltip says it.
+  hint: string;
+  /// Drawn red, as Blender alerts it (`layout.alert`).
+  alert: bool;
 }
 
 /* -------------------------------------------------------------------- */

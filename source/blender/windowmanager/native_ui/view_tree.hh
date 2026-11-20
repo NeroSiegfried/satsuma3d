@@ -48,7 +48,11 @@ struct NodeFields {
   std::string_view leading_icon;
   /** The route of Blender's context menu for it, see `protocol.fbs`. */
   std::string_view menu;
+  /** Why it cannot be edited or run, see `protocol.fbs`. */
+  std::string_view hint;
   bool enabled = true;
+  bool inactive = false;
+  bool alert = false;
   bool mixed = false;
   bool animatable = false;
   protocol::Animation animation = protocol::Animation::None;

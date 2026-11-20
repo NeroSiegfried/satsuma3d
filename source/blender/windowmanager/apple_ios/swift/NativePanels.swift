@@ -24,6 +24,14 @@ extension NativeNode {
   var shortLabel: String { node.shortLabel ?? label }
   var icon: String? { node.icon }
   var enabled: Bool { node.enabled }
+  /** Greyed but still editable, as Blender draws a setting whose parent is off (ROUND6
+   * PANEL-13); `enabled` says whether it can be edited at all. */
+  var inactive: Bool { node.inactive }
+  /** Blender's tooltip for it, and why it cannot be edited or run. */
+  var tooltip: String { node.description ?? "" }
+  var hint: String { node.hint ?? "" }
+  /** Drawn red, as Blender alerts it. */
+  var alert: Bool { node.alert }
   var kind: Blender_NativeUI_Content { node.contentType }
   var role: Blender_NativeUI_Role { node.role }
 

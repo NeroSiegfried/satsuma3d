@@ -278,6 +278,9 @@ def decode_node(raw):
         pass
     if hasattr(node, "Menu"):
         entry["menu"] = s(node.Menu())
+    if hasattr(node, "Inactive"):
+        entry.update(inactive=bool(node.Inactive()), hint=s(node.Hint()), alert=bool(node.Alert()),
+                     description=s(node.Description()))
     if node.ContentType() == Content.Content.Button:
         table = node.Content()
         button = Button.Button()
@@ -4856,7 +4859,31 @@ def tick_census():
             paths = [path.data_path for keying_set in bpy.context.scene.keying_sets for path in keying_set.paths]
             if "location" not in paths:
                 state["problems"].append("hold menu: Add All to Keying Set made %r (ack %r)" % (paths, acks.get(131)))
-        if at == {"object": 31, "selection": 44, "texture_paint": 37}.get(stage, 16):
+        # Tooltips, reasons and inactive settings (B13, C8, PANEL-13): Location X says what it is;
+        # a setting Blender greys because its parent is off stays editable and takes an edit.
+        if stage == "texture_paint" and at == 37:
+            nodes = [n for sub in subs.values() for n in _census_nodes(tree(sub) or {})]
+            location = next((n for n in nodes if n.get("content") == "Number" and n.get("property") == "location"
+                             and n.get("label") == "X"), {})
+            if not location.get("description"):
+                state["problems"].append("tooltips: Location X has none: %r" % location)
+            greyed = [n for n in nodes if n.get("inactive") and n.get("enabled") and n.get("content") == "Toggle"]
+            report["inactive_editable"] = len([n for n in nodes if n.get("inactive") and n.get("enabled")])
+            if not greyed:
+                state["problems"].append("inactive: no greyed setting is editable")
+            else:
+                state["greyed"] = (greyed[0]["key"], greyed[0].get("value"), greyed[0].get("property"))
+                sub = next(sub for sub in subs.values()
+                           if any(n["key"] == greyed[0]["key"] for n in _census_nodes(tree(sub) or {})))
+                state["greyed_sub"] = sub
+                set_bool(sub, greyed[0]["key"], not greyed[0].get("value"), 140)
+        if stage == "texture_paint" and at == 39 and state.get("greyed"):
+            key, before, prop = state["greyed"]
+            node = next((n for n in _census_nodes(tree(state["greyed_sub"]) or {}) if n["key"] == key), {})
+            if node.get("value") == before:
+                state["problems"].append("inactive: %s stayed %r (ack %r)" % (prop, before, acks.get(140)))
+            set_bool(state["greyed_sub"], key, before, 141)
+        if at == {"object": 31, "selection": 44, "texture_paint": 40}.get(stage, 16):
             state["stage"] += 1
             state["start"] = step + 1
             if state["stage"] == len(CENSUS_STAGES):

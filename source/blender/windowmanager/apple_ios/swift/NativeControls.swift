@@ -380,7 +380,22 @@ struct ControlActions: View {
   /** Whether a hold on \a node has anything to offer. */
   static func offered(_ model: PanelsModel, _ node: NativeNode) -> Bool {
     node.number != nil || node.kind == .textfield || node.node.animatable || model.attached(node, .lock) != nil ||
-      route(model, node) != nil
+      route(model, node) != nil || !node.tooltip.isEmpty || !node.hint.isEmpty
+  }
+
+  /** What Blender's tooltip says of it, and why it cannot be edited or run (ROUND6 PANEL-13). */
+  @ViewBuilder
+  private var about: some View {
+    if !node.tooltip.isEmpty || !node.hint.isEmpty {
+      Section {
+        if !node.tooltip.isEmpty {
+          Text(node.tooltip)
+        }
+        if !node.hint.isEmpty {
+          Label(node.hint, systemImage: "exclamationmark.circle")
+        }
+      }
+    }
   }
 
   /** Blender's own context menu for the control (ROUND6 PANEL-12, finding B12): its keyframes,
@@ -400,6 +415,7 @@ struct ControlActions: View {
   }
 
   var body: some View {
+    about
     if let route = Self.route(model, node) {
       if let copied = copiedText {
         Section {
@@ -606,6 +622,16 @@ struct ControlRow: View {
           }
         default:
           EmptyView()
+      }
+    }
+    /* Greyed but editable where Blender's layout is inactive; outlined red where it alerts
+     * (ROUND6 PANEL-13). */
+    .opacity(node.inactive && node.enabled ? 0.55 : 1)
+    .overlay {
+      if node.alert {
+        RoundedRectangle(cornerRadius: ShellStyle.radius, style: .continuous)
+          .strokeBorder(Color.red, lineWidth: 1)
+          .allowsHitTesting(false)
       }
     }
     .controlActions(model, node)
