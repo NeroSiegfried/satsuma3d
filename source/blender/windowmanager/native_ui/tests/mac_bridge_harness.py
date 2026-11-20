@@ -1589,8 +1589,7 @@ def tick_material():
 # menu) answers anything but `document` (ROUND5 9D.4): in a document window they take the document's
 # route, never load or write Blender's file. Then one item runs through the popup's own route:
 # U's UV Mapping › Unwrap Angle Based, and the mesh's UVs must change.
-KEY_MODES = ("object", "edit_mesh", "sculpt", "weight_paint", "vertex_paint", "texture_paint", "edit_curve",
-             "edit_armature", "pose")
+# The modes: all 22 of `HEADER_MODES` (ROUND6 MODE-6; Stage 9A had nine).
 ANSWERS = ("runs", "menu ", "choice", "dialog", "rename", "stand-in ", "says ", "document ")
 # ROUND5 9D.4: the file commands, which must answer `document`.
 DOCUMENT_OPERATORS = ("WM_OT_read_homefile", "WM_OT_read_factory_settings", "WM_OT_open_mainfile",
@@ -1655,11 +1654,28 @@ def tick_keys():
         if state["wait"] > 0:
             state["wait"] -= 1
             return 0.25
-        if state["mode"] >= len(KEY_MODES):
+        # ROUND6 MODE-6 (C7): every value of the context-mode enum, each entered from one object of
+        # its type, as the `header` scenario does (Stage 9A swept nine).
+        if state["mode"] >= len(HEADER_MODES):
+            if not state.get("back"):
+                state["back"] = True
+                with bpy.context.temp_override(**dict(zip(("window", "area", "region"), _view3d()))):
+                    if bpy.context.mode != 'OBJECT':
+                        bpy.ops.object.mode_set(mode='OBJECT')
+                    cube = bpy.data.objects["Cube"]
+                    bpy.ops.object.select_all(action='DESELECT')
+                    cube.select_set(True)
+                    bpy.context.view_layer.objects.active = cube
             return _keys_uv_route()
-        mode = KEY_MODES[state["mode"]]
+        mode = HEADER_MODES[state["mode"]][0]
         if state["phase"] == "enter":
-            enter(mode)
+            why = _header_enter(*HEADER_MODES[state["mode"]])
+            if why is None and bpy.context.mode != mode:
+                why = "entered %s instead" % bpy.context.mode
+            if why:
+                state["problems"].append("MODE-6: %s could not be entered: %s" % (mode, why))
+                state["mode"] += 1
+                return 0.25
             subs["keys"] = subscribe("keys")
             state.update(phase="read", wait=3)
         elif state["phase"] == "read":
@@ -5833,7 +5849,8 @@ def _popups_sweep():
     if state["mode"] >= len(HEADER_MODES):
         report["found"] = state["found"]
         report["popups"] = _popups()
-        report["sweep"] = {"items run": len(state["ran"]), "not run": state["notrun"],
+        report["sweep"] = {"items run": len(state["ran"]), "keys pressed": state.get("keys_pressed", 0),
+                           "not run": state["notrun"],
                            "by mode": state["counts"].get("modes", {})}
         report["problems"] = problems
         _popups_finish("done" if not problems else "error")
@@ -5887,7 +5904,9 @@ def _popups_sweep():
         return 0.05
     if phase == "run":
         if state["index"] >= len(state["items"]):
-            state.update(mode=state["mode"] + 1, phase="enter")
+            # ROUND6 MODE-6 (C7): then every key of the mode's key maps, pressed as a keyboard would.
+            subs["sweep keys"] = subscribe("keys")
+            state.update(phase="keys_read", wait=2, after="keys_run")
             return 0.05
         route, key, label, operator = state["items"][state["index"]]
         state["index"] += 1
@@ -5912,6 +5931,51 @@ def _popups_sweep():
         state["current"] = (mode, label, operator)
         state["phase"] = "settle"
         return 0.05
+    if phase == "keys_read":
+        if state["wait"] > 0:
+            state["wait"] -= 1
+            return 0.05
+        rows = (tree(subs["sweep keys"]) or {}).get("children", [])
+        lib.WM_native_ui_unsubscribe(subs.pop("sweep keys"))
+        keymaps = bpy.context.window_manager.keyconfigs.user.keymaps
+        keys = []
+        for row in rows:
+            keymap, _tab, index = row["key"].partition("\t")
+            call, _tab, answer = (row.get("value") or "").partition("\t")
+            if (keymap, index) in state.setdefault("keys_ran", set()):
+                continue
+            state["keys_ran"].add((keymap, index))
+            km = keymaps.get(keymap)
+            kmi = km.keymap_items[int(index)] if km and int(index) < len(km.keymap_items) else None
+            if kmi is None or kmi.map_type != 'KEYBOARD' or kmi.value != 'PRESS' or kmi.type in {
+                    'LEFT_SHIFT', 'RIGHT_SHIFT', 'LEFT_CTRL', 'RIGHT_CTRL', 'LEFT_ALT', 'RIGHT_ALT', 'OSKEY'}:
+                continue
+            operator = call.partition("(")[0]
+            if POPUP_SKIP.match(operator) or _popups_file_picker(operator) or is_document_command(call) or \
+                    kmi.oskey == 1:
+                state["notrun"][operator] = state["notrun"].get(operator, 0) + 1
+                continue
+            keys.append((row.get("label"), operator, kmi.type, kmi.shift == 1, kmi.ctrl == 1, kmi.alt == 1))
+        state["counts"]["modes"][mode]["keys"] = len(keys)
+        state.update(keys=keys, key_index=0, phase="keys_run")
+        return 0.05
+    if phase == "keys_run":
+        if state["key_index"] >= len(state["keys"]):
+            state.update(mode=state["mode"] + 1, phase="enter", after="run")
+            return 0.05
+        label, operator, kind, shift, ctrl, alt = state["keys"][state["key_index"]]
+        state["key_index"] += 1
+        state["counted"] = _popups()
+        state["drawn"] = state["counted"]["drawn"]
+        state["before"] = _popups_state_now()
+        window, _area, region = _view3d()
+        x, y = region.x + region.width // 2, region.y + region.height // 2
+        for value in ('PRESS', 'RELEASE'):
+            window.event_simulate(type=kind, value=value, x=x, y=y, shift=shift, ctrl=ctrl, alt=alt)
+        state["current"] = (mode, "key " + (label or kind), operator)
+        state["keys_pressed"] = state.get("keys_pressed", 0) + 1
+        state["phase"] = "settle"
+        return 0.05
     if phase == "settle":
         counts = _popups()
         mode_, label, operator = state["current"]
@@ -5934,15 +5998,15 @@ def _popups_sweep():
             _popups_reset()
             state["phase"] = "reenter"
             return 0.2
-        state["phase"] = "run"
+        state["phase"] = state.get("after", "run")
         return 0.02
     if phase == "reenter":
         why = _popups_enter(state["mode"])
         if why:
             problems.append("MODE-3: %s could not be entered again: %s" % (mode, why))
-            state.update(mode=state["mode"] + 1, phase="enter")
+            state.update(mode=state["mode"] + 1, phase="enter", after="run")
             return 0.05
-        state["phase"] = "run"
+        state["phase"] = state.get("after", "run")
         return 0.02
     return 0.05
 

@@ -1,0 +1,278 @@
+# Commands that exist only as a key or a mouse chord (ROUND6 MODE-6, finding C10): bound in Blender's
+# default key map, named nowhere in `bl_ui` (no menu, panel, tool or action of the registry). Each
+# says where a finger reaches it, or why it is desktop only.
+#
+# One line per operator: `<operator> | <category>: <why>`, the category one of navigation, selection,
+# stroke, tool, menu, action, text, interface, editor (another editor's key, which the Desktop
+# Interface has), desktop (no form in the iPad interface yet, with the finding).
+#
+# `tests/python/bl_native_shell_sources.py` reads Blender's default key map as `generate_keymaps`
+# makes it and fails on a key-only operator that is not here, and on one here that is no longer
+# key-only.
+action.clickselect | editor: Dopesheet: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+anim.change_frame | editor: Dopesheet, NLA Editor, Sequencer Tool: Select Box, Sequencer Tool: Select Box (f: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+anim.channel_select_keys | editor: Animation Channels: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+anim.channel_view_pick | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+anim.channels_click | editor: Animation Channels: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+anim.channels_rename | editor: Animation Channels: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+anim.channels_select_all | editor: Animation Channels: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+anim.channels_select_box | editor: Animation Channels: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+anim.channels_select_filter | editor: Animation Channels, Dopesheet, Graph Editor Generic, NLA Generic: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+anim.driver_button_add | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+anim.driver_button_remove | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+anim.keyframe_clear_button | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+anim.keyframe_delete_button | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+anim.keyframe_insert_button | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+anim.keyingset_button_add | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+anim.keyingset_button_remove | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+armature.hide | action: Hide and Reveal are in the mode's menus and the bar
+armature.reveal | action: Hide and Reveal are in the mode's menus and the bar
+armature.select_linked_pick | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+armature.shortest_path_pick | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+brush.asset_activate | interface: the brush rail chooses brushes
+brush.scale_size | tool: the brush size slider beside the view
+brush.stencil_control | desktop: moving, turning and scaling a stencil is a right-button chord with axis keys; no button offers it yet (C10, S2)
+buttons.clear_filter | editor: Property Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+buttons.context_menu | editor: Property Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+buttons.start_filter | editor: Property Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+clip.add_marker_slide | editor: Clip Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+clip.change_frame | editor: Clip Editor, Clip Graph Editor, Clip Time Scrub: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+clip.cursor_set | editor: Clip Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+clip.dopesheet_select_channel | editor: Clip Dopesheet Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+clip.dopesheet_view_all | editor: Clip Dopesheet Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+clip.frame_jump | editor: Clip Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+clip.graph_delete_curve | editor: Clip Graph Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+clip.graph_delete_knot | editor: Clip Graph Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+clip.graph_disable_markers | editor: Clip Graph Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+clip.graph_select | editor: Clip Graph Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+clip.graph_select_box | editor: Clip Graph Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+clip.select | editor: Clip Editor, Mask Editing: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+clip.slide_marker | editor: Clip Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+clip.slide_plane_marker | editor: Clip Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+clip.view_ndof | editor: Clip Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+clip.view_pan | editor: Clip Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+clip.view_zoom | editor: Clip Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+console.execute | editor: Console: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+console.indent_or_autocomplete | editor: Console: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+console.insert | editor: Console: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+console.select_all | editor: Console: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+console.select_set | editor: Console: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+console.select_word | editor: Console: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+constraint.apply | editor: Property Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+constraint.copy | editor: Property Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+constraint.delete | editor: Property Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+curve.draw | tool: the active tool's own drag
+curve.hide | action: Hide and Reveal are in the mode's menus and the bar
+curve.reveal | action: Hide and Reveal are in the mode's menus and the bar
+curve.select_linked_pick | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+curve.shortest_path_pick | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+curves.select_linked_pick | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+curves.tilt_clear | desktop: Alt+T only; tilt is set in the Item panel (C10, S4)
+file.cancel | interface: the system's document picker has its own Cancel
+file.edit_directory_path | editor: File Browser: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+file.execute | interface: the system's document picker has its own Open
+file.highlight | editor: File Browser Main: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+file.mouse_execute | editor: File Browser Main: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+file.select | editor: File Browser, File Browser Main: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+file.select_walk | editor: File Browser Main: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+file.smoothscroll | editor: File Browser: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+file.sort_column_ui_context | editor: File Browser Main: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+file.start_filter | editor: File Browser: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+font.change_character | text: typed with the text object's keyboard (E11)
+font.line_break | text: typed with the text object's keyboard (E11)
+font.move | text: the Select Text tool places the cursor; arrow keys are a keyboard's (E11)
+font.select_word | tool: the active tool's own drag
+font.selection_set | tool: the active tool's own drag
+gizmogroup.gizmo_tweak | editor: Generic Gizmo, Generic Gizmo Click Drag, Generic Gizmo Drag, Generic Gizmo Maybe: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+graph.click_insert | editor: Graph Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+graph.clickselect | editor: Graph Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+graph.cursor_set | editor: Graph Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+grease_pencil.brush_stroke | stroke: the active tool's drag on the view
+grease_pencil.erase_box | desktop: erasing by box or lasso is an Alt chord in Draw Mode; the Erase tool erases by brush (C10)
+grease_pencil.erase_lasso | desktop: erasing by box or lasso is an Alt chord in Draw Mode; the Erase tool erases by brush (C10)
+grease_pencil.fill | tool: the Fill tool's tap
+grease_pencil.sculpt_paint | stroke: the active tool's drag on the view
+grease_pencil.stroke_trim | tool: the active tool's own drag
+grease_pencil.texture_gradient | tool: the active tool's own drag
+grease_pencil.vertex_brush_stroke | stroke: the active tool's drag on the view
+grease_pencil.weight_brush_stroke | stroke: the active tool's drag on the view
+grease_pencil.weight_toggle_direction | tool: the brush direction buttons beside the view (TOUCH)
+image.change_frame | editor: Image: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+image.curves_point_set | editor: Image: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+image.view_cursor_center | editor: Image: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+image.view_ndof | editor: Image: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+image.view_pan | editor: Image: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+image.view_zoom | editor: Image: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+info.reports_display_update | interface: a timer, not a command
+info.select_pick | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+marker.select | editor: Markers: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+marker.select_box | editor: Markers: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+mask.add_feather_vertex_slide | editor: Mask Editing: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+mask.add_vertex_slide | editor: Mask Editing: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+mask.duplicate_move | editor: Mask Editing: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+mask.select | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+mask.select_linked_pick | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+mask.slide_point | editor: Mask Editing: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+mask.slide_spline_curvature | editor: Mask Editing: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+mesh.dissolve_mode | action: Dissolve in the bar and the Delete menu
+mesh.edgering_select | action: Select Edge Rings in the Select menu
+mesh.extrude_context_move | tool: the active tool's own drag
+mesh.extrude_manifold | tool: the active tool's own drag
+mesh.select_linked_pick | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+mesh.shortest_path_pick | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+nla.channels_click | editor: NLA Tracks: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+nla.click_select | editor: NLA Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+nla.fmodifier_add | editor: NLA Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+node.add_reroute | editor: Node Editor, Node Tool: Add Reroute: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+node.backimage_sample | editor: Node Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+node.connect_to_output | editor: Node Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+node.duplicate_move_keep_inputs | editor: Node Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+node.group_enter_exit | editor: Node Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+node.group_separate | editor: Node Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+node.link | editor: Node Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+node.move_detach_links | editor: Node Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+node.move_detach_links_release | editor: Node Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+node.parent_set | editor: Node Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+node.render_changed | editor: Node Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+node.resize | editor: Node Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+node.select_link_viewer | editor: Node Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+node.translate_attach | editor: Node Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+node.viewer_shortcut_get | editor: Node Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+node.viewer_shortcut_set | editor: Node Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+object.modifier_apply | editor: Property Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+object.modifier_copy | editor: Property Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+object.modifier_set_active | editor: Property Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+object.shaderfx_copy | editor: Property Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+object.shaderfx_remove | editor: Property Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+object.voxel_size_edit | desktop: the interactive voxel size (R) needs a hover; the value is typed in Remesh's panel (C10, S4)
+outliner.clear_filter | editor: Outliner: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+outliner.hide | editor: Outliner: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+outliner.highlight_update | editor: Outliner: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+outliner.item_activate | editor: Outliner: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+outliner.item_drag_drop | editor: Outliner: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+outliner.item_openclose | editor: Outliner: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+outliner.item_rename | editor: Outliner: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+outliner.operation | editor: Outliner: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+outliner.scroll_page | editor: Outliner: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+outliner.select_all | editor: Outliner: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+outliner.select_box | editor: Outliner: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+outliner.select_walk | editor: Outliner: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+outliner.start_filter | editor: Outliner: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+outliner.unhide_all | editor: Outliner: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+paint.face_select_hide | action: Hide and Reveal are in the mode's menus and the bar
+paint.face_select_linked_pick | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+paint.face_select_loop | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+paint.face_vert_reveal | action: Hide and Reveal are in the mode's menus and the bar
+paint.grab_clone | desktop: moving the clone source is a right-button drag; no button offers it yet (C10, S2)
+paint.image_paint | stroke: the active tool's drag on the view
+paint.vert_select_hide | action: Hide and Reveal are in the mode's menus and the bar
+paint.vert_select_linked_pick | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+paint.vert_select_loop | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+paint.vertex_paint | stroke: the active tool's drag on the view
+paint.weight_paint | stroke: the active tool's drag on the view
+paintcurve.add_point_slide | desktop: paint-curve editing (Stroke Method Curve) is right-button chords; the panel offers Draw Curve only (C10, S2)
+paintcurve.cursor | desktop: paint-curve editing is right-button chords (C10, S2)
+paintcurve.delete_point | desktop: paint-curve editing is right-button chords (C10, S2)
+paintcurve.select | desktop: paint-curve editing is right-button chords (C10, S2)
+paintcurve.slide | desktop: paint-curve editing is right-button chords (C10, S2)
+particle.brush_edit | stroke: the active tool's drag on the view
+particle.hide | action: Hide and Reveal are in the mode's menus and the bar
+particle.reveal | action: Hide and Reveal are in the mode's menus and the bar
+particle.select_linked_pick | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+pose.select_linked_pick | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+pose.select_parent | action: Select Parent is in the Select menu as Select Grouped and the bar's More
+preferences.clear_filter | interface: Settings has its own search
+preferences.start_filter | interface: Settings has its own search
+render.view_cancel | interface: the render sheet closes itself
+screen.actionzone | interface: Blender's area corners, the Desktop Interface's
+screen.animation_cancel | editor: Frames: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+screen.animation_step | interface: a timer, not a command
+screen.area_join | interface: Blender's area layout, the Desktop Interface's
+screen.area_move | interface: Blender's area layout, the Desktop Interface's
+screen.area_options | interface: Blender's area layout, the Desktop Interface's
+screen.area_swap | interface: Blender's area layout, the Desktop Interface's
+screen.frame_offset | editor: Frames: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+screen.quadview_size | interface: Blender's area layout, the Desktop Interface's
+screen.region_blend | interface: a timer, not a command
+screen.region_context_menu | editor: Region Context Menu: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+screen.region_scale | interface: Blender's area layout, the Desktop Interface's
+screen.space_context_cycle | interface: a key the iPad interface keeps from Blender and answers itself or says where it is (ROUND5 9A)
+screen.space_type_set_or_cycle | interface: a key the iPad interface keeps from Blender and answers itself or says where it is (ROUND5 9A)
+sculpt.brush_stroke | stroke: the active tool's drag on the view
+sculpt.dyntopo_detail_size_edit | desktop: the interactive detail size (R) needs a hover; the value is typed in Dyntopo's panel (C10, S4)
+sculpt_curves.brush_stroke | stroke: the active tool's drag on the view
+sequencer.cursor_set | editor: Preview, Preview Tool: Cursor, Preview Tool: Tweak: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+sequencer.preview_duplicate_move_linked | editor: Preview: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+sequencer.rename_channel | editor: Sequencer Channels: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+sequencer.sample | editor: Preview Tool: Sample: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+sequencer.select | editor: Preview, Sequencer: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+sequencer.select_handle | editor: Sequencer Tool: Select Box, Sequencer Tool: Select Box (fallback): an editor the iPad interface reaches through the Desktop Interface (R6-15)
+sequencer.select_linked_pick | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+sequencer.text_cursor_move | editor: Preview: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+sequencer.text_cursor_set | editor: Preview Tool: Select Box, Preview Tool: Select Box (fallback), Preview Tool: Twe: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+sequencer.text_insert | editor: Preview: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+spreadsheet.fit_column | editor: Spreadsheet Generic: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+spreadsheet.reorder_columns | editor: Spreadsheet Generic: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+spreadsheet.resize_column | editor: Spreadsheet Generic: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+text.cursor_set | editor: Text: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+text.delete | editor: Text: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+text.indent_or_autocomplete | editor: Text: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+text.insert | editor: Text: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+text.line_break | editor: Text: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+text.line_number | editor: Text: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+text.overwrite_toggle | editor: Text: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+text.scroll | editor: Text: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+text.scroll_bar | editor: Text: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+text.selection_set | editor: Text: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+transform.bbone_resize | desktop: Ctrl+Alt+S scales a B-Bone; its size is in the Bone panel (S4)
+transform.from_gizmo | tool: the Transform tool's gizmo
+ui.copy_data_path_button | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+ui.eyedropper_bone | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+ui.eyedropper_colorramp | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+ui.eyedropper_colorramp_point | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+ui.eyedropper_id | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+ui.list_start_filter | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+ui.reset_default_button | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+ui.view_item_delete | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+ui.view_item_rename | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+ui.view_item_select | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+ui.view_scroll | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+ui.view_start_filter | editor: User Interface: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+uv.cursor_set | editor: Image Editor, UV Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+uv.select | editor: Image Editor, UV Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+uv.select_edge_ring | editor: UV Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+uv.select_linked_pick | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+uv.select_loop | editor: UV Editor: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+uv.shortest_path_pick | selection: a tap selects; the menus' Select Linked and Shortest Path work from a selection (C10, S4)
+view2d.ndof | editor: View2D: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+view2d.pan | editor: View2D, View2D Buttons List: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+view2d.reset | editor: View2D Buttons List: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+view2d.scroll_down | editor: View2D, View2D Buttons List: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+view2d.scroll_left | editor: View2D: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+view2d.scroll_right | editor: View2D: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+view2d.scroll_up | editor: View2D, View2D Buttons List: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+view2d.scroller_activate | editor: View2D, View2D Buttons List: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+view2d.smoothview | editor: View2D: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+view2d.zoom | editor: View2D, View2D Buttons List: an editor the iPad interface reaches through the Desktop Interface (R6-15)
+view3d.move | navigation: two fingers move the view, the gizmo turns it (ROUND5 12)
+view3d.navigate | navigation: two fingers move the view, the gizmo turns it (ROUND5 12)
+view3d.ndof_all | navigation: two fingers move the view, the gizmo turns it (ROUND5 12)
+view3d.ndof_orbit | navigation: two fingers move the view, the gizmo turns it (ROUND5 12)
+view3d.ndof_orbit_zoom | navigation: two fingers move the view, the gizmo turns it (ROUND5 12)
+view3d.ndof_pan | navigation: two fingers move the view, the gizmo turns it (ROUND5 12)
+view3d.object_mode_pie_or_toggle | menu: Tab's mode pie, shown natively; the mode menu switches modes
+view3d.rotate | navigation: two fingers move the view, the gizmo turns it (ROUND5 12)
+view3d.select | selection: a tap selects (TOUCH-1)
+view3d.smoothview | interface: a timer, not a command
+view3d.toggle_shading | interface: the shading buttons in the header
+view3d.view_center_lock | desktop: centring on the locked object needs a hover (S4)
+view3d.view_center_pick | desktop: centring on the point under the pointer needs a hover; Frame Selected frames a selection (C10, S4)
+wm.call_asset_shelf_popover | interface: a key the iPad interface keeps from Blender and answers itself or says where it is (ROUND5 9A)
+wm.call_menu_pie | menu: a menu or pie by name, shown natively (ROUND5 9A)
+wm.context_menu_enum | interface: a key the iPad interface keeps from Blender and answers itself or says where it is (ROUND5 9A)
+wm.context_scale_float | interface: the interface's own scale (Ctrl+wheel)
+wm.context_toggle | interface: a key the iPad interface keeps from Blender and answers itself or says where it is (ROUND5 9A)
+wm.doc_view_manual_ui_context | interface: Help is in the More menu
+wm.radial_control | tool: the brush size and strength sliders beside the view (TOUCH)
+wm.toolbar | interface: a key the iPad interface keeps from Blender and answers itself or says where it is (ROUND5 9A)
+wm.toolbar_fallback_pie | interface: a key the iPad interface keeps from Blender and answers itself or says where it is (ROUND5 9A)

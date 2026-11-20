@@ -6677,7 +6677,16 @@ WMNativeKeyAnswer WM_native_ui_keymap_item_answer(bContext *C, const wmKeyMapIte
       answer.kind = Kind::Rename;
       return answer;
     }
-    hidden = true;
+    /* A viewport, top-bar or Properties panel opens as the interface's popover (ROUND6 MODE-3):
+     * its key runs, as a menu item asking for it does. A mode's context menu panel is the long
+     * press's stand-in, below. */
+    const PanelType *pt = panel.empty() ? nullptr : WM_paneltype_find(panel.c_str(), true);
+    if (pt == nullptr || StringRef(panel).endswith("_context_menu") ||
+        !(ELEM(pt->space_type, SPACE_VIEW3D, SPACE_TOPBAR) ||
+          (pt->space_type == SPACE_PROPERTIES && pt->context[0])))
+    {
+      hidden = true;
+    }
   }
   /* What would show Blender's own interface over the platform's. */
   static const Set<StringRef> shows_interface = {

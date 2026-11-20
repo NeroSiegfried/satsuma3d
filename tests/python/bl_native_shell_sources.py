@@ -1846,4 +1846,39 @@ check('bridge_status_keys(C)' in bar_m5 and 'bridge_status_keys(C)' in
       bridge_d9[bridge_d9.index('static std::string bridge_modifier_names('):],
       "R6 MODE-5: the modal bar and the shell's modifier names read the status bar's keys")
 
+# ROUND6 MODE-6 (C10): a command bound to a key or a mouse chord in Blender's default key map and
+# named nowhere in `bl_ui` (no menu, panel, tool or action) is on the reviewed list
+# `release/ios/key_only.txt`, which says where a finger reaches it or why it is desktop only. As the
+# audit made the list: `generate_keymaps` minus every operator `bl_ui` names.
+import sys as sys_m6
+sys_m6.path.insert(0, str(ROOT / 'scripts/presets/keyconfig'))
+from keymap_data import blender_default as keymap_m6
+ui_text_m6 = ''.join(path.read_text(encoding='utf-8', errors='replace')
+                     for path in (ROOT / 'scripts/startup/bl_ui').glob('*.py'))
+bound_m6 = set()
+for _name, args_m6, content_m6 in keymap_m6.generate_keymaps(keymap_m6.Params()):
+    if args_m6.get('modal'):
+        continue
+    for item_m6 in content_m6.get('items', []):
+        if item_m6 and isinstance(item_m6[0], str) and item_m6[0]:
+            bound_m6.add(item_m6[0])
+key_only_m6 = {op for op in bound_m6 if '"%s"' % op not in ui_text_m6 and "'%s'" % op not in ui_text_m6}
+reviewed_m6 = {}
+for line in (ROOT / 'release/ios/key_only.txt').read_text(encoding='utf-8').splitlines():
+    if line.strip() and not line.startswith('#'):
+        op_m6, _, how_m6 = line.partition(' | ')
+        reviewed_m6[op_m6.strip()] = how_m6.strip()
+check(len(key_only_m6) > 200 and not sorted(key_only_m6 - set(reviewed_m6)),
+      "R6 MODE-6 (C10): every key-only command is reviewed (%s)" % sorted(key_only_m6 - set(reviewed_m6)))
+check(not sorted(set(reviewed_m6) - key_only_m6),
+      "R6 MODE-6 (C10): the list names nothing that has a menu, tool or action now (%s)" %
+      sorted(set(reviewed_m6) - key_only_m6))
+categories_m6 = ('navigation', 'selection', 'stroke', 'tool', 'menu', 'action', 'text', 'interface', 'editor', 'desktop')
+check(all(how.split(':')[0] in categories_m6 and len(how.split(':', 1)[-1].strip()) > 5 for how in reviewed_m6.values()),
+      "R6 MODE-6 (C10): each says where, or why desktop only")
+check('pose.rotation_mode_set' not in key_only_m6 and
+      all(reviewed_m6.get(op, '').startswith('desktop:') for op in
+          ('paintcurve.add_point_slide', 'brush.stencil_control', 'paint.grab_clone')),
+      "R6 MODE-6 (C10): Set Rotation Mode has an action; paint curves, the stencil and the clone source say desktop only")
+
 print('PASS: native shell sources ' + json.dumps(checks))

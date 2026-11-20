@@ -616,6 +616,10 @@ ACTIONS = [
     # Pose Mode.
     Action("pose.clear", "Clear Transforms", "pose.transforms_clear", "LOOP_BACK", lambda s: s.mode == 'POSE',
            group="Pose"),
+    # Ctrl+R in Pose Mode, in no menu of Blender's (ROUND6 MODE-6, C10): the rotation mode of every
+    # selected bone at once, which Properties sets for one bone. Its choices open natively.
+    Action("pose.rotation_mode", "Set Rotation Mode", "pose.rotation_mode_set", "ORIENTATION_GIMBAL",
+           lambda s: s.mode == 'POSE', invoke=True, group="Pose", strip=False),
     Action("pose.copy", "Copy Pose", "pose.copy", "COPYDOWN", lambda s: s.mode == 'POSE', group="Pose"),
     Action("pose.paste", "Paste Pose", "pose.paste", "PASTEDOWN", lambda s: s.mode == 'POSE', {"flipped": False},
            group="Pose"),
