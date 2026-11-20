@@ -940,6 +940,11 @@ static AZone *area_actionzone_refresh_xy(ScrArea *area, const int xy[2], const b
   for (az = static_cast<AZone *>(area->actionzones.first); az; az = az->next) {
     rcti az_rect;
     area_actionzone_get_rect(az, &az_rect);
+    if (ELEM(az->type, AZONE_AREA, AZONE_REGION, AZONE_REGION_QUAD)) {
+      /* A finger has a margin more around a corner or a region's edge (ROUND6 DESK-6). */
+      const int margin = WM_event_finger_pick_margin();
+      BLI_rcti_pad(&az_rect, margin, margin);
+    }
     if (BLI_rcti_isect_pt_v(&az_rect, xy)) {
 
       if (az->type == AZONE_AREA) {

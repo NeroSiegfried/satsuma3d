@@ -410,6 +410,16 @@ int WM_event_finger_drag_threshold()
   return int(10.0f * wm_finger_point_pixels.load());
 }
 
+int WM_event_finger_margin()
+{
+  return int(6.0f * wm_finger_point_pixels.load());
+}
+
+int WM_event_finger_pick_margin()
+{
+  return wm_last_press_finger ? WM_event_finger_margin() : 0;
+}
+
 int WM_event_finger_double_tap_distance()
 {
   return int(22.0f * wm_finger_point_pixels.load());

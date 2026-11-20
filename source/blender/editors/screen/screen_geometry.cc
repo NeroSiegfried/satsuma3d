@@ -118,15 +118,17 @@ ScrEdge *screen_geom_find_active_scredge(const wmWindow *win,
   /* Use layout size (screen excluding global areas) for screen-layout area edges */
   rcti screen_rect;
   WM_window_screen_rect_calc(win, &screen_rect);
+  /* A finger has a margin more (ROUND6 DESK-6). */
+  const int margin = WM_event_finger_pick_margin();
   ScrEdge *se = screen_geom_area_map_find_active_scredge(
-      AREAMAP_FROM_SCREEN(screen), &screen_rect, mx, my, BORDERPADDING);
+      AREAMAP_FROM_SCREEN(screen), &screen_rect, mx, my, int(BORDERPADDING) + margin);
 
   if (!se) {
     /* Use entire window size (screen including global areas) for global area edges */
     rcti win_rect;
     WM_window_rect_calc(win, &win_rect);
     se = screen_geom_area_map_find_active_scredge(
-        &win->global_areas, &win_rect, mx, my, int(BORDERPADDING_GLOBAL));
+        &win->global_areas, &win_rect, mx, my, int(BORDERPADDING_GLOBAL) + margin);
   }
   return se;
 }
@@ -182,12 +184,22 @@ int ED_screen_edges_touch_rects(const wmWindow *win,
   }
   rcti screen_rect;
   WM_window_screen_rect_calc(win, &screen_rect);
-  screen_geom_area_map_edge_rects(
-      AREAMAP_FROM_SCREEN(screen), &screen_rect, BORDERPADDING, r_rects, rects_max, &len);
+  /* A finger's, with its margin (ROUND6 DESK-6). */
+  const int margin = WM_event_finger_margin();
+  screen_geom_area_map_edge_rects(AREAMAP_FROM_SCREEN(screen),
+                                  &screen_rect,
+                                  int(BORDERPADDING) + margin,
+                                  r_rects,
+                                  rects_max,
+                                  &len);
   rcti win_rect;
   WM_window_rect_calc(win, &win_rect);
-  screen_geom_area_map_edge_rects(
-      &win->global_areas, &win_rect, int(BORDERPADDING_GLOBAL), r_rects, rects_max, &len);
+  screen_geom_area_map_edge_rects(&win->global_areas,
+                                  &win_rect,
+                                  int(BORDERPADDING_GLOBAL) + margin,
+                                  r_rects,
+                                  rects_max,
+                                  &len);
   return len;
 }
 

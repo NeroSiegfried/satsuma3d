@@ -2128,6 +2128,14 @@ bool WM_cursor_test_motion_and_update(const int mval[2]) ATTR_NONNULL(1) ATTR_WA
 int WM_event_finger_drag_threshold();
 int WM_event_finger_double_tap_distance();
 /**
+ * A finger's pick margin in the window's pixels (ROUND6 DESK-6, finding H14): 6 pt more around
+ * Blender's small screen targets that take a tolerance (an edge between areas, an action zone, a
+ * scroll-bar), whatever the interface size. #WM_event_finger_pick_margin while the last press was a
+ * finger's, else 0, for the hit tests; #WM_event_finger_margin always, for a finger's map.
+ */
+int WM_event_finger_pick_margin();
+int WM_event_finger_margin();
+/**
  * Whether the input is a touch, which has no hover (ROUND6 TOUCH-6): the last press was a finger's
  * or the Pencil's, or, before any press, the native interface's screen is a touch screen.
  */

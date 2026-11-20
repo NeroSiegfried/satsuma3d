@@ -7403,7 +7403,11 @@ static void bridge_touch_zones_update(wmWindowManager *wm)
       RNA_enum_identifier(rna_enum_space_type_items, area->spacetype, &space_name);
       for (const AZone &action_zone : area->actionzones) {
         if (const char *name = bridge_touch_action_zone_name(action_zone.type)) {
-          bridge_touch_place_add(zones, win, action_zone.rect, std::string(space_name) + " " + name);
+          /* With a finger's margin, as Blender's test has it for a finger (ROUND6 DESK-6). */
+          rcti rect = action_zone.rect;
+          const int margin = WM_event_finger_margin();
+          BLI_rcti_pad(&rect, margin, margin);
+          bridge_touch_place_add(zones, win, rect, std::string(space_name) + " " + name);
         }
       }
     }

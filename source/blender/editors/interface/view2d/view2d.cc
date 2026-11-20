@@ -2000,13 +2000,18 @@ char view2d_mouse_in_scrollers_ex(const ARegion *region,
         xy[0] - region->winrct.xmin,
         xy[1] - region->winrct.ymin,
     };
+    /* A finger has a margin more (ROUND6 DESK-6). */
+    const int margin = WM_event_finger_pick_margin();
+    rcti hor = v2d->hor, vert = v2d->vert;
+    BLI_rcti_pad(&hor, margin, margin);
+    BLI_rcti_pad(&vert, margin, margin);
     if (scroll & V2D_SCROLL_HORIZONTAL) {
-      if (IN_2D_HORIZ_SCROLL(v2d, co)) {
+      if (BLI_rcti_isect_pt_v(&hor, co)) {
         return 'h';
       }
     }
     if (scroll & V2D_SCROLL_VERTICAL) {
-      if (IN_2D_VERT_SCROLL(v2d, co)) {
+      if (BLI_rcti_isect_pt_v(&vert, co)) {
         return 'v';
       }
     }
@@ -2048,13 +2053,19 @@ void view2d_scroller_window_rects(const ARegion *region, rcti *r_hor, rcti *r_ve
   const int scroll = view2d_scroll_mapped(v2d->scroll);
   BLI_rcti_init(r_hor, 0, -1, 0, -1);
   BLI_rcti_init(r_vert, 0, -1, 0, -1);
+  /* A finger's, with its margin, clipped to the region (ROUND6 DESK-6). */
+  const int margin = WM_event_finger_margin();
   if (scroll & V2D_SCROLL_HORIZONTAL) {
     *r_hor = v2d->hor;
+    BLI_rcti_pad(r_hor, margin, margin);
     BLI_rcti_translate(r_hor, region->winrct.xmin, region->winrct.ymin);
+    BLI_rcti_isect(r_hor, &region->winrct, r_hor);
   }
   if (scroll & V2D_SCROLL_VERTICAL) {
     *r_vert = v2d->vert;
+    BLI_rcti_pad(r_vert, margin, margin);
     BLI_rcti_translate(r_vert, region->winrct.xmin, region->winrct.ymin);
+    BLI_rcti_isect(r_vert, &region->winrct, r_vert);
   }
 }
 

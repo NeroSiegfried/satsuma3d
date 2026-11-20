@@ -10,6 +10,7 @@ WM_native_ui_flush_commands, decodes updates into node trees, sends commands, wr
 """
 import ctypes
 import json
+import os
 import sys
 import time
 import traceback
@@ -2074,8 +2075,9 @@ def _centre(rect):
 def _point_answering(rect, where):
     """A point of \a rect where the map answers \a where: places overlap (a corner over an edge, the
     time scrub over its region), and the map answers the one Blender would take first."""
-    for fy in (0.5, 0.3, 0.7, 0.15, 0.85):
-        for fx in (0.5, 0.3, 0.7, 0.15, 0.85):
+    steps = [0.5] + [i / 20.0 for i in range(1, 20) if i != 10]
+    for fy in steps:
+        for fx in steps:
             point = (rect[0] + (rect[2] - rect[0]) * fx, rect[1] + (rect[3] - rect[1]) * fy)
             if _touch(*point)["where"] == where:
                 return point
@@ -4118,6 +4120,120 @@ def tick_windows():
     return 0.3
 
 
+# ROUND6 DESK-6 (H14): layout by finger. Blender's small screen targets that take a tolerance (an
+# area's corner, a region's edge, an edge between areas, a scroll-bar) get a finger's margin in
+# points, whatever the interface size. At each offered size from the smallest to the largest, the
+# finger's map measures each kind of target across, in points; the ones with no menu route (a corner:
+# swap; a region's edge: resize) must reach a floor. Then a finger's press inside the margin, outside
+# Blender's own band, on the edge between the Outliner and Properties, dragged, moves the edge:
+# Blender's own test takes it.
+MARGIN_SIZES = [0.5, 0.75, 1.0, 1.5]
+MARGIN_FLOOR_PT = 16.0
+MARGIN_KINDS = (" AREA CORNER", " REGION EDGE", "AREA EDGE", " SCROLLBAR")
+margins_state = {}
+
+
+def set_float(subscription, target, value, command_id):
+    builder = flatbuffers.Builder(256)
+    t = builder.CreateString(target)
+    FloatValue.Start(builder)
+    FloatValue.AddValue(builder, value)
+    fv = FloatValue.End(builder)
+    Command.Start(builder)
+    Command.AddId(builder, command_id)
+    Command.AddSubscription(builder, subscription)
+    Command.AddTarget(builder, t)
+    Command.AddOp(builder, Op.Op.Set)
+    Command.AddValueType(builder, Value.Value.FloatValue)
+    Command.AddValue(builder, fv)
+    c = Command.End(builder)
+    Commands.StartCommandsVector(builder, 1)
+    builder.PrependUOffsetTRelative(c)
+    vec = builder.EndVector()
+    Commands.Start(builder)
+    Commands.AddCommands(builder, vec)
+    builder.Finish(Commands.End(builder))
+    data = bytes(builder.Output())
+    lib.WM_native_ui_send(data, len(data))
+
+
+def tick_margins():
+    global step
+    try:
+        pump()
+        step += 1
+        problems = report.setdefault("problems", [])
+        point = 2.0
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            subs["settings"] = subscribe("settings")
+            return 0.5
+        if step == 2:
+            set_bool(subs["settings"], "desktop", True, 1800)
+            # A finger, 2 window pixels a point: its margin is 6 pt.
+            SIMULATE_FINGER(point)
+            window = bpy.context.window_manager.windows[0]
+            _simulate(window, 'MOUSEMOVE', 'NOTHING', 10, 10)
+            margins_state["sizes"] = list(MARGIN_SIZES)
+            return 1.0
+        sizes = margins_state.get("sizes")
+        if "measuring" in margins_state:
+            size = margins_state.pop("measuring")
+            widths = {}
+            for where, kind, _t, rect in _touch_map():
+                if kind != "zone":
+                    continue
+                for suffix in MARGIN_KINDS:
+                    if where.endswith(suffix):
+                        across = min(rect[2] - rect[0], rect[3] - rect[1]) / point
+                        widths[suffix.strip()] = round(min(widths.get(suffix.strip(), 1e9), across), 1)
+            report.setdefault("narrowest, in points, by interface size", {})[str(size)] = widths
+            for suffix in (" AREA CORNER", " REGION EDGE"):
+                width = widths.get(suffix.strip())
+                if width is None:
+                    problems.append("DESK-6: no%s at size %s" % (suffix, size))
+                elif width < MARGIN_FLOOR_PT:
+                    problems.append("DESK-6:%s is %.1f pt across at size %s, under %.0f pt" % (suffix, width, size, MARGIN_FLOOR_PT))
+        if sizes:
+            size = sizes.pop(0)
+            set_float(subs["settings"], "desktop_scale", size, 1810 + len(sizes))
+            margins_state["measuring"] = size
+            return 1.5
+        if "moved" not in margins_state:
+            window = bpy.context.window_manager.windows[0]
+            outliner = next(a for a in window.screen.areas if a.type == 'OUTLINER')
+            # The edge between the Outliner and Properties below it, pressed inside the finger's
+            # margin, outside the band Blender has for a mouse (its band and 3 pt more), then dragged.
+            edge_y = outliner.y
+            mouse_band = 4 * bpy.context.preferences.system.ui_scale * point / 2 + 2
+            x = outliner.x + outliner.width // 2
+            y = int(edge_y + mouse_band + 3 * point)
+            if os.environ.get("DESK6_CONTROL"):
+                # The control: on the edge itself, where a mouse takes it too.
+                y = edge_y
+            report["edge and press"] = [edge_y, [x, y]]
+            margins_state["moved"] = outliner.height
+            _simulate(window, 'MOUSEMOVE', 'NOTHING', x, y)
+            _simulate(window, 'LEFTMOUSE', 'PRESS', x, y)
+            for i in range(1, 9):
+                _simulate(window, 'MOUSEMOVE', 'NOTHING', x, y + 8 * i)
+            _simulate(window, 'LEFTMOUSE', 'RELEASE', x, y + 64)
+            return 1.0
+        window = bpy.context.window_manager.windows[0]
+        outliner = next(a for a in window.screen.areas if a.type == 'OUTLINER')
+        report["Outliner height before and after the edge's drag"] = [margins_state["moved"], outliner.height]
+        if outliner.height == margins_state["moved"]:
+            problems.append("DESK-6: a finger's drag from inside the margin of an edge between areas moved nothing")
+        SIMULATE_FINGER(0.0)
+        finish("done" if not problems else "error")
+        return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
 def _touchstart_enter_for(idname):
     mode, name = _touchstart_mode(idname)
     _touchstart_enter(mode, name)
@@ -4131,5 +4247,5 @@ bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets
                          "tolerance": tick_tolerance, "waiting": tick_waiting,
                          "touchstart": tick_touchstart, "jobs": tick_jobs,
                          "renderprogress": tick_render_progress, "busy": tick_busy,
-                         "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold, "typing": tick_typing, "windows": tick_windows}.get(SCENARIO, tick_actions),
+                         "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold, "typing": tick_typing, "windows": tick_windows, "margins": tick_margins}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

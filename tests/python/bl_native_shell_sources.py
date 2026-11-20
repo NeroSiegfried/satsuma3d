@@ -1662,4 +1662,27 @@ check(openers_d5 <= set(WINDOW_OPENERS) and
       "R6 DESK-5: every caller that opens a window is placed (%s); WM_window_open_temp keeps one window"
       % sorted(openers_d5 - set(WINDOW_OPENERS)))
 
+# ROUND6 DESK-6 (H14): layout by finger. One margin in points, a finger's, independent of the
+# interface size, in each hit test that takes a tolerance: the edges between areas, the action zones
+# (corners, region edges), the scroll-bars; and the finger's map draws the same places with it. The
+# harness scenario `margins` measures every kind at each offered size and splits an area from inside
+# the margin.
+geometry_d6 = (ROOT / 'source/blender/editors/screen/screen_geometry.cc').read_text(encoding='utf-8')
+ops_d6 = (ROOT / 'source/blender/editors/screen/screen_ops.cc').read_text(encoding='utf-8')
+view2d_d6 = (ROOT / 'source/blender/editors/interface/view2d/view2d.cc').read_text(encoding='utf-8')
+query_d6 = (SWIFT.parents[1] / 'intern/wm_event_query.cc').read_text(encoding='utf-8')
+finder_d6 = geometry_d6[geometry_d6.index('ScrEdge *screen_geom_find_active_scredge('):]
+finder_d6 = finder_d6[:finder_d6.index('\n}\n')]
+refresh_d6 = ops_d6[ops_d6.index('static AZone *area_actionzone_refresh_xy('):]
+refresh_d6 = refresh_d6[:refresh_d6.index('if (BLI_rcti_isect_pt_v(&az_rect, xy))')]
+scrollers_d6 = view2d_d6[view2d_d6.index('char view2d_mouse_in_scrollers_ex('):]
+scrollers_d6 = scrollers_d6[:scrollers_d6.index('\n}\n')]
+check('wm_finger_point_pixels' in query_d6[query_d6.index('int WM_event_finger_margin()'):][:200] and
+      'UI_SCALE_FAC' not in query_d6[query_d6.index('int WM_event_finger_margin()'):][:200] and
+      finder_d6.count('margin') >= 3 and 'WM_event_finger_pick_margin()' in refresh_d6 and
+      'WM_event_finger_pick_margin()' in scrollers_d6 and
+      geometry_d6.count('WM_event_finger_margin()') == 1 and view2d_d6.count('WM_event_finger_margin()') == 1 and
+      'WM_event_finger_margin()' in update_d4,
+      "R6 DESK-6: a finger's margin in points in every hit test with a tolerance, and in its map")
+
 print('PASS: native shell sources ' + json.dumps(checks))
