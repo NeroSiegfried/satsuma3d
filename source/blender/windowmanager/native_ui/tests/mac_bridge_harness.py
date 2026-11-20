@@ -3388,6 +3388,8 @@ def tick_render_progress():
         step += 1
         if step == 1:
             subs["render"] = subscribe("render")
+            # ROUND6 EDIT-2 (D2): the timeline's frame, a live command, is refused while rendering.
+            subs["timeline"] = subscribe("timeline")
             scene = bpy.context.scene
             scene.render.engine = 'BLENDER_EEVEE'
             scene.eevee.taa_render_samples = 256
@@ -3404,11 +3406,23 @@ def tick_render_progress():
         state = view["nodes"].get("state:state", {}).get("value")
         samples = view["nodes"].get("state:samples", {})
         report["seen"].append((state, round(samples["value"], 3) if "value" in samples else None))
+        if state == "rendering" and "frame sent" not in report:
+            timeline = views.get(subs["timeline"], {"nodes": {}})["nodes"]
+            report["frame sent"] = bpy.context.scene.frame_current
+            report["timeline rendering"] = timeline.get("rendering", {}).get("value")
+            report["frame enabled"] = timeline.get("frame", {}).get("enabled")
+            set_float(subs["timeline"], "frame", float(bpy.context.scene.frame_current + 10), 601)
         if state in ("done", "error", "cancelled") or time.monotonic() - report["sent"] > 120:
             rising = [value for name, value in report["seen"] if name == "rendering" and value]
             report["seen"] = report["seen"][-12:]
             report["rising_values"] = len(rising)
-            finish("done" if state == "done" and rising and 0 < min(rising) < 1 else "error")
+            report["frame answer"] = acks.get(601)
+            refused = "frame sent" in report and acks.get(601) not in (None, "ok") and \
+                bpy.context.scene.frame_current == report["frame sent"]
+            if not refused:
+                report.setdefault("problems", []).append(
+                    "EDIT-2: the frame set during the render was not refused: %r" % acks.get(601))
+            finish("done" if state == "done" and rising and 0 < min(rising) < 1 and refused else "error")
             return None
         return 0.1
     except Exception:

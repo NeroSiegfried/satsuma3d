@@ -1897,4 +1897,31 @@ check('BlenderMenus.shared.run(route:' in run_m7 and 'menuItems[' not in run_m7,
 check('bridge_id_counts_said(before, bridge_id_counts_last)' in bridge_d9,
       "R6 MODE-7 (C13): a command shown nowhere says what it added or removed")
 
+# ROUND6 EDIT-2 (D2, D22): a live command runs while an operator or job holds Blender, so it must
+# write nothing a job owns. Every view's `live` rule is reviewed here with what it lets through; a
+# new one, or one gone, fails. The timeline's frame is refused while a render runs (a render counts
+# its frames on the scene's), as desktop's timeline refuses it then.
+live_e2 = {}
+for path in (SWIFT.parents[1] / 'intern/wm_native_ui.cc', SWIFT.parents[1] / 'intern/wm_native_ui_views.cc'):
+    for match in re.finditer(r'\b(\w+)\.live = ', path.read_text(encoding='utf-8')):
+        live_e2[match.group(1)] = path.name
+reviewed_e2 = {
+    'toolbar': "tool settings, brush values, axis locks: the scene's tool settings and brushes, no job's data; "
+               "Undo/Redo refused while an operation waits; a waiting operation's own keys",
+    'settings': "the interface's own preferences",
+    'timeline': "the frame: refused while a render runs (bridge_timeline_rendering)",
+    'render': "Cancel and Clear of the render itself",
+    'jobs': "Stop of a job",
+    'operators': "navigation (the view) and Undo/Redo, refused while an operation waits",
+}
+check(sorted(live_e2) == sorted(reviewed_e2),
+      "R6 EDIT-2 (D2): every view's live rule is reviewed (found %s, reviewed %s)" % (sorted(live_e2), sorted(reviewed_e2)))
+timeline_e2 = bridge_d9[bridge_d9.index('views::CommandResult bridge_timeline_view_command('):]
+timeline_e2 = timeline_e2[:timeline_e2.index('\n}\n')]
+frame_e2 = timeline_e2[timeline_e2.index('if (target == "frame")'):]
+check(frame_e2.index('bridge_timeline_rendering(C)') < frame_e2.index('RNA_property_int_set'),
+      "R6 EDIT-2 (D2): the timeline refuses the frame while rendering, before setting it")
+check('next.rendering = flag("rendering")' in (SWIFT / 'Timeline.swift').read_text(encoding='utf-8') and
+      'guard !store.rendering else { return }' in (SWIFT / 'Timeline.swift').read_text(encoding='utf-8'),
+      "R6 EDIT-2 (D2): the scrubber shows it cannot move while rendering")
 print('PASS: native shell sources ' + json.dumps(checks))

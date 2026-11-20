@@ -1234,6 +1234,11 @@ wmDocumentWrite WM_apple_ios_document_write(bContext *C,
    * auto-save does: its data is not in a state to write until then. */
   if (when_idle) {
     if (wmWindowManager *wm = CTX_wm_manager(C)) {
+      /* A native paint stroke is no operator: it spans many commands with its undo step open
+       * (ROUND6 EDIT-2, D22), as the command gate counts it (`bridge_modal_operator_running`). */
+      if (wm->runtime->undo_stack && wm->runtime->undo_stack->step_init) {
+        return wmDocumentWrite::Deferred;
+      }
       for (wmWindow &win : wm->windows) {
         for (wmEventHandler &handler : win.runtime->modalhandlers) {
           if (handler.type == WM_HANDLER_TYPE_OP &&

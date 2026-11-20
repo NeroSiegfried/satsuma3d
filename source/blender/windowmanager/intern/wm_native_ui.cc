@@ -4050,6 +4050,13 @@ bool bridge_toolbar_view_live(const views::protocol::Command &command)
  * the timeline shows them, built only while it does.
  * \{ */
 
+/** A render runs: Blender's own (`G.is_rendering`, set for its whole job) or a render job. */
+bool bridge_timeline_rendering(bContext *C)
+{
+  const wmWindowManager *wm = CTX_wm_manager(C);
+  return G.is_rendering || (wm && WM_jobs_test(wm, CTX_data_scene(C), WM_JOB_TYPE_RENDER));
+}
+
 void bridge_timeline_view_build(bContext *C,
                                 const views::Params & /*params*/,
                                 views::ViewData * /*data*/,
@@ -4064,9 +4071,13 @@ void bridge_timeline_view_build(bContext *C,
   if (scene == nullptr || wm == nullptr) {
     return;
   }
+  /* A render counts on the scene's frame: desktop's timeline refuses to change it then (its
+   * `change_frame_poll`), and so does this one (ROUND6 EDIT-2, D2). */
+  const bool rendering = bridge_timeline_rendering(C);
   const auto frame = [&](const char *key, const Scene &scene, const int start, const int end) {
     builder.add(top, key, [&](ViewBuffer &buffer, NodeFields &fields) {
       fields.label = IFACE_("Frame");
+      fields.enabled = !rendering;
       return views::protocol::CreateNumber(buffer,
                                            scene.r.cfra,
                                            true,
@@ -4085,6 +4096,9 @@ void bridge_timeline_view_build(bContext *C,
   });
   builder.add(top, "playing", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
     return bridge_data(buffer, ED_screen_animation_playing(wm) != nullptr);
+  });
+  builder.add(top, "rendering", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return bridge_data(buffer, rendering);
   });
   builder.add(top, "autokey", [&](ViewBuffer &buffer, NodeFields &fields) {
     fields.label = IFACE_("Auto Keying");
@@ -4115,6 +4129,12 @@ views::CommandResult bridge_timeline_view_command(bContext *C,
     return views::CommandResult::Failed;
   }
   if (target == "frame") {
+    /* Live, so that scrubbing goes on during a stroke; but a render counts its frames on this
+     * field, and moving it would skip the rest of an animation (ROUND6 EDIT-2, D2). */
+    if (bridge_timeline_rendering(C)) {
+      r_error = IFACE_("The frame cannot change while rendering");
+      return views::CommandResult::Failed;
+    }
     /* As the timeline's own playhead sets it: its update clamps, moves the sound and redraws.
      * Like scrubbing in Blender, changing frames adds no undo step. */
     const views::protocol::FloatValue *value = command.value_as_FloatValue();

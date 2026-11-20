@@ -42,6 +42,8 @@ final class TimelineStore {
   var preview = false
   var playing = false
   var recording = false
+  /** A render counts on the frame: the playhead cannot move until it ends (ROUND6 EDIT-2). */
+  var rendering = false
   var keys: [TimelineKey] = []
   var visible = false
   var expanded = false
@@ -222,6 +224,7 @@ struct Scrubber: View {
     let expanded = store.expanded
     let preview = store.preview
     let keys = store.keys
+    let rendering = store.rendering
     GeometryReader { geometry in
       let size = geometry.size
       let mapping = FrameMapping(start: start, end: end, width: size.width)
@@ -246,9 +249,20 @@ struct Scrubber: View {
       }.onEnded { value in
         ended(value, mapping: mapping, size: size, band: band)
       })
+      /* A render counts on the frame (ROUND6 EDIT-2): the scrubber says so and takes no touch until
+       * it ends, as desktop's timeline refuses then. */
+      .opacity(rendering ? 0.4 : 1)
+      .allowsHitTesting(!rendering)
+      .overlay {
+        if rendering {
+          Text("Rendering").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            .allowsHitTesting(false)
+        }
+      }
     }
     .accessibilityElement()
     .accessibilityLabel("Current Frame")
+    .accessibilityHint(rendering ? "Unavailable while rendering" : "")
     .modifier(FrameFollower(frame: store.frame, playhead: $playhead, scrubbing: mode == .scrubbing))
     .accessibilityIdentifier("blender.timeline.scrubber")
     .accessibilityAdjustableAction { direction in
@@ -276,6 +290,7 @@ struct Scrubber: View {
   }
 
   private func scrub(to frame: Int) {
+    guard !store.rendering else { return }
     if frame != shownFrame {
       if mode == .scrubbing { Haptics.selection() }
       playhead = frame
@@ -794,7 +809,7 @@ final class SwiftTimeline {
     var frame = 1, start = 1, end = 1
     var editFrame: Int?
     var editStart = 0, editEnd = 0
-    var preview = false, playing = false, autokey = false
+    var preview = false, playing = false, autokey = false, rendering = false
     var keys: [TimelineKey] = []
   }
   private var state: State?
@@ -824,6 +839,7 @@ final class SwiftTimeline {
     }
     next.preview = flag("preview")
     next.playing = flag("playing")
+    next.rendering = flag("rendering")
     next.autokey = node("autokey")?.toggle?.value ?? false
     if store.visible, let keysTop = store.keysView.top {
       func ints(_ key: String) -> [Int] {
@@ -854,6 +870,7 @@ final class SwiftTimeline {
     let frame = (edit ? state.editFrame : nil) ?? state.frame
     if store.frame.blender != frame { store.frame.blender = frame }
     store.set(\.playing, state.playing)
+    store.set(\.rendering, state.rendering)
     store.set(\.recording, state.autokey)
     if let editFrame = state.editFrame {
       store.storyboard.follow(frame: editFrame, sceneFrame: state.frame)
