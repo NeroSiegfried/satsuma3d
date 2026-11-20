@@ -1633,4 +1633,33 @@ check('touchAnswerAt' not in tap_d4 and 'place' not in tap_d4 and
       '[self fingerTabletData]' in objc_method(ghost_r6, '- (void)sendPointerButtons:(UIEventButtonMask)buttons'),
       "R6 DESK-4: a tap presses in every canvas, a pinch over interface zooms nothing, a finger's distances")
 
+# ROUND6 DESK-5 (H2): one window means one window. `WM_window_open_temp` itself opens the editor full
+# screen with Back to Previous where the platform shows one window, for every caller; the callers of
+# `WM_window_open` are each kept from a second window where they are. A caller not in this list fails
+# here; the harness scenario `windows` runs each `WM_window_open_temp` command and counts windows.
+WINDOW_OPENERS = {
+    'render_view.cc': 'WM_window_open: the render shows full screen on the iPad (USER_RENDER_DISPLAY_SCREEN)',
+    'screen_ops.cc': 'WM_window_open: area_dupli_poll refuses on the iPad; the Drivers Editor and Info Log go '
+                     'through WM_window_open_temp',
+    'screen_edit.cc': 'WM_window_open_temp: ED_screen_temp_space_open (Preferences, File Browser, image)',
+    'outliner_edit.cc': 'WM_window_open_temp: Manage Unused Data',
+    'wm_operators.cc': 'WM_window_open: wm.window_new and window_new_main refuse on the iPad (their polls)',
+}
+openers_d5 = set()
+for path in (ROOT / 'source/blender').rglob('*.cc'):
+    if path.name == 'wm_window.cc':
+        continue
+    text_d5 = path.read_text(encoding='utf-8', errors='replace')
+    if re.search(r'\bWM_window_open(_temp)?\(', text_d5):
+        openers_d5.add(path.name)
+window_cc_d5 = (SWIFT.parents[1] / 'intern/wm_window.cc').read_text(encoding='utf-8')
+temp_d5 = window_cc_d5[window_cc_d5.index('wmWindow *WM_window_open_temp(bContext *C'):]
+temp_d5 = temp_d5[:temp_d5.index('\n}\n')]
+check(openers_d5 <= set(WINDOW_OPENERS) and
+      temp_d5.index('native->single_window') < temp_d5.index('USER_TEMP_SPACE_DISPLAY_FULLSCREEN') <
+      temp_d5.index('WM_window_dpi_set_userdef') and
+      'native.single_window = true;' in (SWIFT.parents[1] / 'intern/wm_apple_ios_native.cc').read_text(encoding='utf-8'),
+      "R6 DESK-5: every caller that opens a window is placed (%s); WM_window_open_temp keeps one window"
+      % sorted(openers_d5 - set(WINDOW_OPENERS)))
+
 print('PASS: native shell sources ' + json.dumps(checks))

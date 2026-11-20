@@ -128,6 +128,11 @@ struct wmNativeInterface {
   void (*text_input_focus)(wmWindow *win, bool takes_text) = nullptr;
   /** Absolute pointer presses (a Pencil landing) activate the gizmo under them directly. */
   bool direct_gizmo_press = false;
+  /**
+   * The platform shows one window: an editor Blender would open in a window of its own opens full
+   * screen with Back to Previous instead, for every caller of #WM_window_open_temp (ROUND6 DESK-5).
+   */
+  bool single_window = false;
   /** Gizmos show no tooltips, as nothing hovers long over them. */
   bool hide_gizmo_tooltips = false;
 

@@ -1450,6 +1450,22 @@ wmWindow *WM_window_open(bContext *C,
 
 wmWindow *WM_window_open_temp(bContext *C, const char *title, int space_type, bool dialog)
 {
+  if (const wmNativeInterface *native = WM_native_interface(); native && native->single_window) {
+    /* One window (ROUND6 DESK-5, finding H2): the editor full screen in this one, with Back to
+     * Previous, for every caller (Manage Unused Data, the Info Log, the Drivers Editor). A second
+     * window would cover the document with no bar and no way to close it. */
+    ScrArea *area = ED_screen_temp_space_open(
+        C, title, eSpace_Type(space_type), USER_TEMP_SPACE_DISPLAY_FULLSCREEN, dialog);
+    if (area == nullptr) {
+      return nullptr;
+    }
+    /* The context a new window's editor would give its caller: the editor and its main region. */
+    wmWindow *win = CTX_wm_window(C);
+    CTX_wm_screen_set(C, WM_window_get_active_screen(win));
+    CTX_wm_area_set(C, area);
+    CTX_wm_region_set(C, BKE_area_find_region_type(area, RGN_TYPE_WINDOW));
+    return win;
+  }
   rcti rect;
   WM_window_dpi_set_userdef(CTX_wm_window(C));
   eWindowAlignment align;

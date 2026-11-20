@@ -4037,6 +4037,87 @@ def tick_typing():
     return 0.3
 
 
+# ROUND6 DESK-5 (H2): one window means one window. Each command that opens a window of its own on a
+# desktop (`WM_window_open_temp`'s callers) is run as its menu or button runs it, with Blender's own
+# interface on: the window manager must keep one window, the command's editor shown full screen with
+# Back to Previous, which brings the layout back.
+WINDOW_CASES = [("outliner.orphans_manage", 'OUTLINER'), ("screen.info_log_show", 'INFO'),
+                ("screen.drivers_editor_show", 'GRAPH_EDITOR')]
+windows_state = {}
+
+
+def tick_windows():
+    global step
+    try:
+        pump()
+        step += 1
+        problems = report.setdefault("problems", [])
+        cases = report.setdefault("cases", {})
+        wm = bpy.context.window_manager
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            subs["settings"] = subscribe("settings")
+            return 0.5
+        if step == 2:
+            set_bool(subs["settings"], "desktop", True, 1700)
+            return 1.0
+        if step < 5:
+            return 0.5
+        phase = windows_state.get("phase", "next")
+        window = wm.windows[0]
+        if phase == "next":
+            queue = windows_state.setdefault("queue", list(WINDOW_CASES))
+            if not queue:
+                finish("done" if not problems else "error")
+                return None
+            idname, editor = queue.pop(0)
+            windows_state["case"] = (idname, editor)
+            windows_state["areas before"] = sorted(a.type for a in window.screen.areas)
+            area = next(a for a in window.screen.areas if a.type == 'PROPERTIES')
+            region = next(r for r in area.regions if r.type == 'WINDOW')
+            module, name = idname.split(".")
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                result = getattr(getattr(bpy.ops, module), name)('INVOKE_DEFAULT')
+            cases[idname] = {"result": sorted(result)}
+            windows_state["phase"] = "check"
+            return 0.8
+        if phase == "check":
+            idname, editor = windows_state["case"]
+            entry = cases[idname]
+            entry["windows"] = len(wm.windows)
+            entry["areas"] = [a.type for a in wm.windows[-1].screen.areas]
+            if len(wm.windows) != 1:
+                problems.append("DESK-5: %s opened a window of its own (%d windows)" % (idname, len(wm.windows)))
+                # Closed again, so the next case starts from one window.
+                for extra in list(wm.windows)[1:]:
+                    with bpy.context.temp_override(window=extra):
+                        bpy.ops.wm.window_close()
+                windows_state["phase"] = "next"
+                return 0.8
+            if editor not in entry["areas"]:
+                problems.append("DESK-5: %s shows no %s (%s)" % (idname, editor, entry["areas"]))
+            area = next((a for a in window.screen.areas if a.type == editor), None)
+            if area is not None:
+                region = next(r for r in area.regions if r.type == 'WINDOW')
+                with bpy.context.temp_override(window=window, area=area, region=region):
+                    entry["back to previous"] = sorted(bpy.ops.screen.back_to_previous())
+            windows_state["phase"] = "back"
+            return 0.8
+        if phase == "back":
+            idname, editor = windows_state["case"]
+            entry = cases[idname]
+            entry["areas after Back to Previous"] = sorted(a.type for a in window.screen.areas)
+            if entry["areas after Back to Previous"] != windows_state["areas before"]:
+                problems.append("DESK-5: Back to Previous after %s did not bring the layout back" % idname)
+            windows_state["phase"] = "next"
+            return 0.3
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
 def _touchstart_enter_for(idname):
     mode, name = _touchstart_mode(idname)
     _touchstart_enter(mode, name)
@@ -4050,5 +4131,5 @@ bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets
                          "tolerance": tick_tolerance, "waiting": tick_waiting,
                          "touchstart": tick_touchstart, "jobs": tick_jobs,
                          "renderprogress": tick_render_progress, "busy": tick_busy,
-                         "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold, "typing": tick_typing}.get(SCENARIO, tick_actions),
+                         "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold, "typing": tick_typing, "windows": tick_windows}.get(SCENARIO, tick_actions),
                         first_interval=1.0)

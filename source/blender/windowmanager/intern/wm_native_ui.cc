@@ -5947,6 +5947,8 @@ extern "C" void WM_native_ui_test_install_hooks()
       bridge_test_text_input_count++;
     };
     hooks.operator_finished = WM_native_ui_operator_finished;
+    /* As the iPad: one window (ROUND6 DESK-5). */
+    hooks.single_window = true;
     hooks.state_changed = WM_native_ui_tag_changed;
     hooks.menu_popup = bridge_menu_popup;
     hooks.interface_scale = WM_native_ui_interface_scale;

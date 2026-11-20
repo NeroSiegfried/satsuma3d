@@ -220,6 +220,8 @@ wmNativeInterface native_interface_create()
   native.pencil_roll = WM_native_ui_stylus_roll;
   native.tweak_drag = WM_native_ui_tweak_drag;
   native.direct_gizmo_press = true;
+  /* An iPad has one window: a second would cover the document with no way to close it. */
+  native.single_window = true;
   native.hide_gizmo_tooltips = true;
   native.operator_input_adjust = WM_native_ui_operator_input_adjust;
   native.keyconfig_default_ensure = keyconfig_default_ensure;
