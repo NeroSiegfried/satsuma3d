@@ -12561,6 +12561,37 @@ void popup_handlers_add(bContext *C,
       C, handlers, ui_popup_handler, ui_popup_handler_remove, popup, eWM_EventHandlerFlag(flag));
 }
 
+void popup_handlers_context_move(ListBaseT<wmEventHandler> *handlers,
+                                 const ScrArea *from,
+                                 ScrArea *area,
+                                 ARegion *region)
+{
+  for (wmEventHandler &handler_base : *handlers) {
+    if (handler_base.type == WM_HANDLER_TYPE_UI) {
+      wmEventHandler_UI *handler = reinterpret_cast<wmEventHandler_UI *>(&handler_base);
+      if (handler->context.area == from) {
+        handler->context.area = area;
+        handler->context.region = region;
+      }
+      if (handler->handle_fn == ui_popup_handler && handler->remove_fn == ui_popup_handler_remove)
+      {
+        PopupBlockHandle *popup = static_cast<PopupBlockHandle *>(handler->user_data);
+        if (popup && popup->ctx_area == from) {
+          popup->ctx_area = area;
+          popup->ctx_region = region;
+        }
+      }
+    }
+    else if (handler_base.type == WM_HANDLER_TYPE_OP) {
+      wmEventHandler_Op *handler = reinterpret_cast<wmEventHandler_Op *>(&handler_base);
+      if (handler->context.area == from) {
+        handler->context.area = area;
+        handler->context.region = region;
+      }
+    }
+  }
+}
+
 void popup_handlers_remove(ListBaseT<wmEventHandler> *handlers, PopupBlockHandle *popup)
 {
   for (wmEventHandler &handler_base : *handlers) {

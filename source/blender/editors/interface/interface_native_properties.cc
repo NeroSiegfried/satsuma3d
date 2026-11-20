@@ -129,6 +129,13 @@ struct DetachedAreaContext {
     /* Instanced modifier/constraint panels can start window-level animation handlers.
      * Retire those handlers and timers before freeing their temporary panels. */
     panels_free_instanced(C, region);
+    /* A button's operator may have left something that keeps this editor, such as a search
+     * popup or a file browser it opened (PANEL-5): it keeps the editor shown instead, where the
+     * button would have been clicked. */
+    if (wmWindow *win = CTX_wm_window(C)) {
+      popup_handlers_context_move(
+          &win->runtime->modalhandlers, &area, previous_area, previous_region);
+    }
     CTX_wm_area_set(C, previous_area);
     CTX_wm_region_set(C, previous_region);
     BKE_screen_area_free(&area);
@@ -1938,7 +1945,8 @@ class Writer {
     const auto common = [&](NodeFields &fields) {
       fields.label = text;
       fields.icon = icon_name(icon);
-      fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE)) && but.optype->exec;
+      fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE)) &&
+                       (but.optype->exec || but.optype->invoke);
       fields.role = role;
     };
     if (ELEM(icon, ICON_CHECKBOX_HLT, ICON_CHECKBOX_DEHLT)) {
@@ -2167,6 +2175,9 @@ namespace {
 wmOperator *native_redo_operator = nullptr;
 uint64_t native_redo_generation = 0;
 bool native_redo_dismissed = false;
+/* An operator run by a panel's button, which Adjust Last Operation follows as it follows the
+ * viewport's (PANEL-5): the walk's editor is a detached Properties, not a 3D View. */
+bool native_redo_from_panel = false;
 /* Counts requests to open Adjust Last Operation, for the interface to notice a new one. */
 int native_redo_show_requests = 0;
 std::string native_redo_error;
@@ -2281,7 +2292,7 @@ void native_redo_operator_register(bContext *C, wmOperator *op)
   if ((op->type->flag & (OPTYPE_REGISTER | OPTYPE_UNDO)) != (OPTYPE_REGISTER | OPTYPE_UNDO)) {
     return;
   }
-  native_redo_operator = CTX_wm_view3d(C) ? op : nullptr;
+  native_redo_operator = CTX_wm_view3d(C) || native_redo_from_panel ? op : nullptr;
   ++native_redo_generation;
   native_redo_dismissed = false;
   native_redo_error.clear();
@@ -2702,7 +2713,19 @@ struct Fate {
   const char *reason = "";
   /** For a dropped one, what the row counts it as. */
   enum class Counted : uint8_t { No, Control, Note, Section, Panel } counted = Counted::No;
+  /** For an operator's button, how a tap runs it, see #button_call. */
+  std::string call;
 };
+
+/** How a tap on \a but runs its operator (PANEL-5): as a click does, by its call context;
+ * and how the walker ran it before: exec, unless the button had a context store. */
+std::string button_call(const Button &but)
+{
+  const bool invokes = but.optype->invoke && but.opcontext <= wm::OpCallContext::InvokeScreen;
+  const bool invoked = but.optype->invoke && but.context;
+  return std::string(invokes ? (but.optype->modal ? "invoke-modal" : "invoke") : "exec") +
+         (invoked ? " was invoke" : " was exec");
+}
 
 Fate fate_projected(const std::string &kind)
 {
@@ -2863,6 +2886,9 @@ void census_record(const std::string &tab,
   entry.append_str("outcome", fate.outcome);
   entry.append_str("kind", fate.kind);
   entry.append_str("reason", fate.reason);
+  if (!fate.call.empty()) {
+    entry.append_str("call", fate.call);
+  }
   entry.append_str("counted",
                    fate.counted == Fate::Counted::Control ? "control" :
                    fate.counted == Fate::Counted::Note    ? "note" :
@@ -3260,6 +3286,8 @@ static std::string panels_walk(bContext *C,
   std::unique_ptr<bContextStore> operator_context;
   /* Operators chosen from an enum menu run directly, as picking the menu item does. */
   bool operator_exec = false;
+  /* How the button calls it, see #Button::opcontext. */
+  wm::OpCallContext operator_call = wm::OpCallContext::InvokeRegionWin;
   PendingNewID pending_new_id;
   std::set<std::string> open_panels;
   /* Whether each candidate's body is visible, so nested sub-panels follow their parent. */
@@ -3499,7 +3527,9 @@ static std::string panels_walk(bContext *C,
     Layout &layout = block_layout(block, LayoutDirection::Vertical, LayoutType::Panel,
                                    0, 0, 320, 20, 0, style_get_dpi());
     panel->layout = &layout;
-    layout.operator_context_set(wm::OpCallContext::ExecDefault);
+    /* A region's buttons invoke their operators, as a click does, unless the panel says
+     * otherwise (B5, PANEL-5). */
+    layout.operator_context_set(wm::OpCallContext::InvokeRegionWin);
     /* The sections (`layout.panel`) this draw makes, as Blender's own draw starts them afresh
      * (`area.cc`); a stack's panel keeps those of its last draw otherwise. */
     panel->runtime->layout_panels.clear();
@@ -3526,7 +3556,7 @@ static std::string panels_walk(bContext *C,
       /* Body activation must never disable its own enable switch. */
       Layout &body = block_layout(block, LayoutDirection::Vertical, LayoutType::Panel,
                                   0, 0, 320, 20, 0, style_get_dpi());
-      body.operator_context_set(wm::OpCallContext::ExecDefault);
+      body.operator_context_set(wm::OpCallContext::InvokeRegionWin);
       panel->layout = &body;
       pt.draw(C, panel);
       if (shading && candidate.id == "VIEW3D_PT_shading") {
@@ -4638,9 +4668,11 @@ static std::string panels_walk(bContext *C,
         }
         const std::string key = operator_key(C, but, object);
         if (execute && !operator_type && target_panel && *requested_key == key &&
-            !(but.flag & (BUT_DISABLED | BUT_INACTIVE)) && but.optype->exec) {
+            !(but.flag & (BUT_DISABLED | BUT_INACTIVE)) && (but.optype->exec || but.optype->invoke))
+        {
           operator_type = but.optype;
           operator_properties = but.opptr;
+          operator_call = but.opcontext;
           but.opptr = nullptr;
           if (but.context) {
             operator_context = std::make_unique<bContextStore>(*but.context);
@@ -4673,7 +4705,8 @@ static std::string panels_walk(bContext *C,
                                     settings ? settings : ""});
           writer->builder.add(physics, switch_key, [&](Buffer &buffer, NodeFields &fields) {
             fields.label = label;
-            fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE)) && but.optype->exec;
+            fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE)) &&
+                             (but.optype->exec || but.optype->invoke);
             fields.role = protocol::Role::Header;
             return protocol::CreateToggle(buffer, on);
           });
@@ -4681,9 +4714,10 @@ static std::string panels_walk(bContext *C,
         }
         else if (writer && seen.insert(key).second) {
           writer->button(node, but, header_operator ? protocol::Role::Header : protocol::Role::None);
-          /* Drawn greyed when it has no `exec` to run (B5, B13). */
-          decide(&but, but.optype->exec ? fate_projected("Button") :
-                                          Fate{"reduced", "Button", "operator_no_exec"});
+          /* How it runs, which the census lists (PANEL-5's check). */
+          Fate fate = fate_projected("Button");
+          fate.call = button_call(but);
+          decide(&but, std::move(fate));
         }
         decide(&but, fate_consumed("duplicate"));
         continue;
@@ -4882,17 +4916,46 @@ static std::string panels_walk(bContext *C,
     }
     say(top, "elsewhere", tab_said, "tab");
   }
+  /* Why the operator did not run, if it was asked for and could not; whether it ran. */
+  std::string refused;
+  bool ran = false;
   if (operator_type) {
+    /* As a click on the button runs it (B5, PANEL-5): with its call, which invokes it unless the
+     * panel asked for exec, or it is an enum menu's choice, and with its context store. Invoke
+     * asks what a click asks (a type and a domain, a collection, a file), which the native
+     * interface answers; a job starts as one, with its progress and Stop (B1). */
+    const wm::OpCallContext call = operator_exec ? wm::OpCallContext::ExecDefault : operator_call;
+    const bool invokes = operator_type->invoke && call <= wm::OpCallContext::InvokeScreen;
+    if (invokes && operator_type->modal) {
+      /* A modal operator, such as a bake or an eyedropper, keeps the editor it started in for
+       * its events: the one shown, not this walk's, which is gone once it returns. */
+      detached_context.reset();
+    }
     const bContextStore *previous = CTX_store_get(C);
     CTX_store_set(C, operator_context.get());
-    /* Panel buttons such as a modifier's delete button name their target only through the
-     * context store, which the operator reads in invoke (as a click in Blender would). */
-    const wm::OpCallContext call = operator_context && operator_type->invoke && !operator_exec ?
-                                       wm::OpCallContext::InvokeDefault :
-                                       wm::OpCallContext::ExecDefault;
     if (WM_operator_poll_context(C, operator_type, call)) {
-      applied = WM_operator_name_call_ptr(C, operator_type, call, operator_properties, nullptr) &
-                OPERATOR_FINISHED;
+      /* Adjust Last Operation follows it, as from the viewport. */
+      native_redo_from_panel = true;
+      const wmOperatorStatus status = WM_operator_name_call_ptr(
+          C, operator_type, call, operator_properties, nullptr);
+      native_redo_from_panel = false;
+      applied = status & OPERATOR_FINISHED;
+      /* Started (a modal operator, a job), handed to an interface (a dialog, a menu), or
+       * cancelled as Blender's own button would be: done, the operator's reports said as
+       * Blender's are. */
+      ran = true;
+    }
+    else {
+      /* Blender's reason, as its greyed button's tooltip gives it. */
+      bool free_message = false;
+      const char *message = CTX_wm_operator_poll_msg_get(C, &free_message);
+      refused = message && message[0] ? std::string(message) :
+                                        WM_operatortype_name(operator_type, nullptr) +
+                                            " cannot run here.";
+      if (free_message) {
+        MEM_SAFE_DELETE(message);
+      }
+      CTX_wm_operator_poll_msg_clear(C);
     }
     CTX_store_set(C, previous);
     if (operator_properties) {
@@ -4904,7 +4967,10 @@ static std::string panels_walk(bContext *C,
     }
   }
   if (execute) {
-    return applied ? "" : "This property is no longer available or editable.";
+    if (!refused.empty()) {
+      return refused;
+    }
+    return applied || ran ? "" : "This property is no longer available or editable.";
   }
   /* A text object's styles, which Blender keeps per character: on all of it out of Edit Mode,
    * for the Text section's bold, italic and underline. */

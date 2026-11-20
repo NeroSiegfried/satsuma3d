@@ -2186,6 +2186,16 @@ void popup_handlers_add(bContext *C,
                         PopupBlockHandle *popup,
                         char flag);
 void popup_handlers_remove(ListBaseT<wmEventHandler> *handlers, PopupBlockHandle *popup);
+/**
+ * Handlers in \a handlers, and the popups they run, that keep \a from as the editor they belong
+ * to, given \a area and \a region instead: for an editor that is going while they stay, as the
+ * native panels' detached editor does when a button's operator opened a popup or a file browser
+ * (ROUND6 PANEL-5).
+ */
+void popup_handlers_context_move(ListBaseT<wmEventHandler> *handlers,
+                                 const ScrArea *from,
+                                 ScrArea *area,
+                                 ARegion *region);
 void popup_handlers_remove_all(bContext *C, ListBaseT<wmEventHandler> *handlers);
 
 /* Module

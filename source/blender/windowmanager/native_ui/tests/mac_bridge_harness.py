@@ -4271,7 +4271,6 @@ CENSUS_KNOWN = {
     "key": ("Table 1", None),
     "property_type": ("Table 1", None),
     # Shown in part.
-    "operator_no_exec": ("B5, B13", "PANEL-5, PANEL-13"),
     "path": ("B10", "PANEL-10"),
     "search": ("B11", "PANEL-11"),
     "enum_flag": ("B16", "PANEL-14"),
@@ -4289,7 +4288,7 @@ CENSUS_SECTIONS = (("object", "MATERIAL", "Emission"), ("object", "MODIFIER", "A
 CENSUS_LABELS = (("object", "MODIFIER", "No such file or directory", "ERROR"),
                  ("object", "MODIFIER", "Settings are inside the Physics tab", "NONE"))
 CENSUS_STAGES = ("object", "armature", "texture_paint", "selection", "preferences")
-census_state = {"stage": 0, "start": 1, "rows": {}, "problems": [], "buttons": {}, "menu": None}
+census_state = {"stage": 0, "start": 1, "rows": {}, "problems": [], "buttons": {}, "menu": None, "calls": {}}
 
 
 def _census_lib():
@@ -4313,7 +4312,7 @@ def _census_scene():
     decimate.decimate_type = 'DISSOLVE'
     decimate.delimit = {'NORMAL', 'UV'}
     cube.modifiers.new("Displace", 'DISPLACE').vertex_group = "Group"
-    cube.modifiers.new("Cloth", 'CLOTH')
+    cube.modifiers.new("Cloth", 'CLOTH').point_cache.frame_end = 3
     cube.modifiers.new("Subdivision", 'SUBSURF')
     cache = cube.modifiers.new("Mesh Cache", 'MESH_CACHE')
     cache.cache_format = 'PC2'
@@ -4388,6 +4387,10 @@ def _census_check(stage, entries):
         if counted != said:
             problems.append("%s %s: %d dropped, the rows say %d" % (stage, identity, counted, said))
         for entry in walk:
+            if entry.get("call"):
+                # How a tap runs each operator's button, and how it ran before (PANEL-5's check).
+                calls = census_state["calls"].setdefault(entry["call"], set())
+                calls.add(entry["detail"])
             key = (entry["button"], entry["outcome"], entry["kind"])
             census_state["buttons"][key] = census_state["buttons"].get(key, 0) + 1
             if entry["outcome"] not in ("dropped", "reduced"):
@@ -4428,6 +4431,22 @@ def tick_census():
                 state["problems"].append("Subdivision's header menu offers Duplicate greyed: %r" % items[0])
             else:
                 invoke(state["menu"], items[0]["key"], 77)
+        if stage == "object" and at == 21:
+            # The cloth cache's Bake, a job (B1, PANEL-5): from its button, as a tap runs it, after
+            # the menu's item, as a running job refuses taps (R6-12).
+            bakes = [n for n in _census_nodes(tree(subs.get("PHYSICS")) or {})
+                     if n.get("content") == "Button" and n["key"].startswith("PTCACHE_OT_bake:")
+                     and "bake=True" in n["key"]]
+            if not bakes:
+                state["problems"].append("object PHYSICS: no Bake button for the cloth cache")
+            else:
+                invoke(subs["PHYSICS"], bakes[0]["key"], 88)
+                state["bake"] = True
+        if stage == "object" and at == 26 and state.get("bake"):
+            cache = bpy.data.objects["Cube"].modifiers["Cloth"].point_cache
+            if acks.get(88) != "ok" or not cache.is_baked:
+                state["problems"].append("Bake from the cloth cache's button: answer %r, baked %r" % (
+                    acks.get(88), cache.is_baked))
         if stage == "object" and at == 20 and state["menu"] is not None:
             if sum(m.type == 'SUBSURF' for m in bpy.data.objects["Cube"].modifiers) != 2:
                 state["problems"].append("Duplicate from Subdivision's header menu made no copy (ack %r; modifiers %r)" % (
@@ -4502,7 +4521,7 @@ def tick_census():
             report["steps"].append({"name": stage, "views": len(walks), "fates": sum(len(w) for w in walks.values()),
                                     "dropped": counted, "rows": shown})
         # The object stage runs its header menu's item before the next stage changes the scene.
-        if at == (21 if stage == "object" else 16):
+        if at == (27 if stage == "object" else 16):
             state["stage"] += 1
             state["start"] = step + 1
             if state["stage"] == len(CENSUS_STAGES):
@@ -4514,6 +4533,7 @@ def tick_census():
                     state["problems"].append("Findings PANEL-1 must show first, not shown: " + ", ".join(missing))
                 report["census"] = dict(sorted(rows.items(), key=lambda item: (item[1]["package"] or "~", item[0])))
                 report["buttons"] = {" ".join(k): v for k, v in sorted(state["buttons"].items())}
+                report["calls"] = {call: sorted(details) for call, details in sorted(state["calls"].items())}
                 report["problems"] = state["problems"]
                 finish("done" if not state["problems"] else "error")
                 return None
