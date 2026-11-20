@@ -506,8 +506,8 @@ def tick_actions():
             bpy.ops.object.select_all(action='DESELECT')
             cube.select_set(True)
             bpy.context.view_layer.objects.active = cube
-            for surface in ("palette", "long_press", "radial"):
-                subs[surface] = subscribe("actions", surface=surface)
+            # The palette, the one surface beside the strip (ROUND6 MODE-4 removed the others).
+            subs["palette"] = subscribe("actions", surface="palette")
             subs["toolbar"] = subscribe("toolbar")
         elif step == 5:
             report["steps"].append({"name": "object_mesh", "trees": {name: tree(sub) for name, sub in subs.items()
@@ -5428,6 +5428,10 @@ def tick_header():
             if state["sub"] is None:
                 state["sub"] = subscribe("tool_settings", tab="HEADER")
                 state["toolbar"] = subscribe("toolbar")
+            # ROUND6 MODE-4 (E9): the long press, as a screen reads it: Blender's context menu route.
+            if state.get("context") is not None:
+                lib.WM_native_ui_unsubscribe(state["context"])
+            state["context"] = subscribe("menu", route="context")
         elif at == 4:
             entries = json.loads(_census_lib().UI_native_panel_census_take())
             walks, current = {}, None
@@ -5459,6 +5463,34 @@ def tick_header():
             if mode in HEADER_PARTS and parts != HEADER_PARTS[mode]:
                 problems.append("MODE-2: %s: the header's own parts are %r, Blender's header has %r" % (
                     mode, sorted(parts), sorted(HEADER_PARTS[mode])))
+            # ROUND6 MODE-4 (E9): what the screens read, in every mode: the bar's actions (the
+            # toolbar view's `actions` row) at least three, the long press more than one item.
+            bar = next((n for n in (tree(state["toolbar"]) or {}).get("children", []) if n["key"] == "actions"), {})
+            bar_items = [n.get("label") for n in bar.get("children", []) if n["key"].startswith("action:")]
+            press = [n.get("label") for n in (tree(state["context"]) or {}).get("children", []) if n.get("label")]
+            state["modes"][mode].update(bar=bar_items, long_press=press)
+            if len(bar_items) < 3:
+                problems.append("MODE-4: %s: the bar has %d actions: %r" % (mode, len(bar_items), bar_items))
+            if len(press) < 2:
+                problems.append("MODE-4: %s: the long press has %d items: %r" % (mode, len(press), press))
+            if mode == "PARTICLE":
+                # E10 (Particle Edit's brush sidebar raised on every refresh) did not reproduce in Run 0:
+                # recorded here, every particle tool's brush values read without an exception.
+                import bl_ui.native_brush as native_brush
+                from bl_ui.space_toolsystem_common import ToolSelectPanelHelper
+                window, area, region = _view3d()
+                read = {}
+                with bpy.context.temp_override(window=window, area=area, region=region):
+                    cls = ToolSelectPanelHelper._tool_class_from_space_type('VIEW_3D')
+                    for item in cls.tools_from_context(bpy.context):
+                        if item is None or not hasattr(item, "idname"):
+                            continue
+                        bpy.ops.wm.tool_set_by_id(name=item.idname)
+                        try:
+                            read[item.idname] = type(native_brush.brush_values(bpy.context)).__name__
+                        except Exception as ex:
+                            problems.append("E10: %s: brush values raised %r" % (item.idname, ex))
+                report["E10 (did not reproduce in Run 0)"] = read
             flags = {n["key"]: n.get("value") for n in _census_nodes(tree(state["toolbar"]) or {})}
             for flag, expected in MODE_FLAGS.get(mode, {}).items():
                 if bool(flags.get(flag)) != expected:

@@ -4,9 +4,14 @@
 
 """Context actions for the native iPad interface.
 
-One registry, four surfaces: the strip along the viewport (``actions``), the grouped palette it
-expands into (``palette``), the long-press menu (``long_press``) and the Pencil squeeze radial
-(``radial``). An action is defined once and each surface picks from it.
+One registry, two surfaces: the strip along the viewport (``actions``) and the grouped palette it
+expands into (``palette``), which Search lists. An action is defined once and each surface picks
+from it. The long press and the Pencil's radial menu show Blender's own context menu instead
+(ROUND6 MODE-4 removed the registry's surfaces for them, which nothing read).
+
+A mode nobody wrote rules for still has actions (ROUND6 MODE-4, E9): the first operator items of
+its own context menu, or where that is a panel, of its header's menus, as Blender lists them
+(``_fallback``). Hand-written rules come first; these only fill a thin strip.
 
 Each action has a *scope*, the context it belongs to at all (the mode, the mesh select mode, the
 active tool or brush, the active object's type and whether anything is selected), and an *enabled*
@@ -27,9 +32,7 @@ from bpy.props import EnumProperty
 __all__ = (
     "GROUPS",
     "actions",
-    "long_press",
     "palette",
-    "radial",
     "rename_active",
     "run",
     "run_reported",
@@ -64,8 +67,9 @@ GROUPS = (
     "Delete",
 )
 
-# Blender's own context menu for each mode, which "More..." in the long-press menu opens. `None`
-# where the mode has no context menu (the paint and sculpt modes use a panel instead).
+# Blender's own context menu for each mode, the first source of the actions of a mode without
+# rules (`_fallback`). `None` where the mode has no context menu (the paint and sculpt modes use a
+# panel instead): their header's menus are read then.
 MODE_MENUS = {
     'OBJECT': "VIEW3D_MT_object_context_menu",
     'EDIT_MESH': "VIEW3D_MT_edit_mesh_context_menu",
@@ -96,9 +100,9 @@ MODE_MENUS = {
     'VERTEX_GREASE_PENCIL': None,
 }
 
-# How many in-scope actions the long-press menu and the radial take.
-LONG_PRESS_ACTIONS = 5
-RADIAL_SLOTS = 8
+# A strip with fewer actions than this is filled from the mode's own menus, up to FALLBACK_ACTIONS.
+MINIMUM_ACTIONS = 3
+FALLBACK_ACTIONS = 6
 
 # Object types that have an Edit Mode.
 _EDITABLE_TYPES = {'MESH', 'CURVE', 'SURFACE', 'META', 'FONT', 'LATTICE', 'ARMATURE', 'GREASEPENCIL',
@@ -177,6 +181,11 @@ class _State:
     def xray(self):
         space = self.context.space_data
         return bool(space and space.type == 'VIEW_3D' and space.shading.show_xray)
+
+
+# Modes that work on the whole active object, which Frame Selected frames.
+_OBJECT_MODES = {'SCULPT', 'PAINT_WEIGHT', 'PAINT_VERTEX', 'PAINT_TEXTURE', 'SCULPT_CURVES', 'PAINT_GREASE_PENCIL',
+                 'SCULPT_GREASE_PENCIL', 'WEIGHT_GREASE_PENCIL', 'VERTEX_GREASE_PENCIL'}
 
 
 def _always(_state):
@@ -538,11 +547,27 @@ ACTIONS = [
     # The view, which a keyboard reaches with the numeric keypad's period and Home: what is
     # selected filling it, or everything with nothing selected.
     Action("view.frame_selected", "Frame Selected", "view3d.view_selected", "ZOOM_SELECTED",
-           lambda s: (s.mode == 'OBJECT' and bool(s.selected)) or (s.mode == 'EDIT_MESH' and s.verts > 0),
+           lambda s: (s.mode == 'OBJECT' and bool(s.selected)) or (s.mode == 'EDIT_MESH' and s.verts > 0) or
+           # The object being painted or sculpted, which is the selection there (ROUND6 MODE-4).
+           s.mode in _OBJECT_MODES,
            invoke=True, group="View"),
     Action("view.frame_all", "Frame All", "view3d.view_all", "ZOOM_ALL",
-           lambda s: (s.mode == 'OBJECT' and not s.selected) or (s.mode == 'EDIT_MESH' and not s.verts),
+           lambda s: (s.mode == 'OBJECT' and not s.selected) or (s.mode == 'EDIT_MESH' and not s.verts) or
+           # Home frames everything in every mode (ROUND6 MODE-4, E9: scoped to two).
+           s.mode not in {'OBJECT', 'EDIT_MESH'},
            invoke=True, group="View"),
+    # Texture Paint has neither a context menu nor a mode menu (ROUND6 MODE-4, E9): what its Texture
+    # Slots panel does, the image to paint on and keeping what was painted.
+    # The active layer, which the Grease Pencil modes paint, sculpt and weigh on (ROUND6 MODE-4:
+    # Sculpt Mode's header has no menu of its own).
+    Action("grease.active_layer", "Active Layer", "", "OUTLINER_DATA_GP_LAYER",
+           lambda s: s.mode in {'PAINT_GREASE_PENCIL', 'SCULPT_GREASE_PENCIL', 'WEIGHT_GREASE_PENCIL',
+                                'VERTEX_GREASE_PENCIL'},
+           menu="GREASE_PENCIL_MT_layer_active", group="Edit"),
+    Action("paint.add_slot", "Add Texture Slot", "paint.add_texture_paint_slot", "ADD",
+           lambda s: s.mode == 'PAINT_TEXTURE', invoke=True, group="Edit"),
+    Action("paint.save_images", "Save All Images", "image.save_all_modified", "FILE_TICK",
+           lambda s: s.mode == 'PAINT_TEXTURE', group="Edit"),
     # What Hide hid, back again: on the strip while objects are hidden, as nothing else there
     # undoes it; in the palette for a mesh, whose hidden parts are not counted as it is drawn.
     Action("object.reveal", "Reveal Hidden", "object.hide_view_clear", "HIDE_OFF",
@@ -648,18 +673,6 @@ ACTIONS = [
 _BY_ID = {action.id: action for action in ACTIONS}
 _INDEX = {action.id: index for index, action in enumerate(ACTIONS)}
 
-# The long-press menu's fixed top section, by mode: the actions it takes, in order. `rename` is the
-# shell's own Rename, which asks for the name and sends it to `rename_active`.
-_FIXED = {
-    'OBJECT': ("object.copy", "object.paste", "object.duplicate", "rename", "object.delete"),
-    'EDIT_MESH': ("mesh.copy", "mesh.paste", "mesh.duplicate", "mesh.delete_verts", "mesh.delete_edges", "mesh.delete_faces"),
-    'POSE': ("pose.copy", "pose.paste", "rename"),
-    'EDIT_ARMATURE': ("armature.duplicate", "rename"),
-    'EDIT_GREASE_PENCIL': ("grease.copy", "grease.paste", "grease.duplicate", "grease.delete"),
-    'EDIT_CURVE': ("curve.duplicate",),
-}
-
-
 def _poll(action):
     # The shell opens a menu natively by its route, so `wm.call_menu`'s need for a window does not
     # apply; the menu existing is enough.
@@ -722,63 +735,185 @@ def _strip(state):
     return available
 
 
-def _commands(state):
-    """The strip's actions for the long-press menu and the radial: the mode's own commands in the
-    registry's order, without the selection tools' lead or the selection actions it brings."""
-    available = [action for action in _strip(state) if action.group != "Selection"]
-    available.sort(key=lambda action: (1 if action.destructive else 0, _INDEX[action.id]))
+class _Recorder:
+    """A layout that records what a menu's `draw` puts in it, in order: operator items with their
+    text, icon and properties, and submenus. Everything else a layout does is accepted and
+    ignored; rows and columns record into the same list."""
+
+    def __init__(self, out):
+        object.__setattr__(self, "_out", out)
+
+    def operator(self, idname, text=None, icon='NONE', **_kwargs):
+        properties = {}
+        self._out.append(("operator", idname, text, icon, properties))
+        return _Properties(properties)
+
+    def operator_menu_enum(self, operator, _property, text=None, icon='NONE', **_kwargs):
+        # Run as its menu item runs it: its choices open natively (`WM_menu_invoke`).
+        self._out.append(("operator", operator, text, icon, {}))
+
+    def menu(self, menu, text=None, icon='NONE', **_kwargs):
+        self._out.append(("menu", menu, text, icon, None))
+        return None
+
+    def _same(self, *_args, **_kwargs):
+        return self
+
+    def __getattr__(self, _name):
+        return self._same
+
+    def __setattr__(self, _name, _value):
+        pass
+
+
+class _Properties:
+    """An operator item's properties, as a menu's `draw` sets them."""
+
+    def __init__(self, properties):
+        object.__setattr__(self, "_properties", properties)
+
+    def __setattr__(self, name, value):
+        self._properties[name] = value
+
+    def __getattr__(self, _name):
+        return None
+
+
+def _menu_items(context, name, out, depth=0):
+    """The operator items of the Python menu `name` and, one level down, of its submenus."""
+    menu = getattr(bpy.types, name, None)
+    if menu is None or not hasattr(menu, "draw") or depth > 1:
+        return
+    poll = getattr(menu, "poll", None)
+    try:
+        if poll is not None and not poll(context):
+            return
+    except Exception:
+        return
+    recorded = []
+
+    class Drawn:
+        pass
+
+    drawn = Drawn()
+    drawn.layout = _Recorder(recorded)
+    drawn.bl_label = getattr(menu, "bl_label", "")
+    try:
+        menu.draw(drawn, context)
+    except Exception:
+        # A draw that needs more than the recorder has: what it recorded until then is kept.
+        pass
+    submenus = []
+    for kind, idname, text, icon, properties in recorded:
+        if kind == "operator":
+            out.append((idname, text, icon, properties))
+        else:
+            submenus.append(idname)
+    for submenu in submenus:
+        _menu_items(context, submenu, out, depth + 1)
+
+
+def _fallback_sources(context, mode):
+    """Where a mode without rules finds its actions: its context menu, or its header's own menus
+    (not View or Select) where the context menu is a panel."""
+    if MODE_MENUS.get(mode):
+        return [MODE_MENUS[mode]]
+    recorded = []
+    menus = getattr(bpy.types, "VIEW3D_MT_editor_menus", None)
+    if menus is None:
+        return []
+
+    class Drawn:
+        pass
+
+    drawn = Drawn()
+    drawn.layout = _Recorder(recorded)
+    try:
+        menus.draw(drawn, context)
+    except Exception:
+        pass
+    return [idname for kind, idname, _text, _icon, _props in recorded
+            if kind == "menu" and idname != "VIEW3D_MT_view" and "_select" not in idname]
+
+
+# The actions made from menus, by id, so `run` finds them; and each mode's items, read once.
+_FALLBACK_ACTIONS = {}
+_FALLBACK_ITEMS = {}
+
+
+def _fallback_action(idname, text, icon, properties):
+    """An action for one menu item, run as a click on it runs it."""
+    module, _, name = idname.partition(".")
+    operator = getattr(getattr(bpy.ops, module, None), name, None)
+    if not name or operator is None:
+        return None
+    try:
+        operator.get_rna_type()
+    except KeyError:
+        return None
+    action_id = "menu:" + idname + json.dumps(properties, sort_keys=True, default=str)
+    action = _FALLBACK_ACTIONS.get(action_id)
+    if action is None:
+        label = text or operator.get_rna_type().name
+        destructive = name.startswith(("delete", "dissolve"))
+        action = Action(action_id, label, idname, icon if icon and icon != 'NONE' else "DOT",
+                        props=dict(properties), invoke=True,
+                        group="Delete" if destructive else "Edit", destructive=destructive)
+        _FALLBACK_ACTIONS[action_id] = action
+        _BY_ID[action_id] = action
+        _INDEX[action_id] = len(ACTIONS) + len(_FALLBACK_ACTIONS)
+    return action
+
+
+def _fallback(state, taken):
+    """The first operator items of the mode's own menus that can run now and are not in `taken`."""
+    key = (state.mode, state.obj.type if state.obj else None)
+    items = _FALLBACK_ITEMS.get(key)
+    if items is None:
+        items = []
+        for source in _fallback_sources(state.context, state.mode):
+            _menu_items(state.context, source, items)
+        _FALLBACK_ITEMS[key] = items
+    chosen = []
+    for idname, text, icon, properties in items:
+        if len(chosen) + len(taken) >= FALLBACK_ACTIONS:
+            break
+        action = _fallback_action(idname, text, icon, properties)
+        if action is None or action.op in taken or action.id in {a.id for a in chosen}:
+            continue
+        if _poll(action):
+            chosen.append(action)
+    return chosen
+
+
+def _strip_filled(state):
+    """The strip, and where it is thin, the mode's own menu items after it."""
+    available = _strip(state)
+    if len(available) < MINIMUM_ACTIONS:
+        available = available + _fallback(state, {action.op for action in available})
     return available
 
 
 def actions(context, tool):
     """The collapsed strip: the in-scope actions that can run now and may show in the strip."""
     state = _State(context, tool)
-    return [_item(action, state) for action in _strip(state)]
+    return [_item(action, state) for action in _strip_filled(state)]
 
 
 def palette(context, tool):
     """The expanded palette: every in-scope action, grouped in the fixed group order, dimmed when
-    it cannot run. Only non-empty groups are listed."""
+    it cannot run. Only non-empty groups are listed; a thin mode's menu items are in it too."""
     state = _State(context, tool)
     groups = {}
     for action in _in_scope(state):
         groups.setdefault(action.group, []).append(_item(action, state, _can_run(action, state)))
+    in_scope = {item["operator"] for items in groups.values() for item in items}
+    strip = _strip(state)
+    if len(strip) < MINIMUM_ACTIONS:
+        for action in _fallback(state, {action.op for action in strip}):
+            if action.operator().idname() not in in_scope:
+                groups.setdefault(action.group, []).append(_item(action, state))
     return [{"group": group, "items": groups[group]} for group in GROUPS if group in groups]
-
-
-def long_press(context, tool):
-    """The long-press menu: a fixed top section for the mode, then the mode's top commands that are
-    not already in it (never selection actions), then "More..." for Blender's own context menu."""
-    state = _State(context, tool)
-    fixed = []
-    taken = set()
-    for action_id in _FIXED.get(state.mode, ()):
-        if action_id == "rename":
-            fixed.append({"title": "Rename", "action": "rename", "operator": "", "icon": "", "symbol": "",
-                          "selected": False, "enabled": state.obj is not None, "group": "Object",
-                          "destructive": False, "tool": "", "menu": ""})
-            continue
-        action = _BY_ID[action_id]
-        taken.add(action.op)
-        try:
-            if action.scope(state):
-                fixed.append(_item(action, state, _can_run(action, state)))
-        except (AttributeError, KeyError, RuntimeError, ReferenceError):
-            continue
-    middle = [action for action in _commands(state) if action.op not in taken][:LONG_PRESS_ACTIONS]
-    return {
-        "fixed": fixed,
-        "actions": [_item(action, state) for action in middle],
-        "more": MODE_MENUS.get(state.mode) or "",
-    }
-
-
-def radial(context, tool):
-    """The Pencil squeeze radial's default slots: the top in-scope actions that can run now, never a
-    destructive one. The shell lets the owner pin slots over these."""
-    state = _State(context, tool)
-    chosen = [action for action in _commands(state) if not action.destructive][:RADIAL_SLOTS]
-    return [_item(action, state) for action in chosen]
 
 
 def rename_active(context, name):

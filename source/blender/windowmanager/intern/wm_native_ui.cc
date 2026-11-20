@@ -3303,13 +3303,14 @@ void bridge_actions_build(bContext *C,
   }
 }
 
-/** The surfaces of `bl_ui.native_actions` beyond the strip, which the `actions` view shows. */
-constexpr const char *bridge_action_surfaces[] = {"palette", "long_press", "radial"};
+/** The surface of `bl_ui.native_actions` beyond the strip, which the `actions` view shows. The
+ * long-press menu's and the radial's were removed (ROUND6 MODE-4, E9): no screen read them; the long
+ * press and the Pencil's radial show Blender's own context menu. */
+constexpr const char *bridge_action_surfaces[] = {"palette"};
 
-/** The `actions` view: one surface of the context actions, by its `surface` parameter, built only
- * while the interface shows it. The palette is a group per action group, in order; the long-press
- * menu is the groups `section:fixed` and `section:actions` and, where the mode has a context menu, a `more`
- * button that opens it; the radial is its slots in order. Invoking `action:<id>` runs one. */
+/** The `actions` view: the palette of the context actions (its `surface` parameter), built only
+ * while the interface shows it: a group per action group, in order. Invoking `action:<id>` runs
+ * one. */
 void bridge_actions_view_build(bContext *C,
                                const views::Params &params,
                                views::ViewData * /*data*/,
@@ -3354,45 +3355,13 @@ void bridge_actions_view_build(bContext *C,
   if (const ArrayValue *array = value->as_array_value()) {
     for (const std::shared_ptr<Value> &item : array->elements()) {
       const DictionaryValue *entry = item->as_dictionary_value();
-      if (entry == nullptr) {
-        continue;
-      }
-      const std::shared_ptr<Value> *items = entry->lookup("items");
+      const std::shared_ptr<Value> *items = entry ? entry->lookup("items") : nullptr;
       const ArrayValue *items_array = items ? (*items)->as_array_value() : nullptr;
       if (items_array) {
         /* A palette group. */
         const StringRef name = bridge_text(*entry, "group");
         group_add("group:" + std::string(name), name, *items_array);
       }
-      else {
-        /* A radial slot. */
-        bridge_action_add(builder, top, *entry);
-      }
-    }
-    return;
-  }
-  if (const DictionaryValue *menu = value->as_dictionary_value()) {
-    for (const char *section : {"fixed", "actions"}) {
-      const std::shared_ptr<Value> *items = menu->lookup(section);
-      if (const ArrayValue *items_array = items ? (*items)->as_array_value() : nullptr) {
-        /* Not keyed by the bare name: `actions` is the view's top node. */
-        group_add("section:" + std::string(section), section, *items_array);
-      }
-    }
-    const StringRef more = bridge_text(*menu, "more");
-    if (!more.is_empty()) {
-      builder.add(top, "more", [&](ViewBuffer &buffer, NodeFields &fields) {
-        fields.label = IFACE_("More...");
-        const flatbuffers::Offset<views::protocol::Param> param = views::protocol::CreateParamDirect(
-            buffer,
-            "name",
-            views::protocol::Value::TextValue,
-            views::protocol::CreateTextValueDirect(buffer, std::string(more).c_str()).Union());
-        return views::protocol::CreateButton(buffer,
-                                             views::protocol::ButtonStyle::Normal,
-                                             buffer.CreateString("WM_OT_call_menu"),
-                                             buffer.CreateVector(&param, 1));
-      });
     }
   }
 }

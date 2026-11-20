@@ -71,12 +71,14 @@ check(not any(action.op in {"object.location_clear", "object.rotation_clear", "o
                             "object.origin_clear"} for action in actions.ACTIONS),
       "No esoteric object transform clearing")
 modes = set(bpy.types.Context.bl_rna.properties['mode'].enum_items.keys())
-check(modes == set(actions.MODE_MENUS), "Every mode has a More... entry: " +
+check(modes == set(actions.MODE_MENUS), "Every mode names where its fallback actions come from: " +
       str(sorted(modes ^ set(actions.MODE_MENUS))))
 for mode, menu in actions.MODE_MENUS.items():
     check(menu is None or hasattr(bpy.types, menu), f"{mode}'s context menu {menu} exists")
-for mode, fixed in actions._FIXED.items():
-    check(all(item == "rename" or item in actions._BY_ID for item in fixed), f"{mode}'s fixed items exist")
+# ROUND6 MODE-4 (E9): the long-press and radial surfaces, which no screen read, are gone; the long
+# press and the Pencil's radial menu show Blender's context menu, checked by the harness's `header`.
+check(not any(hasattr(actions, name) for name in ("long_press", "radial", "_FIXED")),
+      "No surface nothing reads: long_press, radial and their fixed section are gone")
 
 # Object Mode, nothing selected.
 cube = bpy.data.objects['Cube']
@@ -132,27 +134,10 @@ bpy.context.scene.camera = bpy.context.active_object
 check(not applies("object.active_camera") and "object.active_camera" in palette_items(),
       "The scene camera dims Set Active Camera but keeps it in place")
 
-# Long-press menu in Object Mode.
+# Edit Mesh.
 bpy.ops.object.select_all(action='DESELECT')
 cube.select_set(True)
 bpy.context.view_layer.objects.active = cube
-menu = actions.long_press(bpy.context, "builtin.move")
-check([item["title"] for item in menu["fixed"]] == ["Copy Objects", "Paste Objects", "Duplicate", "Rename", "Delete"],
-      "Long press leads with Copy, Paste, Duplicate, Rename, Delete: " + str(menu["fixed"]))
-check(len(menu["actions"]) <= actions.LONG_PRESS_ACTIONS and
-      not {item["title"] for item in menu["actions"]} & {"Duplicate", "Delete"},
-      "Long press adds up to five other actions: " + str(menu["actions"]))
-check(menu["more"] == "VIEW3D_MT_object_context_menu", "More... opens the object context menu")
-menu = actions.long_press(bpy.context, "builtin.select_box")
-check(not any(item["group"] == "Selection" for item in menu["actions"]) and menu["actions"][0]["title"] == "Edit",
-      "The selection tools' lead stays in the strip, out of the long-press menu: " + str(menu["actions"]))
-check(not any(item["group"] == "Selection" for item in actions.radial(bpy.context, "builtin.select_box")),
-      "The radial has no selection actions")
-radial = actions.radial(bpy.context, "builtin.move")
-check(len(radial) <= actions.RADIAL_SLOTS and not any(item["destructive"] for item in radial),
-      "The radial has up to eight slots and nothing destructive")
-
-# Edit Mesh.
 bpy.ops.object.mode_set(mode='EDIT')
 bpy.context.tool_settings.mesh_select_mode = (True, False, False)
 bpy.ops.mesh.select_all(action='DESELECT')
@@ -204,9 +189,6 @@ check(seed(face) == ["Subdivide", "Inset", "Bevel", "Separate", "Dissolve", "Mir
       "The face strip is the seed: " + str(face))
 groups = [group["group"] for group in palette("builtin.move")]
 check("Normals & Shading" in groups and "Vertex" not in groups, "The face palette: " + str(groups))
-menu = actions.long_press(bpy.context, "builtin.move")
-check([item["title"] for item in menu["fixed"]] == ["Copy", "Paste", "Duplicate", "Delete"] and
-      menu["more"] == "VIEW3D_MT_edit_mesh_context_menu", "Edit Mesh long press: " + str(menu))
 
 mesh = bmesh.from_edit_mesh(cube.data)
 for f in mesh.faces:
@@ -246,7 +228,33 @@ bpy.ops.object.mode_set(mode='OBJECT')
 
 bpy.ops.object.mode_set(mode='SCULPT')
 check(titles("builtin_brush.Draw")[:2] == ["Invert Mask", "Clear Mask"], "Sculpt keeps its mask actions")
-check(actions.long_press(bpy.context, "builtin_brush.Draw")["more"] == "", "Sculpt has no context menu")
+bpy.ops.object.mode_set(mode='OBJECT')
+
+# ROUND6 MODE-4 (E9): a mode without rules fills its strip from its own menus, as Blender lists
+# them: Edit Lattice (its context menu). Texture Paint has none: it has rules of its own.
+lattice_ob = bpy.data.objects.new("Lattice", bpy.data.lattices.new("Lattice"))
+bpy.context.scene.collection.objects.link(lattice_ob)
+bpy.ops.object.select_all(action='DESELECT')
+lattice_ob.select_set(True)
+bpy.context.view_layer.objects.active = lattice_ob
+bpy.ops.object.mode_set(mode='EDIT')
+lattice = actions.actions(bpy.context, "builtin.select_box")
+check(len(lattice) >= actions.MINIMUM_ACTIONS and any(i["action"].startswith("menu:") for i in lattice),
+      "Edit Lattice's strip is filled from its context menu: " + str([i["title"] for i in lattice]))
+first = next(i for i in lattice if i["action"].startswith("menu:"))
+check(first["action"] in actions._BY_ID, "A fallback action runs by its id: " + first["action"])
+groups = {item["action"] for group in palette("builtin.select_box") for item in group["items"]}
+check(first["action"] in groups, "Search's palette lists the fallback actions too")
+bpy.ops.object.mode_set(mode='OBJECT')
+bpy.data.objects.remove(lattice_ob)
+bpy.context.view_layer.objects.active = cube
+cube.select_set(True)
+bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
+# Its header has no menu of its own: hand rules (Frame All needs a viewport, so it is counted by
+# the harness's `header`, with every other mode's bar).
+paint = {item["action"] for group in palette("builtin_brush.Draw") for item in group["items"]}
+check({"paint.add_slot", "paint.save_images", "view.frame_all"} <= paint,
+      "Texture Paint has its own actions: " + str(sorted(paint)))
 bpy.ops.object.mode_set(mode='OBJECT')
 
 bpy.ops.object.armature_add()

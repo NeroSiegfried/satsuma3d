@@ -464,7 +464,9 @@ static const char *native_context_menu_id(const bContext *C)
     case CTX_MODE_SCULPT_GREASE_PENCIL: return "VIEW3D_PT_greasepencil_sculpt_context_menu";
     case CTX_MODE_WEIGHT_GREASE_PENCIL: return "VIEW3D_PT_greasepencil_weight_context_menu";
     case CTX_MODE_VERTEX_GREASE_PENCIL: return "VIEW3D_PT_greasepencil_vertex_paint_context_menu";
-    default: return nullptr;
+    /* A mode without a context menu (Sculpt Curves, Edit Point Cloud): its header's menus, so a
+     * long press is never empty (ROUND6 MODE-4, E9). */
+    default: return "VIEW3D_MT_editor_menus";
   }
 }
 
