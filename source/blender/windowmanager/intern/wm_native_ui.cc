@@ -74,6 +74,7 @@
 #include "DNA_workspace_types.h"
 
 #include "../asset/ED_asset_shelf.hh"
+#include "ED_action_native.hh"
 #include "ED_anim_api.hh"
 #include "ED_asset.hh"
 #include "ED_asset_menu_utils.hh"
@@ -4163,24 +4164,12 @@ void bridge_timeline_keys_view_build(bContext *C,
                                      views::ViewData * /*data*/,
                                      views::ViewBuilder &builder)
 {
-  using namespace io::serialize;
   const NodeId top = builder.top("timeline_keys", [](ViewBuffer &buffer, NodeFields & /*fields*/) {
     return views::protocol::CreateGroup(buffer);
   });
-  const std::shared_ptr<Value> keys = bridge_python_value(
-      C, "timeline.keys", "bl_ui.native_timeline.keys(bpy.context)");
+  /* Blender's own Timeline's keys, those its jump and its edits use too (ROUND6 EDIT-6, D16). */
   std::vector<int64_t> frames, selected;
-  if (const ArrayValue *array = keys ? keys->as_array_value() : nullptr) {
-    for (const std::shared_ptr<Value> &item : array->elements()) {
-      if (const DictionaryValue *key = item->as_dictionary_value()) {
-        const int64_t frame = int64_t(bridge_number(*key, "f", 0.0));
-        frames.push_back(frame);
-        if (bridge_flag(*key, "s")) {
-          selected.push_back(frame);
-        }
-      }
-    }
-  }
+  ED_action_native_timeline_keys(C, frames, selected);
   for (const auto &[key, values] : {std::pair{"keys", &frames}, std::pair{"selected", &selected}}) {
     builder.add(top, key, [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
       return views::protocol::CreateData(
@@ -5450,7 +5439,7 @@ void WM_native_ui_views_register()
 
   ViewType timeline_keys;
   timeline_keys.name = "timeline_keys";
-  /* Read with Python, four times a second at most. */
+  /* Gathered over every animated channel, four times a second at most. */
   timeline_keys.min_interval = 0.25;
   timeline_keys.notifiers = {NC_ANIMATION, NC_OBJECT, NC_SCENE, NC_GPENCIL, NC_WM, NC_GEOM};
   timeline_keys.wants = [](const wmNotifier &note) {
@@ -6274,6 +6263,7 @@ void WM_native_ui_exit()
   ui::native::popup_menu_forget();
   bridge_popup_releases.clear();
   ED_graph_native_exit();
+  ED_action_native_exit();
 }
 
 extern "C" void WM_native_ui_test_install_hooks()

@@ -111,7 +111,8 @@ final class TimelineStore {
     guard editTime else {
       switch command {
         case "start", "end": Operators.run("SCREEN_OT_frame_jump", ["end": .bool(command == "end")])
-        case "prev_key", "next_key": Operators.run("SCREEN_OT_keyframe_jump", ["next": .bool(command == "next_key")])
+        /* The Timeline's own jump, to the keys the strip draws (ROUND6 EDIT-6). */
+        case "prev_key", "next_key": Operators.run("anim.native_key_jump", ["next": .bool(command == "next_key")])
         default: Operators.run("SCREEN_OT_animation_play")
       }
       return

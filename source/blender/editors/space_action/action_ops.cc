@@ -10,6 +10,7 @@
 
 #include "DNA_space_types.h"
 
+#include "ED_action_native.hh"
 #include "ED_anim_api.hh"
 #include "ED_transform.hh"
 
@@ -26,6 +27,9 @@ namespace blender {
 
 void action_operatortypes()
 {
+  /* The native interface's key strip, run as the Timeline's own (ROUND6 EDIT-6). */
+  ED_action_native_operatortypes();
+
   /* keyframes */
   /* selection */
   WM_operatortype_append(ACTION_OT_clickselect);

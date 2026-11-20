@@ -218,6 +218,9 @@ struct Drag {
   std::string interaction;
   /** Per curve, its keys as they were, in scene time. */
   std::map<FCurve *, std::vector<BezTriple>> keys;
+  /** Per curve, how its values were shown when the drag began: held for the drag, as transform
+   * holds it, so a normalized curve's factor does not change under the finger (ROUND6 EDIT-6). */
+  std::map<FCurve *, ValueMapping> mappings;
 };
 Drag drag;
 
@@ -396,10 +399,30 @@ void activate(Curves &curves, const int index)
                           ANIMTYPE_FCURVE);
 }
 
+/** Whether the Graph Editor shows handles, which its transform's clean-up takes into account. */
+bool uses_handles(const Curves &curves)
+{
+  const SpaceGraph *space = reinterpret_cast<const SpaceGraph *>(curves.ac.sl);
+  return space == nullptr || (space->flag & SIPO_NOHANDLES) == 0;
+}
+
+void clear_drag_tags(FCurve &fcu)
+{
+  for (int i = 0; i < fcu.totvert; i++) {
+    fcu.bezt[i].f1 &= ~BEZT_FLAG_TEMP_TAG;
+    fcu.bezt[i].f2 &= ~BEZT_FLAG_TEMP_TAG;
+    fcu.bezt[i].f3 &= ~BEZT_FLAG_TEMP_TAG;
+  }
+}
+
 /** Moves the dragged keys, and their handles, by a frame and value delta from where they began;
- * or one handle to a place. */
+ * or one handle to a place. What moves is tagged as the Graph Editor's transform tags it, and the
+ * handles are tested and recalculated by those tags, as there: a Vector handle dragged on its own
+ * becomes Free, an Auto one Aligned, and the dragged handle wins over the other (ROUND6 EDIT-6,
+ * D23). */
 void apply_drag(Curves &curves, const DictionaryValue &query)
 {
+  const bool use_handle = uses_handles(curves);
   const double delta_frame = number(query, "df");
   const double delta_value = number(query, "dv");
   const int handle_curve = int(number(query, "curve", -1));
@@ -416,26 +439,28 @@ void apply_drag(Curves &curves, const DictionaryValue &query)
     {
       continue;
     }
-    const ValueMapping mapping = value_mapping(curves, ale);
+    auto held = drag.mappings.find(&fcu);
+    const ValueMapping mapping = held != drag.mappings.end() ? held->second :
+                                                               value_mapping(curves, ale);
     const float dv = float(delta_value) / (mapping.scale != 0.0f ? mapping.scale : 1.0f);
     ANIM_nla_mapping_apply_if_needed_fcurve(ale, &fcu, false, false);
+    bool moved = false;
     for (int i = 0; i < fcu.totvert; i++) {
       BezTriple &bezt = fcu.bezt[i];
       const BezTriple &from = found->second[i];
+      bezt.f1 &= ~BEZT_FLAG_TEMP_TAG;
+      bezt.f2 &= ~BEZT_FLAG_TEMP_TAG;
+      bezt.f3 &= ~BEZT_FLAG_TEMP_TAG;
       if (handle_side != 0) {
         if (index != handle_curve || i != handle_key) {
           continue;
         }
-        /* A handle on its own: auto handles become aligned, as dragging one does in Blender. */
+        /* A handle on its own. */
         const int point = handle_side < 0 ? 0 : 2;
         bezt.vec[point][0] = from.vec[point][0] + float(delta_frame);
         bezt.vec[point][1] = from.vec[point][1] + dv;
-        if (ELEM(bezt.h1, HD_AUTO, HD_AUTO_ANIM)) {
-          bezt.h1 = HD_ALIGN;
-        }
-        if (ELEM(bezt.h2, HD_AUTO, HD_AUTO_ANIM)) {
-          bezt.h2 = HD_ALIGN;
-        }
+        (handle_side < 0 ? bezt.f1 : bezt.f3) |= BEZT_FLAG_TEMP_TAG;
+        moved = true;
         continue;
       }
       if (from.f2 & SELECT) {
@@ -443,10 +468,18 @@ void apply_drag(Curves &curves, const DictionaryValue &query)
           bezt.vec[point][0] = from.vec[point][0] + float(delta_frame);
           bezt.vec[point][1] = from.vec[point][1] + dv;
         }
+        /* The key with its handles, as a tap selects it. */
+        bezt.f1 |= BEZT_FLAG_TEMP_TAG;
+        bezt.f2 |= BEZT_FLAG_TEMP_TAG;
+        bezt.f3 |= BEZT_FLAG_TEMP_TAG;
+        moved = true;
       }
     }
+    if (moved) {
+      testhandles_fcurve(&fcu, BEZT_FLAG_TEMP_TAG, use_handle);
+    }
     ANIM_nla_mapping_apply_if_needed_fcurve(ale, &fcu, true, false);
-    ale->update = eAnim_Update_Flags(ale->update | ANIM_UPDATE_DEPS | ANIM_UPDATE_HANDLES);
+    ale->update = eAnim_Update_Flags(ale->update | ANIM_UPDATE_DEPS);
   }
   ANIM_animdata_update(&curves.ac, &curves.list);
 }
@@ -463,7 +496,31 @@ void begin_drag(Curves &curves, const std::string &interaction)
     keys.assign(fcu.bezt, fcu.bezt + fcu.totvert);
     ANIM_nla_mapping_apply_if_needed_fcurve(ale, &fcu, true, false);
     drag.keys[&fcu] = std::move(keys);
+    drag.mappings[&fcu] = value_mapping(curves, ale);
   }
+}
+
+/**
+ * What the Graph Editor's transform does once a drag is let go (`special_aftertrans_update`):
+ * keys put back in order, a key landing on another replaces it, handles recalculated by what was
+ * moved. Without it, keys stacked on one frame and handles snapped back (ROUND6 EDIT-6, D23).
+ */
+void finish_drag(Curves &curves)
+{
+  const bool use_handle = uses_handles(curves);
+  for (bAnimListElem *ale : curves.items) {
+    FCurve &fcu = *static_cast<FCurve *>(ale->key_data);
+    if (!drag.keys.count(&fcu) || (fcu.flag & FCURVE_PROTECTED) || !(fcu.flag & FCURVE_VISIBLE)) {
+      continue;
+    }
+    ANIM_nla_mapping_apply_if_needed_fcurve(ale, &fcu, false, false);
+    sort_time_fcurve(fcu);
+    BKE_fcurve_merge_duplicate_keys(&fcu, BEZT_FLAG_TEMP_TAG, use_handle);
+    BKE_fcurve_handles_recalc_ex(fcu, eBezTriple_Flag(BEZT_FLAG_TEMP_TAG));
+    clear_drag_tags(fcu);
+    ANIM_nla_mapping_apply_if_needed_fcurve(ale, &fcu, true, false);
+  }
+  curves.update(ANIM_UPDATE_DEPS);
 }
 
 /** Blender's own operators on the selected keys, as their menus and keys run them. */
@@ -741,8 +798,7 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     if (phase == "update") {
       return std::string("");
     }
-    /* Keys passed by others are sorted back into order once let go, as in Blender. */
-    curves.update(ANIM_UPDATE_DEFAULT);
+    finish_drag(curves);
     drag = {};
     return std::string(number(query, "side") != 0 ? "Move Handle" : "Move Keyframes");
   }
@@ -765,11 +821,13 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
       }
       const ValueMapping mapping = value_mapping(curves, ale);
       ANIM_nla_mapping_apply_if_needed_fcurve(ale, &fcu, false, false);
+      bool changed = false;
       for (int i = 0; i < fcu.totvert; i++) {
         BezTriple &bezt = fcu.bezt[i];
         if (!(bezt.f2 & SELECT)) {
           continue;
         }
+        changed = true;
         const float df = frame ? float(*frame) - bezt.vec[1][0] : 0.0f;
         const float dv = value ? float(*value) / (mapping.scale != 0.0f ? mapping.scale : 1.0f) -
                                      mapping.offset - bezt.vec[1][1] :
@@ -778,6 +836,11 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
           bezt.vec[point][0] += df;
           bezt.vec[point][1] += dv;
         }
+      }
+      if (changed && frame) {
+        /* Keys typed onto one frame become one, as snapping them there does in Blender. */
+        sort_time_fcurve(fcu);
+        BKE_fcurve_merge_duplicate_keys(&fcu, SELECT, false);
       }
       ANIM_nla_mapping_apply_if_needed_fcurve(ale, &fcu, true, false);
     }

@@ -353,6 +353,11 @@ def decode_node(raw):
             fv = FloatsValue.FloatsValue()
             fv.Init(data.Value().Bytes, data.Value().Pos)
             entry.update(value=[fv.Value(i) for i in range(fv.ValueLength())])
+        elif data.ValueType() == Value.Value.IntsValue:
+            from Blender.NativeUI import IntsValue
+            iv = IntsValue.IntsValue()
+            iv.Init(data.Value().Bytes, data.Value().Pos)
+            entry.update(value=[iv.Value(i) for i in range(iv.ValueLength())])
         elif data.ValueType() == Value.Value.TextsValue:
             tv = TextsValue.TextsValue()
             tv.Init(data.Value().Bytes, data.Value().Pos)
@@ -6536,6 +6541,170 @@ def tick_nodegroups():
     return 0.3
 
 
+# ROUND6 EDIT-6 (D16, D23): the strip, its previous and next buttons and desktop's Timeline count
+# the same keys. On one scene with keys on every kind of owner (object, its data's shape keys, its
+# material, a bone selected and one not, the world, the scene, an object not selected, Grease
+# Pencil layers active and not), the frames the strip draws (`timeline_keys`), the frames its
+# buttons visit (`anim.native_key_jump`) and the frames a real Timeline's `screen.keyframe_jump`
+# visits are equal. Then the curve editor's drag: a key dragged onto another replaces it, and a
+# Vector handle dragged on its own becomes Free and stays where it was let go.
+timelinekeys_state = {"at": 0, "problems": [], "found": {}}
+
+
+def _timelinekeys_visits(run):
+    scene = bpy.context.scene
+    scene.frame_set(-1000)
+    visited = []
+    while len(visited) < 200 and run() == {'FINISHED'}:
+        visited.append(scene.frame_current)
+    return visited
+
+
+def _timelinekeys_desktop():
+    """The frames a real Timeline's jump visits: the screen's one area made a Timeline for it, as
+    desktop's editor menu does (another screen cannot be the context: the iPad's is temporary)."""
+    window, area, _region = _view3d()
+    area.ui_type = 'TIMELINE'
+    try:
+        region = next(r for r in area.regions if r.type == 'WINDOW')
+        space = area.spaces.active
+        settings = {"only selected": bpy.context.scene.show_keys_from_selected_only, "mode": space.mode}
+        with bpy.context.temp_override(window=window, area=area, region=region):
+            return settings, _timelinekeys_visits(lambda: bpy.ops.screen.keyframe_jump(next=True))
+    finally:
+        area.ui_type = 'VIEW_3D'
+
+
+def tick_timelinekeys():
+    global step
+    state = timelinekeys_state
+    problems = state["problems"]
+    found = state["found"]
+    scene = bpy.context.scene
+    try:
+        pump()
+        step += 1
+        at = state["at"]
+        state["at"] += 1
+        if at == 0:
+            enter("object")
+            scene.frame_start, scene.frame_end = 1, 120
+            cube = bpy.data.objects["Cube"]
+            camera = bpy.data.objects["Camera"]
+            cube.keyframe_insert("location", frame=5)
+            cube.shape_key_add(name="Basis")
+            shape = cube.shape_key_add(name="Key")
+            shape.keyframe_insert("value", frame=15)
+            material = cube.active_material or bpy.data.materials.new("Keyed")
+            if not cube.material_slots:
+                cube.data.materials.append(material)
+            material.keyframe_insert("diffuse_color", frame=20)
+            scene.world.keyframe_insert("color", frame=25)
+            scene.keyframe_insert("audio_volume", frame=30)
+            camera.keyframe_insert("location", frame=35)
+            bpy.ops.object.armature_add(location=(4, 0, 0))
+            rig = bpy.context.view_layer.objects.active
+            bpy.ops.object.mode_set(mode='EDIT')
+            second = rig.data.edit_bones.new("Second")
+            second.head, second.tail = (0, 0, 1), (0, 0, 2)
+            bpy.ops.object.mode_set(mode='POSE')
+            for name, frame in ((rig.pose.bones[0].name, 40), ("Second", 45)):
+                rig.pose.bones[name].keyframe_insert("location", frame=frame)
+            for pose_bone in rig.pose.bones:
+                owner = pose_bone if hasattr(pose_bone, "select") else pose_bone.bone
+                owner.select = pose_bone.name != "Second"
+            bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.ops.object.grease_pencil_add(type='EMPTY', location=(-4, 0, 0))
+            pencil = bpy.context.view_layer.objects.active
+            ink = pencil.data.layers.new("Ink")
+            other = pencil.data.layers.new("Other")
+            ink.frames.new(50)
+            other.frames.new(55)
+            pencil.data.layers.active = ink
+            bpy.ops.object.select_all(action='DESELECT')
+            for ob in (cube, rig, pencil):
+                ob.select_set(True)
+            bpy.context.view_layer.objects.active = cube
+            subs["keys"] = subscribe("timeline_keys")
+        elif at == 3:
+            strip = views.get(subs["keys"], {"nodes": {}})["nodes"].get("keys", {}).get("value")
+            jumps = _timelinekeys_visits(lambda: bpy.ops.anim.native_key_jump(next=True))
+            settings, desktop = _timelinekeys_desktop()
+            found.update({"strip": strip, "strip jump": jumps, "desktop Timeline": desktop,
+                          "desktop Timeline settings": settings})
+            if desktop is None:
+                problems.append("EDIT-6: no Timeline in the file to compare with")
+            elif not (strip == jumps == desktop):
+                problems.append("EDIT-6: the strip draws %r, its jump visits %r, desktop's Timeline %r" %
+                                (strip, jumps, desktop))
+            if strip and 35 in strip:
+                problems.append("EDIT-6: the strip draws the unselected camera's key at 35: %r" % strip)
+            # The curve editor: one curve, keys at 1, 10 and 20; the one at 1 dragged onto 10. The
+            # scene's and the world's curves, listed whatever is selected, go first.
+            scene.animation_data_clear()
+            scene.world.animation_data_clear()
+            bpy.ops.object.select_all(action='DESELECT')
+            bpy.ops.object.empty_add(location=(0, 4, 0))
+            empty = bpy.context.view_layer.objects.active
+            for frame, value in ((1, 0.0), (10, 2.0), (20, 1.0)):
+                empty.location.x = value
+                empty.keyframe_insert("location", index=0, frame=frame)
+            subs["graph"] = subscribe("graph")
+            canvas_command(subs["graph"], "state", Op.Op.Set, {"only_selected": 1}, 7401)
+        elif at == 5:
+            empty = bpy.context.view_layer.objects.active
+            fcurve = empty.animation_data.action.layers[0].strips[0].channelbags[0].fcurves[0]
+            for point in fcurve.keyframe_points:
+                selected = round(point.co.x) == 1
+                point.select_control_point = point.select_left_handle = point.select_right_handle = selected
+            canvas_command(subs["graph"], "edit", Op.Op.Invoke,
+                           {"action": "move", "interaction": "drag-1", "phase": "update", "df": 4.0, "dv": 0.0,
+                            "sequence": 2}, 7403)
+            canvas_command(subs["graph"], "edit", Op.Op.Invoke,
+                           {"action": "move", "interaction": "drag-1", "phase": "end", "df": 9.0, "dv": 0.0,
+                            "sequence": 3}, 7404)
+        elif at == 7:
+            empty = bpy.context.view_layer.objects.active
+            fcurve = empty.animation_data.action.layers[0].strips[0].channelbags[0].fcurves[0]
+            keys = [(round(p.co.x, 3), round(p.co.y, 3)) for p in fcurve.keyframe_points]
+            found["curve after a key dragged onto another"] = {"answers": [acks.get(7403), acks.get(7404)], "keys": keys}
+            if keys != [(10.0, 0.0), (20.0, 1.0)]:
+                problems.append("EDIT-6 (D23): dragging the key at 1 onto 10 left %r (one key at 10, the dragged one's value)" % (keys,))
+            # A Vector handle dragged on its own.
+            point = fcurve.keyframe_points[0]
+            point.handle_left_type = point.handle_right_type = 'VECTOR'
+            fcurve.keyframe_points.handles_recalc()
+            for p in fcurve.keyframe_points:
+                p.select_control_point = p.select_left_handle = p.select_right_handle = p is point
+            state["handle from"] = tuple(point.handle_right)
+            canvas_command(subs["graph"], "edit", Op.Op.Invoke,
+                           {"action": "move", "interaction": "drag-2", "phase": "end", "df": 0.0, "dv": 1.5,
+                            "curve": 0, "key": 0, "side": 1, "sequence": 4}, 7405)
+        elif at == 9:
+            empty = bpy.context.view_layer.objects.active
+            fcurve = empty.animation_data.action.layers[0].strips[0].channelbags[0].fcurves[0]
+            point = fcurve.keyframe_points[0]
+            want = state["handle from"][1] + 1.5
+            found["vector handle dragged"] = {"answer": acks.get(7405), "types": (point.handle_left_type, point.handle_right_type),
+                                              "right handle y": round(point.handle_right.y, 3), "wanted": round(want, 3),
+                                              "keys": [(tuple(round(v, 3) for v in p.handle_left), tuple(round(v, 3) for v in p.co),
+                                                        tuple(round(v, 3) for v in p.handle_right)) for p in fcurve.keyframe_points],
+                                              "from": state["handle from"]}
+            if point.handle_right_type != 'FREE' or point.handle_left_type != 'VECTOR' or abs(point.handle_right.y - want) > 1e-3:
+                problems.append("EDIT-6 (D23): a dragged Vector handle: %r" % found["vector handle dragged"])
+        elif at >= 10:
+            report["found"] = found
+            report["problems"] = problems
+            finish("done" if not problems else "error")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        report["found"] = found
+        finish("error")
+        return None
+    return 0.3
+
+
 # Every scenario, by the name `mac_bridge_check.py --scenario` takes: the one list (ROUND7 U4d).
 # `mac_bridge_check.py`'s SCENARIOS must name exactly these, which `bl_native_test_runners.py`
 # checks; a name not here ends the run with an error, never another scenario's run.
@@ -6550,6 +6719,7 @@ SCENARIOS = {
     "windows": tick_windows, "margins": tick_margins, "census": tick_census, "stale": tick_stale,
     "header": tick_header, "popups": tick_popups, "statuskeys": tick_statuskeys,
     "answers": tick_answers, "animkeys": tick_animkeys, "nodegroups": tick_nodegroups,
+    "timelinekeys": tick_timelinekeys,
 }
 
 

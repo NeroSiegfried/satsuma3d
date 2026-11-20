@@ -1763,7 +1763,8 @@ EXECUTED_D9 = {
     'WM_OT_collection_export_all': 'exports with the exporters the collections hold',
     'WM_OT_context_toggle': 'flips the property it names',
     'ANIM_OT_native_key_delete': 'the timeline\'s own', 'ANIM_OT_native_key_move': 'the timeline\'s own',
-    'ANIM_OT_native_key_select': 'the timeline\'s own', 'WM_OT_native_node_tree_new': 'the node editor\'s own',
+    'ANIM_OT_native_key_select': 'the timeline\'s own', 'ANIM_OT_native_key_jump': 'the timeline\'s own jump',
+    'WM_OT_native_node_tree_new': 'the node editor\'s own',
     'OBJECT_OT_location_clear': 'clears', 'OBJECT_OT_rotation_clear': 'clears', 'OBJECT_OT_scale_clear': 'clears',
     'VIEW3D_OT_view_center_camera': 'frames the camera', 'VIEW3D_OT_localview': 'toggles Local View',
 }

@@ -22,7 +22,6 @@ _modules = [
     "native_render",
     "native_reveal",
     "native_settings",
-    "native_timeline",
     "native_view_state",
     "anim",
     "asset_shelf",
