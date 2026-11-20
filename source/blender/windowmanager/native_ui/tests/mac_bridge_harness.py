@@ -3528,6 +3528,15 @@ def _jobs_start_ocean(directory):
         return bpy.ops.object.ocean_bake('INVOKE_DEFAULT', modifier="Ocean")
 
 
+# `WM_operator_name_call`, as a button calls an operator: no depsgraph evaluation after it.
+_OP_NAME_CALL = getattr(lib, "_ZN7blender21WM_operator_name_callEPNS_8bContextEPKcNS_2wm13OpCallContext"
+                             "EPNS_10PointerRNAEPKNS_7wmEventE")
+_OP_NAME_CALL.restype = ctypes.c_int
+_OP_NAME_CALL.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int8, ctypes.c_void_p, ctypes.c_void_p]
+_EXEC_DEFAULT = 6  # `wm::OpCallContext::ExecDefault`.
+_OP_STATUS = ((1, "RUNNING_MODAL"), (2, "CANCELLED"), (4, "FINISHED"), (8, "PASS_THROUGH"), (32, "INTERFACE"))
+
+
 def _jobs_start_dynamic_paint(directory):
     ob = _jobs_mesh("Canvas", bpy.ops.mesh.primitive_grid_add, x_subdivisions=20, y_subdivisions=20)
     ob.modifiers.new("DynamicPaint", 'DYNAMIC_PAINT')
@@ -3540,7 +3549,13 @@ def _jobs_start_dynamic_paint(directory):
     surface.frame_start, surface.frame_end = 1, 5000
     with bpy.context.temp_override(**_jobs_window(), object=ob, active_object=ob):
         bpy.ops.mesh.uv_texture_add() if not ob.data.uv_layers else None
-        return bpy.ops.dpaint.bake()
+        # Started as its button starts it, not by `bpy.ops` (ROUND7 U4d): the bake returns FINISHED
+        # with its job running, and `bpy.ops` then evaluates the view layer's depsgraph again on
+        # this thread while the job evaluates the same one: two threads in
+        # `dynamicPaint_Modifier_do` on one object, a use after free (Blender's own, 5.1.2's and
+        # 5.3.0's code alike, reached only by a script, never by the button).
+        status = _OP_NAME_CALL(bpy.context.as_pointer(), b"DPAINT_OT_bake", _EXEC_DEFAULT, None, None)
+        return {name for bit, name in _OP_STATUS if status & bit}
 
 
 def _jobs_start_alembic(directory):
@@ -5217,13 +5232,25 @@ def _touchstart_enter_for(idname):
     return mode, name
 
 
-bpy.app.timers.register({"touch": tick_touch, "material": tick_material, "insets": tick_insets, "tabs": tick_tabs, "precision": tick_precision, "reveal": tick_reveal, "knife": tick_knife, "menus": tick_menus, "mirror": tick_mirror,
-                         "extensions": tick_extensions, "keys": tick_keys,
-                         "numinput": tick_numinput, "render": tick_render,
-                         "fingers": tick_fingers, "undo": tick_undo,
-                         "tolerance": tick_tolerance, "waiting": tick_waiting,
-                         "touchstart": tick_touchstart, "jobs": tick_jobs,
-                         "renderprogress": tick_render_progress, "busy": tick_busy,
-                         "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold, "typing": tick_typing, "windows": tick_windows, "margins": tick_margins, "census": tick_census,
-                         "stale": tick_stale}.get(SCENARIO, tick_actions),
-                        first_interval=1.0)
+# Every scenario, by the name `mac_bridge_check.py --scenario` takes: the one list (ROUND7 U4d).
+# `mac_bridge_check.py`'s SCENARIOS must name exactly these, which `bl_native_test_runners.py`
+# checks; a name not here ends the run with an error, never another scenario's run.
+SCENARIOS = {
+    "actions": tick_actions, "tabs": tick_tabs, "menus": tick_menus, "mirror": tick_mirror,
+    "reveal": tick_reveal, "knife": tick_knife, "precision": tick_precision, "material": tick_material,
+    "extensions": tick_extensions, "keys": tick_keys, "insets": tick_insets, "touch": tick_touch,
+    "numinput": tick_numinput, "render": tick_render, "fingers": tick_fingers, "undo": tick_undo,
+    "tolerance": tick_tolerance, "waiting": tick_waiting, "touchstart": tick_touchstart,
+    "jobs": tick_jobs, "renderprogress": tick_render_progress, "busy": tick_busy,
+    "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold, "typing": tick_typing,
+    "windows": tick_windows, "margins": tick_margins, "census": tick_census, "stale": tick_stale,
+}
+
+
+def _unknown_scenario():
+    report["error"] = "unknown scenario %r; known: %s" % (SCENARIO, ", ".join(SCENARIOS))
+    finish("error")
+    return None
+
+
+bpy.app.timers.register(SCENARIOS.get(SCENARIO, _unknown_scenario), first_interval=1.0)
