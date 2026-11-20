@@ -968,6 +968,16 @@ struct HeaderMenuButton: View {
   let node: NativeNode
 
   var body: some View {
+    if menuButtonView(node) == "popover" {
+      PopoverPanelButton(model: model, node: node, header: true)
+    }
+    else {
+      menu
+    }
+  }
+
+  @ViewBuilder
+  private var menu: some View {
     let route = BlenderMenus.route(menuName(node), tab: model.currentTab)
     Menu {
       BlenderMenuItems(route: route)
@@ -992,12 +1002,92 @@ struct HeaderMenuButton: View {
   }
 }
 
+/** What a menu button opens: Blender's menus (`menu`), or a popover's panel (`popover`). */
+@MainActor
+func menuButtonView(_ node: NativeNode) -> String {
+  node.content(Blender_NativeUI_MenuButton.self)?.view ?? ""
+}
+
+/** A menu button's parameter, such as a popover's `panel`. */
+@MainActor
+func menuButtonParam(_ node: NativeNode, _ key: String) -> String {
+  guard let button = node.content(Blender_NativeUI_MenuButton.self) else { return "" }
+  return (0..<button.paramsCount).compactMap { button.params(at: $0) }
+    .first { $0.key == key }?.value(type: Blender_NativeUI_TextValue.self)?.value ?? ""
+}
+
+/**
+ * A popover a panel's button opens, such as its header's presets or a popover in its body (ROUND6
+ * PANEL-8, findings B8 and B14): the popover's panel, which Blender draws from the tab it is
+ * opened from, as a view of its own while it shows, as Shading and Overlays are. In a header,
+ * Blender's icon alone; in a body, a widget the row's width.
+ */
+struct PopoverPanelButton: View {
+  let model: PanelsModel
+  let node: NativeNode
+  var header = false
+  @State private var content: PanelsModel?
+
+  var body: some View {
+    Button {
+      let panel = menuButtonParam(node, "panel")
+      guard !panel.isEmpty else { return }
+      content = PanelsModel(mode: .popover, tab: "POPOVER:" + panel + "\t" + model.currentTab)
+    } label: {
+      if header {
+        Group {
+          if let image = BlenderIcon.image(node.icon) {
+            Image(uiImage: image).renderingMode(.template)
+          }
+          else {
+            Image(systemName: "list.bullet")
+          }
+        }
+        .frame(width: 36, height: 36)
+        .contentShape(Rectangle())
+      }
+      else {
+        BlenderWidgetFace(icon: BlenderIcon.image(node.icon), text: node.label, arrow: true, fills: true)
+      }
+    }
+    .buttonStyle(.plain)
+    .foregroundStyle(header ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+    .disabled(!node.enabled)
+    .accessibilityLabel(node.label)
+    .popover(isPresented: Binding(get: { content != nil }, set: { if !$0 { dismiss() } })) {
+      if let content {
+        ScrollView {
+          PanelsForm(model: content, scrolls: false)
+        }
+        .frame(minWidth: 320, idealWidth: 360, minHeight: 120, idealHeight: 420)
+        .onDisappear { dismiss() }
+      }
+    }
+  }
+
+  /** Blender stops building the popover's view once it is gone. */
+  private func dismiss() {
+    if let content { NativeViews.shared.unsubscribe(content.view) }
+    content = nil
+  }
+}
+
 /** A button opening one of Blender's menus. */
 struct NativeMenuButton: View {
   let model: PanelsModel
   let node: NativeNode
 
   var body: some View {
+    if menuButtonView(node) == "popover" {
+      PopoverPanelButton(model: model, node: node)
+    }
+    else {
+      menu
+    }
+  }
+
+  @ViewBuilder
+  private var menu: some View {
     /* Blender's menu button, such as a node socket's link: a dropdown the row's width. */
     let route = BlenderMenus.route(menuName(node), tab: model.currentTab)
     Menu {

@@ -4289,13 +4289,13 @@ def tick_margins():
 CENSUS_KNOWN = {
     # Dropped, and said by the panel's (or the tab's) row. Labels are lines of their own
     # (PANEL-2), sections sub-panels (PANEL-3) and menus Blender builds in C menu buttons
-    # (PANEL-4), the active object's panels stay with others selected (PANEL-6), and curves are
-    # curve nodes (PANEL-7): one dropped is a failure. Popups Blender builds in C are not menus
-    # yet.
+    # (PANEL-4), the active object's panels stay with others selected (PANEL-6), curves are
+    # curve nodes (PANEL-7), and header presets and Properties' popovers open as views (PANEL-8):
+    # one dropped is a failure. Popups Blender builds in C are not menus yet; popovers of other
+    # editors (the 3D View's asset shelf) are MODE-1's.
     "c_block": ("B4", "PANEL-4 (popups)"),
     "callback": ("B18, Table 1", "PANEL-14"),
-    "header_preset": ("B8", "PANEL-8"),
-    "popover": ("B14", "PANEL-8"),
+    "popover": ("B14", "MODE-1"),
     "path_button": ("B10", "PANEL-10"),
     "id_open": ("B10", "PANEL-10"),
     "pointer": ("B11", "PANEL-11"),
@@ -4317,7 +4317,7 @@ CENSUS_KNOWN = {
     "tree": ("B18", "PANEL-14"),
 }
 # The findings PANEL-1 showed first whose packages are not built yet: each must still show.
-CENSUS_FIRST = ("B4", "B8", "B10", "B11", "B16", "B17", "B18", "B21")
+CENSUS_FIRST = ("B4", "B10", "B11", "B16", "B17", "B18", "B21")
 # Sections opened by the census's taps, as sub-panels with their rows (PANEL-3): by stage, tab
 # and title, one kept by the view (Principled BSDF's Emission) and one by a modifier's property
 # (Subdivision's Advanced, `open_advanced_panel`).
@@ -4634,7 +4634,28 @@ def tick_census():
             report["steps"].append({"name": stage, "views": len(walks), "fates": sum(len(w) for w in walks.values()),
                                     "dropped": counted, "rows": shown})
         # The object stage runs its header menu's item before the next stage changes the scene.
-        if at == {"object": 31, "selection": 26}.get(stage, 16):
+        if stage == "selection" and at == 27:
+            # Format's presets, in its header (B8, PANEL-8): a popover, opened as a view of its own.
+            presets = [n for n in _census_nodes(tree(subs.get("OUTPUT")) or {})
+                       if n.get("content") == "MenuButton" and n.get("view") == "popover"
+                       and (n.get("params") or {}).get("panel") == "RENDER_PT_format_presets"]
+            if not presets or presets[0].get("role") != 7:
+                state["problems"].append("selection OUTPUT: Format's presets are not a popover in its header: %r" % presets)
+            else:
+                state["popover"] = subscribe("properties", tab="POPOVER:RENDER_PT_format_presets\tOUTPUT")
+        if stage == "selection" and at == 29 and state.get("popover"):
+            items = [n for n in _census_nodes(tree(state["popover"]) or {}) if n.get("content") == "Button"]
+            preset = next((n for n in items if n.get("label") == "HDTV 720p"), None)
+            if not preset:
+                state["problems"].append("Format's presets popover lists %r" % [n.get("label") for n in items])
+            else:
+                invoke(state["popover"], preset["key"], 99)
+        if stage == "selection" and at == 31 and state.get("popover"):
+            render = bpy.context.scene.render
+            if (render.resolution_x, render.resolution_y) != (1280, 720):
+                state["problems"].append("HDTV 720p from the presets popover left %dx%d (ack %r)" % (
+                    render.resolution_x, render.resolution_y, acks.get(99)))
+        if at == {"object": 31, "selection": 32}.get(stage, 16):
             state["stage"] += 1
             state["start"] = step + 1
             if state["stage"] == len(CENSUS_STAGES):

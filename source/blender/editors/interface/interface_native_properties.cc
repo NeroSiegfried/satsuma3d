@@ -2927,6 +2927,9 @@ constexpr const char *PREFERENCES_TAB_PREFIX = "PREFERENCES_";
 /* The 3D Viewport sidebar's tabs other than Tool, add-ons' among them (LoopTools' Edit and the
  * like), as Properties tabs named apart: `SIDEBAR:Edit`. */
 constexpr const char *SIDEBAR_TAB_PREFIX = "SIDEBAR:";
+/** A popover a panel's button opens (PANEL-8): this, the popover's panel, and after a tab the tab
+ * it is opened from. */
+constexpr const char *POPOVER_TAB_PREFIX = "POPOVER:";
 
 /** The sidebar's categories beside Tool that have panels, in the order Blender registered them. */
 static Vector<std::string> sidebar_categories()
@@ -3476,6 +3479,23 @@ static std::string panels_walk(bContext *C,
   const bool viewport = header_popover || tool_settings;
   /* The Preferences' sections, their tabs named apart from the Properties' ones. */
   const bool preferences = StringRef(requested_tab).startswith(PREFERENCES_TAB_PREFIX);
+  /* A popover a panel's button opens, such as a header's presets (B8, B14, PANEL-8): its panel,
+   * drawn in the Properties tab it is opened from, as Blender draws it from there. */
+  const bool panel_popover = StringRef(requested_tab).startswith(POPOVER_TAB_PREFIX);
+  std::string popover_id, popover_origin;
+  PanelType *popover_type = nullptr;
+  if (panel_popover) {
+    const StringRef rest = StringRef(requested_tab).drop_prefix(strlen(POPOVER_TAB_PREFIX));
+    const int64_t at = rest.find('\t');
+    popover_id = at == StringRef::not_found ? rest : rest.substr(0, at);
+    popover_origin = at == StringRef::not_found ? "" : rest.substr(at + 1);
+    popover_type = WM_paneltype_find(popover_id.c_str(), true);
+    if (!popover_type || popover_type->space_type != SPACE_PROPERTIES) {
+      return nothing("This popover is only in the Desktop Interface.");
+    }
+  }
+  /* The Properties tab to draw in. */
+  const std::string &properties_tab = panel_popover ? popover_origin : requested_tab;
   std::unique_ptr<DetachedAreaContext> detached_context;
   if (preferences) {
     detached_context = std::make_unique<DetachedAreaContext>(C, SPACE_USERPREF);
@@ -3509,9 +3529,9 @@ static std::string panels_walk(bContext *C,
     int selected = BCONTEXT_OBJECT;
     /* A sidebar tab shows as Blender's Tool tab does, the Properties' place for the 3D Viewport's
      * sidebar panels. */
-    const bool sidebar_requested = StringRef(requested_tab).startswith(SIDEBAR_TAB_PREFIX);
+    const bool sidebar_requested = StringRef(properties_tab).startswith(SIDEBAR_TAB_PREFIX);
     if (!RNA_enum_value_from_identifier(
-            items, sidebar_requested ? "TOOL" : requested_tab.c_str(), &selected))
+            items, sidebar_requested ? "TOOL" : properties_tab.c_str(), &selected))
     {
       selected = context.space->mainb;
     }
@@ -3542,6 +3562,12 @@ static std::string panels_walk(bContext *C,
     if (sidebar_requested &&
         std::any_of(tabs.begin(), tabs.end(), [&](const Tab &tab) { return tab.id == requested_tab; }))
     {
+      tab_id = requested_tab;
+    }
+    if (panel_popover) {
+      /* The popover alone: no tabs and no context path of its own. */
+      tabs.clear();
+      properties_space = nullptr;
       tab_id = requested_tab;
     }
   }
@@ -3639,7 +3665,7 @@ static std::string panels_walk(bContext *C,
       }
     }
   }
-  if (writer && !viewport && !preferences && tab_id != "TOOL") {
+  if (writer && !viewport && !preferences && !panel_popover && tab_id != "TOOL") {
     /* With several objects selected, which of them an edit goes to: the active one, or with the
      * switch on every selected one that has the property (R6-10, PANEL-6). */
     const int64_t selected = CTX_data_collection_get(C, "selected_editable_objects").size();
@@ -3727,7 +3753,21 @@ static std::string panels_walk(bContext *C,
                                                                   RGN_TYPE_UI) :
                                            panel_region_type;
   WorkSpace *workspace = CTX_wm_workspace(C);
+  if (panel_popover) {
+    /* The popover's panel and its sub-panels, as Blender draws them in the popover. */
+    const std::function<void(PanelType &, const std::string &)> add = [&](PanelType &pt,
+                                                                            const std::string &parent) {
+      candidates.push_back({&pt, nullptr, pt.idname, parent});
+      for (LinkData &link : pt.children) {
+        add(*static_cast<PanelType *>(link.data), pt.idname);
+      }
+    };
+    add(*popover_type, "");
+  }
   for (PanelType &pt : candidate_region_type->paneltypes) {
+    if (panel_popover) {
+      break;
+    }
     if (sidebar_tab) {
       /* The category's panels and their sub-panels. */
       if (pt.parent_id[0] ? !sidebar_panels.count(pt.parent_id) : sidebar_category != pt.category) {
@@ -3836,7 +3876,7 @@ static std::string panels_walk(bContext *C,
       }
       continue;
     }
-    if (writer && pt.draw && !viewport && !tool_tab && !sidebar_tab && !candidate.instance &&
+    if (writer && pt.draw && !viewport && !tool_tab && !sidebar_tab && !panel_popover && !candidate.instance &&
         panel_context != pt.context && !(preferences && panel_context.empty()) &&
         (candidate.parent.empty() ? !pt.context[0] : panel_nodes.count(candidate.parent) != 0) &&
         panel_poll(C, &pt))
@@ -3850,7 +3890,8 @@ static std::string panels_walk(bContext *C,
       continue;
     }
     if (!pt.draw ||
-        (!viewport && !tool_tab && !sidebar_tab && !candidate.instance && panel_context != pt.context) ||
+        (!viewport && !tool_tab && !sidebar_tab && !panel_popover && !candidate.instance &&
+         panel_context != pt.context) ||
         (preferences && panel_context.empty()) ||
         /* Header-less Properties panels hold data-block pickers and slots (e.g. a material's
          * context panel); viewport ones are decorative. */
@@ -3955,6 +3996,10 @@ static std::string panels_walk(bContext *C,
     }
     if (pt.draw_header) {
       pt.draw_header(C, panel);
+    }
+    if (pt.draw_header_preset && !header_popover) {
+      /* Its presets, which Blender draws in its header (B8, PANEL-8): a popover's button. */
+      pt.draw_header_preset(C, panel);
     }
     std::set<Button *> header_buttons;
     for (const auto &button : block->buttons) {
@@ -5006,6 +5051,37 @@ static std::string panels_walk(bContext *C,
           continue;
         }
       }
+      if (PanelType *popover = but.type == ButtonType::Popover && !header_popover ?
+                                   button_paneltype_get(&but) :
+                                   nullptr;
+          popover && popover->space_type == SPACE_PROPERTIES && !viewport && !preferences)
+      {
+        /* A popover of the panel's, such as its header's presets (B8, B14, PANEL-8): opened by
+         * the interface as a view of its own (`POPOVER:` tab), as Shading and Overlays are. */
+        if (writer && !(but.flag & UI_HIDDEN)) {
+          const std::string label = !but.str.empty() ? but.str : std::string(popover->label);
+          const bool in_header = header_buttons.count(&but) != 0;
+          writer->builder.add(node,
+                              writer->key(std::string("popover:") + candidate.id + ":" + popover->idname),
+                              [&](Buffer &buffer, NodeFields &fields) {
+                                fields.label = label;
+                                fields.icon = icon_name(button_icon(&but));
+                                fields.enabled = !(but.flag & BUT_DISABLED);
+                                fields.role = in_header ? protocol::Role::Header :
+                                                          protocol::Role::None;
+                                const auto param = protocol::CreateParamDirect(
+                                    buffer,
+                                    "panel",
+                                    protocol::Value::TextValue,
+                                    protocol::CreateTextValueDirect(buffer, popover->idname).Union());
+                                return protocol::CreateMenuButton(buffer,
+                                                                  buffer.CreateString("popover"),
+                                                                  buffer.CreateVector(&param, 1));
+                              });
+          decide(&but, fate_projected("Popover"));
+        }
+        continue;
+      }
       if (!execute && !open && !header_toggle && !header_operator && !header_name) {
         continue;
       }
@@ -5248,10 +5324,6 @@ static std::string panels_walk(bContext *C,
           panel_said->add(fate.counted);
         }
       };
-      if (pt.draw_header_preset) {
-        /* The presets Blender draws in the panel's header (B8). */
-        note("HeaderPreset", pt.idname, fate_dropped("header_preset"));
-      }
       for (const Section &section : sections) {
         /* A sub-panel, opened and closed as Blender's (PANEL-3). */
         note("Section", section.title, fate_projected("Panel"));

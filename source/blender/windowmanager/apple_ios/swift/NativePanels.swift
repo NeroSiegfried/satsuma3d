@@ -111,6 +111,8 @@ final class PanelsModel {
     case dialog
     /** Controls of a canvas, such as the node editor's nodes'. */
     case canvas
+    /** A popover a panel's button opens, such as its header's presets (ROUND6 PANEL-8). */
+    case popover
   }
 
   let mode: Mode
