@@ -228,8 +228,10 @@ struct ReferenceRow: View {
   private var actionsMenu: some View {
     let reference = self.reference
     let canNew = reference?.canNew == true
+    /* A file opened as a new one, as the template's Open does (ROUND6 PANEL-10). */
+    let canOpen = reference?.canOpen == true
     let canRename = has && reference?.linked != true
-    let any = canNew || canRename || reference?.canFakeUser == true || reference?.canSingleUser == true ||
+    let any = canNew || canOpen || canRename || reference?.canFakeUser == true || reference?.canSingleUser == true ||
       reference?.canUnlink == true
     if any {
       Menu {
@@ -239,6 +241,13 @@ struct ReferenceRow: View {
               model.send(node, .add)
             } label: {
               Label(has ? "Duplicate" : "New \(type)", systemImage: has ? "plus.square.on.square" : "plus")
+            }
+          }
+          if canOpen {
+            Button {
+              model.send(node, .invoke, .text("open"))
+            } label: {
+              Label("Open…", systemImage: "folder")
             }
           }
           if canRename {

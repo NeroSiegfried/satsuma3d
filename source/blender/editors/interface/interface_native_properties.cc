@@ -1509,7 +1509,8 @@ bool apply_id_template(bContext *C,
                        wmOperatorType *&r_operator_type,
                        PointerRNA *&r_operator_properties,
                        std::unique_ptr<bContextStore> &r_operator_context,
-                       PendingNewID &r_pending)
+                       PendingNewID &r_pending,
+                       Button *&r_button)
 {
   PointerRNA ptr = ptr_const;
   if (!RNA_property_editable(&ptr, prop)) {
@@ -1561,6 +1562,7 @@ bool apply_id_template(bContext *C,
     if (button->context) {
       r_operator_context = std::make_unique<bContextStore>(*button->context);
     }
+    r_button = button;
     r_pending.ptr = ptr;
     r_pending.prop = prop;
     if (ListBaseT<ID> *ids = idcode ? which_libbase(bmain, idcode) : nullptr) {
@@ -1568,6 +1570,23 @@ bool apply_id_template(bContext *C,
         r_pending.before.insert(&existing);
       }
     }
+    return true;
+  }
+  else if (action == "open") {
+    /* Open, as the template's own button does (B10, PANEL-10): its operator, invoked, asks for
+     * the file (the system's picker on the iPad), and assigns what it opens through the
+     * template, which it finds as the button last clicked (#run_operator). */
+    Button *button = id_template_part(block, ptr, prop, UI_ID_OPEN);
+    if (!button || !button->optype || r_operator_type) {
+      return false;
+    }
+    r_operator_type = button->optype;
+    r_operator_properties = button->opptr;
+    button->opptr = nullptr;
+    if (button->context) {
+      r_operator_context = std::make_unique<bContextStore>(*button->context);
+    }
+    r_button = button;
     return true;
   }
   else if (action == "load_font" && idcode == ID_VF && !value.empty()) {
@@ -2128,9 +2147,12 @@ class Writer {
     }
     else if (type == PROP_STRING) {
       const std::string value = RNA_property_string_get(ptr, prop);
+      /* A file or folder, whose folder button beside it opens the system's picker (PANEL-10). */
+      const bool path = ELEM(
+          RNA_property_subtype(prop), PROP_FILEPATH, PROP_DIRPATH, PROP_FILENAME);
       node = builder.add(parent, key, [&](Buffer &buffer, NodeFields &fields) {
         common(fields);
-        return protocol::CreateTextFieldDirect(buffer, value.c_str());
+        return protocol::CreateTextFieldDirect(buffer, value.c_str(), false, path);
       });
     }
     else if (type == PROP_ENUM) {
@@ -2331,6 +2353,7 @@ class Writer {
     const std::string key = this->key(edit_key);
     data.edits.add_overwrite(key, {Edit::Kind::Picker, panel, edit_key});
     const Button *new_button = id_template_part(block, ptr, prop, UI_ID_ADD_NEW);
+    const Button *open_button = id_template_part(block, ptr, prop, UI_ID_OPEN);
     const Button *unlink = id_template_part(block, ptr, prop, UI_ID_DELETE);
     if (!unlink) {
       unlink = id_template_part(block, ptr, prop, UI_ID_NOP);
@@ -2382,7 +2405,10 @@ class Writer {
           /* Fonts are chosen with the system's font picker, see `load_font`. */
           idcode == ID_VF,
           buffer.CreateString(idcode == ID_VF && id ? reinterpret_cast<VFont *>(id)->filepath :
-                                                      ""));
+                                                      ""),
+          /* Any other file, with the template's Open (PANEL-10). */
+          idcode != ID_VF && open_button && open_button->optype &&
+              !(open_button->flag & BUT_DISABLED));
     });
   }
 
@@ -3365,12 +3391,6 @@ Fate property_fate(const Button &but)
     /* A palette's swatch picks its colour in Blender; here it edits it (B17). */
     reduced("palette");
   }
-  else if (type == PROP_STRING &&
-           ELEM(RNA_property_subtype(but.rnaprop), PROP_FILEPATH, PROP_DIRPATH, PROP_FILENAME))
-  {
-    /* Typed, not chosen with a picker (B10). */
-    reduced("path");
-  }
   else if (but.type == ButtonType::SearchMenu && type == PROP_STRING) {
     /* A name to pick from a list, typed without the list (B11). */
     reduced("search");
@@ -3766,6 +3786,78 @@ static std::string panels_walk(bContext *C,
   /* How the button calls it, see #Button::opcontext. */
   wm::OpCallContext operator_call = wm::OpCallContext::InvokeRegionWin;
   PendingNewID pending_new_id;
+  /* Why the operator did not run, if it was asked for and could not; whether it ran. */
+  std::string refused;
+  bool ran = false;
+  /* The button whose operator runs, as a click leaves it: Blender's own operators find their
+   * target through it (a path's folder button its path, a template's Open and New the template),
+   * see #run_operator. */
+  Button *operator_button = nullptr;
+  /**
+   * Runs the operator a button asked for, as a click on it runs it (B5, B10, PANEL-5, PANEL-10):
+   * with its call, which invokes it unless the panel asked for exec, or it is an enum menu's
+   * choice, and with its context store. Invoke asks what a click asks (a type and a domain, a
+   * collection, a file), which the native interface answers; a job starts as one, with its
+   * progress and Stop (B1). While it runs, the panel's \a block is one of the region's and
+   * \a button is the one last clicked, as Blender leaves them after a click, for operators that
+   * look for the active button (`context_active_but_get`), as #animate_property does for keys.
+   * Without a block it runs once the walk's panels are gone: a modal operator keeps the editor
+   * it starts in, the one shown, not this walk's.
+   */
+  const auto run_operator = [&](Block *block, Button *button) {
+    const wm::OpCallContext call = operator_exec ? wm::OpCallContext::ExecDefault : operator_call;
+    const bool invokes = operator_type->invoke && call <= wm::OpCallContext::InvokeScreen;
+    if (!block && invokes && operator_type->modal) {
+      detached_context.reset();
+    }
+    ARegion *region = block ? CTX_wm_region(C) : nullptr;
+    const int old_flag = button ? button->flag : 0;
+    if (region && button) {
+      BLI_addtail(&region->runtime->uiblocks, block);
+      button->flag |= BUT_ACTIVE_OVERRIDE | BUT_LAST_ACTIVE;
+    }
+    const bContextStore *previous = CTX_store_get(C);
+    CTX_store_set(C, operator_context.get());
+    if (WM_operator_poll_context(C, operator_type, call)) {
+      /* Adjust Last Operation follows it, as from the viewport. */
+      native_redo_from_panel = true;
+      const wmOperatorStatus status = WM_operator_name_call_ptr(
+          C, operator_type, call, operator_properties, nullptr);
+      native_redo_from_panel = false;
+      applied = status & OPERATOR_FINISHED;
+      /* Started (a modal operator, a job), handed to an interface (a dialog, a menu, a file
+       * picker), or cancelled as Blender's own button would be: done, the operator's reports said
+       * as Blender's are. */
+      ran = true;
+    }
+    else {
+      /* Blender's reason, as its greyed button's tooltip gives it. */
+      bool free_message = false;
+      const char *message = CTX_wm_operator_poll_msg_get(C, &free_message);
+      refused = message && message[0] ? std::string(message) :
+                                        WM_operatortype_name(operator_type, nullptr) +
+                                            " cannot run here.";
+      if (free_message) {
+        MEM_SAFE_DELETE(message);
+      }
+      CTX_wm_operator_poll_msg_clear(C);
+    }
+    CTX_store_set(C, previous);
+    if (region && button) {
+      BLI_remlink(&region->runtime->uiblocks, block);
+      button->flag = old_flag;
+    }
+    if (operator_properties) {
+      WM_operator_properties_free(operator_properties);
+      MEM_delete(operator_properties);
+      operator_properties = nullptr;
+    }
+    if (applied) {
+      finish_pending_new_id(C, pending_new_id);
+    }
+    operator_type = nullptr;
+    operator_button = nullptr;
+  };
   std::set<std::string> open_panels;
   /* Whether each candidate's body is visible, so nested sub-panels follow their parent. */
   std::map<std::string, bool> visible_panels;
@@ -4381,16 +4473,9 @@ static std::string panels_walk(bContext *C,
     std::map<const Button *, std::vector<const Button *>> row_items;
     if (preferences) {
       for (const auto &button : block->buttons) {
+        /* A path's folder button stays: it opens the system's picker (PANEL-10). */
         if (button->rnaprop && preferences_hidden(button->rnapoin, button->rnaprop)) {
           decide(button.get(), {"hidden", "", "preferences"});
-          combined.insert(button.get());
-        }
-        /* Paths are typed: Blender's file browser has no place in the native interface. */
-        else if (button->optype && ELEM(StringRef(button->optype->idname),
-                                        "BUTTONS_OT_file_browse",
-                                        "BUTTONS_OT_directory_browse"))
-        {
-          decide(button.get(), fate_dropped("path_button"));
           combined.insert(button.get());
         }
       }
@@ -4404,12 +4489,9 @@ static std::string panels_walk(bContext *C,
         if (template_id_property_get(*button, template_ptr, template_prop, event)) {
           if (event != UI_ID_BROWSE) {
             combined.insert(button.get());
-            /* The parts the picker shows (#Writer::picker), and those it does not: Open but for a
-             * font, which the system's font picker opens (B10); making local, overriding. */
-            const bool font = RNA_type_to_ID_code(
-                                  RNA_property_pointer_type(&template_ptr, template_prop)) == ID_VF;
+            /* The parts the picker shows (#Writer::picker), Open among them (PANEL-10), and those
+             * it does not: making local, overriding and pinning. */
             decide(button.get(),
-                   event == UI_ID_OPEN && !font                      ? fate_dropped("id_open") :
                    ELEM(event, UI_ID_LOCAL, UI_ID_OVERRIDE, UI_ID_PIN) ? fate_dropped("id_part") :
                                                                        fate_consumed("template"));
           }
@@ -4862,7 +4944,7 @@ static std::string panels_walk(bContext *C,
             if (target_panel && *requested_key == key && !applied) {
               applied = apply_id_template(C, *block, template_ptr, template_prop, *request,
                                           operator_type, operator_properties, operator_context,
-                                          pending_new_id);
+                                          pending_new_id, operator_button);
             }
           }
           else if (seen.insert(key).second) {
@@ -5008,6 +5090,7 @@ static std::string panels_walk(bContext *C,
               operator_context = std::make_unique<bContextStore>(*but.context);
             }
             operator_exec = true;
+            operator_button = &but;
           }
         }
         else if (seen.insert(key).second) {
@@ -5229,6 +5312,7 @@ static std::string panels_walk(bContext *C,
           operator_type = but.optype;
           operator_properties = but.opptr;
           operator_call = but.opcontext;
+          operator_button = &but;
           but.opptr = nullptr;
           if (but.context) {
             operator_context = std::make_unique<bContextStore>(*but.context);
@@ -5383,6 +5467,13 @@ static std::string panels_walk(bContext *C,
       }
     }
     node = panel_node_id;
+    if (operator_type && operator_button && execute && target_panel &&
+        !(operator_type->modal && operator_type->invoke && !operator_exec &&
+          operator_call <= wm::OpCallContext::InvokeScreen))
+    {
+      /* With the panel's block, the button found as a click leaves it (#run_operator). */
+      run_operator(block, operator_button);
+    }
     if (writer) {
       /* The census of this panel: what became of each button, and what it could not show,
        * which the row at the foot of its node says (R6-9). */
@@ -5474,55 +5565,9 @@ static std::string panels_walk(bContext *C,
     }
     say(top, "elsewhere", tab_said, "tab");
   }
-  /* Why the operator did not run, if it was asked for and could not; whether it ran. */
-  std::string refused;
-  bool ran = false;
   if (operator_type) {
-    /* As a click on the button runs it (B5, PANEL-5): with its call, which invokes it unless the
-     * panel asked for exec, or it is an enum menu's choice, and with its context store. Invoke
-     * asks what a click asks (a type and a domain, a collection, a file), which the native
-     * interface answers; a job starts as one, with its progress and Stop (B1). */
-    const wm::OpCallContext call = operator_exec ? wm::OpCallContext::ExecDefault : operator_call;
-    const bool invokes = operator_type->invoke && call <= wm::OpCallContext::InvokeScreen;
-    if (invokes && operator_type->modal) {
-      /* A modal operator, such as a bake or an eyedropper, keeps the editor it started in for
-       * its events: the one shown, not this walk's, which is gone once it returns. */
-      detached_context.reset();
-    }
-    const bContextStore *previous = CTX_store_get(C);
-    CTX_store_set(C, operator_context.get());
-    if (WM_operator_poll_context(C, operator_type, call)) {
-      /* Adjust Last Operation follows it, as from the viewport. */
-      native_redo_from_panel = true;
-      const wmOperatorStatus status = WM_operator_name_call_ptr(
-          C, operator_type, call, operator_properties, nullptr);
-      native_redo_from_panel = false;
-      applied = status & OPERATOR_FINISHED;
-      /* Started (a modal operator, a job), handed to an interface (a dialog, a menu), or
-       * cancelled as Blender's own button would be: done, the operator's reports said as
-       * Blender's are. */
-      ran = true;
-    }
-    else {
-      /* Blender's reason, as its greyed button's tooltip gives it. */
-      bool free_message = false;
-      const char *message = CTX_wm_operator_poll_msg_get(C, &free_message);
-      refused = message && message[0] ? std::string(message) :
-                                        WM_operatortype_name(operator_type, nullptr) +
-                                            " cannot run here.";
-      if (free_message) {
-        MEM_SAFE_DELETE(message);
-      }
-      CTX_wm_operator_poll_msg_clear(C);
-    }
-    CTX_store_set(C, previous);
-    if (operator_properties) {
-      WM_operator_properties_free(operator_properties);
-      MEM_delete(operator_properties);
-    }
-    if (applied) {
-      finish_pending_new_id(C, pending_new_id);
-    }
+    /* A modal operator's, run once the walk's panels are gone, see #run_operator. */
+    run_operator(nullptr, nullptr);
   }
   if (execute) {
     if (!refused.empty()) {
@@ -6719,6 +6764,7 @@ bool apply_node_property(bContext *C,
   PointerRNA *operator_properties = nullptr;
   std::unique_ptr<bContextStore> operator_context;
   PendingNewID pending;
+  Button *operator_button = nullptr;
   for_each_node_field(
       *block,
       [&](Button &but, const int index, const std::string &field_key) {
@@ -6732,19 +6778,35 @@ bool apply_node_property(bContext *C,
       [&](PointerRNA &ptr, PropertyRNA *prop) {
         if (!applied && picker && id_template_key(ptr, prop) == key) {
           applied = apply_id_template(C, *block, ptr, prop, request, operator_type,
-                                      operator_properties, operator_context, pending);
+                                      operator_properties, operator_context, pending,
+                                      operator_button);
         }
       });
-  /* New (or a copy), which the picker's own operator makes. */
+  /* New (or a copy), which the picker's own operator makes; Open, which asks for the file and
+   * finds the template as the button last clicked (PANEL-10, as #run_operator). */
   if (operator_type) {
+    const bool open = request.action == "open";
+    const wm::OpCallContext call = open ? wm::OpCallContext::InvokeDefault :
+                                          wm::OpCallContext::ExecDefault;
+    ARegion *region = open && operator_button ? CTX_wm_region(C) : nullptr;
+    const int old_flag = operator_button ? operator_button->flag : 0;
+    if (region) {
+      BLI_addtail(&region->runtime->uiblocks, block);
+      operator_button->flag |= BUT_ACTIVE_OVERRIDE | BUT_LAST_ACTIVE;
+    }
     const bContextStore *previous = CTX_store_get(C);
     CTX_store_set(C, operator_context.get());
-    if (WM_operator_poll_context(C, operator_type, wm::OpCallContext::ExecDefault)) {
-      applied = WM_operator_name_call_ptr(C, operator_type, wm::OpCallContext::ExecDefault,
-                                          operator_properties, nullptr) &
-                OPERATOR_FINISHED;
+    if (WM_operator_poll_context(C, operator_type, call)) {
+      const wmOperatorStatus status = WM_operator_name_call_ptr(
+          C, operator_type, call, operator_properties, nullptr);
+      /* Open finishes once a file is chosen. */
+      applied = (status & OPERATOR_FINISHED) || (open && (status & OPERATOR_RUNNING_MODAL));
     }
     CTX_store_set(C, previous);
+    if (region) {
+      BLI_remlink(&region->runtime->uiblocks, block);
+      operator_button->flag = old_flag;
+    }
     if (operator_properties) {
       WM_operator_properties_free(operator_properties);
       MEM_delete(operator_properties);

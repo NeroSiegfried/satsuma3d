@@ -245,6 +245,9 @@ table Reference {
   font: bool;
   /// The file it was loaded from, such as a font's.
   file: string;
+  /// A file can be opened as a new one, as the template's Open does: `Invoke` with `open`
+  /// (ROUND6 PANEL-10). Not for a font, which `font` covers.
+  can_open: bool;
 }
 
 /// How a button is drawn.

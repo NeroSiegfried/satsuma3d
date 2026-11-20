@@ -139,6 +139,42 @@ def send_floats(subscription, target, op, values, command_id):
     lib.WM_native_ui_send(data, len(data))
 
 
+def invoke_text(subscription, target, text, command_id):
+    """An `Invoke` carrying a text, such as a picker's `open` (ROUND6 PANEL-10)."""
+    builder = flatbuffers.Builder(256)
+    t = builder.CreateString(target)
+    v = builder.CreateString(text)
+    TextValue.Start(builder)
+    TextValue.AddValue(builder, v)
+    tv = TextValue.End(builder)
+    Command.Start(builder)
+    Command.AddId(builder, command_id)
+    Command.AddSubscription(builder, subscription)
+    Command.AddTarget(builder, t)
+    Command.AddOp(builder, Op.Op.Invoke)
+    Command.AddValueType(builder, Value.Value.TextValue)
+    Command.AddValue(builder, tv)
+    c = Command.End(builder)
+    Commands.StartCommandsVector(builder, 1)
+    builder.PrependUOffsetTRelative(c)
+    vec = builder.EndVector()
+    Commands.Start(builder)
+    Commands.AddCommands(builder, vec)
+    builder.Finish(Commands.End(builder))
+    data = bytes(builder.Output())
+    lib.WM_native_ui_send(data, len(data))
+
+
+def _census_file_browser():
+    """Blender's File Browser, as an operator opened it: its window, area and region."""
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == 'FILE_BROWSER':
+                region = next(r for r in area.regions if r.type == 'WINDOW')
+                return {"window": window, "area": area, "region": region}
+    return None
+
+
 def invoke(subscription, target, command_id, op=None):
     invoke_many(subscription, [(target, command_id)], op=op, version=0)
 
@@ -303,6 +339,7 @@ def decode_node(raw):
         table = node.Content()
         reference = Reference.Reference()
         reference.Init(table.Bytes, table.Pos)
+        entry.update(can_open=getattr(reference, "CanOpen", lambda: False)())
         entry.update(name=s(reference.Name()), users=reference.Users(), can_new=reference.CanNew(),
                      can_unlink=reference.CanUnlink(), can_single_user=reference.CanSingleUser(),
                      can_fake_user=reference.CanFakeUser(), fake_user=reference.FakeUser(),
@@ -4298,8 +4335,6 @@ CENSUS_KNOWN = {
     "c_block": ("B4", "PANEL-4 (popups)"),
     "callback": ("B18, Table 1", "PANEL-14"),
     "popover": ("B14", "MODE-1"),
-    "path_button": ("B10", "PANEL-10"),
-    "id_open": ("B10", "PANEL-10"),
     "pointer": ("B11", "PANEL-11"),
     "row_button": ("B18", "PANEL-14"),
     "grid": ("B18", "PANEL-14"),
@@ -4312,14 +4347,13 @@ CENSUS_KNOWN = {
     "key": ("Table 1", None),
     "property_type": ("Table 1", None),
     # Shown in part.
-    "path": ("B10", "PANEL-10"),
     "search": ("B11", "PANEL-11"),
     "enum_flag": ("B16", "PANEL-14"),
     "palette": ("B17", "PANEL-14"),
     "tree": ("B18", "PANEL-14"),
 }
 # The findings PANEL-1 showed first whose packages are not built yet: each must still show.
-CENSUS_FIRST = ("B4", "B10", "B11", "B16", "B17", "B18", "B21")
+CENSUS_FIRST = ("B4", "B11", "B16", "B17", "B18", "B21")
 # Sections opened by the census's taps, as sub-panels with their rows (PANEL-3): by stage, tab
 # and title, one kept by the view (Principled BSDF's Emission) and one by a modifier's property
 # (Subdivision's Advanced, `open_advanced_panel`).
@@ -4367,6 +4401,12 @@ def _census_scene():
     cube.constraints.new('COPY_LOCATION').target = rig
     light = bpy.data.objects.new("Lamp", bpy.data.lights.new("Lamp", 'POINT'))
     scene.collection.objects.link(light)
+    # An Image Texture feeding the material's Base Color, whose image has the template's Open.
+    tree = cube.active_material.node_tree
+    texture = tree.nodes.new("ShaderNodeTexImage")
+    tree.links.new(texture.outputs["Color"], tree.nodes["Principled BSDF"].inputs["Base Color"])
+    # Drawn under the input while it is expanded, as Blender's Properties draw a linked node.
+    tree.nodes["Principled BSDF"].inputs["Base Color"].show_expanded = True
     palette = bpy.data.palettes.new("Palette")
     palette.colors.new()
     scene.tool_settings.image_paint.palette = palette
@@ -4686,7 +4726,61 @@ def tick_census():
                 state["problems"].append("units: 3 in an imperial scene gave %r (ack %r)" % (
                     bpy.data.objects["Cube"].location.x, acks.get(104)))
             bpy.context.scene.unit_settings.system = 'METRIC'
-        if at == {"object": 31, "selection": 44}.get(stage, 16):
+        # Files from Properties (B10, PANEL-10): the Output path's folder button and the Image
+        # Texture's Open each open Blender's File Browser on the Mac (the iPad's picker answers
+        # the same invoke), which sets what it was opened for.
+        if stage == "texture_paint" and at == 17:
+            browse = next((n for n in _census_nodes(tree(subs.get("OUTPUT")) or {})
+                           if n.get("content") == "Button" and n["key"].startswith("BUTTONS_OT_file_browse")), None)
+            if not browse:
+                state["problems"].append("files: no folder button beside the Output path")
+            else:
+                invoke(subs["OUTPUT"], browse["key"], 110)
+        if stage == "texture_paint" and at == 19:
+            browser = _census_file_browser()
+            if not browser:
+                state["problems"].append("files: the Output path's folder button opened no file browser (ack %r)" % acks.get(110))
+            else:
+                folder = REPORT.rsplit("/", 1)[0] + "/"
+                params = browser["area"].spaces.active.params
+                params.directory = folder.encode()
+                params.filename = "frame_"
+                with bpy.context.temp_override(**browser):
+                    bpy.ops.file.execute()
+                state["folder"] = folder
+        if stage == "texture_paint" and at == 21 and state.get("folder"):
+            path = bpy.context.scene.render.filepath
+            if not path.endswith("frame_"):
+                state["problems"].append("files: the folder button left the Output path %r" % path)
+            images = [n for n in _census_nodes(tree(subs.get("MATERIAL")) or {})
+                      if n.get("content") == "Reference" and n.get("can_open")]
+            if not images:
+                state["problems"].append("files: the Image Texture's image has no Open: %r" % [
+                    (n.get("name"), n["key"]) for n in _census_nodes(tree(subs.get("MATERIAL")) or {})
+                    if n.get("content") == "Reference"])
+            else:
+                invoke_text(subs["MATERIAL"], images[0]["key"], "open", 111)
+        if stage == "texture_paint" and at == 23 and state.get("folder"):
+            browser = _census_file_browser()
+            image = os.path.join(bpy.utils.system_resource('DATAFILES'), "studiolights", "world", "forest.exr")
+            if not browser:
+                state["problems"].append("files: Open opened no file browser (ack %r)" % acks.get(111))
+            else:
+                space = browser["area"].spaces.active
+                params = space.params
+                params.directory = (image.rsplit("/", 1)[0] + "/").encode()
+                params.filename = "forest.exr"
+                operator = space.active_operator
+                state["open_browser"] = (operator.bl_idname if operator else None, image)
+                with bpy.context.temp_override(**browser):
+                    bpy.ops.file.execute()
+        if stage == "texture_paint" and at == 25 and state.get("folder"):
+            texture = next(n for n in bpy.data.objects["Cube"].active_material.node_tree.nodes
+                           if n.type == 'TEX_IMAGE')
+            if not texture.image or texture.image.name != "forest.exr":
+                state["problems"].append("files: Open left the Image Texture's image %r (images %r, ack %r, browser %r)" % (
+                    texture.image, [i.name for i in bpy.data.images], acks.get(111), state.get("open_browser")))
+        if at == {"object": 31, "selection": 44, "texture_paint": 26}.get(stage, 16):
             state["stage"] += 1
             state["start"] = step + 1
             if state["stage"] == len(CENSUS_STAGES):
