@@ -18,7 +18,15 @@ There are three kinds:
 - `*.mm`, `*.cc` and `*.swift`: harnesses and probes the tests above build, and
   `swiftui_panels_harness`, a standalone app hosting the SwiftUI panels with recorded snapshots.
 
-Run the `unittest` modules with:
+Every `test_*.py` module is named by a runner (ROUND7 U4d): `mac_tests.py` lists them as quick
+(ctest `script_native_ios_unittests`), packaging (`python3 tests/ios/mac_tests.py packaging`) or
+owed (failing, each with what fails; run and expected to fail). The scripts that run inside the app
+are listed in `tests/python/bl_native_test_runners.py` (ctest `script_native_test_runners`), which
+fails on a test file no runner names. `ctest -R script_native` runs the quick and owed sets inside
+Blender's Python.
+
+Run all the `unittest` modules at once (Homebrew's `python3`; the Mac's 3.9 cannot run
+`test_ipad_pencil`) with:
 
 ```sh
 BLENDER_BIN=/path/to/blender \

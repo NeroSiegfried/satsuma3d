@@ -305,6 +305,19 @@ add_blender_test(
   --python ${CMAKE_CURRENT_LIST_DIR}/bl_native_shell_sources.py
 )
 
+# ROUND7 U4d: a test no runner runs is not a test. The Mac's own `tests/ios` modules (owed ones
+# included, which must still fail as written), and the sweep that fails on a test file no runner
+# names.
+add_blender_test(
+  script_native_ios_unittests
+  --python ${CMAKE_CURRENT_LIST_DIR}/../ios/mac_tests.py -- quick
+)
+
+add_blender_test(
+  script_native_test_runners
+  --python ${CMAKE_CURRENT_LIST_DIR}/bl_native_test_runners.py
+)
+
 add_blender_test(
   script_bundled_modules
   --python ${CMAKE_CURRENT_LIST_DIR}/bl_bundled_modules.py -- --inside-blender
