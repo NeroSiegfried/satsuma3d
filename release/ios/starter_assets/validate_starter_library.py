@@ -32,6 +32,11 @@ from mathutils import Vector
 TRIANGLE_BUDGET = 50_000
 MODIFIER_TRIANGLE_BUDGET = 150_000
 TIME_BUDGET = 0.050
+# A wall-clock time says more about other work than about the asset once the 1-minute load average
+# is above this share of the Mac's cores: under a parallel build (load 16 to 49 on 8 cores) Mug
+# read 50.5 ms and Nut 61.6 ms against about 30 and 17 on a quiet Mac, and Planet 85 ms against 25.
+BUSY_LOAD_PER_CORE = 0.75
+RETIMES = 3
 
 
 def parse_args():
@@ -40,7 +45,8 @@ def parse_args():
     parser.add_argument("--library", required=True)
     parser.add_argument("--contact-sheet")
     parser.add_argument("--strict-time", action="store_true",
-                        help="Fail, rather than warn, when an asset evaluates slower than the budget")
+                        help="Fail, rather than warn, when an asset evaluates slower than the budget "
+                             "on a Mac that is not busy (see judge_time)")
     return parser.parse_args(argv)
 
 
@@ -222,6 +228,29 @@ def time_evaluation(obj):
     return best
 
 
+def judge_time(label, obj, seconds, strict, problems, warnings, unjudged):
+    """Hold an evaluation time to the budget fairly. An overrun is timed again (a pause, then the best
+    of four more, up to RETIMES times), so one slow moment does not count. One still over is a
+    problem with `--strict-time` (else a warning) when the Mac was not busy; on a busy Mac it is
+    neither: it is listed as not judged, said in the summary, and the test reports it as skipped,
+    so a loaded Mac neither fails a good asset nor passes a slow one without a word. Returns the
+    best time seen."""
+    for _ in range(RETIMES):
+        if seconds <= TIME_BUDGET:
+            return seconds
+        time.sleep(1.0)
+        seconds = min(seconds, time_evaluation(obj))
+    if seconds <= TIME_BUDGET:
+        return seconds
+    load, cores = os.getloadavg()[0], os.cpu_count() or 1
+    message = f"{label}: evaluates in {seconds * 1000:.1f} ms, over {TIME_BUDGET * 1000:.0f} ms"
+    if load > cores * BUSY_LOAD_PER_CORE:
+        unjudged.append(f"{message}, timed while the Mac was busy (load {load:.1f} on {cores} cores)")
+    else:
+        (problems if strict else warnings).append(message)
+    return seconds
+
+
 def menu_options(group):
     """Each menu input of a Geometry Nodes group with the item names it offers."""
     group_input = next((node for node in group.nodes if node.bl_idname == "NodeGroupInput"), None)
@@ -313,6 +342,7 @@ def main():
 
     problems = []
     warnings = []
+    unjudged = []
     ids_in_order = []
     collections = {"object": "objects", "material": "materials", "modifier": "node_groups",
                    "collection": "collections"}
@@ -368,14 +398,12 @@ def main():
                     problems.append(f"{label}: exposes no inputs to tweak")
             scene.collection.objects.link(id_data)
             triangles, low, high = evaluated_stats([id_data])
-            seconds = time_evaluation(id_data)
+            seconds = judge_time(label, id_data, time_evaluation(id_data), args.strict_time,
+                                 problems, warnings, unjudged)
             if triangles == 0:
                 problems.append(f"{label}: evaluates to no triangles")
             elif triangles > TRIANGLE_BUDGET:
                 problems.append(f"{label}: {triangles} triangles, over the {TRIANGLE_BUDGET} budget")
-            if seconds > TIME_BUDGET:
-                message = f"{label}: evaluates in {seconds * 1000:.1f} ms, over {TIME_BUDGET * 1000:.0f} ms"
-                (problems if args.strict_time else warnings).append(message)
             if low.x != math.inf:
                 size = high - low
                 largest = max(size)
@@ -429,7 +457,8 @@ def main():
             modifier = base.modifiers.new(name, "NODES")
             modifier.node_group = id_data
             triangles, low, high = evaluated_stats([base])
-            seconds = time_evaluation(base)
+            seconds = judge_time(label, base, time_evaluation(base), args.strict_time,
+                                 problems, warnings, unjudged)
             evaluated = base.evaluated_get(bpy.context.evaluated_depsgraph_get())
             after = (len(evaluated.data.vertices) if evaluated.type == "MESH" else -1,
                      tuple(evaluated.dimensions))
@@ -437,9 +466,6 @@ def main():
                 problems.append(f"{label}: does not change the geometry it's added to")
             if triangles > MODIFIER_TRIANGLE_BUDGET:
                 problems.append(f"{label}: {triangles} triangles on a 1280-triangle sphere")
-            if seconds > TIME_BUDGET:
-                message = f"{label}: evaluates in {seconds * 1000:.1f} ms, over {TIME_BUDGET * 1000:.0f} ms"
-                (problems if args.strict_time else warnings).append(message)
             print(f"{label:42} {triangles:7d} tris {seconds * 1000:7.1f} ms")
 
             def make_object(group=id_data, mesh=base.data):
@@ -473,7 +499,10 @@ def main():
         print(f"WARNING: {warning}")
     for problem in problems:
         print(f"PROBLEM: {problem}")
-    print(f"Validated {len(manifest)} assets: {len(problems)} problems, {len(warnings)} warnings")
+    for line in unjudged:
+        print(f"NOT JUDGED: {line}")
+    print(f"Validated {len(manifest)} assets: {len(problems)} problems, {len(warnings)} warnings, "
+          f"{len(unjudged)} times not judged")
     sys.stdout.flush()
     os._exit(1 if problems else 0)
 

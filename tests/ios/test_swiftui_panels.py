@@ -381,13 +381,23 @@ def build(app):
 def run_scenario(device, artifacts, name, *arguments, wait=3.0, before_screenshot=None):
     subprocess.run(["xcrun", "simctl", "terminate", device, BUNDLE_ID], capture_output=True)
     simctl("launch", device, BUNDLE_ID, *arguments)
+    container = Path(simctl("get_app_container", device, BUNDLE_ID, "data").stdout.strip())
+    log = container / "Documents/requests.jsonl"
+    # `wait` is the least time the scenario gets, not the most: a busy Mac starts the simulator's
+    # app late, so the requests log is read once it exists and has not grown for a second (up to
+    # fifteen seconds more), not after a fixed sleep alone.
     time.sleep(wait)
+    deadline, size = time.monotonic() + 15, -1
+    while time.monotonic() < deadline:
+        now = log.stat().st_size if log.exists() else -1
+        if now >= 0 and now == size:
+            break
+        size = now
+        time.sleep(1.0)
     if before_screenshot:
         before_screenshot()
     path = artifacts / f"{name}.png"
     simctl("io", device, "screenshot", str(path))
-    container = Path(simctl("get_app_container", device, BUNDLE_ID, "data").stdout.strip())
-    log = container / "Documents/requests.jsonl"
     requests = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
     return path, requests
 

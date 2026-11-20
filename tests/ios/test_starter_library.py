@@ -38,7 +38,14 @@ class StarterLibraryTest(unittest.TestCase):
                                  "--", "--library", str(LIBRARY), "--strict-time"],
                                 text=True, capture_output=True, timeout=900)
         self.assertEqual(result.returncode, 0, result.stdout[-4000:] + result.stderr[-2000:])
-        self.assertIn(" 0 problems, 0 warnings", result.stdout)
+        self.assertIn(" 0 problems, 0 warnings, ", result.stdout)
+        # The 50 ms budget is a wall-clock time: one the validator could not judge because the Mac
+        # was busy is reported as a skipped part of this test (the runners print skips), not passed
+        # in silence and not failed for another program's load.
+        unjudged = [line for line in result.stdout.splitlines() if line.startswith("NOT JUDGED: ")]
+        for line in unjudged:
+            with self.subTest(time=line):
+                self.skipTest(line[len("NOT JUDGED: "):])
 
     def test_files_record_no_local_paths(self):
         files = sorted(LIBRARY.glob("*.blend")) + sorted(SOURCES.glob("*.blend"))
