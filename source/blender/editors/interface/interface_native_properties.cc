@@ -1907,6 +1907,20 @@ bool apply_tree(bContext *C, const TreeRows &tree, const native::EditRequest &re
     AbstractViewItem *item = item_at(request.index);
     return item && item->supports_renaming() && item->rename(*C, request.text);
   }
+  if (ELEM(action, "expand", "collapse")) {
+    /* Unfolded or folded as Blender's arrow does, through the item, which keeps it where the tree
+     * keeps it, such as a bone collection's own flag (B18, PANEL-14). */
+    auto *item = dynamic_cast<AbstractTreeViewItem *>(item_at(request.index));
+    if (!item || !item->is_collapsible()) {
+      return false;
+    }
+    /* As `toggle_collapsed_from_view` does. */
+    const bool collapse = action == "collapse";
+    if (item->set_collapsed(collapse)) {
+      item->on_collapse_change(*C, collapse);
+    }
+    return true;
+  }
   if (action == "move") {
     /* Make the item active, then move it as the arrows beside the tree do. */
     const int64_t from = request.index;
@@ -1979,6 +1993,8 @@ struct ListRow {
   /** The buttons drawn over it, and what it is called when none of them names it. */
   const std::vector<const Button *> *items = nullptr;
   std::string fallback;
+  /** A tree's item with items under it: 1 unfolded, 0 folded; -1 for any other row. */
+  int fold = -1;
 };
 
 class Writer {
@@ -2129,8 +2145,12 @@ class Writer {
                              (data.tool_tab ? "1" : "0") + native::PANEL_MENU_PART + panel +
                              native::PANEL_MENU_PART + edit_key + native::PANEL_MENU_PART +
                              std::to_string(edit_occurrence);
+    /* A palette's colour is a swatch, which a tap uses (B17, PANEL-14). */
+    const bool swatch = but.type == ButtonType::Color &&
+                        static_cast<const ButtonColor &>(but).is_pallete_color;
     /* A material slot's link follows the slot's material in its row, as Blender draws it. */
-    const protocol::Role role = look.role == protocol::Role::None &&
+    const protocol::Role role = swatch ? protocol::Role::Swatch :
+                                look.role == protocol::Role::None &&
                                         RNA_struct_is_a(ptr->type, RNA_MaterialSlot) &&
                                         STREQ(RNA_property_identifier(prop), "link") ?
                                     protocol::Role::Link :
@@ -2291,11 +2311,13 @@ class Writer {
         common(fields);
         std::string value;
         const auto options = enum_options(buffer, ptr, prop, value);
+        /* A flag enum shows every choice that is set, and a tap toggles one (B16, PANEL-14). */
         return protocol::CreateChoice(buffer,
                                       buffer.CreateString(value),
                                       options,
                                       look.expand ? protocol::ChoiceStyle::Expanded :
-                                                    protocol::ChoiceStyle::Menu);
+                                                    protocol::ChoiceStyle::Menu,
+                                      (RNA_property_flag(prop) & PROP_ENUM_FLAG) != 0);
       });
     }
     else if (type == PROP_POINTER) {
@@ -2725,15 +2747,22 @@ class Writer {
                                        row.depth,
                                        selected,
                                        row.renamable || !name_key.empty(),
-                                       preview.c_str());
+                                       preview.c_str(),
+                                       nullptr,
+                                       row.fold >= 0,
+                                       row.fold == 1);
     });
-    /* What it draws beside its name, such as a shape key's value or a vertex group's lock. */
+    /* What it draws beside its name, such as a shape key's value or a vertex group's lock, and
+     * the buttons of operators over it, such as an add-on's enable (B18, PANEL-14). */
     for (const Button *item : items) {
       if (!(item->flag & UI_HIDDEN) && item->rnaprop && item->rnapoin.data &&
           !RNA_property_array_check(item->rnaprop) &&
           ELEM(RNA_property_type(item->rnaprop), PROP_BOOLEAN, PROP_INT, PROP_FLOAT, PROP_ENUM))
       {
         property(node, const_cast<Button &>(*item), -1);
+      }
+      else if (!(item->flag & UI_HIDDEN) && item->optype && !item->rnaprop) {
+        button(node, *item);
       }
     }
     return node;
@@ -2760,7 +2789,11 @@ class Writer {
                                                       item.name,
                                                       icon_name(item.icon),
                                                       preview_icon_path(C, item.icon).c_str()));
-      if (flags ? (selected & item.value) != 0 : selected == item.value) {
+      if (flags && (selected & item.value) != 0) {
+        /* Every flag set, as Blender lights each (B16). */
+        r_value += (r_value.empty() ? "" : ",") + std::string(item.identifier);
+      }
+      else if (!flags && selected == item.value) {
         r_value = item.identifier;
       }
     }
@@ -3407,9 +3440,10 @@ struct Said {
   }
 };
 
-/** Every fate while the harness records them (`UI_native_panel_census_record`). */
+/** Every fate while the harness records them (`UI_native_panel_census_record`). Freed when it is
+ * taken or recording stops, never at exit, where Blender's allocator is gone. */
 bool census_recording = false;
-std::shared_ptr<io::serialize::ArrayValue> census_log;
+io::serialize::ArrayValue *census_log = nullptr;
 
 const char *button_type_name(const ButtonType type)
 {
@@ -3499,7 +3533,7 @@ void census_record(const std::string &tab,
     return;
   }
   if (!census_log) {
-    census_log = std::make_shared<io::serialize::ArrayValue>();
+    census_log = MEM_new<io::serialize::ArrayValue>(__func__);
   }
   io::serialize::DictionaryValue &entry = *census_log->append_dict();
   entry.append_str("tab", tab);
@@ -3546,20 +3580,13 @@ Fate property_fate(const Button &but)
     fate.reason = reason;
   };
   const PropertyType type = RNA_property_type(but.rnaprop);
-  if (but.type == ButtonType::Color && static_cast<const ButtonColor &>(but).is_pallete_color) {
-    /* A palette's swatch picks its colour in Blender; here it edits it (B17). */
-    reduced("palette");
-  }
-  else if (but.type == ButtonType::SearchMenu && type == PROP_STRING && !search_names(but))
+  if (but.type == ButtonType::SearchMenu && type == PROP_STRING && !search_names(but))
   {
     /* A name picked by a search that is not a collection, such as an attribute's, typed without
      * its list (B11). */
     reduced("search");
   }
-  else if (type == PROP_ENUM && (RNA_property_flag(but.rnaprop) & PROP_ENUM_FLAG)) {
-    /* Several choices at once, shown as one (B16). */
-    reduced("enum_flag");
-  }
+
   return fate;
 }
 
@@ -4188,32 +4215,9 @@ static std::string panels_walk(bContext *C,
   for (size_t candidate_index = 0; candidate_index < candidates.size(); candidate_index++) {
     const Candidate candidate = candidates[candidate_index];
     PanelType &pt = *candidate.type;
-    /* Blender draws a sub-panel with its parent whatever its context, and a top-level panel that
-     * names none on every tab (#panel_add_check): those the test of the context below leaves out
-     * are said, at their parent's foot or the tab's (B21). */
-    if (STREQ(pt.idname, "PROPERTIES_PT_context")) {
-      /* Blender's context path, which the view sends as its `path` above. */
-      if (writer) {
-        census_record(tab_id, "", "Panel", pt.idname, fate_consumed("context_path"));
-      }
-      continue;
-    }
-    if (writer && pt.draw && !viewport && !tool_tab && !sidebar_tab && !panel_popover && !candidate.instance &&
-        panel_context != pt.context && !(preferences && panel_context.empty()) &&
-        (candidate.parent.empty() ? !pt.context[0] : panel_nodes.count(candidate.parent) != 0) &&
-        panel_poll(C, &pt))
-    {
-      const Fate fate = fate_dropped("panel_context",
-                                     candidate.parent.empty() ? Fate::Counted::Panel :
-                                                                Fate::Counted::Section);
-      census_record(tab_id, candidate.parent, "Panel", pt.idname, fate);
-      (candidate.parent.empty() ? tab_said : said[panel_nodes.at(candidate.parent)])
-          .add(fate.counted);
-      continue;
-    }
     if (!pt.draw ||
         (!viewport && !tool_tab && !sidebar_tab && !panel_popover && !candidate.instance &&
-         panel_context != pt.context) ||
+         candidate.parent.empty() && pt.context[0] && panel_context != pt.context) ||
         (preferences && panel_context.empty()) ||
         /* Header-less Properties panels hold data-block pickers and slots (e.g. a material's
          * context panel); viewport ones are decorative. */
@@ -4697,6 +4701,7 @@ static std::string panels_walk(bContext *C,
                    (item->rnaprop && item_type == PROP_STRING) ||
                            (ELEM(item->type, ButtonType::Label, ButtonType::Text) && !item->rnaprop) ?
                        fate_consumed("row_name") :
+                   item->optype && !item->rnaprop ? fate_projected("Button") :
                    item->type == ButtonType::Label || ELEM(item->type, ButtonType::Sepr,
                                                            ButtonType::SeprSpacer,
                                                            ButtonType::Decorator) ?
@@ -4922,7 +4927,9 @@ static std::string panels_walk(bContext *C,
                      item->count_parents(),
                      item->supports_renaming(),
                      items == row_items.end() ? nullptr : &items->second,
-                     view_item.get_rename_string()});
+                     view_item.get_rename_string(),
+                     /* Folded and unfolded as Blender's arrow does (B18, PANEL-14). */
+                     item->is_collapsible() ? (item->is_collapsed() ? 0 : 1) : -1});
         nested |= item->count_parents() > 0;
       }
       writer->list(node, key, &tree.side, !nested, active, rows);
@@ -5155,13 +5162,8 @@ static std::string panels_walk(bContext *C,
           }
           else if (seen.insert(key).second) {
             write_tree(trees[index], key);
-            /* Its items can neither be folded nor unfolded here (B18). */
-            const bool folds = std::any_of(
-                trees[index].items.begin(), trees[index].items.end(), [](const ButtonViewItem *item) {
-                  const AbstractTreeViewItem *tree_view_item = tree_item(*item);
-                  return tree_view_item && tree_view_item->is_collapsible();
-                });
-            decide(&but, folds ? Fate{"reduced", "List", "tree"} : fate_projected("List"));
+            /* Its items fold and unfold (B18, PANEL-14). */
+            decide(&but, fate_projected("List"));
           }
         }
         continue;
@@ -5576,7 +5578,14 @@ static std::string panels_walk(bContext *C,
           if (target_panel && *requested_key == key && !applied &&
               occurrences[key]++ == request->edit->occurrence)
           {
-            if (request->action == "button" && request->with_button) {
+            if (request->action == "pick" && but.type == ButtonType::Color &&
+                static_cast<ButtonColor &>(but).is_pallete_color)
+            {
+              /* A palette's colour used, as a click on its swatch uses it (B17). */
+              palette_color_use(C, &static_cast<ButtonColor &>(but));
+              applied = true;
+            }
+            else if (request->action == "button" && request->with_button) {
               /* Its context menu's component, as a click on it gives it (PANEL-12). */
               const int old_index = but.rnaindex;
               but.rnaindex = index;
@@ -7723,7 +7732,7 @@ void UI_native_panel_census_record(const bool on)
 {
   blender::ui::census_recording = on;
   if (!on) {
-    blender::ui::census_log.reset();
+    MEM_SAFE_DELETE(blender::ui::census_log);
   }
 }
 
@@ -7733,10 +7742,10 @@ const char *UI_native_panel_census_take()
   std::stringstream stream;
   blender::io::serialize::JsonFormatter formatter;
   if (!blender::ui::census_log) {
-    blender::ui::census_log = std::make_shared<blender::io::serialize::ArrayValue>();
+    blender::ui::census_log = MEM_new<blender::io::serialize::ArrayValue>(__func__);
   }
   formatter.serialize(stream, *blender::ui::census_log);
-  blender::ui::census_log.reset();
+  MEM_SAFE_DELETE(blender::ui::census_log);
   text = stream.str();
   return text.c_str();
 }

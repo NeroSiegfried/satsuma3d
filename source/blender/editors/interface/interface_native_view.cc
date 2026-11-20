@@ -134,6 +134,11 @@ bool control_request(PanelsData &data,
   else if (edit.kind != Edit::Kind::Property) {
     return false;
   }
+  if (op == protocol::Op::Invoke && edit.kind == Edit::Kind::Property) {
+    /* A palette's colour used (PANEL-14). */
+    request.action = "pick";
+    return true;
+  }
   if (ELEM(op,
            protocol::Op::KeyframeInsert,
            protocol::Op::KeyframeDelete,
@@ -255,6 +260,11 @@ CommandResult panels_command(bContext *C,
     switch (op) {
       case protocol::Op::Activate:
         request.action = "activate";
+        return run(*list);
+      case protocol::Op::Open:
+      case protocol::Op::Close:
+        /* A tree's item unfolded or folded (PANEL-14). */
+        request.action = op == protocol::Op::Open ? "expand" : "collapse";
         return run(*list);
       case protocol::Op::Rename:
         if (!row->name.empty()) {

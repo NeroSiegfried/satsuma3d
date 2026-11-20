@@ -6745,6 +6745,62 @@ static void ui_palette_set_active(ButtonColor *color_but)
   }
 }
 
+/**
+ * Uses a palette's colour, as a click on its swatch does: the active brush's colour, or its
+ * gradient's active stop, takes it, and the palette's active colour is it. Also for an interface
+ * that shows the swatches itself (ROUND6 PANEL-14).
+ */
+void palette_color_use(bContext *C, ButtonColor *color_but)
+{
+  ui_palette_set_active(color_but);
+  float color[3];
+  Paint *paint = BKE_paint_get_active_from_context(C);
+  if (paint != nullptr) {
+    Brush *brush = BKE_paint_brush(paint);
+
+    if (brush == nullptr) {
+      /* Pass. */
+    }
+    else if (brush->flag & BRUSH_USE_GRADIENT) {
+      float *target = &brush->gradient->data[brush->gradient->cur].r;
+
+      if (color_but->rnaprop && RNA_property_subtype(color_but->rnaprop) == PROP_COLOR_GAMMA) {
+        RNA_property_float_get_array_at_most(&color_but->rnapoin, color_but->rnaprop, target, 3);
+        IMB_colormanagement_srgb_to_scene_linear_v3(target, target);
+      }
+      else if (color_but->rnaprop && RNA_property_subtype(color_but->rnaprop) == PROP_COLOR) {
+        RNA_property_float_get_array_at_most(&color_but->rnapoin, color_but->rnaprop, target, 3);
+      }
+      BKE_brush_tag_unsaved_changes(brush);
+    }
+    else {
+      bool updated = false;
+
+      if (color_but->rnaprop && RNA_property_subtype(color_but->rnaprop) == PROP_COLOR_GAMMA) {
+        RNA_property_float_get_array_at_most(
+            &color_but->rnapoin, color_but->rnaprop, color, ARRAY_SIZE(color));
+        IMB_colormanagement_srgb_to_scene_linear_v3(color, color);
+        BKE_brush_color_set(paint, brush, color);
+        updated = true;
+      }
+      else if (color_but->rnaprop && RNA_property_subtype(color_but->rnaprop) == PROP_COLOR) {
+        RNA_property_float_get_array_at_most(
+            &color_but->rnapoin, color_but->rnaprop, color, ARRAY_SIZE(color));
+        BKE_brush_color_set(paint, brush, color);
+        updated = true;
+      }
+
+      if (updated) {
+        PropertyRNA *brush_color_prop;
+
+        PointerRNA brush_ptr = RNA_id_pointer_create(&brush->id);
+        brush_color_prop = RNA_struct_find_property(&brush_ptr, "color");
+        RNA_property_update(C, &brush_ptr, brush_color_prop);
+      }
+    }
+  }
+}
+
 static int ui_do_but_COLOR(bContext *C, Button *but, HandleButtonData *data, const wmEvent *event)
 {
   BLI_assert(but->type == ButtonType::Color);
@@ -6836,53 +6892,7 @@ static int ui_do_but_COLOR(bContext *C, Button *but, HandleButtonData *data, con
     if (event->type == LEFTMOUSE && event->val == KM_RELEASE) {
       if (color_but->is_pallete_color) {
         if ((event->modifier & KM_CTRL) == 0) {
-          float color[3];
-          Paint *paint = BKE_paint_get_active_from_context(C);
-          if (paint != nullptr) {
-            Brush *brush = BKE_paint_brush(paint);
-
-            if (brush == nullptr) {
-              /* Pass. */
-            }
-            else if (brush->flag & BRUSH_USE_GRADIENT) {
-              float *target = &brush->gradient->data[brush->gradient->cur].r;
-
-              if (but->rnaprop && RNA_property_subtype(but->rnaprop) == PROP_COLOR_GAMMA) {
-                RNA_property_float_get_array_at_most(&but->rnapoin, but->rnaprop, target, 3);
-                IMB_colormanagement_srgb_to_scene_linear_v3(target, target);
-              }
-              else if (but->rnaprop && RNA_property_subtype(but->rnaprop) == PROP_COLOR) {
-                RNA_property_float_get_array_at_most(&but->rnapoin, but->rnaprop, target, 3);
-              }
-              BKE_brush_tag_unsaved_changes(brush);
-            }
-            else {
-              bool updated = false;
-
-              if (but->rnaprop && RNA_property_subtype(but->rnaprop) == PROP_COLOR_GAMMA) {
-                RNA_property_float_get_array_at_most(
-                    &but->rnapoin, but->rnaprop, color, ARRAY_SIZE(color));
-                IMB_colormanagement_srgb_to_scene_linear_v3(color, color);
-                BKE_brush_color_set(paint, brush, color);
-                updated = true;
-              }
-              else if (but->rnaprop && RNA_property_subtype(but->rnaprop) == PROP_COLOR) {
-                RNA_property_float_get_array_at_most(
-                    &but->rnapoin, but->rnaprop, color, ARRAY_SIZE(color));
-                BKE_brush_color_set(paint, brush, color);
-                updated = true;
-              }
-
-              if (updated) {
-                PropertyRNA *brush_color_prop;
-
-                PointerRNA brush_ptr = RNA_id_pointer_create(&brush->id);
-                brush_color_prop = RNA_struct_find_property(&brush_ptr, "color");
-                RNA_property_update(C, &brush_ptr, brush_color_prop);
-              }
-            }
-          }
-
+          palette_color_use(C, color_but);
           button_activate_state(C, but, BUTTON_STATE_EXIT);
         }
         else {

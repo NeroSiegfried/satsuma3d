@@ -555,23 +555,71 @@ class VIEW3D_PT_native_brush_settings(bpy.types.Panel):
         _draw_mirror(layout, context)
 
 
-# Above this many selected vertices their median is not worked out as the panel is drawn.
+# Above this many selected points their median is not worked out as the panel is drawn.
 _MEDIAN_LIMIT = 50000
+
+# The kinds of object whose Edit Mode Transform this panel shows: Blender's own draws fields that
+# are not properties there (ROUND6 PANEL-14, finding B14).
+_MEDIAN_MODES = {'EDIT_MESH', 'EDIT_CURVE', 'EDIT_SURFACE', 'EDIT_LATTICE'}
+_MEDIAN_TYPES = {'MESH', 'CURVE', 'SURFACE', 'LATTICE'}
+
+
+def _object_points(ob):
+    """The selected points of an object in Edit Mode, each `(position, move)`: its position as a
+    3D vector in the object's space, and a function moving it by a vector, as Blender's Transform
+    panel moves it (a curve's handles with its control point)."""
+    from mathutils import Vector
+    data = ob.data
+    if ob.type == 'MESH':
+        import bmesh
+        mesh = bmesh.from_edit_mesh(data)
+        for vert in mesh.verts:
+            if vert.select:
+                # The BMesh is held with its vertices: they are gone once it is.
+                def move(offset, vert=vert, mesh=mesh):
+                    vert.co += offset
+                yield vert.co.copy(), move
+    elif ob.type in {'CURVE', 'SURFACE'}:
+        for spline in data.splines:
+            for point in spline.bezier_points:
+                if point.select_control_point:
+                    def move(offset, point=point):
+                        point.co += offset
+                        point.handle_left += offset
+                        point.handle_right += offset
+                    yield point.co.copy(), move
+            for point in spline.points:
+                if point.select:
+                    def move(offset, point=point):
+                        point.co = (*(Vector(point.co[:3]) + offset), point.co[3])
+                    yield Vector(point.co[:3]), move
+    elif ob.type == 'LATTICE':
+        for point in data.points:
+            if point.select:
+                def move(offset, point=point):
+                    point.co_deform += offset
+                yield point.co_deform.copy(), move
+
+
+def _median_objects(context):
+    return [ob for ob in context.objects_in_mode_unique_data if ob.type in _MEDIAN_TYPES]
 
 
 def _median_selection(context):
-    """The Edit Mode meshes' selected vertices as `[(object, mesh, vertices)]`, or an empty list
-    when there are none or too many to go through."""
-    objects = [ob for ob in context.objects_in_mode_unique_data if ob.type == 'MESH']
-    count = sum(ob.data.total_vert_sel for ob in objects)
-    if count == 0 or count > _MEDIAN_LIMIT:
+    """The Edit Mode objects' selected points as `[(object, points)]`, or an empty list when there
+    are none or too many to go through."""
+    objects = _median_objects(context)
+    if sum(ob.data.total_vert_sel for ob in objects if ob.type == 'MESH') > _MEDIAN_LIMIT:
         return []
-    import bmesh
     selection = []
+    count = 0
     for ob in objects:
-        if ob.data.total_vert_sel:
-            mesh = bmesh.from_edit_mesh(ob.data)
-            selection.append((ob, mesh, [vert for vert in mesh.verts if vert.select]))
+        points = list(_object_points(ob))
+        count += len(points)
+        if count > _MEDIAN_LIMIT:
+            return []
+        if points:
+            selection.append((ob, points))
     return selection
 
 
@@ -585,11 +633,11 @@ def _median(self, selection):
     use_global = _median_global(self, selection)
     total = Vector()
     count = 0
-    for ob, _mesh, verts in selection:
+    for ob, points in selection:
         matrix = ob.matrix_world
-        for vert in verts:
-            total += (matrix @ vert.co) if use_global else vert.co
-        count += len(verts)
+        for position, _move in points:
+            total += (matrix @ position) if use_global else position
+        count += len(points)
     return total / count
 
 
@@ -600,22 +648,107 @@ def _median_get(self):
 
 def _median_set(self, value):
     from mathutils import Vector
-    import bmesh
     selection = _median_selection(bpy.context)
     if not selection:
         return
     offset = Vector(value) - _median(self, selection)
     use_global = _median_global(self, selection)
-    for ob, _mesh, verts in selection:
+    for ob, points in selection:
         local = (ob.matrix_world.inverted_safe().to_3x3() @ offset) if use_global else offset
-        for vert in verts:
-            vert.co += local
-        bmesh.update_edit_mesh(ob.data, loop_triangles=True, destructive=False)
+        for _position, move in points:
+            move(local)
+        if ob.type == 'MESH':
+            import bmesh
+            bmesh.update_edit_mesh(ob.data, loop_triangles=True, destructive=False)
+        else:
+            ob.data.update_tag()
+
+
+def _mean_values(context, kind):
+    """For a mean the panel shows, the selected items' values as `[(item, layer)]` and how to set
+    one: a mesh's edges' bevel weight or crease, its vertices' crease, a curve's points' radius or
+    tilt, a lattice's points' weight (B14)."""
+    items = []
+    for ob in _median_objects(context):
+        data = ob.data
+        if ob.type == 'MESH' and kind in {'bevel_weight_edge', 'crease_edge', 'crease_vert'}:
+            import bmesh
+            mesh = bmesh.from_edit_mesh(data)
+            elements = mesh.verts if kind == 'crease_vert' else mesh.edges
+            layer = elements.layers.float.get(kind)
+            items += [(ob, mesh, layer, kind, element) for element in elements if element.select]
+        elif ob.type in {'CURVE', 'SURFACE'} and kind in {'radius', 'tilt'}:
+            for spline in data.splines:
+                items += [(ob, None, None, kind, point) for point in spline.bezier_points
+                          if point.select_control_point]
+                items += [(ob, None, None, kind, point) for point in spline.points if point.select]
+        elif ob.type == 'LATTICE' and kind == 'weight_softbody':
+            items += [(ob, None, None, kind, point) for point in data.points if point.select]
+    return items
+
+
+def _mean_of(items, kind):
+    total = 0.0
+    for _ob, mesh, layer, _kind, element in items:
+        if mesh is not None:
+            total += element[layer] if layer is not None else 0.0
+        else:
+            total += getattr(element, kind)
+    return total / len(items) if items else 0.0
+
+
+def _mean_get_for(kind):
+    def get(self):
+        return _mean_of(_mean_values(bpy.context, kind), kind)
+    return get
+
+
+def _mean_set_for(kind, clamp):
+    def setter(self, value):
+        import bmesh
+        # The attribute made the first time it is set, as Blender's panel makes it, before any
+        # element is read: making it afterwards would leave those read behind.
+        for ob in _median_objects(bpy.context):
+            if ob.type == 'MESH' and kind in {'bevel_weight_edge', 'crease_edge', 'crease_vert'}:
+                mesh = bmesh.from_edit_mesh(ob.data)
+                elements = mesh.verts if kind == 'crease_vert' else mesh.edges
+                if elements.layers.float.get(kind) is None:
+                    elements.layers.float.new(kind)
+        items = _mean_values(bpy.context, kind)
+        if not items:
+            return
+        offset = value - _mean_of(items, kind)
+        changed = {}
+        for ob, mesh, layer, _kind, element in items:
+            if mesh is not None:
+                current = element[layer] + offset
+                element[layer] = min(1.0, max(0.0, current)) if clamp else current
+            else:
+                current = getattr(element, kind) + offset
+                setattr(element, kind, max(0.0, current) if clamp else current)
+            changed[ob.name] = ob
+        for ob in changed.values():
+            if ob.type == 'MESH':
+                bmesh.update_edit_mesh(ob.data, loop_triangles=False, destructive=False)
+            else:
+                ob.data.update_tag()
+    return setter
+
+
+# The means Blender's Transform panel shows beside the median, by mode: their property, label and
+# whether they stay within 0 and 1.
+_MEANS = {
+    'EDIT_MESH': (("bevel_weight_edge", "Mean Bevel Weight", True), ("crease_edge", "Mean Crease", True),
+                  ("crease_vert", "Vertex Crease", True)),
+    'EDIT_CURVE': (("radius", "Mean Radius", True), ("tilt", "Mean Tilt", False)),
+    'EDIT_SURFACE': (("radius", "Mean Radius", True),),
+    'EDIT_LATTICE': (("weight_softbody", "Mean Weight", True),),
+}
 
 
 class VIEW3D_PT_native_item_median(bpy.types.Panel):
-    """Item's Transform in Edit Mode for the native interface: where the selected vertices are,
-    which Blender's own panel shows in fields that are not properties"""
+    """Item's Transform in Edit Mode for the native interface: where the selected points are, and
+    their means, which Blender's own panel shows in fields that are not properties"""
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = "Item"
@@ -625,7 +758,7 @@ class VIEW3D_PT_native_item_median(bpy.types.Panel):
     def register(cls):
         bpy.types.WindowManager.native_item_median = bpy.props.FloatVectorProperty(
             name="Median",
-            description="Where the selected vertices are, on average: changing it moves them all",
+            description="Where the selected points are, on average: changing it moves them all",
             subtype='TRANSLATION',
             unit='LENGTH',
             precision=4,
@@ -641,31 +774,53 @@ class VIEW3D_PT_native_item_median(bpy.types.Panel):
             ),
             default='LOCAL',
         )
+        for kind in {kind for means in _MEANS.values() for kind, _label, _clamp in means}:
+            clamp = next(c for means in _MEANS.values() for k, _l, c in means if k == kind)
+            setattr(bpy.types.WindowManager, "native_item_mean_" + kind, bpy.props.FloatProperty(
+                name=kind.replace("_", " ").title(),
+                description="The selected items' value on average: changing it changes them all by as much",
+                min=0.0 if clamp else -1e9,
+                max=1.0 if clamp and kind != "radius" else 1e9,
+                subtype='ANGLE' if kind == "tilt" else 'FACTOR' if clamp else 'NONE',
+                precision=3,
+                get=_mean_get_for(kind),
+                set=_mean_set_for(kind, clamp),
+            ))
 
     @classmethod
     def unregister(cls):
         del bpy.types.WindowManager.native_item_median
         del bpy.types.WindowManager.native_item_space
+        for kind in {kind for means in _MEANS.values() for kind, _label, _clamp in means}:
+            delattr(bpy.types.WindowManager, "native_item_mean_" + kind)
 
     @classmethod
     def poll(cls, context):
         # As the panels above, only the native projection draws this, from the main region.
         region = context.region
-        return context.mode == 'EDIT_MESH' and region is not None and region.type == 'WINDOW'
+        return context.mode in _MEDIAN_MODES and region is not None and region.type == 'WINDOW'
 
     def draw(self, context):
         layout = self.layout
         layout.use_property_split = True
         window_manager = context.window_manager
-        count = sum(ob.data.total_vert_sel for ob in context.objects_in_mode_unique_data
-                    if ob.type == 'MESH')
+        if context.mode == 'EDIT_MESH':
+            count = sum(ob.data.total_vert_sel for ob in _median_objects(context) if ob.type == 'MESH')
+        else:
+            count = sum(len(list(_object_points(ob))) for ob in _median_objects(context))
         if count == 0:
             layout.label(text="Nothing selected")
-        elif count > _MEDIAN_LIMIT:
-            layout.label(text="Select fewer vertices to move them by typing")
-        else:
-            layout.prop(window_manager, "native_item_median", text="Vertex" if count == 1 else "Median")
-            layout.prop(window_manager, "native_item_space", expand=True)
+            return
+        if count > _MEDIAN_LIMIT:
+            layout.label(text="Select fewer points to move them by typing")
+            return
+        layout.prop(window_manager, "native_item_median", text="Vertex" if count == 1 else "Median")
+        layout.prop(window_manager, "native_item_space", expand=True)
+        edges = sum(ob.data.total_edge_sel for ob in _median_objects(context) if ob.type == 'MESH')
+        for kind, label, _clamp in _MEANS.get(context.mode, ()):
+            if kind.endswith("_edge") and edges == 0:
+                continue
+            layout.prop(window_manager, "native_item_mean_" + kind, text=label)
 
 
 class WM_OT_native_node_tree_new(bpy.types.Operator):

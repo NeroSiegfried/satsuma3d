@@ -1627,6 +1627,8 @@ bool popup_context_menu_for_button(bContext *C, Button *but, const wmEvent *even
  * an interface that shows the menu itself (ROUND6 PANEL-12).
  */
 void context_menu_for_button_draw(bContext *C, Button *but, const wmEvent *event, Layout &layout);
+/** A palette's colour used as a click on its swatch uses it (ROUND6 PANEL-14). */
+void palette_color_use(bContext *C, ButtonColor *color_but);
 /**
  * menu to show when right clicking on the panel header
  */

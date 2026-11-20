@@ -799,6 +799,23 @@ struct NativeListRows: View {
     let empty = row.label.isEmpty
     let label = empty ? "Empty" : row.label
     HStack(spacing: 8) {
+      if row.row?.expandable == true {
+        /* Blender's arrow: unfolds or folds the items under it (ROUND6 PANEL-14). */
+        let expanded = row.row?.expanded == true
+        Button {
+          model.send(row, expanded ? .close : .open_)
+          Haptics.selection()
+        } label: {
+          Image(systemName: "chevron.right")
+            .font(.system(size: 10, weight: .bold))
+            .rotationEffect(.degrees(expanded ? 90 : 0))
+            .frame(width: 20, height: 28)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .accessibilityLabel(expanded ? "Fold" : "Unfold")
+      }
       Group {
         if let preview = PreviewCache.image(row.row?.preview) {
           Image(uiImage: preview).resizable().scaledToFill()

@@ -406,6 +406,10 @@ table Row {
   preview: string;
   /// The heading it is listed under, such as a brush's catalog.
   section: string;
+  /// A tree's item with items under it, folded or not (ROUND6 PANEL-14): `Open` and `Close`
+  /// unfold and fold it, as Blender's arrow does.
+  expandable: bool;
+  expanded: bool;
 }
 
 /// A picture, such as a material's rendered preview.
@@ -485,6 +489,9 @@ enum Role : ubyte {
   /// Says, as its label, what the panel or tab it is a child of could not show, and goes to the
   /// Desktop Interface, where Blender draws all of it (ROUND6 PANEL-1, decision R6-9).
   Elsewhere,
+  /// A palette's colour: `Invoke` uses it, as a click on Blender's swatch does; setting its value
+  /// edits it (ROUND6 PANEL-14).
+  Swatch,
 }
 
 /// How a property is animated, as Blender colors its control.

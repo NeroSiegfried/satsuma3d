@@ -311,7 +311,7 @@ def decode_node(raw):
         table = node.Content()
         choice = Choice.Choice()
         choice.Init(table.Bytes, table.Pos)
-        entry.update(value=s(choice.Value()),
+        entry.update(value=s(choice.Value()), multiple=bool(choice.Multiple()),
                      options=[s(choice.Options(i).Value()) for i in range(choice.OptionsLength())])
     elif node.ContentType() == Content.Content.Data:
         table = node.Content()
@@ -373,6 +373,14 @@ def decode_node(raw):
         if hasattr(field, "SuggestionsLength"):
             entry.update(suggestions=[s(field.Suggestions(i)) for i in range(field.SuggestionsLength())],
                          invalid=bool(field.Invalid()))
+    elif node.ContentType() == Content.Content.Row:
+        from Blender.NativeUI import Row as RowTable
+        table = node.Content()
+        row = RowTable.Row()
+        row.Init(table.Bytes, table.Pos)
+        entry.update(depth=row.Depth(), selected=bool(row.Selected()))
+        if hasattr(row, "Expandable"):
+            entry.update(expandable=bool(row.Expandable()), expanded=bool(row.Expanded()))
     elif node.ContentType() == Content.Content.Toggle:
         table = node.Content()
         toggle = Toggle.Toggle()
@@ -4350,9 +4358,8 @@ CENSUS_KNOWN = {
     "callback": ("B18, Table 1", "PANEL-14"),
     "popover": ("B14", "MODE-1"),
     "pointer": ("B11", "PANEL-11"),
-    "row_button": ("B18", "PANEL-14"),
-    "grid": ("B18", "PANEL-14"),
-    "panel_context": ("B21", "PANEL-14"),
+    "row_button": ("B18", "PANEL-14 (callbacks over rows)"),
+    "grid": ("B18", "PANEL-14 (grids)"),
     "non_rna_field": ("B14", "PANEL-14"),
     "id_part": ("B10", None),
     "preview": ("B20", None),
@@ -4362,12 +4369,9 @@ CENSUS_KNOWN = {
     "property_type": ("Table 1", None),
     # Shown in part.
     "search": ("B11", "PANEL-11 (searches of no collection)"),
-    "enum_flag": ("B16", "PANEL-14"),
-    "palette": ("B17", "PANEL-14"),
-    "tree": ("B18", "PANEL-14"),
 }
 # The findings PANEL-1 showed first whose packages are not built yet: each must still show.
-CENSUS_FIRST = ("B4", "B16", "B17", "B18", "B21")
+CENSUS_FIRST = ("B4", "B18")
 # Sections opened by the census's taps, as sub-panels with their rows (PANEL-3): by stage, tab
 # and title, one kept by the view (Principled BSDF's Emission) and one by a modifier's property
 # (Subdivision's Advanced, `open_advanced_panel`).
@@ -4430,7 +4434,7 @@ def _census_scene():
     # Drawn under the input while it is expanded, as Blender's Properties draw a linked node.
     tree.nodes["Principled BSDF"].inputs["Base Color"].show_expanded = True
     palette = bpy.data.palettes.new("Palette")
-    palette.colors.new()
+    palette.colors.new().color = (1.0, 0.0, 0.0)
     scene.tool_settings.image_paint.palette = palette
 
 
@@ -4883,7 +4887,50 @@ def tick_census():
             if node.get("value") == before:
                 state["problems"].append("inactive: %s stayed %r (ack %r)" % (prop, before, acks.get(140)))
             set_bool(state["greyed_sub"], key, before, 141)
-        if at == {"object": 31, "selection": 44, "texture_paint": 40}.get(stage, 16):
+        # PANEL-14: a flag enum shows every choice set (B16); a palette's swatch colours the brush
+        # (B17); a tree's item folds and unfolds (B18); a sub-panel unlike its parent's context is
+        # drawn with it, as Auto Run Python Scripts (B21).
+        if stage == "texture_paint" and at == 41:
+            delimit = next((n for n in _census_nodes(tree(subs.get("MODIFIER")) or {})
+                            if n.get("content") == "Choice" and n.get("property") == "delimit"), {})
+            if set((delimit.get("value") or "").split(",")) != {"NORMAL", "UV"} or not delimit.get("multiple"):
+                state["problems"].append("flags: the Decimate's Delimit shows %r" % delimit)
+            swatch = next((n for n in _census_nodes(tree(subs.get("TOOL")) or {})
+                           if n.get("content") == "Color" and n.get("role") == getattr(Role.Role, "Swatch", -1)), None)
+            if not swatch:
+                state["problems"].append("palette: no swatch in the Tool tab")
+            else:
+                invoke(subs["TOOL"], swatch["key"], 150)
+        if stage == "texture_paint" and at == 43:
+            settings = bpy.context.tool_settings
+            brush = settings.image_paint.brush
+            unified = getattr(settings.image_paint, "unified_paint_settings", None)
+            colors = [tuple(round(c, 3) for c in unified.color) if unified else None,
+                      tuple(round(c, 3) for c in brush.color) if brush else None]
+            if (1.0, 0.0, 0.0) not in colors:
+                state["problems"].append("palette: the swatch left the brush %r (ack %r)" % (colors, acks.get(150)))
+        if stage == "armature" and at == 17:
+            rows = [n for n in _census_nodes(tree(subs.get("DATA")) or {}) if n.get("content") == "Row"
+                    and n.get("label") == "Body"]
+            if not rows or not rows[0].get("expandable"):
+                state["problems"].append("trees: the bone collection Body does not fold: %r" % rows)
+            else:
+                state["fold"] = rows[0]["key"]
+                invoke(subs["DATA"], rows[0]["key"], 151, op=Op.Op.Close)
+        if stage == "armature" and at == 19 and state.get("fold"):
+            body = bpy.data.objects["Rig"].data.collections["Body"]
+            if body.is_expanded:
+                state["problems"].append("trees: Close left Body unfolded (ack %r)" % acks.get(151))
+            invoke(subs["DATA"], state["fold"], 152, op=Op.Op.Open)
+        if stage == "armature" and at == 21 and state.get("fold"):
+            if not bpy.data.objects["Rig"].data.collections["Body"].is_expanded:
+                state["problems"].append("trees: Open left Body folded (ack %r)" % acks.get(152))
+        if stage == "preferences" and at == 15:
+            autorun = [n for sub in subs.values() for n in _census_nodes(tree(sub) or {})
+                       if n["key"] == "panel:USERPREF_PT_saveload_autorun"]
+            if not autorun:
+                state["problems"].append("contexts: Auto Run Python Scripts is not under Blend Files")
+        if at == {"object": 31, "selection": 44, "texture_paint": 44, "armature": 22}.get(stage, 16):
             state["stage"] += 1
             state["start"] = step + 1
             if state["stage"] == len(CENSUS_STAGES):
@@ -4904,6 +4951,7 @@ def tick_census():
             return None
     except Exception:
         report["error"] = traceback.format_exc()
+        _census_lib().UI_native_panel_census_record(False)
         finish("error")
         return None
     return 0.3

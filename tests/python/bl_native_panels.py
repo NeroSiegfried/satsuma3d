@@ -246,5 +246,40 @@ window_manager.native_item_space = 'LOCAL'
 check((Vector(window_manager.native_item_median) - Vector((0.0, 0.0, 1.5))).length < 1e-5, 'Median in local space')
 bpy.ops.mesh.select_all(action='DESELECT')
 check(tuple(window_manager.native_item_median) == (0.0, 0.0, 0.0), 'Nothing selected has no median')
+# The means beside it, which Blender's panel shows in fields that are not properties (ROUND6
+# PANEL-14, B14): the edges' crease and bevel weight, made the first time they are set.
+bpy.ops.mesh.select_all(action='SELECT')
+window_manager.native_item_mean_crease_edge = 0.5
+window_manager.native_item_mean_bevel_weight_edge = 0.25
+mesh = bmesh.from_edit_mesh(cube.data)
+crease = mesh.edges.layers.float.get("crease_edge")
+bevel = mesh.edges.layers.float.get("bevel_weight_edge")
+check(crease is not None and all(abs(edge[crease] - 0.5) < 1e-5 for edge in mesh.edges),
+      'Mean Crease sets the selected edges')
+check(bevel is not None and all(abs(edge[bevel] - 0.25) < 1e-5 for edge in mesh.edges),
+      'Mean Bevel Weight sets the selected edges')
+check(abs(window_manager.native_item_mean_crease_edge - 0.5) < 1e-5, 'Mean Crease reads back')
+bpy.ops.object.mode_set(mode='OBJECT')
+# A curve's control points and a lattice's points, which had no Transform in the Item tab (B14):
+# their median moves them, a curve's handles with them, and their means set them.
+bpy.ops.curve.primitive_bezier_curve_add(location=(0.0, 0.0, 0.0), enter_editmode=True)
+curve = bpy.context.active_object
+bpy.ops.curve.select_all(action='SELECT')
+window_manager.native_item_space = 'LOCAL'
+points = curve.data.splines[0].bezier_points
+handle_before = points[0].handle_left.z - points[0].co.z
+window_manager.native_item_median = (0.0, 0.0, 1.0)
+check(abs(sum(point.co.z for point in points) / len(points) - 1.0) < 1e-5, 'Typing a curve median moves its points')
+check(abs(points[0].handle_left.z - points[0].co.z - handle_before) < 1e-5, 'A control point carries its handles')
+window_manager.native_item_mean_radius = 2.0
+check(all(abs(point.radius - 2.0) < 1e-5 for point in points), 'Mean Radius sets the control points')
+bpy.ops.object.mode_set(mode='OBJECT')
+bpy.ops.object.add(type='LATTICE', location=(0.0, 0.0, 0.0))
+lattice = bpy.context.active_object
+bpy.ops.object.mode_set(mode='EDIT')
+bpy.ops.lattice.select_all(action='SELECT')
+window_manager.native_item_median = (0.0, 0.0, 0.5)
+check(abs(sum(point.co_deform.z for point in lattice.data.points) / len(lattice.data.points) - 0.5) < 1e-5,
+      'Typing a lattice median moves its points')
 bpy.ops.object.mode_set(mode='OBJECT')
 print('PASS: native scene panels ' + json.dumps(checks))

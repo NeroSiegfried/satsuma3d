@@ -993,7 +993,11 @@ struct PanelBody: View {
         PanelStackOptions(model: model, name: name, toggles: PanelStackOptions.secondary(header))
       }
       ForEach(Self.runs(nodes.filter { $0 !== link }), id: \.first!.key) { run in
-        if run.count > 1 {
+        if run.first?.role == .swatch {
+          /* A palette's colours (ROUND6 PANEL-14). */
+          PaletteSwatches(model: model, swatches: run)
+        }
+        else if run.count > 1 {
           /* Buttons side by side, as Assign, Select and Deselect: joined (ROUND5 7C). */
           NativeButtonRow(model: model, buttons: run)
         }
@@ -1040,7 +1044,11 @@ struct PanelBody: View {
         && !node.label.isEmpty
     }
     for node in nodes {
-      if joinable(node), let last = runs.last, last.count < 4, last.allSatisfy(joinable) {
+      if node.role == .swatch, let last = runs.last, last.first?.role == .swatch {
+        /* A palette's colours, side by side. */
+        runs[runs.count - 1].append(node)
+      }
+      else if joinable(node), let last = runs.last, last.count < 4, last.allSatisfy(joinable) {
         runs[runs.count - 1].append(node)
       }
       else {
@@ -1048,6 +1056,52 @@ struct PanelBody: View {
       }
     }
     return runs
+  }
+}
+
+/**
+ * A palette's colours as Blender's swatches (ROUND6 PANEL-14, finding B17): a tap uses the colour,
+ * as a click on Blender's does (the brush takes it); a hold offers Edit Color, which opens the
+ * colour picker on that palette colour, as Blender's Ctrl-click does.
+ */
+struct PaletteSwatches: View {
+  let model: PanelsModel
+  let swatches: [NativeNode]
+
+  var body: some View {
+    LazyVGrid(columns: [GridItem(.adaptive(minimum: 30, maximum: 36), spacing: 6)], alignment: .leading, spacing: 6) {
+      ForEach(swatches) { PaletteSwatch(model: model, node: $0) }
+    }
+  }
+}
+
+struct PaletteSwatch: View {
+  let model: PanelsModel
+  let node: NativeNode
+  @State private var anchor = AnchorBox()
+
+  var body: some View {
+    let color = Color(uiColor: blenderColor(model.floats(node).map { NSNumber(value: $0) }))
+    RoundedRectangle(cornerRadius: 6, style: .continuous)
+      .fill(color)
+      .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(.separator, lineWidth: 1))
+      .frame(width: 30, height: 30)
+      .background(PresentationAnchor(anchor: anchor))
+      .contentShape(Rectangle())
+      .onTapGesture {
+        guard node.enabled else { return }
+        model.send(node, .invoke)
+        Haptics.selection()
+      }
+      .contextMenu {
+        Button {
+          ColorPickerSession(model: model, node: node).present(from: anchor)
+        } label: {
+          Label("Edit Color…", systemImage: "eyedropper")
+        }
+      }
+      .accessibilityLabel(node.label)
+      .accessibilityHint("Uses this colour")
   }
 }
 
