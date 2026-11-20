@@ -1,0 +1,159 @@
+# Every operator that runs modally without a modal key map (ROUND6 MODE-5, finding C9): its
+# `modal()` reads keys itself, which the modal bar does not see in a key map. Each says how a finger
+# reaches what its keys do. Macros are not listed: their steps' own key maps apply.
+#
+# One line per operator: `<idname> | <how>: <why>`, where how is one of
+#   status  - it writes its keys in the status bar, which the modal bar shows as buttons;
+#   drag    - it follows the press and ends with it or with the bar's Confirm and Cancel;
+#   job     - it watches a job, which Escape or the busy veil's Stop ends;
+#   desktop - a key it reads has no button: said here, and in MODE-6's table of key-only commands;
+#   none    - not in this build.
+#
+# `tests/python/bl_native_shell_sources.py` asks Blender for the list
+# (`WM_native_ui_modal_without_keymap`) and fails on one not here, and on one here that is gone.
+ACTION_OT_clickselect | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+ANIM_OT_change_frame | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+ANIM_OT_channels_select_filter | desktop: the channel list's filter is typed into (Ctrl+F), in the Desktop Interface's editors
+ASSET_OT_open_containing_blend_file | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+ASSET_OT_screenshot_preview | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+BRUSH_OT_stencil_control | desktop: its X and Y axis keys lock the stencil's movement, which no button offers (C10)
+CLIP_OT_add_marker_at_click | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+CLIP_OT_change_frame | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+CLIP_OT_prefetch | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+CLIP_OT_slide_marker | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+CLIP_OT_slide_plane_marker | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+CLIP_OT_solve_camera | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+CLIP_OT_track_markers | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+CLIP_OT_view_pan | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+CLIP_OT_view_zoom | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+CONSOLE_OT_select_set | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+CURVES_OT_draw | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+CURVE_OT_draw | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+EXTENSIONS_OT_package_install | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+EXTENSIONS_OT_package_install_files | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+EXTENSIONS_OT_package_install_marked | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+EXTENSIONS_OT_package_uninstall | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+EXTENSIONS_OT_package_uninstall_marked | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+EXTENSIONS_OT_package_upgrade_all | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+EXTENSIONS_OT_repo_sync | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+EXTENSIONS_OT_repo_sync_all | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+FILE_OT_select | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+FLUID_OT_bake_all | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+FLUID_OT_bake_data | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+FLUID_OT_bake_guides | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+FLUID_OT_bake_mesh | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+FLUID_OT_bake_noise | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+FLUID_OT_bake_particles | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+FONT_OT_selection_set | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+GPENCIL_OT_annotate | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+GRAPH_OT_blend_offset | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+GRAPH_OT_blend_to_default | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+GRAPH_OT_blend_to_ease | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+GRAPH_OT_blend_to_neighbor | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+GRAPH_OT_breakdown | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+GRAPH_OT_butterworth_smooth | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+GRAPH_OT_clickselect | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+GRAPH_OT_cursor_set | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+GRAPH_OT_decimate | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+GRAPH_OT_ease | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+GRAPH_OT_gaussian_smooth | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+GRAPH_OT_match_slope | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+GRAPH_OT_push_pull | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+GRAPH_OT_scale_average | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+GRAPH_OT_scale_from_neighbor | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+GRAPH_OT_shear | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+GRAPH_OT_time_offset | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+GREASE_PENCIL_OT_brush_stroke | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+GREASE_PENCIL_OT_sculpt_paint | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+GREASE_PENCIL_OT_stroke_trim | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+GREASE_PENCIL_OT_texture_gradient | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+GREASE_PENCIL_OT_vertex_brush_stroke | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+GREASE_PENCIL_OT_weight_brush_stroke | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+IMAGE_OT_change_frame | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+IMAGE_OT_curves_point_set | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+IMAGE_OT_sample | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+IMAGE_OT_view_pan | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+IMAGE_OT_view_zoom | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+MARKER_OT_duplicate | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+MARKER_OT_move | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+MARKER_OT_select | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+MASK_OT_slide_point | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+MASK_OT_slide_spline_curvature | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+MESH_OT_inset | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+MESH_OT_loopcut | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+MESH_OT_vertices_smooth | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+NLA_OT_click_select | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+NODE_OT_add_image | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+NODE_OT_add_import_node | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+NODE_OT_add_reroute | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+NODE_OT_backimage_move | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+NODE_OT_backimage_sample | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+NODE_OT_insert_offset | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+NODE_OT_links_cut | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+NODE_OT_links_mute | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+OBJECT_OT_bake | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+OBJECT_OT_bake_image | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+OBJECT_OT_geometry_node_bake_single | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+OBJECT_OT_lightprobe_cache_bake | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+OBJECT_OT_lineart_bake_strokes | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+OBJECT_OT_simulation_nodes_cache_bake | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+OBJECT_OT_simulation_nodes_cache_calculate_to_frame | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+OBJECT_OT_transform_axis_target | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+OBJECT_OT_voxel_size_edit | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+OUTLINER_OT_item_openclose | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+PAINTCURVE_OT_slide | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+PAINT_OT_grab_clone | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+PAINT_OT_sample_color | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+PARTICLE_OT_brush_edit | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+POSELIB_OT_blend_pose_asset | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+POSELIB_OT_restore_previous_action | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+POSE_OT_blend_to_neighbor | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+POSE_OT_blend_with_rest | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+POSE_OT_breakdown | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+POSE_OT_push | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+POSE_OT_relax | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+PTCACHE_OT_bake | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+PTCACHE_OT_bake_all | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+RENDER_OT_opengl | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+RENDER_OT_render | job: Escape or the busy veil's Stop ends it (BUSY); no other keys
+SCREEN_OT_actionzone | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SCREEN_OT_area_join | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SCREEN_OT_area_split | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SCREEN_OT_area_swap | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SCREEN_OT_quadview_size | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SCREEN_OT_region_scale | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SCULPT_CURVES_OT_brush_stroke | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SCULPT_CURVES_OT_min_distance_edit | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SCULPT_CURVES_OT_select_grow | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SCULPT_OT_cloth_filter | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SCULPT_OT_color_filter | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SCULPT_OT_dyntopo_detail_size_edit | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+SCULPT_OT_sample_detail_size | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SCULPT_OT_uv_sculpt_grab | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SCULPT_OT_uv_sculpt_pinch | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SCULPT_OT_uv_sculpt_relax | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SEQUENCER_OT_sample | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SEQUENCER_OT_select | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SEQUENCER_OT_text_cursor_set | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SPREADSHEET_OT_reorder_columns | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+SPREADSHEET_OT_resize_column | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+TEXT_OT_autocomplete | desktop: the Text Editor's completion list, typed into
+TEXT_OT_scroll | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+TEXT_OT_scroll_bar | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+TEXT_OT_selection_set | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+TRANSFORM_OT_vertex_random | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+UI_OT_view_item_select | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+UV_OT_minimize_stretch | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+UV_OT_stitch | status: the keys the status bar shows are the modal bar's buttons, its held modifier the shell's (MODE-5)
+VIEW2D_OT_edge_pan | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+VIEW2D_OT_pan | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+VIEW2D_OT_scroller_activate | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+VIEW2D_OT_zoom | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+VIEW3D_OT_view_roll | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+WM_OT_context_modal_mouse | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+WM_OT_radial_control | drag: it follows the press and ends with it or with the bar's Confirm and Cancel; typed numbers come from the bar's pad
+WM_OT_toolbar_prompt | desktop: a key prompt for the toolbar, which the iPad interface's keys never open (ROUND5 9A)
+WM_OT_xr_navigation_fly | none: virtual reality, which this build has not
+WM_OT_xr_navigation_grab | none: virtual reality, which this build has not
+WM_OT_xr_navigation_swap_hands | none: virtual reality, which this build has not
+WM_OT_xr_navigation_teleport | none: virtual reality, which this build has not

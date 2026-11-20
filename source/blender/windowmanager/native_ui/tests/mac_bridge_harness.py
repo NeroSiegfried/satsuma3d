@@ -5947,6 +5947,103 @@ def _popups_sweep():
     return 0.05
 
 
+
+# ROUND6 MODE-5 (C9): the modal bar shows the keys an operation reads in its own `modal()` and says
+# only in the status bar: Inset's Outset, Boundary and Individual, with Ctrl as Depth on the shell's
+# held Ctrl; a pose slide's channels and axes. A key pressed from the bar reaches the operation.
+statuskeys_state = {"at": 0, "problems": [], "found": {}}
+
+
+def _statuskeys_bar():
+    top = tree(subs["toolbar"]) or {}
+    row = next((n for n in top.get("children", []) if n["key"] == "actions"), {})
+    keys = {n["key"]: n.get("label") for n in row.get("children", []) if n["key"].startswith("modalkey:")}
+    names = next((n.get("value") for n in top.get("children", []) if n["key"] == "modifier_names"), "")
+    return keys, names
+
+
+def _statuskeys_escape():
+    window, _area, region = _view3d()
+    for value in ('PRESS', 'RELEASE'):
+        window.event_simulate(type='ESC', value=value, x=region.x + region.width // 2,
+                              y=region.y + region.height // 2)
+
+
+def tick_statuskeys():
+    global step
+    state = statuskeys_state
+    problems = state["problems"]
+    try:
+        pump()
+        step += 1
+        at = state["at"]
+        state["at"] += 1
+        window, area, region = _view3d()
+        if at == 0:
+            lib.WM_native_ui_test_install_hooks()
+            subs["toolbar"] = subscribe("toolbar")
+            enter("edit_mesh")
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                bpy.ops.mesh.inset('INVOKE_DEFAULT')
+        elif at == 3:
+            keys, names = _statuskeys_bar()
+            state["found"]["Inset"] = [keys, names]
+            for key, label in (("modalkey:O", "Outset"), ("modalkey:B", "Boundary"), ("modalkey:I", "Individual")):
+                if keys.get(key) != label:
+                    problems.append("MODE-5: Inset's bar has no %s %r: %r" % (key, label, keys))
+            if "ctrl=Depth" not in (names or ""):
+                problems.append("MODE-5: the shell's Ctrl is not Inset's Depth: %r" % names)
+            invoke(subs["toolbar"], "modalkey:O", 5101)
+        elif at == 5:
+            running = [op for op in window.modal_operators if op.bl_idname == "MESH_OT_inset"]
+            outset = running[0].properties.use_outset if running else None
+            state["found"]["Outset from the bar"] = [acks.get(5101), outset]
+            if outset is not True:
+                problems.append("MODE-5: the bar's Outset did not reach Inset (ack %r, use_outset %r)" %
+                                (acks.get(5101), outset))
+            _statuskeys_escape()
+        elif at == 7:
+            bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.ops.object.armature_add()
+            bpy.ops.object.mode_set(mode='POSE')
+            bpy.ops.pose.select_all(action='SELECT')
+            # Keys either side of the frame, which a pose slide slides between.
+            bone = bpy.context.object.pose.bones[0]
+            bone.keyframe_insert("location", frame=1)
+            bone.location.x = 1.0
+            bone.keyframe_insert("location", frame=11)
+            bpy.context.scene.frame_set(5)
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                bpy.ops.pose.push('INVOKE_DEFAULT')
+        elif at == 10:
+            keys, _names = _statuskeys_bar()
+            state["found"]["Push Pose"] = keys
+            wanted = {"modalkey:G", "modalkey:R", "modalkey:S", "modalkey:B", "modalkey:C"}
+            if not wanted <= set(keys):
+                problems.append("MODE-5: Push Pose's bar lacks %s: %r" % (sorted(wanted - set(keys)), keys))
+            # Location only, from the bar: then its axes, as the status bar shows them then.
+            invoke(subs["toolbar"], "modalkey:G", 5102)
+        elif at == 12:
+            keys, _names = _statuskeys_bar()
+            state["found"]["Push Pose, location only"] = [acks.get(5102), keys]
+            wanted = {"modalkey:X", "modalkey:Y", "modalkey:Z"}
+            if not wanted <= set(keys):
+                problems.append("MODE-5: after G from the bar, Push Pose's bar lacks %s: %r (ack %r)" % (
+                    sorted(wanted - set(keys)), keys, acks.get(5102)))
+            _statuskeys_escape()
+        elif at >= 14:
+            report["found"] = state["found"]
+            report["problems"] = problems
+            finish("done" if not problems else "error")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        report["found"] = state["found"]
+        finish("error")
+        return None
+    return 0.3
+
+
 # Every scenario, by the name `mac_bridge_check.py --scenario` takes: the one list (ROUND7 U4d).
 # `mac_bridge_check.py`'s SCENARIOS must name exactly these, which `bl_native_test_runners.py`
 # checks; a name not here ends the run with an error, never another scenario's run.
@@ -5959,7 +6056,7 @@ SCENARIOS = {
     "jobs": tick_jobs, "renderprogress": tick_render_progress, "busy": tick_busy,
     "renderkeep": tick_render_keep, "desk": tick_desk, "hold": tick_hold, "typing": tick_typing,
     "windows": tick_windows, "margins": tick_margins, "census": tick_census, "stale": tick_stale,
-    "header": tick_header, "popups": tick_popups,
+    "header": tick_header, "popups": tick_popups, "statuskeys": tick_statuskeys,
 }
 
 

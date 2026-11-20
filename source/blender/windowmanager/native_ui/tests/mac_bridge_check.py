@@ -32,7 +32,7 @@ SCENARIOS = ("actions", "tabs", "menus", "mirror", "reveal", "knife", "precision
              "extensions", "keys", "insets", "touch", "numinput", "render", "fingers", "undo",
              "tolerance", "waiting", "touchstart", "jobs", "renderprogress", "busy", "renderkeep",
              "desk", "hold", "typing", "windows", "margins", "census", "stale", "header",
-             "popups")
+             "popups", "statuskeys")
 
 
 # A scenario that walks every menu item of every mode needs longer than the others' five minutes.
@@ -119,7 +119,7 @@ def main():
             env["BLENDER_USER_RESOURCES"] = os.path.join(directory, "user")
             extra = ["--offline-mode"]
         if args.scenario in ("fingers", "undo", "tolerance", "waiting", "touchstart", "desk", "hold", "typing", "margins",
-                             "popups"):
+                             "popups", "statuskeys"):
             # Events made by the scenario, as a finger's would arrive (ROUND6 TOUCH).
             extra = ["--enable-event-simulate"]
         subprocess.run([args.blender, "--factory-startup", *extra, "--python", os.path.join(HERE, "mac_bridge_harness.py"),

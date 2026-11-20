@@ -1820,4 +1820,30 @@ check('data("panel")' in (SWIFT / 'DocumentWindow.swift').read_text(encoding='ut
       'struct CalledPanelPopover' in (SWIFT / 'NativeToolSettings.swift').read_text(encoding='utf-8'),
       "R6 MODE-3 (E7): the shell shows a called panel as a popover")
 
+# ROUND6 MODE-5 (C9): an operator whose `modal()` reads keys itself, with no modal key map, is on the
+# reviewed list `release/ios/modal_keys.txt`, which says how a finger reaches what its keys do; a new
+# one fails here, and so does a listed one that is gone. The modal bar reads the status bar's keys.
+import ctypes
+modal_lib_m5 = ctypes.CDLL(None)
+modal_lib_m5.WM_native_ui_modal_without_keymap.restype = ctypes.c_char_p
+modal_m5 = [line.split('\t') for line in modal_lib_m5.WM_native_ui_modal_without_keymap().decode().splitlines() if line]
+needing_m5 = {fields[0] for fields in modal_m5 if len(fields) == 1}
+reviewed_m5 = {}
+for line in (ROOT / 'release/ios/modal_keys.txt').read_text(encoding='utf-8').splitlines():
+    if line.strip() and not line.startswith('#'):
+        idname, _, how = line.partition(' | ')
+        reviewed_m5[idname.strip()] = how.strip()
+check(len(needing_m5) > 100 and not sorted(needing_m5 - set(reviewed_m5)),
+      "R6 MODE-5 (C9): every modal operator without a key map is reviewed (%s)" % sorted(needing_m5 - set(reviewed_m5)))
+check(not sorted(set(reviewed_m5) - needing_m5),
+      "R6 MODE-5 (C9): the reviewed list names no operator that is gone or has a key map now (%s)" %
+      sorted(set(reviewed_m5) - needing_m5))
+check(all(how.split(':')[0] in ('status', 'drag', 'job', 'desktop', 'none') and len(how.split(':', 1)[-1].strip()) > 5
+          for how in reviewed_m5.values()), "R6 MODE-5 (C9): each says how, and why")
+bar_m5 = bridge_d9[bridge_d9.index('static void bridge_modal_bar_build('):]
+bar_m5 = bar_m5[:bar_m5.index('\n}\n')]
+check('bridge_status_keys(C)' in bar_m5 and 'bridge_status_keys(C)' in
+      bridge_d9[bridge_d9.index('static std::string bridge_modifier_names('):],
+      "R6 MODE-5: the modal bar and the shell's modifier names read the status bar's keys")
+
 print('PASS: native shell sources ' + json.dumps(checks))

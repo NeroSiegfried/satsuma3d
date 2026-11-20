@@ -453,6 +453,77 @@ static std::string bridge_modifier_kmi_name(wmKeyMapItem &kmi)
 }
 
 /**
+ * One entry of what the running operation writes in the status bar (ROUND6 MODE-5, C9): its keys,
+ * as event types, and its text. `WorkspaceStatus` writes each key's icon, then the text that goes
+ * with them; an operator whose `modal()` reads keys itself, with no modal key map (Inset, Loop Cut,
+ * a pose slide), says them only there.
+ */
+struct BridgeStatusKey {
+  Vector<int> events;
+  /** Held modifiers among the icons: Shift, Ctrl, Alt, as #bridge_modifier_index numbers them. */
+  Vector<int> modifiers;
+  bool mouse = false;
+  std::string text;
+};
+
+/** The event a status icon shows: the reverse of #ui::icon_from_event_type, for keys. */
+static int bridge_status_icon_event(const int icon)
+{
+  static const Map<int, int> events = [] {
+    Map<int, int> map;
+    for (const EnumPropertyItem *item = rna_enum_event_type_items; item->identifier; item++) {
+      if (item->identifier[0] == '\0' || ISMOUSE_MOTION(item->value) || ISMOUSE_BUTTON(item->value) ||
+          ISMOUSE_WHEEL(item->value) || ISMOUSE_GESTURE(item->value) || ISNDOF(item->value) ||
+          ISTIMER(item->value))
+      {
+        continue;
+      }
+      const int icon = ui::icon_from_event_type(item->value, KM_PRESS);
+      if (icon != ICON_NONE) {
+        map.add(icon, item->value);
+      }
+    }
+    return map;
+  }();
+  return events.lookup_default(icon, EVENT_NONE);
+}
+
+static Vector<BridgeStatusKey> bridge_status_keys(bContext *C)
+{
+  Vector<BridgeStatusKey> keys;
+  WorkSpace *workspace = CTX_wm_workspace(C);
+  if (workspace == nullptr || workspace->runtime == nullptr) {
+    return keys;
+  }
+  BridgeStatusKey pending;
+  for (const bke::WorkSpaceStatusItem &item : workspace->runtime->status) {
+    if (item.icon != ICON_NONE) {
+      if (item.icon >= ICON_MOUSE_LMB && item.icon <= ICON_MOUSE_RMB_DRAG) {
+        pending.mouse = true;
+      }
+      else if (ELEM(item.icon, ICON_EVENT_SHIFT, ICON_EVENT_CTRL, ICON_EVENT_ALT)) {
+        pending.modifiers.append(item.icon == ICON_EVENT_SHIFT ? 0 :
+                                 item.icon == ICON_EVENT_CTRL  ? 1 :
+                                                                 2);
+      }
+      else if (const int event = bridge_status_icon_event(item.icon); event != EVENT_NONE) {
+        pending.events.append(event);
+      }
+      continue;
+    }
+    /* A range's dash, or an entry with no text (a pose slide's channel keys before their one
+     * label): the keys wait for the text that names them. */
+    if (item.text.empty() || item.text == "-") {
+      continue;
+    }
+    pending.text = item.text;
+    keys.append(std::move(pending));
+    pending = BridgeStatusKey();
+  }
+  return keys;
+}
+
+/**
  * What Shift, Ctrl and Alt do now, for the shell's buttons that hold them (ROUND6 TOUCH-8, decision
  * R6-8): named by the running operation's modal key map where it names them ("Snap Midpoints",
  * "Precision"), else by the active tool's key map ("Subtract", "Mask"); empty where neither does,
@@ -491,6 +562,13 @@ static std::string bridge_modifier_names(bContext *C)
         }
       }
       break;
+    }
+  }
+  /* A held modifier the operation reads itself and says only in the status bar (ROUND6 MODE-5):
+   * Inset's Ctrl (Depth), Loop Cut's Alt (Smoothness). Not one that only goes with a key. */
+  for (const BridgeStatusKey &key : bridge_status_keys(C)) {
+    if (key.modifiers.size() == 1 && key.events.is_empty() && names[key.modifiers[0]].empty()) {
+      names[key.modifiers[0]] = key.text;
     }
   }
   if (const bToolRef *tool = bridge_active_tool(C);
@@ -3154,9 +3232,11 @@ static void bridge_modal_bar_build(
                          nullptr;
   const EnumPropertyItem *items = keymap ? static_cast<const EnumPropertyItem *>(keymap->modal_items) :
                                            nullptr;
+  /* Every key a button offers, by `modalkey:` name. */
+  Set<std::string> keys_offered;
   if (keymap && items) {
     Set<int> shown;
-    Set<std::string> keys;
+    Set<std::string> &keys = keys_offered;
     for (wmKeyMapItem &kmi : keymap->items) {
       if ((kmi.flag & KMI_INACTIVE) || kmi.propvalue == 0 || shown.contains(kmi.propvalue)) {
         continue;
@@ -3208,6 +3288,42 @@ static void bridge_modal_bar_build(
         continue;
       }
       const std::string label = CTX_IFACE_(BLT_I18NCONTEXT_ID_WINDOWMANAGER, name);
+      builder.add(row, "modalkey:" + key, [&](ViewBuffer &buffer, NodeFields &fields) {
+        fields.label = label;
+        return views::protocol::CreateButtonDirect(
+            buffer, views::protocol::ButtonStyle::Normal, nullptr, nullptr, nullptr, false);
+      });
+    }
+  }
+  /* Keys its `modal()` reads itself, which no key map lists and the status bar shows (ROUND6
+   * MODE-5, C9): Inset's Outset, Boundary and Individual, Loop Cut's number of cuts, a pose slide's
+   * channels and axes. Named by the status bar's text; by the key too where one text names several
+   * keys. A held modifier is the shell's Shift, Ctrl or Alt, named in #bridge_modifier_names. */
+  Set<std::string> status_seen;
+  for (const BridgeStatusKey &status : bridge_status_keys(C)) {
+    for (const int event : status.events) {
+      if (ELEM(event, EVT_RETKEY, EVT_PADENTER, EVT_ESCKEY)) {
+        continue;
+      }
+      const char *event_id = nullptr;
+      const char *event_name = nullptr;
+      if (!RNA_enum_identifier(rna_enum_event_type_items, event, &event_id) ||
+          !RNA_enum_name(rna_enum_event_type_items, event, &event_name))
+      {
+        continue;
+      }
+      std::string key;
+      for (const int modifier : status.modifiers) {
+        key += modifier == 0 ? "shift+" : modifier == 1 ? "ctrl+" : "alt+";
+      }
+      key += event_id;
+      /* A key its key map already offers keeps that button and name. */
+      if (keys_offered.contains(key) || !status_seen.add(key)) {
+        continue;
+      }
+      const std::string label = status.events.size() > 1 ?
+                                    fmt::format("{} ({})", status.text, IFACE_(event_name)) :
+                                    status.text;
       builder.add(row, "modalkey:" + key, [&](ViewBuffer &buffer, NodeFields &fields) {
         fields.label = label;
         return views::protocol::CreateButtonDirect(
@@ -6070,6 +6186,30 @@ extern "C" void WM_native_ui_test_install_popup_hooks()
   hooks.operator_freed = ui::native_redo_operator_free;
   hooks.redo_cleared = ui::native_redo_operator_clear;
   hooks.redo_show = ui::native_redo_show;
+}
+
+/**
+ * Every operator type that runs modally without a modal key map (ROUND6 MODE-5, C9's sweep): its
+ * keys are read in `modal()` itself, which the modal bar knows only through the status bar. One
+ * identifier a line, sorted, and `\tmacro` after a macro's, for `bl_native_shell_sources.py`'s
+ * reviewed list `release/ios/modal_keys.txt`.
+ */
+extern "C" const char *WM_native_ui_modal_without_keymap()
+{
+  static std::string text;
+  Vector<std::string> names;
+  for (const wmOperatorType *ot : WM_operatortypes_registered_get()) {
+    if (ot->modal && ot->modalkeymap == nullptr) {
+      /* A macro runs its steps, such as a duplicate then a move, whose own key maps apply. */
+      names.append(std::string(ot->idname) + (BLI_listbase_is_empty(&ot->macro) ? "" : "\tmacro"));
+    }
+  }
+  std::sort(names.begin(), names.end());
+  text.clear();
+  for (const std::string &name : names) {
+    text += name + "\n";
+  }
+  return text.c_str();
 }
 
 /** What became of Blender's popups since the start: drawn by Blender, taken, refused; and the
