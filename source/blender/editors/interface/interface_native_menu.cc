@@ -502,6 +502,31 @@ static void native_menu(bContext *C,
   if (invocation && root == "context") {
     return;
   }
+  if (StringRef(root).startswith(std::string(native::PANEL_MENU_ROOT) + native::PANEL_MENU_PART)) {
+    /* A panel's menu Blender builds in C (ROUND6 PANEL-4): the panel drawn again, as its view
+     * draws it, and the menu its button opens. */
+    Vector<std::string> parts;
+    for (StringRef rest = root;;) {
+      const int64_t found = rest.find(native::PANEL_MENU_PART);
+      if (found == StringRef::not_found) {
+        parts.append(rest);
+        break;
+      }
+      parts.append(rest.substr(0, found));
+      rest = rest.substr(found + 1);
+    }
+    if (parts.size() != 4) {
+      return;
+    }
+    const StringRef tab = split(first, '\t').second;
+    native::panel_button(C, tab, parts[1] == "1", parts[2], parts[3], [&](Button &but) {
+      project(C, nullptr, &but, std::string(first), path, 0, writer, invocation);
+    });
+    if (invocation) {
+      invocation->execute(C);
+    }
+    return;
+  }
   const char *context_id = native_context_menu_id(C);
   const std::string resolved = root == "context" ? (context_id ? context_id : "") : root;
   /* Sculpt Mode's context menu, and the other modes' that are panels of settings, are opened as
@@ -625,12 +650,23 @@ void menu_write(bContext *C, const StringRef route, ViewBuilder &builder)
                       fields.label = heading;
                       return protocol::CreateMenu(buffer);
                     })};
+  if (split(first, '\t').first.startswith(std::string(PANEL_MENU_ROOT) + PANEL_MENU_PART)) {
+    /* Drawn in the panel's own view's context, see #panel_button. */
+    native_menu(C, route, &writer, nullptr);
+    return;
+  }
   in_properties_tab(C, tab, [&]() { native_menu(C, route, &writer, nullptr); });
 }
 
 void menu_run(bContext *C, const StringRef route)
 {
-  const StringRef tab = split(split(route, '\n').first, '\t').second;
+  const StringRef first = split(route, '\n').first;
+  const StringRef tab = split(first, '\t').second;
+  if (split(first, '\t').first.startswith(std::string(PANEL_MENU_ROOT) + PANEL_MENU_PART)) {
+    Invocation invocation;
+    native_menu(C, route, nullptr, &invocation);
+    return;
+  }
   in_properties_tab(C, tab, [&]() {
     Invocation invocation;
     native_menu(C, route, nullptr, &invocation);

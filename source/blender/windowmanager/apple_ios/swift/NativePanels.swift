@@ -1231,6 +1231,8 @@ struct PanelHeaderControls: View {
               PanelHeaderToggle(model: model, node: control)
             case .button:
               HeaderButton(model: model, node: control)
+            case .menubutton:
+              HeaderMenuButton(model: model, node: control)
             default:
               EmptyView()
           }

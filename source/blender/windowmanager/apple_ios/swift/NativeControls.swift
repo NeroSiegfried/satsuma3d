@@ -958,6 +958,38 @@ struct HeaderButton: View {
   }
 }
 
+/** A menu in a panel's header that Blender builds itself, such as a modifier's or constraint's,
+ * with Apply, Duplicate, Copy to Selected and Move (ROUND6 PANEL-4): Blender's down arrow, as its
+ * header draws it, opening the menu. */
+struct HeaderMenuButton: View {
+  let model: PanelsModel
+  let node: NativeNode
+
+  var body: some View {
+    let route = BlenderMenus.route(menuName(node), tab: model.currentTab)
+    Menu {
+      BlenderMenuItems(route: route)
+    } label: {
+      Group {
+        if let image = BlenderIcon.image(node.icon) {
+          Image(uiImage: image).renderingMode(.template)
+        }
+        else {
+          Image(systemName: "chevron.down").font(.system(size: 13, weight: .semibold))
+        }
+      }
+      .frame(width: 36, height: 36)
+      .contentShape(Rectangle())
+    }
+    .menuIndicator(.hidden)
+    .buttonStyle(.borderless)
+    .foregroundStyle(.secondary)
+    .disabled(!node.enabled)
+    .prefetchingBlenderMenu(route)
+    .accessibilityLabel(node.label.isEmpty ? "Options" : node.label)
+  }
+}
+
 /** A button opening one of Blender's menus. */
 struct NativeMenuButton: View {
   let model: PanelsModel

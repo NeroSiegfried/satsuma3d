@@ -4249,8 +4249,9 @@ def tick_margins():
 # first must each show.
 CENSUS_KNOWN = {
     # Dropped, and said by the panel's (or the tab's) row. Labels are lines of their own
-    # (PANEL-2) and sections sub-panels (PANEL-3): one dropped is a failure.
-    "c_menu": ("B4", "PANEL-4"),
+    # (PANEL-2), sections sub-panels (PANEL-3) and menus Blender builds in C menu buttons
+    # (PANEL-4): one dropped is a failure. Popups Blender builds in C are not menus yet.
+    "c_block": ("B4", "PANEL-4 (popups)"),
     "selection": ("B2", "PANEL-6"),
     "curve": ("B7", "PANEL-7"),
     "callback": ("B7, B18", "PANEL-7, PANEL-14"),
@@ -4288,7 +4289,7 @@ CENSUS_SECTIONS = (("object", "MATERIAL", "Emission"), ("object", "MODIFIER", "A
 CENSUS_LABELS = (("object", "MODIFIER", "No such file or directory", "ERROR"),
                  ("object", "MODIFIER", "Settings are inside the Physics tab", "NONE"))
 CENSUS_STAGES = ("object", "armature", "texture_paint", "selection", "preferences")
-census_state = {"stage": 0, "start": 1, "rows": {}, "problems": [], "buttons": {}}
+census_state = {"stage": 0, "start": 1, "rows": {}, "problems": [], "buttons": {}, "menu": None}
 
 
 def _census_lib():
@@ -4417,6 +4418,20 @@ def tick_census():
         if step == 1:
             _census_lib().UI_native_panel_census_record(True)
             _census_scene()
+        if stage == "object" and at == 17 and state["menu"] is not None:
+            # Duplicate, as Apply refuses a mesh with shape keys, as the fixture's is.
+            items = [n for n in _census_nodes(tree(state["menu"]) or {}) if n.get("label") == "Duplicate"]
+            if not items or not any(n.get("label") == "Apply" for n in _census_nodes(tree(state["menu"]) or {})):
+                state["problems"].append("Subdivision's header menu lacks Apply or Duplicate: %r" % [
+                    n.get("label") for n in _census_nodes(tree(state["menu"]) or {})])
+            elif not items[0].get("enabled", True):
+                state["problems"].append("Subdivision's header menu offers Duplicate greyed: %r" % items[0])
+            else:
+                invoke(state["menu"], items[0]["key"], 77)
+        if stage == "object" and at == 20 and state["menu"] is not None:
+            if sum(m.type == 'SUBSURF' for m in bpy.data.objects["Cube"].modifiers) != 2:
+                state["problems"].append("Duplicate from Subdivision's header menu made no copy (ack %r; modifiers %r)" % (
+                    acks.get(77), [m.name for m in bpy.data.objects["Cube"].modifiers]))
         if at == 0:
             _census_stage(stage)
             if stage == "preferences":
@@ -4474,8 +4489,20 @@ def tick_census():
                     state["problems"].append("%s %s: section %r opened shows nothing" % (stage, tab, title))
             if stage == "object" and not bpy.data.objects["Cube"].modifiers["Subdivision"].open_advanced_panel:
                 state["problems"].append("object: opening Subdivision's Advanced did not set open_advanced_panel")
+            if stage == "object":
+                # Subdivision's header menu, which Blender builds in C (PANEL-4): opened as a menu.
+                menus = [n for n in _census_nodes(tree(subs.get("MODIFIER")) or {})
+                         if n.get("content") == "MenuButton" and "Subdivision" in n["key"]
+                         and (n.get("params") or {}).get("menu", "").startswith("panel\x1f")]
+                if not menus:
+                    state["problems"].append("object MODIFIER: Subdivision's header menu is not a menu button")
+                else:
+                    route = menus[0]["params"]["menu"] + "\t" + "MODIFIER"
+                    state["menu"] = subscribe("menu", route=route)
             report["steps"].append({"name": stage, "views": len(walks), "fates": sum(len(w) for w in walks.values()),
                                     "dropped": counted, "rows": shown})
+        # The object stage runs its header menu's item before the next stage changes the scene.
+        if at == (21 if stage == "object" else 16):
             state["stage"] += 1
             state["start"] = step + 1
             if state["stage"] == len(CENSUS_STAGES):

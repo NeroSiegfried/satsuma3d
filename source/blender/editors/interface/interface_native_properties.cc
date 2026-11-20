@@ -2967,9 +2967,15 @@ std::optional<Fate> unhandled_fate(const Button &but)
     default:
       break;
   }
-  if (but.menu_create_func || but.block_create_func) {
-    /* A menu or popup Blender builds in C (B4). */
+  if (but.menu_create_func) {
+    /* A menu Blender builds in C, where the walker does not write it, such as over a list's
+     * row (B4). */
     return fate_dropped("c_menu");
+  }
+  if (but.block_create_func) {
+    /* A popup Blender builds in C, such as a colour ramp's or a curve's tools, or a search
+     * among a collection's items (B4). */
+    return fate_dropped("c_block");
   }
   if (but.rnaprop) {
     /* A pointer to something other than a data-block, chosen by a search, such as an Action
@@ -4222,6 +4228,17 @@ static std::string panels_walk(bContext *C,
     std::set<std::string> seen;
     std::map<std::string, int> occurrences;
     int named_row_count = 0;
+    /* Menus Blender builds in C, by their order in the panel, which the menu walker finds them
+     * by when it draws the panel again (PANEL-4). */
+    std::map<const Button *, int> c_menus;
+    for (const auto &button : block->buttons) {
+      /* An enum's dropdown has a menu function too, which the property's choice stands for. */
+      if (button->menu_create_func && !button->rnaprop && !button->optype &&
+          !button_menutype_get(button.get()) && !button_paneltype_get(button.get()))
+      {
+        c_menus.emplace(button.get(), int(c_menus.size()));
+      }
+    }
     /* A section's rows go into its sub-panel, made as its first button comes (PANEL-3). */
     const NodeId panel_node_id = node;
     const std::function<NodeId(int)> section_target = [&](const int i) -> NodeId {
@@ -4501,6 +4518,53 @@ static std::string panels_walk(bContext *C,
       const bool header_name = header_buttons.count(&but) && candidate.instance && but.rnaprop &&
                                RNA_property_type(but.rnaprop) == PROP_STRING &&
                                STREQ(RNA_property_identifier(but.rnaprop), "name");
+      if (const auto c_menu = c_menus.find(&but); c_menu != c_menus.end()) {
+        /* A menu Blender builds in C, such as a modifier's header menu (Apply, Duplicate, Copy to
+         * Selected, Move) or a socket's link: opened as Blender's own menus are, by the menu
+         * walker, which draws this panel again to find it (B4, PANEL-4). */
+        const std::string key = "menu:" + std::to_string(c_menu->second);
+        if (execute) {
+          if (target_panel && *requested_key == key && request->action == "button" &&
+              request->with_button && !applied)
+          {
+            request->with_button(but);
+            applied = true;
+          }
+        }
+        /* Properties and Preferences, where the menu walker can draw the panel again; the top
+         * bar's and the viewport's popovers say it is in the Desktop Interface. */
+        else if (writer && !(but.flag & UI_HIDDEN) && !viewport) {
+          const std::string route = std::string(native::PANEL_MENU_ROOT) +
+                                    native::PANEL_MENU_PART + (data.tool_tab ? "1" : "0") +
+                                    native::PANEL_MENU_PART + candidate.id +
+                                    native::PANEL_MENU_PART + key;
+          const std::string label = !but.str.empty()       ? but.str :
+                                    !but.tip.is_empty()    ? std::string(but.tip) :
+                                                             std::string();
+          const bool in_header = header_buttons.count(&but) != 0;
+          writer->builder.add(node,
+                              writer->key("cmenu:" + candidate.id + ":" + key),
+                              [&](Buffer &buffer, NodeFields &fields) {
+                                fields.label = label;
+                                fields.icon = icon_name(button_icon(&but));
+                                fields.enabled = !(but.flag & (BUT_DISABLED | BUT_INACTIVE));
+                                fields.role = in_header ? protocol::Role::Header :
+                                                          protocol::Role::None;
+                                const auto param = protocol::CreateParamDirect(
+                                    buffer,
+                                    "menu",
+                                    protocol::Value::TextValue,
+                                    protocol::CreateTextValueDirect(buffer, route.c_str()).Union());
+                                return protocol::CreateMenuButton(
+                                    buffer, buffer.CreateString("menu"), buffer.CreateVector(&param, 1));
+                              });
+          decide(&but, fate_projected("MenuButton"));
+          continue;
+        }
+        if (execute || !writer) {
+          continue;
+        }
+      }
       if (!execute && !open && !header_toggle && !header_operator && !header_name) {
         continue;
       }
@@ -4915,6 +4979,24 @@ std::string panels_edit(bContext *C, PanelsData &data, const EditRequest &reques
 }  // namespace native
 
 namespace native {
+
+bool panel_button(bContext *C,
+                  const StringRef tab,
+                  const bool tool_tab,
+                  const StringRef panel,
+                  const StringRef key,
+                  const FunctionRef<void(Button &)> fn)
+{
+  PanelsData data;
+  data.tab = tab;
+  data.tool_tab = tool_tab;
+  const Edit edit{Edit::Kind::Property, panel, key};
+  EditRequest request;
+  request.edit = &edit;
+  request.action = "button";
+  request.with_button = fn;
+  return panels_walk(C, data, nullptr, &request).empty();
+}
 
 void in_properties_tab(bContext *C, const StringRef tab, const FunctionRef<void()> fn)
 {

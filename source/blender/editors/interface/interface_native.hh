@@ -26,6 +26,10 @@ namespace blender {
 struct bContext;
 }
 
+namespace blender::ui {
+struct Button;
+}
+
 namespace blender::ui::native {
 
 /** What a control edits: a button, found again by its key in the panel that draws it. */
@@ -145,7 +149,30 @@ struct EditRequest {
   /** A drag, as one step to undo, and how far it is. */
   std::string interaction;
   std::string phase;
+  /** With `button` as the action: called with the button the edit's key names, as the panel
+   * draws it (#panel_button). */
+  FunctionRef<void(Button &)> with_button;
 };
+
+/**
+ * The root of a route to a menu Blender builds in C for a panel's button (ROUND6 PANEL-4), such
+ * as a modifier's header menu: `panel`, then, each after #PANEL_MENU_PART, 1 for the Properties'
+ * Tool tab, the panel's id and the button's key. The tab follows as for every route.
+ */
+inline constexpr const char *PANEL_MENU_ROOT = "panel";
+inline constexpr char PANEL_MENU_PART = '\x1f';
+
+/**
+ * Calls \a fn with the button \a key names in the panel \a panel of \a tab, drawn as the
+ * panels' view draws it there (the Properties' Tool tab with \a tool_tab); false where it is no
+ * longer there.
+ */
+bool panel_button(bContext *C,
+                  StringRef tab,
+                  bool tool_tab,
+                  StringRef panel,
+                  StringRef key,
+                  FunctionRef<void(Button &)> fn);
 
 /** The node editor's view, see `interface_native_view.cc`: its tree's nodes as records, and their
  * values as controls. */
