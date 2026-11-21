@@ -807,9 +807,10 @@ final class LayoutChecker {
   /* -------------------------------------------------------------------- */
   /* The bottom controls' band (ROUND5 9G.5) */
 
-  /** Zones that are controls along the window's bottom edge while they stand there: the Actions
-   * button and bar, the last operation's strip, the tool button or the bottom rail. */
-  private static let bottomZones: Set<String> = ["actions", "operation", "tools", "brushes"]
+  /** Zones that are controls along the window's bottom edge while they stand there: Shift, Ctrl
+   * and Alt, the Actions button and bar, the last operation's strip, the tool button or the bottom
+   * rail. */
+  private static let bottomZones: Set<String> = ["modifier keys", "actions", "operation", "tools", "brushes"]
   /** Controls along the bottom that are not checked for overlaps, such as the keyboard's bar. */
   private var bottomOnly: [String: CGRect] = [:]
   private var sentBand: Float = -1

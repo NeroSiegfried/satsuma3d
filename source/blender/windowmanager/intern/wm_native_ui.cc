@@ -396,6 +396,8 @@ wmOperator *bridge_waiting_operator(wmWindow *win)
 }
 
 static bToolRef *bridge_active_tool(bContext *C);
+ScrArea *bridge_find_view3d_area(bScreen *screen);
+ARegion *bridge_find_window_region(ScrArea *area);
 
 /** Shift (0), Ctrl (1), Alt (2) for a modifier key event type, or -1. */
 static int bridge_modifier_index(const int type)
@@ -534,15 +536,138 @@ static Vector<BridgeStatusKey> bridge_status_keys(bContext *C)
   return keys;
 }
 
+/** What a click or drag with the left button does in the largest 3D View, with Shift (0), Ctrl
+ * (1) or Alt (2) held alone, or nothing held (-1): the first item Blender's handlers would run
+ * for it, in their order (the active tool's key map first, then the mode's and the editor's),
+ * whose key map and operator poll here. As Blender dispatches it: an item whose operator cannot
+ * run here passes the click on (Select Box's Alt, a face-mask loop select, in Edit Mode). */
+struct BridgeClickEffect {
+  /** For a button: the set choice ("Extend"), the set toggle's name, or the operator's name. */
+  std::string name;
+  std::string idname;
+  /** What it does, for comparing with what the sidebar offers: `mode:ADD`, `toggle`,
+   * `op:MESH_OT_loop_select`. */
+  std::string effect;
+  /** Named by a property it sets rather than by its operator. */
+  bool by_property = false;
+};
+
+static bool bridge_click_matches(const wmKeyMapItem &kmi, const int held)
+{
+  if ((kmi.flag & KMI_INACTIVE) || kmi.type != LEFTMOUSE ||
+      !ELEM(kmi.val, KM_PRESS, KM_CLICK, KM_PRESS_DRAG) || kmi.oskey == KM_MOD_HELD ||
+      kmi.hyper == KM_MOD_HELD ||
+      /* Not with a key held as well, such as annotation's D. */
+      kmi.keymodifier != EVENT_NONE)
+  {
+    return false;
+  }
+  const short mods[3] = {kmi.shift, kmi.ctrl, kmi.alt};
+  for (int i = 0; i < 3; i++) {
+    if (mods[i] == KM_ANY) {
+      continue;
+    }
+    if ((mods[i] == KM_MOD_HELD) != (i == held)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static BridgeClickEffect bridge_click_effect(bContext *C, const int held)
+{
+  BridgeClickEffect result;
+  wmWindowManager *wm = CTX_wm_manager(C);
+  wmWindow *win = CTX_wm_window(C);
+  bScreen *screen = win ? WM_window_get_active_screen(win) : nullptr;
+  ScrArea *area = bridge_find_view3d_area(screen);
+  ARegion *region = bridge_find_window_region(area);
+  if (wm == nullptr || win == nullptr || region == nullptr) {
+    return result;
+  }
+  ScrArea *area_prev = CTX_wm_area(C);
+  ARegion *region_prev = CTX_wm_region(C);
+  CTX_wm_area_set(C, area);
+  CTX_wm_region_set(C, region);
+  bool found = false;
+  for (ListBaseT<wmEventHandler> *handlers :
+       {&region->runtime->handlers, &area->handlers, &win->runtime->handlers})
+  {
+    for (wmEventHandler &handler_base : *handlers) {
+      if (found || handler_base.type != WM_HANDLER_TYPE_KEYMAP) {
+        continue;
+      }
+      auto *handler = reinterpret_cast<wmEventHandler_Keymap *>(&handler_base);
+      wmEventHandler_KeymapResult km_result;
+      WM_event_get_keymaps_from_handler(wm, win, handler, &km_result);
+      for (int km_index = 0; km_index < km_result.keymaps_len && !found; km_index++) {
+        wmKeyMap *keymap = km_result.keymaps[km_index];
+        if (keymap == nullptr || !WM_keymap_poll(C, keymap)) {
+          continue;
+        }
+        for (wmKeyMapItem &kmi : keymap->items) {
+          if (!bridge_click_matches(kmi, held)) {
+            continue;
+          }
+          wmOperatorType *ot = WM_operatortype_find(kmi.idname, true);
+          if (ot == nullptr || !WM_operator_poll(C, ot)) {
+            continue;
+          }
+          found = true;
+          result.idname = ot->idname;
+          result.name = bridge_modifier_kmi_name(kmi);
+          result.effect = std::string("op:") + ot->idname;
+          if (kmi.ptr) {
+            RNA_STRUCT_BEGIN (kmi.ptr, prop) {
+              if (!RNA_property_is_set(kmi.ptr, prop)) {
+                continue;
+              }
+              const char *identifier = RNA_property_identifier(prop);
+              if (RNA_property_type(prop) == PROP_ENUM &&
+                  !(RNA_property_flag(prop) & PROP_ENUM_FLAG))
+              {
+                const char *value = nullptr;
+                if (RNA_property_enum_identifier(
+                        C, kmi.ptr, prop, RNA_property_enum_get(kmi.ptr, prop), &value) &&
+                    value)
+                {
+                  result.effect = std::string(identifier) + ":" + value;
+                  result.by_property = true;
+                  break;
+                }
+              }
+              if (RNA_property_type(prop) == PROP_BOOLEAN &&
+                  RNA_property_boolean_get(kmi.ptr, prop) && !result.by_property &&
+                  !STREQ(identifier, "deselect_all") && !STREQ(identifier, "select_passthrough"))
+              {
+                result.effect = identifier;
+                result.by_property = true;
+              }
+            }
+            RNA_STRUCT_END;
+          }
+          break;
+        }
+      }
+    }
+  }
+  CTX_wm_area_set(C, area_prev);
+  CTX_wm_region_set(C, region_prev);
+  return result;
+}
+
 /**
  * What Shift, Ctrl and Alt do now, for the shell's buttons that hold them (ROUND6 TOUCH-8, decision
  * R6-8): named by the running operation's modal key map where it names them ("Snap Midpoints",
- * "Precision"), else by the active tool's key map ("Subtract", "Mask"); empty where neither does,
- * and the button keeps the key's name. As `shift=…\nctrl=…\nalt=…`.
+ * "Precision"), else by what a click with the key held does that a plain click does not ("Extend",
+ * "Loop Select"); empty where nothing says so, and the button keeps the key's name (device round:
+ * Alt read "Select" from a face-mask loop select that cannot run in Edit Mode, where Alt selects a
+ * loop). As `shift=…\nctrl=…\nalt=…` in \a r_names, and what each does in \a r_effects, in
+ * the same form, for the shell to leave out a key its sidebar already offers.
  */
-static std::string bridge_modifier_names(bContext *C)
+static void bridge_modifier_names(bContext *C, std::string &r_names, std::string &r_effects)
 {
-  std::string names[3];
+  std::string names[3], effects[3];
   wmWindowManager *wm = CTX_wm_manager(C);
   wmWindow *win = CTX_wm_window(C);
   if (wm && win) {
@@ -569,6 +694,8 @@ static std::string bridge_modifier_names(bContext *C)
           const char *name = nullptr;
           if (RNA_enum_name(items, kmi.propvalue, &name)) {
             names[index] = bridge_modifier_item_name(name);
+            /* The held key itself is what it does: the sidebar's Snap and Precision hold it. */
+            effects[index] = std::string("key:") + (index == 0 ? "shift" : index == 1 ? "ctrl" : "alt");
           }
         }
       }
@@ -580,28 +707,28 @@ static std::string bridge_modifier_names(bContext *C)
   for (const BridgeStatusKey &key : bridge_status_keys(C)) {
     if (key.modifiers.size() == 1 && key.events.is_empty() && names[key.modifiers[0]].empty()) {
       names[key.modifiers[0]] = key.text;
+      effects[key.modifiers[0]] = "status:" + key.text;
     }
   }
-  if (const bToolRef *tool = bridge_active_tool(C);
-      wm && tool && tool->runtime && tool->runtime->keymap[0])
-  {
-    if (wmKeyMap *keymap = WM_keymap_find_all(wm, tool->runtime->keymap, SPACE_VIEW3D, RGN_TYPE_WINDOW)) {
-      for (wmKeyMapItem &kmi : keymap->items) {
-        if ((kmi.flag & KMI_INACTIVE) || kmi.type != LEFTMOUSE) {
-          continue;
-        }
-        const bool held[3] = {kmi.shift == KM_MOD_HELD, kmi.ctrl == KM_MOD_HELD, kmi.alt == KM_MOD_HELD};
-        if (held[0] + held[1] + held[2] != 1 || kmi.oskey == KM_MOD_HELD) {
-          continue;
-        }
-        const int index = held[0] ? 0 : (held[1] ? 1 : 2);
-        if (names[index].empty()) {
-          names[index] = bridge_modifier_kmi_name(kmi);
-        }
-      }
+  bool modal = false;
+  for (const std::string &name : names) {
+    modal |= !name.empty();
+  }
+  if (!modal && wm && win) {
+    /* Nothing running reads them: what a click does with each held, against a plain click. */
+    const BridgeClickEffect plain = bridge_click_effect(C, -1);
+    for (int index = 0; index < 3; index++) {
+      const BridgeClickEffect held = bridge_click_effect(C, index);
+      effects[index] = held.effect;
+      /* A name says what the key changes, or the key keeps its own: none when nothing runs, the
+       * plain click's own name, or the same operator named only by itself. */
+      const bool says = !held.name.empty() && held.name != plain.name &&
+                        !(held.idname == plain.idname && !held.by_property);
+      names[index] = says ? held.name : "";
     }
   }
-  return "shift=" + names[0] + "\nctrl=" + names[1] + "\nalt=" + names[2];
+  r_names = "shift=" + names[0] + "\nctrl=" + names[1] + "\nalt=" + names[2];
+  r_effects = "shift=" + effects[0] + "\nctrl=" + effects[1] + "\nalt=" + effects[2];
 }
 
 /**
@@ -3956,8 +4083,10 @@ void bridge_toolbar_view_build(bContext *C,
   /* Moving, turning or scaling: the held buttons are Snap and Precision then. */
   data("transforming", bridge_constraint_operator(CTX_wm_window(C)) != nullptr);
   /* What the shell's Shift, Ctrl and Alt do now (ROUND6 TOUCH-8). */
-  const std::string modifier_names = bridge_modifier_names(C);
+  std::string modifier_names, modifier_effects;
+  bridge_modifier_names(C, modifier_names, modifier_effects);
   data("modifier_names", std::string_view(modifier_names));
+  data("modifier_effects", std::string_view(modifier_effects));
   bool drag_done = false;
   std::string drag_hint;
   if (bridge_waiting_hint(CTX_wm_window(C), &drag_done, drag_hint)) {
@@ -8258,6 +8387,31 @@ extern "C" void WM_native_ui_bottom_controls_set(const float pixels)
   bridge_bottom_controls.store(pixels);
 }
 
+static std::atomic<float> bridge_desktop_inset_top{0.0f};
+static std::atomic<float> bridge_desktop_inset_bottom{0.0f};
+static std::atomic<bool> bridge_desktop_insets_changed{false};
+
+extern "C" void WM_native_ui_desktop_insets_set(const float top, const float bottom)
+{
+  const bool changed = bridge_desktop_inset_top.exchange(std::max(0.0f, top)) != top;
+  if (bridge_desktop_inset_bottom.exchange(std::max(0.0f, bottom)) != bottom || changed) {
+    bridge_desktop_insets_changed.store(true);
+    GHOST_mailbox_published();
+  }
+}
+
+bool WM_native_ui_desktop_insets(int *r_top, int *r_bottom)
+{
+  *r_top = 0;
+  *r_bottom = 0;
+  if (!WM_native_ui_desktop_mode()) {
+    return false;
+  }
+  *r_top = int(bridge_desktop_inset_top.load());
+  *r_bottom = int(bridge_desktop_inset_bottom.load());
+  return *r_top > 0 || *r_bottom > 0;
+}
+
 /* Set from the native interface: telling Blender a message waits wakes its loop. */
 extern "C" void WM_native_ui_viewport_cover_set(const float pixels)
 {
@@ -9721,6 +9875,19 @@ void WM_native_ui_flush_commands(bContext *C)
 #endif
   WM_native_ui_ensure_layout(C);
 
+  if (bridge_desktop_insets_changed.exchange(false)) {
+    /* The cluster's bands changed: Blender's screens are laid out again between them, as after
+     * a window's resize (#WM_window_rect_calc). */
+    wmWindowManager *wm = CTX_wm_manager(C);
+    wmWindow *win_prev = CTX_wm_window(C);
+    for (wmWindow &win : wm->windows) {
+      /* At once, not at the next draw: an idle window would keep the old layout until then. */
+      CTX_wm_window_set(C, &win);
+      ED_screen_refresh(C, wm, &win);
+      WM_event_add_notifier_ex(wm, &win, NC_WINDOW | NA_EDITED, nullptr);
+    }
+    CTX_wm_window_set(C, win_prev);
+  }
   if (bridge_viewport_cover_changed.exchange(false)) {
     /* The 3D views are shortened to the part a panel leaves showing, see #area_calc_totrct. */
     for (wmWindow &win : CTX_wm_manager(C)->windows) {

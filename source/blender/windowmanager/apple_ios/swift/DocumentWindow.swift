@@ -1013,8 +1013,10 @@ public struct DocumentWindow: View {
           TextObjectKeyboard(model: model)
         }
       }
-      /* Shift, Ctrl and Alt as real keys for a finger (ROUND6 TOUCH-8): here in the iPad interface,
-       * in the cluster in the Desktop Interface. */
+#if os(visionOS)
+      /* Shift, Ctrl and Alt as real keys for a finger (ROUND6 TOUCH-8). On the iPad they stand
+       * first in the bottom row, placed by #ShellLayout.bottomStack with everything else there
+       * (#QuickActionsRow), and in the Desktop Interface in the cluster; visionOS has no row. */
       .overlay(alignment: .bottomLeading) {
         if model.viewportReady && controlsShown {
           StickyModifierKeys(model: model)
@@ -1022,6 +1024,7 @@ public struct DocumentWindow: View {
             .padding(.bottom, 96)
         }
       }
+#endif
       /* Over Blender's own interface, in every screen state, Focus Mode and a maximized area
        * included: the app's one small cluster, the way back among it (ROUND6 DESK-1, R6-6). */
       .overlay {
@@ -1191,7 +1194,7 @@ public struct DocumentWindow: View {
         .ignoresSafeArea(edges: .vertical)
       /* Below the toolbar; in the Desktop Interface, in the cluster, off Blender's top bar. */
       if !model.desktop {
-        CompileIndicator(progress: shell.compile)
+        CompileIndicator(progress: shell.compile, model: model)
       }
     }
   }

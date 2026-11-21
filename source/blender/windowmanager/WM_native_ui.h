@@ -154,6 +154,12 @@ bool WM_native_ui_session_log_file(char *path, size_t path_size);
  * log, at most once a minute (ROUND5 10E). Safe from any thread. */
 void WM_native_ui_session_log_active(void);
 
+/** The bands along the window's top and bottom that the Desktop Interface's cluster stands in
+ * (ROUND6 DESK-1), in window pixels: Blender lays its screen out between them, as it does inside
+ * a window's client-side decorations (`WM_window_rect_calc`), so the cluster never covers one of
+ * Blender's regions (device round: it covered the Timeline's header). 0 for none. */
+void WM_native_ui_desktop_insets_set(float top, float bottom);
+
 /** How much of the window's height, from the top, the interface's top bar covers. */
 void WM_native_ui_top_bar_set(float fraction);
 /** How much of the window's height, from the bottom, the asset pane and timeline cover. */

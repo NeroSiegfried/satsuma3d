@@ -263,6 +263,8 @@ struct BottomStackInput: Equatable {
   var item = Fold.none
   /** The number pad is shown. */
   var pad = false
+  /** Shift, Ctrl and Alt's width (TOUCH-8), folded or not; 0 when they are not shown. */
+  var modifierKeys: CGFloat = 0
 }
 
 /** A piece of the bottom stack that can stand in the row as a pill. */
@@ -273,6 +275,8 @@ enum BottomStackPill: Hashable {
 /** Where each piece of the bottom stack stands, in the row's coordinates: the origin at the
  * top-leading corner of the row, y negative above it. */
 struct BottomStackFrames: Equatable {
+  /** Shift, Ctrl and Alt, first in the row. */
+  var modifierKeys: CGRect?
   /** The Actions pill, or the open bar. */
   var actions: CGRect?
   /** The last operation's pill, or its open strip. */
@@ -346,6 +350,11 @@ enum ShellLayout {
    *    less than #ShellMetrics.barMinWidth, the last named pill becomes a
    *    circle with its icon alone: Item, then the operation, then Actions (decision 31). The
    *    number pad narrows with the lane, and below its narrowest it is centred on the view.
+   * 0. Shift, Ctrl and Alt stand first, at the lane's leading end, and reserve their width: every
+   *    other piece of the row (rules 1, 3, 4, 5, 9) has the lane after them, so nothing in the
+   *    row is ever under them (device round 2026-11-21). Where the row cannot hold them beside
+   *    the least the rest needs, they stand on the first shelf above it instead. The shelves
+   *    above the row keep the whole lane.
    */
   nonisolated static func bottomStack(_ input: BottomStackInput) -> BottomStackFrames {
     typealias M = ShellMetrics
@@ -353,8 +362,29 @@ enum ShellLayout {
     let laneEnd = input.laneLeading + input.laneWidth
     var frames = BottomStackFrames()
 
+    /* Rule 0: the keys, and the row's lane after them; on the first shelf when the row has no
+     * room for them beside the least the rest needs there (every pill as its icon, the open bar at
+     * its narrowest). */
+    var rowLeading = input.laneLeading
+    var keysOnShelf = false
+    if input.modifierKeys > 0 {
+      let pieces = (input.actions == .folded ? 1 : 0) + (input.operation == .folded ? 1 : 0) +
+        (input.item != .none ? 1 : 0)
+      var need = CGFloat(pieces) * (M.buttonHeight + gap)
+      if input.actions == .open { need += M.barMinWidth + gap }
+      if input.operation == .open && input.actions != .open { need += M.barMinWidth + gap }
+      keysOnShelf = input.modifierKeys + gap + need > input.laneWidth
+      if !keysOnShelf {
+        let rect = CGRect(x: input.laneLeading, y: (M.rowHeight - M.modifierKeysHeight) / 2,
+                          width: input.modifierKeys, height: M.modifierKeysHeight)
+        frames.modifierKeys = rect
+        rowLeading = min(laneEnd, rect.maxX + gap)
+      }
+    }
+    let rowWidth = max(0, laneEnd - rowLeading)
+
     /* Rules 1 and 2. */
-    let stripAbove = input.operation == .open && (input.actions == .open || input.laneWidth < M.wideRow)
+    let stripAbove = input.operation == .open && (input.actions == .open || rowWidth < M.wideRow)
     let shelves = stripAbove ? gap + M.stripHeight : 0
     frames.itemOpen = input.item == .open && !input.pad && input.headroom - shelves - gap >= M.itemMinHeight
 
@@ -370,15 +400,15 @@ enum ShellLayout {
     /* Also while the open bar beside them would get less than its narrowest. */
     func crowded() -> Bool {
       let width = pillsWidth()
-      return width > input.laneWidth ||
-        (input.actions == .open && !pills.isEmpty && input.laneWidth - width - gap < M.barMinWidth)
+      return width > rowWidth ||
+        (input.actions == .open && !pills.isEmpty && rowWidth - width - gap < M.barMinWidth)
     }
     for piece in [BottomStackPill.item, .operation, .actions] where crowded() {
       guard let index = pills.firstIndex(where: { $0.piece == piece }) else { continue }
       pills[index].width = M.buttonHeight
       frames.iconPills.insert(piece)
     }
-    var x = input.laneLeading
+    var x = rowLeading
     for pill in pills {
       let rect = CGRect(x: x, y: (M.rowHeight - M.buttonHeight) / 2, width: pill.width, height: M.buttonHeight)
       x += pill.width + gap
@@ -389,7 +419,7 @@ enum ShellLayout {
       }
     }
     let pillsEnd = x
-    let inRow = pillsEnd > input.laneLeading
+    let inRow = pillsEnd > rowLeading || frames.modifierKeys != nil
 
     /* Centred on the view, kept between \a start and \a end. */
     func centred(_ width: CGFloat, _ start: CGFloat, _ end: CGFloat) -> CGFloat {
@@ -412,6 +442,14 @@ enum ShellLayout {
     /* Rules 6 and 7: the shelves, from the top of what is in the row. */
     let barInRow = input.actions == .open || (input.operation == .open && !stripAbove)
     var base = barInRow ? barY - gap : inRow ? (M.rowHeight - M.buttonHeight) / 2 - gap : barY + M.barHeight
+    if frames.modifierKeys != nil && !barInRow {
+      base = min(base, (M.rowHeight - M.modifierKeysHeight) / 2 - gap)
+    }
+    if keysOnShelf {
+      frames.modifierKeys = CGRect(x: input.laneLeading, y: base - M.modifierKeysHeight,
+                                   width: input.modifierKeys, height: M.modifierKeysHeight)
+      base -= M.modifierKeysHeight + gap
+    }
     if stripAbove {
       let width = max(0, min(input.operationWidth, 1000, input.laneWidth))
       frames.operation = CGRect(x: centred(width, input.laneLeading, laneEnd), y: base - M.stripHeight,
@@ -477,12 +515,17 @@ enum ShellLayout {
     let items: [(String, BottomStackInput.Fold, CGSize?)] = [
       ("", .none, nil), (" item", .folded, nil), (" item open 86", .open, CGSize(width: 438, height: 86)),
       (" item open 200", .open, CGSize(width: 438, height: 200))]
+    /* Shift, Ctrl and Alt: none, folded, shown (TOUCH-8). */
+    let keys: [(String, CGFloat)] = [("", 0), (" keys folded", ShellMetrics.modifierKeysWidth(folded: true)),
+                                     (" keys", ShellMetrics.modifierKeysWidth(folded: false))]
+    for k in keys {
     for a in actions {
       for pad in a.1 == .open ? [false, true] : [false] {
         for o in operations {
           for i in items {
             var input = BottomStackInput(width: width, laneLeading: lane.laneLeading, laneWidth: lane.laneWidth,
                                          headroom: headroom, itemMaxHeight: itemMaxHeight)
+            input.modifierKeys = k.1
             input.actions = a.1
             input.actionsWidth = a.2
             input.operation = o.1
@@ -490,10 +533,11 @@ enum ShellLayout {
             input.operationWidth = o.2
             input.item = i.1
             input.pad = pad
-            cases.append((a.0 + (pad ? " pad" : "") + o.0 + i.0, input, i.2))
+            cases.append((k.0 + a.0 + (pad ? " pad" : "") + o.0 + i.0, input, i.2))
           }
         }
       }
+    }
     }
     return cases
   }
@@ -569,6 +613,7 @@ enum ShellLayout {
                 return CGRect(x: slot.minX, y: slot.maxY - height, width: width, height: height)
               }
               var stack: [(String, CGRect)] = []
+              if let rect = frames.modifierKeys { stack.append(("modifier keys", inWindow(rect))) }
               if let rect = frames.actions { stack.append(("actions", inWindow(rect))) }
               if let rect = frames.operation { stack.append(("operation", inWindow(rect))) }
               /* The pad is its slot: its keys take the slot's width. */

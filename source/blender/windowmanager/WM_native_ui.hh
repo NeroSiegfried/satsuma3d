@@ -112,6 +112,11 @@ void WM_native_ui_starter_library_ensure();
  * true when no platform interface is registered.
  */
 bool WM_native_ui_desktop_mode();
+/**
+ * In the Desktop Interface, the bands the app's cluster reserves along the window's top and
+ * bottom, in window pixels (#WM_native_ui_desktop_insets_set); false, and zeros, otherwise.
+ */
+bool WM_native_ui_desktop_insets(int *r_top, int *r_bottom);
 
 /**
  * Around writing \a bmain to a file (\a begin, then not): while a hand-off visits the Desktop

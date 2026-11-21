@@ -46,6 +46,17 @@ enum ShellMetrics {
   static let barMinWidth: CGFloat = 132
   /** The Item card's header and one row: less room than this and it shows as its pill. */
   static let itemMinHeight: CGFloat = 92
+  /** Shift, Ctrl and Alt (ROUND6 TOUCH-8) as built: three 58-point keys and the fold button
+   * (32), 4 apart, in 4 of padding; folded, the button alone. 44-point keys in 4 of padding. */
+  static func modifierKeysWidth(folded: Bool, keys: Int = 3) -> CGFloat {
+    folded ? 32 + 8 : CGFloat(keys) * 58 + 32 + CGFloat(keys) * 4 + 8
+  }
+  static let modifierKeysHeight: CGFloat = 52
+  /** Between the items of the bar under the header (the tool settings row), every one of them:
+   * Blender's header spaces its buttons by the style's `buttonspacex`, 8 at 100 %, and so does this
+   * row, on each side of a group's divider too. Joined buttons (a toggle and its menu, the mirror
+   * axes) stay joined, as in Blender. */
+  static let headerSpacing: CGFloat = 8
 }
 
 /* -------------------------------------------------------------------- */
@@ -510,6 +521,13 @@ struct QuickActionsRow: View {
     }
     if itemShown { input.item = stack.itemFolded ? .folded : .open }
     input.pad = modalRunning && NumberPadState.shared.shown
+    /* Shift, Ctrl and Alt stand first in the row, and everything else after them (device round:
+     * at a fixed place they covered the strip's Cancel and a folded Actions). */
+    /* As many keys as the box shows (the sidebar's own are left out), none with no box. */
+    let keys = StickyModifierKeys.shownKeys(model: model, embedded: false).count
+    if model.viewportReady && keys > 0 {
+      input.modifierKeys = ShellMetrics.modifierKeysWidth(folded: StickyModifierState.shared.folded, keys: keys)
+    }
     return input
   }
 
@@ -537,6 +555,11 @@ struct QuickActionsRow: View {
         /* Merging only glass that touches, so neighbouring buttons stay separate capsules. */
         PanelGlassGroup(spacing: 2) {
           ZStack(alignment: .topLeading) {
+            if let slot = frames.modifierKeys {
+              StickyModifierKeys(model: model)
+                .layoutZone("modifier keys")
+                .placed(in: slot, alignment: .leading)
+            }
             if let frame = frames.actions {
               actionsMorph(frame: frame, itemsWidth: frame.width - actionsBarChrome,
                            icon: frames.iconPills.contains(.actions))

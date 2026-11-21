@@ -2487,6 +2487,40 @@ def tick_touch():
                 touch_state["checking"] = (ui_type, kind)
                 return 0.5
             area.ui_type = 'TIMELINE'
+            # Device round (2026-11-21): the Desktop Interface's cluster covered the Timeline's
+            # header. Its band (`WM_native_ui_desktop_insets_set`) is kept out of Blender's screen:
+            # every area lies above a 200-pixel band at the bottom, and below one at the top, and
+            # the screen takes the whole window again once the band goes.
+            # First with no band, as the baseline; the bottom band then the top one have the same
+            # size, so the second only moves the screen.
+            touch_state["insets"] = [(0.0, 0.0), (0.0, 200.0), (200.0, 0.0), (0.0, 0.0)]
+            touch_state.pop("editors")
+            lib.WM_native_ui_desktop_insets_set.argtypes = [ctypes.c_float, ctypes.c_float]
+            return 0.1
+        insets = touch_state.get("insets")
+        if insets is not None:
+            window = _view3d()[0]
+            if "inset" in touch_state:
+                top, bottom = touch_state.pop("inset")
+                lowest = min(a.y for a in window.screen.areas)
+                highest = max(a.y + a.height for a in window.screen.areas)
+                seen = report.setdefault("desktop_insets", [])
+                seen.append({"top": top, "bottom": bottom, "lowest": lowest, "highest": highest})
+                base_low, base_high = seen[0]["lowest"], seen[0]["highest"]
+                if bottom and lowest < base_low + bottom:
+                    problems.append("desktop band %d at the bottom: an area starts at %d (%d without)" % (
+                        bottom, lowest, base_low))
+                if top and highest > base_high - top:
+                    problems.append("desktop band %d at the top: an area ends at %d (%d without)" % (
+                        top, highest, base_high))
+                if not top and not bottom and (lowest, highest) != (base_low, base_high):
+                    problems.append("desktop band gone: the screen spans %d..%d, not %d..%d" % (
+                        lowest, highest, base_low, base_high))
+            if insets:
+                top, bottom = insets.pop(0)
+                lib.WM_native_ui_desktop_insets_set(top, bottom)
+                touch_state["inset"] = (top, bottom)
+                return 1.0
             finish("done" if not problems else "error")
             return None
     except Exception:
@@ -6182,7 +6216,28 @@ def tick_statuskeys():
                 problems.append("MODE-5: after G from the bar, Push Pose's bar lacks %s: %r (ack %r)" % (
                     sorted(wanted - set(keys)), keys, acks.get(5102)))
             _statuskeys_escape()
-        elif at >= 14:
+        elif at == 14:
+            # Owner, on the iPad (Edit Mode, Select Box): the box read Extend, Subtract and "Select"
+            # for Alt. What a click with each key held does, as Blender dispatches it: the tool's
+            # Alt item (a face-mask loop select) cannot run in Edit Mode, so Alt selects a loop.
+            bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.context.view_layer.objects.active = bpy.data.objects["Cube"]
+            bpy.ops.object.mode_set(mode='EDIT')
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                bpy.ops.wm.tool_set_by_id(name="builtin.select_box")
+        elif at == 16:
+            top = tree(subs["toolbar"]) or {}
+            value = {n["key"]: n.get("value") for n in top.get("children", [])}
+            parse = lambda text: dict(line.split("=", 1) for line in (text or "").split("\n") if "=" in line)
+            names, effects = parse(value.get("modifier_names")), parse(value.get("modifier_effects"))
+            state["found"]["Select Box in Edit Mode"] = [names, effects]
+            expected = {"shift": ("Extend", "mode:ADD"), "ctrl": ("Subtract", "mode:SUB"),
+                        "alt": ("Loop Select", "op:MESH_OT_loop_select")}
+            for key, (name, effect) in expected.items():
+                if (names.get(key), effects.get(key)) != (name, effect):
+                    problems.append("TOUCH-8: Select Box's %s in Edit Mode is %r %r, not %r %r" % (
+                        key, names.get(key), effects.get(key), name, effect))
+        elif at >= 17:
             report["found"] = state["found"]
             report["problems"] = problems
             finish("done" if not problems else "error")

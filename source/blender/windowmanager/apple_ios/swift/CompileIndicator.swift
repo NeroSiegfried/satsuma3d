@@ -134,20 +134,45 @@ struct CompileIndicator: View {
   /** In the Desktop Interface's cluster (ROUND6 DESK-1): the pills alone, hugging them, rather than
    * a column hung from the window's top over Blender's top bar. */
   var inCluster = false
+  /** In the iPad interface: the window's model, whose top bar and tool settings row the pills
+   * hang below, and which keeps their height for what hangs below them (#ShellModel.jobsHeight). */
+  var model: ShellModel? = nil
 
   var body: some View {
+    if inCluster {
+      pills
+    }
+    else {
+      /* Below the header and the tool settings row, never over them (device round: the render's
+       * pill covered the row's middle); what hangs at the top of the viewport (the drag hint, a
+       * waiting operation's words, messages) goes below the pills. */
+      GeometryReader { proxy in
+        let below = max(0, (model?.topBarBottom ?? 0) - proxy.frame(in: .global).minY)
+        VStack(spacing: 0) {
+          pills
+            .layoutZone("jobs")
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+              let reserve = height > 1 ? height + 8 : 0
+              if let model, model.jobsHeight != reserve { model.jobsHeight = reserve }
+            }
+            .onDisappear { if let model, model.jobsHeight != 0 { model.jobsHeight = 0 } }
+          Spacer(minLength: 0)
+            .allowsHitTesting(false)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, below + 8)
+      }
+    }
+  }
+
+  private var pills: some View {
     VStack(spacing: 6) {
       compilePill
         .allowsHitTesting(false)
       ForEach(BlenderJobs.jobs) { job in
         JobPill(job: job)
       }
-      if !inCluster {
-        Spacer(minLength: 0)
-          .allowsHitTesting(false)
-      }
     }
-    .padding(.top, inCluster ? 0 : 8)
     .animation(UIAccessibility.isReduceMotionEnabled ? nil : .easeOut(duration: 0.2),
                value: BlenderJobs.jobs.map(\.id))
     /* The screen stays on while work runs in front, so the iPad does not lock and send it to the

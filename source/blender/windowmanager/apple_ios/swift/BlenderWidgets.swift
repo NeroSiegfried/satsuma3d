@@ -252,11 +252,15 @@ struct BlenderToggleButton: View {
 
 /** A separator between the bar's groups, as Blender's header spaces them. */
 struct BlenderWidgetSeparator: View {
+  /** Beside it, on top of the spacing of the row it stands in: none in the tool settings row,
+   * whose one spacing stands on either side of it. */
+  var padding: CGFloat = 4
+
   var body: some View {
     Rectangle()
       .fill(Color.primary.opacity(0.2))
       .frame(width: 1, height: 22)
-      .padding(.horizontal, 4)
+      .padding(.horizontal, padding)
   }
 }
 

@@ -1126,7 +1126,8 @@ struct MirrorInline: View {
     let axes = Array(model.transformSettings["mirror_axes"] ?? "")
     let on = model.transformSettings["mirror"] ?? ""
     let label = model.transformSettings["mirror_label"] ?? "Mirror"
-    HStack(spacing: 4) {
+    /* The tool settings row's one spacing between its pieces (#ShellMetrics.headerSpacing). */
+    HStack(spacing: ShellMetrics.headerSpacing) {
       if !axes.isEmpty {
         HStack(spacing: 4) {
           iconImage(BlenderIcon.image("MOD_MIRROR"))

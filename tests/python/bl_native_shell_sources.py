@@ -1487,7 +1487,7 @@ render_py = (ROOT / 'scripts/startup/bl_ui/native_render.py').read_text(encoding
 check('jobs.live = [](const protocol::Command & /*command*/) { return true; };' in jobs_view and
       'WM_jobs_list(' in bridge_text and 'G.is_break = true;' in bridge_text and
       'BlenderJobs.stop(job)' in pills and 'subscribe("jobs")' in pills and
-      'CompileIndicator(progress: shell.compile)' in layers_b1 and 'controlsShown' not in layers_b1 and
+      'CompileIndicator(progress: shell.compile, model: model)' in layers_b1 and 'controlsShown' not in layers_b1 and
       'CompileIndicator(progress: compile, inCluster: true)' in (SWIFT / 'DesktopCluster.swift').read_text(encoding='utf-8') and
       'handlers.render_stats' not in render_py and '"state:samples"' in bridge_text,
       "R6 BUSY-1: running work is listed with a live Stop in both interfaces; render progress from the job")
@@ -1887,7 +1887,7 @@ check(all(how.split(':')[0] in ('status', 'drag', 'job', 'desktop', 'none') and 
 bar_m5 = bridge_d9[bridge_d9.index('static void bridge_modal_bar_build('):]
 bar_m5 = bar_m5[:bar_m5.index('\n}\n')]
 check('bridge_status_keys(C)' in bar_m5 and 'bridge_status_keys(C)' in
-      bridge_d9[bridge_d9.index('static std::string bridge_modifier_names('):],
+      bridge_d9[bridge_d9.index('static void bridge_modifier_names('):],
       "R6 MODE-5: the modal bar and the shell's modifier names read the status bar's keys")
 
 # ROUND6 MODE-6 (C10): a command bound to a key or a mouse chord in Blender's default key map and

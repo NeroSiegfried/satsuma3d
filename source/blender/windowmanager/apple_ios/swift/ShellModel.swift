@@ -204,6 +204,19 @@ final class ShellModel {
     }
     return names
   }
+  /** What a click with Shift, Ctrl or Alt held does, by `shift`, `ctrl`, `alt`, as the bridge
+   * names it (`mode:ADD`, `toggle`, `op:MESH_OT_loop_select`, `key:ctrl` while an operation reads
+   * the key itself), for leaving out a key the sidebar already offers (#SidebarContent.offers). */
+  var modifierEffects: [String: String] {
+    var effects: [String: String] = [:]
+    for line in (text("modifier_effects") ?? "").split(separator: "\n") {
+      let parts = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+      if parts.count == 2, !parts[1].isEmpty { effects[String(parts[0])] = String(parts[1]) }
+    }
+    return effects
+  }
+  /** What the sidebar beside the viewport offers while it shows (#SidebarContent.offers). */
+  var sidebarOffers: Set<String> = []
   /** A command waiting for a drag in the view, as Box Select chosen from the menu bar: what to
    * do, and whether it ends with Done. */
   var dragHint: DragHint? {
@@ -444,6 +457,9 @@ final class ShellModel {
   var topBarBottom: CGFloat = 0
   /** The header's own bottom, which the tool settings row hangs from. */
   var navigationBarBottom: CGFloat = 0
+  /** The running work's pills under the tool settings row, with their gap, 0 with none: what
+   * hangs at the top of the viewport below them keeps clear of them (#CompileIndicator). */
+  var jobsHeight: CGFloat = 0
   /** The tool settings row's height, 0 while it is hidden; the window then measures again. */
   var toolRowHeight: CGFloat = 0 {
     didSet { if toolRowHeight != oldValue { toolRowChanged?() } }

@@ -51,6 +51,12 @@ enum DesktopClusterCorner: String, CaseIterable {
   }
 }
 
+/** The bands along the window's top and bottom the cluster keeps for itself, in window pixels. */
+struct DesktopClusterBand: Equatable {
+  var top: CGFloat
+  var bottom: CGFloat
+}
+
 /** The cluster over the whole window, standing in its corner; only the cluster takes touches. */
 struct DesktopClusterLayer: View {
   let model: ShellModel
@@ -60,10 +66,21 @@ struct DesktopClusterLayer: View {
   static let foldedKey = "DesktopClusterFolded"
   @AppStorage(DesktopClusterLayer.cornerKey) private var cornerName = DesktopClusterCorner.bottomLeading.rawValue
   @State private var size = CGSize.zero
+  /** The cluster's own height, which its band reserves. */
+  @State private var clusterHeight: CGFloat = 0
   /** While the cluster is dragged to another corner. */
   @State private var drag = CGSize.zero
+  /** Between the cluster and the window's edge, and between it and Blender's screen. */
+  private static let edgeGap: CGFloat = 6
 
   private var corner: DesktopClusterCorner { DesktopClusterCorner(rawValue: cornerName) ?? .bottomLeading }
+
+  /** The band the cluster reserves, in window pixels: its height and a gap on either side. */
+  private var band: DesktopClusterBand {
+    let pixels = ((clusterHeight + 2 * Self.edgeGap) * model.pointScale).rounded()
+    guard clusterHeight > 1 else { return DesktopClusterBand(top: 0, bottom: 0) }
+    return corner.top ? DesktopClusterBand(top: pixels, bottom: 0) : DesktopClusterBand(top: 0, bottom: pixels)
+  }
 
   var body: some View {
     ZStack(alignment: corner.alignment) {
@@ -83,12 +100,18 @@ struct DesktopClusterLayer: View {
           drag = .zero
         }
       }
+      .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { clusterHeight = $0 }
       .offset(drag)
-      /* Clear of Blender's top bar and status bar, which keep their own controls. */
       .padding(.horizontal, 12)
-      .padding(.top, 40)
-      .padding(.bottom, 34)
+      .padding(.vertical, Self.edgeGap)
     }
+    /* The cluster stands in a band of its own along the top or the bottom, which Blender's
+     * screen is laid out beside, so it never covers one of Blender's regions (device round: its
+     * keys covered the Timeline's header). The band follows the cluster's height and corner. */
+    .onChange(of: band, initial: true) { _, band in
+      WM_native_ui_desktop_insets_set(Float(band.top), Float(band.bottom))
+    }
+    .onDisappear { WM_native_ui_desktop_insets_set(0, 0) }
     .onChange(of: model.notices, initial: true) { _, notices in
       /* The iPad interface's messages take Blender's notices there; here the cluster does, so
        * what the app says (a refused Undo, a file it cannot open) is never lost (ROUND6 DESK-1). */

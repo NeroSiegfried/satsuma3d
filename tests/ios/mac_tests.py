@@ -51,6 +51,7 @@ QUICK = (
     'test_number_text',
     'test_responsive_ui',
     'test_save_space',
+    'test_shell_overlays',
     'test_snapshot_steps',
     'test_starter_library',
     'test_swiftui_panels',

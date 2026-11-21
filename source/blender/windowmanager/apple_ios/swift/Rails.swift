@@ -1005,6 +1005,15 @@ struct ToolRails: View {
     }
   }
 
+  /** The face control's badge shows, under the top column's hint (#FaceControl). */
+  private var faceShown: Bool {
+#if os(visionOS)
+    false
+#else
+    FaceControl.shared.running
+#endif
+  }
+
   /** Under the finger while \a what is carried, as far from it as where it was taken, within
    * its \a size. */
   private func carriedCenter(_ what: Carry, size: CGSize) -> CGPoint? {
@@ -1129,10 +1138,17 @@ struct ToolRails: View {
         }
         railLabel(safe: safe, layout: layout, frame: proxy.frame(in: .global), size: proxy.size)
         railFlyout(items: toolItems, safe: safe, layout: layout, frame: proxy.frame(in: .global), size: proxy.size)
+        /* The column hung at the top of the viewport, below the running work's pills, which
+         * reserve their height (#CompileIndicator): never two of them in one place. */
+        let topColumn = safe.minY + model.jobsHeight
+        /* One row each, one under the other: the drag hint or a waiting operation's words, then the
+         * face control's badge; then messages. */
+        let hintShown = model.dragHint != nil || !model.modalHint.isEmpty
         if let hint = model.dragHint {
           /* Below the bar: nothing else shows the command is waiting for a drag. */
           DragHintBadge(hint: hint) { wm_apple_ios_window_send_key(model.window, "ESC") }
-            .position(x: safe.midX, y: safe.minY + 34)
+            .layoutZone("drag hint")
+            .position(x: safe.midX, y: topColumn + 34)
             .transition(.opacity.combined(with: .move(edge: .top)))
         }
         else if !model.modalHint.isEmpty {
@@ -1140,11 +1156,11 @@ struct ToolRails: View {
            * top, where messages are, never over the controls along the bottom. */
           ShellNameLabel(text: model.modalHint)
             .layoutZone("modal hint")
-            .position(x: safe.midX, y: safe.minY + 34)
+            .position(x: safe.midX, y: topColumn + 34)
             .transition(.opacity)
         }
         /* Blender's reports and why a command did not run, under the bar or the drag hint. */
-        let messagesTop: CGFloat = model.dragHint == nil && model.modalHint.isEmpty ? 12 : 68
+        let messagesTop: CGFloat = model.jobsHeight + 12 + 56 * CGFloat((hintShown ? 1 : 0) + (faceShown ? 1 : 0))
         ShellMessagesView(messages: model.messages) { model.perform($0) }
           .layoutZone("messages")
           .frame(maxWidth: max(0, safe.width - 2 * max(layout.leadingCorner, layout.trailingCorner) - 32))
@@ -1152,15 +1168,22 @@ struct ToolRails: View {
           .frame(width: safe.width, height: max(0, safe.height - messagesTop), alignment: .top)
           .position(x: safe.midX, y: safe.minY + messagesTop + max(0, safe.height - messagesTop) / 2)
 #if !os(visionOS)
-        if FaceControl.shared.running {
-          /* Below the bar, while the face plays the brush. */
+        if faceShown {
+          /* Below the bar, while the face plays the brush; below the hint when one shows. */
           FaceControlBadge()
-            .position(x: safe.midX, y: safe.minY + 34)
+            .layoutZone("face control")
+            .position(x: safe.midX, y: topColumn + 34 + (hintShown ? 56 : 0))
             .transition(.opacity.combined(with: .move(edge: .top)))
         }
 #endif
       }
       .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+      /* What the sidebar offers while it shows, for the Shift, Ctrl and Alt box to leave out. */
+      .onChange(of: content.isEmpty || layout.sidebarTucked ? Set<String>() :
+                  content.offers(transforming: model.transforming, strokes: model.direction != nil),
+                initial: true) { _, offered in
+        if model.sidebarOffers != offered { model.sidebarOffers = offered }
+      }
       /* The Pencil's dial shows the items instead, over everything. */
       .opacity(RollDial.shared.showing ? 0 : 1)
       /* Fading as the dial opens; back at once as it lands, where the chosen item meets it. */
@@ -2021,6 +2044,29 @@ struct SidebarContent: Equatable {
   var isEmpty: Bool { !size && !strength && !buttons && !smooth && !color }
   /** Only buttons: small enough to sit above the tool rail. */
   var buttonsOnly: Bool { (buttons || smooth) && !size && !strength && !color }
+
+  /**
+   * What the sidebar's buttons do, in the terms the bridge names what a click with Shift, Ctrl or
+   * Alt held does (`modifier_effects`): a key whose click does one of these is left out of the
+   * Shift, Ctrl and Alt box, which would only repeat it (#StickyModifierKeys). From what the column
+   * shows, never from a tool's name: Snap and Precision hold Ctrl and Shift themselves; + and -
+   * stroke a brush either way (Ctrl's Invert); Set, Extend, Subtract and Toggle are a select
+   * operator's modes and toggles; Smooth is Shift's smoothing stroke.
+   */
+  func offers(transforming: Bool, strokes: Bool) -> Set<String> {
+    Self.offers(buttons: buttons, smooth: smooth, transforming: transforming, strokes: strokes)
+  }
+
+  static func offers(buttons: Bool, smooth: Bool, transforming: Bool, strokes: Bool) -> Set<String> {
+    var offered = Set<String>()
+    if buttons {
+      offered = transforming ? ["key:ctrl", "key:shift"] :
+        strokes ? ["mode:INVERT", "mode:NORMAL"] :
+        ["mode:ADD", "mode:SUB", "mode:XOR", "toggle", "extend", "deselect"]
+    }
+    if smooth { offered.formUnion(["mode:SMOOTH", "brush_toggle:SMOOTH"]) }
+    return offered
+  }
 
   var sliderHeight: CGFloat { dial ? 52 : 148 }
   /** The buttons, Smooth and Face Control below them, each a cell with its name. */
@@ -3320,6 +3366,9 @@ final class StickyModifierState {
   static let shared = StickyModifierState()
   /** Two bits each for Shift, Ctrl, Alt: 0 off, 1 held, 2 latched, 3 locked. */
   private(set) var bits: UInt32 = 0
+  /** Folded to their button in the iPad interface: the bottom row's layout reads it for their
+   * width (#ShellLayout.bottomStack), so it is here, not the view's own. */
+  var folded = false
 
   private init() {
     NotificationCenter.default.addObserver(forName: Notification.Name("GHOSTIOSStickyModifiersChanged"),
@@ -3338,25 +3387,43 @@ struct StickyModifierKeys: View {
    * them its surface: no fold button and no glass of their own. */
   var embedded = false
   @State private var pressedAt: [Int: Date] = [:]
-  @State private var folded = false
+  /** Only the iPad interface's keys fold; in the cluster, the cluster folds them with itself. */
+  private var folded: Bool { !embedded && StickyModifierState.shared.folded }
   private static let keys: [(key: String, symbol: String, title: String)] = [
     ("shift", "shift", "Shift"), ("ctrl", "control", "Ctrl"), ("alt", "option", "Alt"),
   ]
   /** Shorter than this, a lift is a tap: it latches, or locks a latched key. */
   private static let tapSeconds = 0.3
 
+  /** The keys shown, by index into #keys: in the iPad interface, those whose click the sidebar
+   * does not already offer (owner, on the iPad: Extend and Subtract twice, in the box and the
+   * sidebar). In the cluster every key, there being no sidebar there. */
+  static func shownKeys(model: ShellModel, embedded: Bool) -> [Int] {
+    embedded ? [0, 1, 2] : shownKeys(effects: model.modifierEffects, offers: model.sidebarOffers)
+  }
+
+  /** Shift (0), Ctrl (1) and Alt (2), but those whose click (\a effects, by `shift`, `ctrl`,
+   * `alt`) is one of \a offers. */
+  nonisolated static func shownKeys(effects: [String: String], offers: Set<String>) -> [Int] {
+    ["shift", "ctrl", "alt"].indices.filter { index in
+      guard let effect = effects[["shift", "ctrl", "alt"][index]] else { return true }
+      return !offers.contains(effect)
+    }
+  }
+
   var body: some View {
     let names = model.modifierNames
     let sticky = StickyModifierState.shared
+    let shown = Self.shownKeys(model: model, embedded: embedded)
     HStack(spacing: 4) {
       if !folded {
-        ForEach(Array(Self.keys.enumerated()), id: \.offset) { index, key in
-          keyButton(index: index, key: key, name: names[key.key], state: sticky.state(index))
+        ForEach(shown, id: \.self) { index in
+          keyButton(index: index, key: Self.keys[index], name: names[Self.keys[index].key], state: sticky.state(index))
         }
       }
       if !embedded {
         Button {
-          withAnimation(.easeOut(duration: 0.18)) { folded.toggle() }
+          withAnimation(.easeOut(duration: 0.18)) { StickyModifierState.shared.folded.toggle() }
         } label: {
           Image(systemName: folded ? "command" : "chevron.left")
             .font(.system(size: 14, weight: .semibold))
@@ -3377,6 +3444,12 @@ struct StickyModifierKeys: View {
     .onChange(of: folded) { _, folded in
       if folded {
         for index in 0..<Self.keys.count { wm_apple_ios_window_sticky_modifier(model.window, Int32(index), 3) }
+      }
+    }
+    .onChange(of: shown) { _, shown in
+      /* A key left out lets go: nothing stays held for Blender behind the sidebar's button. */
+      for index in Self.keys.indices where !shown.contains(index) {
+        wm_apple_ios_window_sticky_modifier(model.window, Int32(index), 3)
       }
     }
     .accessibilityElement(children: .contain)

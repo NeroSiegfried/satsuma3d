@@ -62,6 +62,9 @@
 #include "RNA_enum_types.hh"
 
 #include "WM_api.hh"
+#ifdef WITH_NATIVE_UI
+#  include "WM_native_ui.hh"
+#endif
 #include "WM_keymap.hh"
 #include "WM_native_interface.hh"
 #include "WM_types.hh"
@@ -3176,6 +3179,17 @@ void WM_window_rect_calc(const wmWindow *win, rcti *r_rect)
 
   const int2 win_size = WM_window_native_pixel_size(win);
   BLI_rcti_init(r_rect, 0, win_size[0], 0, win_size[1]);
+#ifdef WITH_NATIVE_UI
+  /* The Desktop Interface's cluster stands in a band along the top or the bottom: Blender's
+   * screen is laid out beside it, as inside client-side decorations, so the cluster covers none
+   * of its regions (ROUND6 DESK-1; device round 2026-11-21). At most a third of the height. */
+  int top, bottom;
+  if (WM_native_ui_desktop_insets(&top, &bottom)) {
+    const int most = win_size[1] / 3;
+    r_rect->ymin += std::min(bottom, most);
+    r_rect->ymax -= std::min(top, most);
+  }
+#endif
 }
 void WM_window_screen_rect_calc(const wmWindow *win, rcti *r_rect)
 {

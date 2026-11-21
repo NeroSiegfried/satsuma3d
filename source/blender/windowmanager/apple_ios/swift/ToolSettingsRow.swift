@@ -45,24 +45,25 @@ struct ToolSettingsRow: View {
   }
 
   private var items: some View {
-    HStack(spacing: 6) {
+    /* One spacing for the whole row, as Blender's header has (device round: packed too tightly). */
+    HStack(spacing: ShellMetrics.headerSpacing) {
       ActiveToolLabel(model: model)
       if shell.panels.tools.hasToolSettings {
         ToolSettingsItems(model: shell.panels.tools)
       }
       if transformMode {
-        BlenderWidgetSeparator()
+        BlenderWidgetSeparator(padding: 0)
         ToolSettingsTransformItems(model: model, parts: transformParts)
       }
       /* Mirror, X-Axis Mirror or Symmetry, and Auto Merge, in every mode whose header has them. */
       if modeSettings {
-        BlenderWidgetSeparator()
+        BlenderWidgetSeparator(padding: 0)
         MirrorInline(model: model)
       }
       /* The rest of Blender's header for the mode, as its header draws it (ROUND6 MODE-1): masks,
        * select modes, placement, and its popovers, beside the transform settings they extend. */
       if shell.panels.header.hasToolSettings {
-        BlenderWidgetSeparator()
+        BlenderWidgetSeparator(padding: 0)
         ToolSettingsItems(model: shell.panels.header)
       }
     }
@@ -70,7 +71,7 @@ struct ToolSettingsRow: View {
     /* Blender's text colour, not the system's blue. */
     .tint(Color.primary)
     .foregroundStyle(Color.primary)
-    .padding(.horizontal, 8)
+    .padding(.horizontal, ShellMetrics.headerSpacing)
     .frame(height: 44)
     .environment(\.widgetsNamed, model.widthClass >= .regular)
   }
