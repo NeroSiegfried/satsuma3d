@@ -154,6 +154,9 @@
 
 #include "WM_api.hh"
 #include "WM_native_interface.hh"
+#ifdef WITH_NATIVE_UI
+#  include "WM_native_ui.hh"
+#endif
 #include "WM_keymap.hh"
 #include "WM_message.hh"
 #include "WM_toolsystem.hh"
@@ -2121,6 +2124,26 @@ static ImBuf *blend_file_thumb_from_camera(const bContext *C,
 /** \name Write Main Blend-File (internal)
  * \{ */
 
+/**
+ * What a file is written with: where a visit of the Desktop Interface went is never written in the
+ * document, the startup file or an auto-save (ROUND6 EDIT-11, #WM_native_ui_visit_write).
+ */
+struct NativeVisitWriteScope {
+  Main *bmain;
+  explicit NativeVisitWriteScope(Main *bmain) : bmain(bmain)
+  {
+#ifdef WITH_NATIVE_UI
+    WM_native_ui_visit_write(bmain, true);
+#endif
+  }
+  ~NativeVisitWriteScope()
+  {
+#ifdef WITH_NATIVE_UI
+    WM_native_ui_visit_write(bmain, false);
+#endif
+  }
+};
+
 bool write_crash_blend()
 {
   char filepath[FILE_MAX];
@@ -2294,7 +2317,10 @@ bool wm_file_write(bContext *C,
   blend_write_params.use_save_as_copy = use_save_as_copy;
   blend_write_params.thumb = thumb;
 
-  const bool success = BLO_write_file(bmain, filepath, fileflags, &blend_write_params, reports);
+  const bool success = [&]() {
+    const NativeVisitWriteScope visit(bmain);
+    return BLO_write_file(bmain, filepath, fileflags, &blend_write_params, reports);
+  }();
 
   if (success) {
     const bool do_history_file_update = (G.background == false) &&
@@ -2426,7 +2452,10 @@ bool WM_autosave_write(wmWindowManager *wm, Main *bmain, ReportList *reports)
 
   /* Error reporting into console. */
   BlendFileWriteParams params{};
-  const bool success = BLO_write_file(bmain, filepath, fileflags, &params, reports);
+  const bool success = [&]() {
+    const NativeVisitWriteScope visit(bmain);
+    return BLO_write_file(bmain, filepath, fileflags, &params, reports);
+  }();
 #if defined(WITH_APPLE_CROSSPLATFORM) && APPLE_TARGET_IOS
   /* Which file this auto-save belongs to, by its size and date (ROUND6 SAFE-5): only for what was
    * written. */
@@ -2634,8 +2663,10 @@ static wmOperatorStatus wm_homefile_write_exec(bContext *C, wmOperator *op)
   /* Don't apply any path changes to the current blend file. */
   blend_write_params.use_save_as_copy = true;
 
-  const bool success = BLO_write_file(
-      bmain, filepath, fileflags, &blend_write_params, op->reports);
+  const bool success = [&]() {
+    const NativeVisitWriteScope visit(bmain);
+    return BLO_write_file(bmain, filepath, fileflags, &blend_write_params, op->reports);
+  }();
 
   BKE_callback_exec_string(bmain, "", success ? BKE_CB_EVT_SAVE_POST : BKE_CB_EVT_SAVE_POST_FAIL);
 

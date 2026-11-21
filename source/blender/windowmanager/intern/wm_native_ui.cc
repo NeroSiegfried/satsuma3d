@@ -153,6 +153,7 @@
 #include <map>
 #include <set>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -195,7 +196,7 @@ void bridge_volume_build(bContext *C);
 bool bridge_volume_command(bContext *C, StringRef setting, StringRef value);
 
 void bridge_interface_set(bContext *C, bool desktop);
-void bridge_desktop_uv_editing(bContext *C);
+bool bridge_desktop_open(bContext *C, StringRef id, std::string &r_error);
 void bridge_desktop_scale_set(bContext *C, float scale);
 void bridge_interface_measure();
 
@@ -5156,6 +5157,47 @@ void bridge_image_view_shown(const bool shown)
  * they change. `render`: a render started from the interface, see `bl_ui.native_render`.
  * \{ */
 
+/**
+ * Blender's editors the iPad interface has no form of, each reached in the Desktop Interface
+ * (ROUND6 EDIT-11, decision R6-15; ROUND5 decision 55). An editor opens full screen in place of
+ * the 3D View with Back to Previous, as #WM_window_open_temp opens one on the iPad (DESK-5), then
+ * takes its space's settings (`name=VALUE`, space separated); its header chooses the rest of its
+ * modes, as on a desktop. A workspace is changed to instead, added from the startup file where the
+ * document has none, as the desktop's + › General adds it. The `listed` ones are offered in the
+ * iPad interface's Sidebar menu, from the `desktop_open` setting's options.
+ */
+struct BridgeDesktopEditor {
+  const char *id;
+  const char *title;
+  const char *icon;
+  eSpace_Type space_type;
+  const char *settings;
+  const char *workspace;
+  bool listed;
+};
+
+static const BridgeDesktopEditor bridge_desktop_editors[] = {
+    {"DOPESHEET", "Dope Sheet", "ACTION", SPACE_ACTION, "ui_mode=DOPESHEET", nullptr, true},
+    {"DRIVERS", "Drivers", "DRIVER", SPACE_GRAPH, "mode=DRIVERS", nullptr, true},
+    {"NLA_EDITOR", "Nonlinear Animation", "NLA", SPACE_NLA, "", nullptr, true},
+    {"SEQUENCE_EDITOR", "Video Sequencer", "SEQUENCE", SPACE_SEQ, "view_type=SEQUENCER_PREVIEW",
+     nullptr, true},
+    {"CLIP_EDITOR", "Movie Clip Editor", "TRACKER", SPACE_CLIP, "", nullptr, true},
+    {"MASK", "Mask Editor", "MOD_MASK", SPACE_IMAGE, "mode=MASK", nullptr, true},
+    {"WORLD_NODES", "World Nodes", "WORLD", SPACE_NODE,
+     "tree_type=ShaderNodeTree shader_type=WORLD", nullptr, true},
+    {"TEXTURE_NODES", "Texture Node Editor", "NODE_TEXTURE", SPACE_NODE,
+     "tree_type=TextureNodeTree", nullptr, true},
+    {"TEXT_EDITOR", "Text Editor", "TEXT", SPACE_TEXT, "", nullptr, true},
+    {"CONSOLE", "Python Console", "CONSOLE", SPACE_CONSOLE, "", nullptr, true},
+    {"INFO", "Info", "INFO", SPACE_INFO, "", nullptr, true},
+    {"SPREADSHEET", "Spreadsheet", "SPREADSHEET", SPACE_SPREADSHEET, "", nullptr, true},
+    {"OUTLINER", "Outliner", "OUTLINER", SPACE_OUTLINER, "", nullptr, true},
+    {"ASSETS", "Asset Browser", "ASSET_MANAGER", SPACE_FILE, "browse_mode=ASSETS", nullptr, true},
+    /* The UV Editor's Edit UVs in Desktop Interface (ROUND5 9B.6): its own button. */
+    {"UV_EDITING", "UV Editing", "UV", SPACE_EMPTY, "", "UV Editing", false},
+};
+
 void bridge_settings_view_build(bContext * /*C*/,
                                 const views::Params & /*params*/,
                                 views::ViewData * /*data*/,
@@ -5186,6 +5228,19 @@ void bridge_settings_view_build(bContext * /*C*/,
                                          2);
   });
   toggle("hover_highlight", "Highlight What the Pencil Hovers Over", bridge_hover_highlight);
+  /* Blender's editors with no form here, for the Sidebar menu: set to one, it opens in the Desktop
+   * Interface (ROUND6 EDIT-11). */
+  builder.add(top, "desktop_open", [&](ViewBuffer &buffer, NodeFields &fields) {
+    fields.label = IFACE_("Open in Desktop Interface");
+    OptionOffsets options;
+    for (const BridgeDesktopEditor &editor : bridge_desktop_editors) {
+      if (editor.listed) {
+        options.push_back(views::protocol::CreateOptionDirect(
+            buffer, editor.id, IFACE_(editor.title), editor.icon));
+      }
+    }
+    return views::protocol::CreateChoiceDirect(buffer, "", &options);
+  });
   builder.add(top, "keymap", [&](ViewBuffer &buffer, NodeFields &fields) {
     fields.label = IFACE_("Keymap");
     static const std::pair<const char *, const char *> keymaps[] = {
@@ -5249,8 +5304,11 @@ views::CommandResult bridge_settings_view_command(bContext *C,
   if (target == "desktop" && on) {
     bridge_interface_set(C, on->value());
   }
-  else if (target == "desktop_uv_editing" && on && on->value()) {
-    bridge_desktop_uv_editing(C);
+  else if (target == "desktop_open" && text_value) {
+    /* One of Blender's editors in the Desktop Interface (ROUND6 EDIT-11). */
+    if (!bridge_desktop_open(C, text, r_error)) {
+      return views::CommandResult::Failed;
+    }
   }
   else if (target == "interface_measure" && on && on->value()) {
     bridge_interface_measure();
@@ -7450,6 +7508,44 @@ extern "C" void WM_native_ui_test_msgbus_guard(int *r_passes,
 
 /** \} */
 
+/**
+ * A visit to the Desktop Interface made by a hand-off (#bridge_desktop_open): the workspace and
+ * layout the iPad interface was on, by name, restored on return and written in their place while
+ * the visit lasts (ROUND6 EDIT-11). Not a plain Switch to Desktop Interface, which is the person's
+ * own choice of where to go.
+ */
+static struct {
+  bool active = false;
+  /** Return to iPad Interface was chosen: #WM_native_ui_ensure_layout puts the layout back. */
+  bool returning = false;
+  /** The document it belongs to: another one opened ends it. */
+  const Main *bmain = nullptr;
+  std::string workspace;
+  std::string screen;
+} bridge_visit;
+
+/** The visit's workspace and its layout, if the document still has them. */
+static bool bridge_visit_find(const Main *bmain, WorkSpace **r_workspace, WorkSpaceLayout **r_layout)
+{
+  if (!bridge_visit.active || bmain != bridge_visit.bmain) {
+    return false;
+  }
+  for (WorkSpace &workspace : const_cast<Main *>(bmain)->workspaces) {
+    if (bridge_visit.workspace != workspace.id.name + 2) {
+      continue;
+    }
+    for (WorkSpaceLayout &layout : workspace.layouts) {
+      const bScreen *screen = BKE_workspace_layout_screen_get(&layout);
+      if (screen && bridge_visit.screen == screen->id.name + 2) {
+        *r_workspace = &workspace;
+        *r_layout = &layout;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 /** Switch between the native interface and Blender's own, as on a Mac. */
 void bridge_interface_set(bContext *C, const bool desktop)
 {
@@ -7457,6 +7553,10 @@ void bridge_interface_set(bContext *C, const bool desktop)
     return;
   }
   bridge_desktop_ui = desktop;
+  if (!desktop && bridge_visit.active) {
+    /* Back from a hand-off: the next update puts the workspace back (#bridge_visit_return). */
+    bridge_visit.returning = true;
+  }
   bridge_interface_toggle_name_update();
   const BridgeContextStore context_store = bridge_context_push_view3d(C);
   wmWindow *win = CTX_wm_window(C);
@@ -7488,42 +7588,303 @@ void bridge_interface_set(bContext *C, const bool desktop)
   bridge_interface_resize(C);
 }
 
-/**
- * The UV Editor's Edit UVs in Desktop Interface (ROUND5 9B.6, decision 55): Blender's own interface
- * on the document's UV Editing workspace, where UVs are selected and moved by hand. Where the
- * document has none, it is added from the startup file, as the desktop's + › General › UV Editing
- * adds it (`WORKSPACE_OT_append_activate`). This changes the document's workspaces, as the
- * desktop's tabs do. Return to iPad Interface comes back as from any workspace.
- */
-void bridge_desktop_uv_editing(bContext *C)
+/** Set an editor's space settings by name; what could not be set is said in \a r_error. */
+static bool bridge_desktop_space_settings(bContext *C,
+                                          bScreen *screen,
+                                          SpaceLink *space,
+                                          const StringRef settings,
+                                          std::string &r_error)
 {
-  bridge_interface_set(C, true);
-  wmWindow *win = CTX_wm_window(C);
-  if (win == nullptr) {
-    return;
+  PointerRNA ptr = RNA_pointer_create_discrete(&screen->id, RNA_Space, space);
+  std::istringstream words{std::string(settings)};
+  std::string setting;
+  while (words >> setting) {
+    const size_t equals = setting.find('=');
+    if (equals == std::string::npos) {
+      r_error = fmt::format("The editor's setting {} has no value", setting);
+      return false;
+    }
+    const std::string name = setting.substr(0, equals);
+    const std::string value = setting.substr(equals + 1);
+    PropertyRNA *prop = RNA_struct_find_property(&ptr, name.c_str());
+    int enum_value = 0;
+    if (prop == nullptr || RNA_property_type(prop) != PROP_ENUM ||
+        !RNA_property_enum_value(C, &ptr, prop, value.c_str(), &enum_value))
+    {
+      r_error = fmt::format("The editor's {} could not be set to {}", name, value);
+      return false;
+    }
+    RNA_property_enum_set(&ptr, prop, enum_value);
+    RNA_property_update(C, &ptr, prop);
+  }
+  return true;
+}
+
+/**
+ * Open one of #bridge_desktop_editors in the Desktop Interface. Coming from the iPad interface
+ * makes it a visit (#bridge_visit): where the iPad interface was is remembered, put back on
+ * Return to iPad Interface and written in place of the visit by every save meanwhile.
+ */
+bool bridge_desktop_open(bContext *C, const StringRef id, std::string &r_error)
+{
+  const BridgeDesktopEditor *editor = nullptr;
+  for (const BridgeDesktopEditor &item : bridge_desktop_editors) {
+    if (id == item.id) {
+      editor = &item;
+    }
+  }
+  wmWindow *win = bridge_active_window(C);
+  if (editor == nullptr || win == nullptr) {
+    r_error = editor ? "There is no window to open it in" :
+                       fmt::format("No editor is called {}", std::string(id));
+    return false;
   }
   Main *bmain = CTX_data_main(C);
-  const char *name = "UV Editing";
-  if (WorkSpace *workspace = reinterpret_cast<WorkSpace *>(
-          BKE_libblock_find_name(bmain, ID_WS, name, nullptr)))
-  {
-    /* Changing workspace changes the context: as Blender's tabs do it, once this command ends. */
-    WM_event_add_notifier(C, NC_SCREEN | ND_WORKSPACE_SET, workspace);
-    WM_native_ui_session_log("interface", "desktop, UV Editing");
-    return;
+  const bool from_ipad = !bridge_desktop_ui;
+  WorkSpace *workspace = WM_window_get_active_workspace(win);
+  bridge_interface_set(C, true);
+  if (from_ipad && workspace != nullptr) {
+    /* After leaving the iPad interface's full screen: the layout the Desktop Interface shows. */
+    const bScreen *screen = WM_window_get_active_screen(win);
+    bridge_visit.active = true;
+    bridge_visit.returning = false;
+    bridge_visit.bmain = bmain;
+    bridge_visit.workspace = workspace->id.name + 2;
+    bridge_visit.screen = screen ? screen->id.name + 2 : "";
   }
-  PointerRNA properties = WM_operator_properties_create("WORKSPACE_OT_append_activate");
-  RNA_string_set(&properties, "idname", name);
-  RNA_string_set(&properties, "filepath", BLO_EMBEDDED_STARTUP_BLEND);
-  const wmOperatorStatus status = WM_operator_name_call(
-      C, "WORKSPACE_OT_append_activate", wm::OpCallContext::ExecDefault, &properties, nullptr);
-  WM_operator_properties_free(&properties);
-  if (status & OPERATOR_FINISHED) {
-    WM_native_ui_session_log("interface", "desktop, UV Editing added from the startup file");
+
+  if (editor->workspace != nullptr) {
+    if (WorkSpace *target = reinterpret_cast<WorkSpace *>(
+            BKE_libblock_find_name(bmain, ID_WS, editor->workspace, nullptr)))
+    {
+      /* Changing workspace changes the context: as Blender's tabs do it, once this command ends. */
+      WM_event_add_notifier(C, NC_SCREEN | ND_WORKSPACE_SET, target);
+      WM_native_ui_session_log("interface", fmt::format("desktop, {}", editor->title).c_str());
+      return true;
+    }
+    PointerRNA properties = WM_operator_properties_create("WORKSPACE_OT_append_activate");
+    RNA_string_set(&properties, "idname", editor->workspace);
+    RNA_string_set(&properties, "filepath", BLO_EMBEDDED_STARTUP_BLEND);
+    const wmOperatorStatus status = WM_operator_name_call(
+        C, "WORKSPACE_OT_append_activate", wm::OpCallContext::ExecDefault, &properties, nullptr);
+    WM_operator_properties_free(&properties);
+    if (!(status & OPERATOR_FINISHED)) {
+      r_error = fmt::format("The {} workspace could not be added", editor->title);
+      return false;
+    }
+    WM_native_ui_session_log(
+        "interface", fmt::format("desktop, {} added from the startup file", editor->title).c_str());
+    return true;
+  }
+
+  /* In place of the 3D View, full screen with Back to Previous, as DESK-5 opens an editor. */
+  const BridgeContextStore context_store = bridge_context_push_view3d(C);
+  bool done = false;
+  if (CTX_wm_area(C) == nullptr) {
+    r_error = "The Desktop Interface has no 3D View to open it in";
+  }
+  else if (ScrArea *area = ED_screen_temp_space_open(C,
+                                                     IFACE_(editor->title),
+                                                     editor->space_type,
+                                                     USER_TEMP_SPACE_DISPLAY_FULLSCREEN,
+                                                     false))
+  {
+    done = bridge_desktop_space_settings(C,
+                                         WM_window_get_active_screen(win),
+                                         static_cast<SpaceLink *>(area->spacedata.first),
+                                         editor->settings,
+                                         r_error);
   }
   else {
-    WM_native_ui_notice(RPT_WARNING, "The UV Editing workspace could not be added");
+    r_error = fmt::format("The {} could not be opened", editor->title);
   }
+  bridge_context_pop(C, context_store);
+  if (done) {
+    WM_native_ui_session_log("interface", fmt::format("desktop, {}", editor->title).c_str());
+  }
+  return done;
+}
+
+/**
+ * Back from a visit (#bridge_visit): out of the editor's full screen, onto the workspace the iPad
+ * interface was on. Whether the layout changed, to be checked again on the next update.
+ */
+static bool bridge_visit_return(bContext *C, wmWindow *win, bScreen *screen)
+{
+  if (screen->state != SCREENNORMAL) {
+    /* The visited workspace is left as it was found, not with the editor full screen. */
+    for (ScrArea &area : screen->areabase) {
+      if (!ED_area_is_global(&area)) {
+        ED_screen_full_restore(C, &area);
+        return true;
+      }
+    }
+  }
+  bridge_visit.returning = false;
+  WorkSpace *workspace = nullptr;
+  WorkSpaceLayout *layout = nullptr;
+  const bool found = bridge_visit_find(CTX_data_main(C), &workspace, &layout);
+  bridge_visit.active = false;
+  if (!found) {
+    WM_native_ui_session_log("interface", "back from a visit: its workspace is gone");
+    return false;
+  }
+  if (workspace != WM_window_get_active_workspace(win)) {
+    ED_workspace_change(workspace, C, CTX_wm_manager(C), win);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * What a save during a visit changes for its write and puts back after it (#WM_native_ui_visit_write).
+ * An editor the visit opened full screen (#screen_state_to_nonnormal: the editor's area took the
+ * 3D View's data from the screen it came from, the editor in front as a temporary space) is taken
+ * out: the 3D View's data goes back to its place in that screen, which is written as not full
+ * screen, and the editor's space is held aside, so the file never has it.
+ */
+struct BridgeVisitWrite {
+  wmWindow *win = nullptr;
+  WorkSpace *workspace = nullptr;
+  WorkSpaceLayout *visit_layout = nullptr;
+  WorkSpaceLayout *return_layout = nullptr;
+  /* The full screen's area and the one it came from. */
+  ScrArea *full_area = nullptr;
+  ScrArea *from_area = nullptr;
+  bScreen *from_screen = nullptr;
+  short from_state = SCREENNORMAL;
+  Vector<std::pair<ScrArea *, bScreen *>> from_full;
+  SpaceLink *editor = nullptr;
+  ListBaseT<ARegion> editor_regions = {};
+  char full_spacetype = SPACE_EMPTY;
+};
+
+/** As `ED_area_data_swap` (internal to the screen editor) swaps two areas' editors. */
+static void bridge_area_data_swap(ScrArea *area_dst, ScrArea *area_src)
+{
+  std::swap(area_dst->spacetype, area_src->spacetype);
+  std::swap(area_dst->type, area_src->type);
+  std::swap(area_dst->spacedata, area_src->spacedata);
+  std::swap(area_dst->regionbase, area_src->regionbase);
+}
+
+/**
+ * Take the visit's full screen out of what is written; whether there was one. Blender makes a full
+ * screen two ways (#screen_state_to_nonnormal): an editor opened full screen (#ED_screen_full_newspace,
+ * as the hand-offs and DESK-5 open one) is a new screen beside the untouched one it came from; an
+ * area made full screen (View › Area › Toggle Maximize Area) takes its editor from that screen,
+ * leaving an empty one in its place, which is swapped back for the write (#ED_area_data_swap),
+ * a temporary editor in front of it held aside.
+ */
+static bool bridge_visit_write_unfull(BridgeVisitWrite &w, bScreen *visit_screen)
+{
+  ScrArea *area = static_cast<ScrArea *>(visit_screen->areabase.first);
+  bScreen *from = area ? area->full : nullptr;
+  if (visit_screen->state == SCREENNORMAL || from == nullptr) {
+    return false;
+  }
+  w.full_area = area;
+  w.from_screen = from;
+  w.from_state = from->state;
+  for (ScrArea &old : from->areabase) {
+    if (old.full != nullptr && w.from_area == nullptr) {
+      w.from_area = &old;
+    }
+  }
+  if (w.from_area != nullptr) {
+    SpaceLink *editor = static_cast<SpaceLink *>(area->spacedata.first);
+    w.full_spacetype = area->spacetype;
+    if (editor != nullptr && editor->next != nullptr &&
+        (editor->link_flag & SPACE_FLAG_TYPE_TEMPORARY))
+    {
+      /* The space behind the temporary one in front, with its regions, as Back to Previous. */
+      SpaceLink *before = editor->next;
+      w.editor = editor;
+      BLI_remlink(&area->spacedata, editor);
+      w.editor_regions = area->regionbase;
+      area->regionbase = before->regionbase;
+      before->regionbase = {};
+      area->spacetype = before->spacetype;
+    }
+    bridge_area_data_swap(w.from_area, area);
+  }
+  from->state = SCREENNORMAL;
+  for (ScrArea &old : from->areabase) {
+    w.from_full.append({&old, old.full});
+    old.full = nullptr;
+  }
+  return true;
+}
+
+static void bridge_visit_write_refull(BridgeVisitWrite &w)
+{
+  for (const auto &[old, full] : w.from_full) {
+    old->full = full;
+  }
+  w.from_screen->state = w.from_state;
+  if (w.from_area == nullptr) {
+    return;
+  }
+  ScrArea *area = w.full_area;
+  bridge_area_data_swap(w.from_area, area);
+  if (w.editor != nullptr) {
+    SpaceLink *before = static_cast<SpaceLink *>(area->spacedata.first);
+    before->regionbase = area->regionbase;
+    area->regionbase = w.editor_regions;
+    BLI_addhead(&area->spacedata, w.editor);
+  }
+  area->spacetype = w.full_spacetype;
+}
+
+void WM_native_ui_visit_write(Main *bmain, const bool begin)
+{
+  /* What #begin changed, put back by its end. Saves do not nest. */
+  static BridgeVisitWrite swapped;
+  if (!begin) {
+    if (swapped.win != nullptr) {
+      WorkSpaceInstanceHook *hook = swapped.win->workspace_hook;
+      WorkSpace *return_workspace = BKE_workspace_active_get(hook);
+      if (swapped.return_layout != nullptr) {
+        BKE_workspace_active_layout_set(
+            hook, swapped.win->winid, return_workspace, swapped.return_layout);
+      }
+      BKE_workspace_active_set(hook, swapped.workspace);
+      BKE_workspace_active_layout_set(
+          hook, swapped.win->winid, swapped.workspace, swapped.visit_layout);
+      if (swapped.full_area != nullptr) {
+        bridge_visit_write_refull(swapped);
+      }
+    }
+    swapped = {};
+    return;
+  }
+  swapped = {};
+  WorkSpace *workspace = nullptr;
+  WorkSpaceLayout *layout = nullptr;
+  wmWindowManager *wm = static_cast<wmWindowManager *>(bmain->wm.first);
+  if (wm == nullptr || BLI_listbase_is_empty(&wm->windows) ||
+      !bridge_visit_find(bmain, &workspace, &layout))
+  {
+    return;
+  }
+  wmWindow *win = static_cast<wmWindow *>(wm->windows.first);
+  WorkSpaceInstanceHook *hook = win->workspace_hook;
+  swapped.win = win;
+  swapped.workspace = BKE_workspace_active_get(hook);
+  swapped.visit_layout = BKE_workspace_active_layout_get(hook);
+  swapped.return_layout = BKE_workspace_active_layout_for_workspace_get(hook, workspace);
+  bScreen *visit_screen = swapped.visit_layout ?
+                              BKE_workspace_layout_screen_get(swapped.visit_layout) :
+                              nullptr;
+  if (visit_screen && bridge_visit_write_unfull(swapped, visit_screen)) {
+    /* The visited workspace as it was before the editor took it full screen. */
+    if (WorkSpaceLayout *from = BKE_workspace_layout_find(swapped.workspace, swapped.from_screen))
+    {
+      BKE_workspace_active_layout_set(hook, win->winid, swapped.workspace, from);
+    }
+  }
+  BKE_workspace_active_set(hook, workspace);
+  BKE_workspace_active_layout_set(hook, win->winid, workspace, layout);
 }
 
 static wmOperatorStatus bridge_interface_toggle_exec(bContext *C, wmOperator * /*op*/)
@@ -7702,6 +8063,13 @@ void WM_native_ui_ensure_layout(bContext *C)
   wmWindow *win = CTX_wm_window(C);
   bScreen *screen = CTX_wm_screen(C);
   ScrArea *area = CTX_wm_area(C);
+  if (bridge_visit.returning && win != nullptr && screen != nullptr &&
+      bridge_visit_return(C, win, screen))
+  {
+    /* Back from a hand-off: the workspace and layout the iPad interface was on, first. */
+    bridge_context_pop(C, context_store);
+    return;
+  }
   if (win != nullptr && screen != nullptr && !bridge_view3d_ensure(C, win, screen))
   {
     /* The screen changed: full screen and its regions follow on the next pass. */

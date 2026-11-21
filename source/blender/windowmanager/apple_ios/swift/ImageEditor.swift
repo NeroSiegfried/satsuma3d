@@ -505,7 +505,7 @@ struct ImageEditorPanel: View {
           /* Selecting and moving UVs by hand is Blender's own UV Editor's (ROUND5 9B.6, decision
            * 55): its UV Editing workspace, added from the startup file where this one has none. */
           Button("Edit UVs in Desktop Interface", systemImage: "macwindow") {
-            BlenderSettings.set("desktop_uv_editing", .bool(true))
+            BlenderSettings.set("desktop_open", .text("UV_EDITING"))
           }
           .accessibilityIdentifier("blender.image.edit_uvs_desktop")
         }

@@ -658,8 +658,27 @@ check('case uv, image' in image_editor and 'model.mode == .image && model.snapsh
       "9B.2: the UV Editor shows the unit square instead of a No Image page, and always its UVs")
 check('ForEach(ImageEditorModel.Mode.allCases)' in (SWIFT / 'TopBar.swift').read_text(encoding='utf-8'),
       "9B.1: the editors menu lists the UV Editor and the Image Editor")
-check('"desktop_uv_editing"' in image_editor and '"desktop_uv_editing"' in bridge_text,
-      "9B.6: Edit UVs in Desktop Interface reaches Blender's settings view")
+check('BlenderSettings.set("desktop_open", .text("UV_EDITING"))' in image_editor and
+      '{"UV_EDITING", "UV Editing"' in bridge_text,
+      "9B.6: Edit UVs in Desktop Interface is a caller of the one hand-off (ROUND6 EDIT-11)")
+
+# ROUND6 EDIT-11 (D10): one hand-off. Every Blender editor is native, hosted or handed off; the
+# harness scenario `handoff` walks the editors and their modes against a written classification.
+# Here: the Sidebar menu lists Blender's own list (the `desktop_open` options), not a copy, and
+# nothing else sends the old one-off setting.
+topbar_text = (SWIFT / 'TopBar.swift').read_text(encoding='utf-8')
+check('BlenderSettings.desktopEditors' in topbar_text and 'desktopEditors\n' in topbar_text and
+      'BlenderSettings.set("desktop_open", .text(editor.value' in topbar_text,
+      "EDIT-11: the Sidebar menu's Open in Desktop Interface lists the settings view's editors")
+check(not any('"desktop_uv_editing"' in path.read_text(encoding='utf-8') for path in SWIFT.glob('*.swift')) and
+      '"desktop_uv_editing"' not in bridge_text,
+      "EDIT-11: no one-off hand-off setting is left beside `desktop_open`")
+files_text = (ROOT / 'source/blender/windowmanager/intern/wm_files.cc').read_text(encoding='utf-8')
+# The crash file is written from a crash handler and is not a document: the one write left out.
+check(files_text.count('BLO_write_file(') == files_text.count('const NativeVisitWriteScope visit(bmain);') + 1 and
+      files_text.count('const NativeVisitWriteScope visit(bmain);') == 3,
+      "EDIT-11: every write of a document, startup file or auto-save goes through the visit's scope")
+
 check('case "editor":' in snapshots_text, "9B.7: the snapshot step `editor uv|image open|close`")
 
 # ROUND5 9C (decision 56): the size of Blender's own interface is the app's own setting, sent at

@@ -1161,7 +1161,7 @@ def _reveal_uv_editor():
     elif phase == "desktop":
         # ROUND5 9C: Blender's own interface at the app's size (75 % by default), the iPad's at its own.
         state["dpi_ipad"] = bpy.context.preferences.system.dpi
-        set_bool(subs["settings"], "desktop_uv_editing", True, 960)
+        set_text(subs["settings"], "desktop_open", "UV_EDITING", 960)
         state.update(phase="landed", wait=4)
     elif phase == "landed":
         window = bpy.context.window_manager.windows[0]
@@ -7275,6 +7275,230 @@ def tick_storyboard():
     return 0.3
 
 
+# ROUND6 EDIT-11 (D10): one hand-off to Blender's own editors. Every editor and every mode of one is
+# native here, handed off (an id of the settings view's `desktop_open`), reached from a handed-off
+# editor's own header, or left out with the reason written: a new editor or mode fails until it is
+# placed. Then each hand-off from the iPad interface: Blender's interface shows the editor (or the
+# workspace), a save meanwhile writes where the iPad interface was, and Return to iPad Interface
+# comes back to that workspace.
+HANDOFF_CLASSES = {
+    "space EMPTY": ("excluded", "no editor"),
+    "space VIEW_3D": ("native", "the viewport"),
+    "space IMAGE_EDITOR": ("native", "Image Editor, UV Editor"),
+    "space NODE_EDITOR": ("native", "Shader Editor, Geometry Nodes, Compositor"),
+    "space SEQUENCE_EDITOR": ("handoff", "SEQUENCE_EDITOR"),
+    "space CLIP_EDITOR": ("handoff", "CLIP_EDITOR"),
+    "space DOPESHEET_EDITOR": ("native", "Timeline"),
+    "space GRAPH_EDITOR": ("native", "curve editor"),
+    "space NLA_EDITOR": ("handoff", "NLA_EDITOR"),
+    "space TEXT_EDITOR": ("handoff", "TEXT_EDITOR"),
+    "space CONSOLE": ("handoff", "CONSOLE"),
+    "space INFO": ("handoff", "INFO"),
+    "space TOPBAR": ("native", "the top bar's menus and the system menu bar (EDIT-12)"),
+    "space STATUSBAR": ("native", "messages, the modal bar, the statistics overlay (EDIT-12)"),
+    "space OUTLINER": ("native", "Outliner"),
+    "space PROPERTIES": ("native", "Properties"),
+    "space FILE_BROWSER": ("native", "the system's Files picker (FILES runs)"),
+    "space SPREADSHEET": ("handoff", "SPREADSHEET"),
+    "space PREFERENCES": ("native", "Settings and its Preferences"),
+    "dopesheet DOPESHEET": ("handoff", "DOPESHEET"),
+    "dopesheet ACTION": ("header", "DOPESHEET"),
+    "dopesheet SHAPEKEY": ("header", "DOPESHEET"),
+    "dopesheet GPENCIL": ("header", "DOPESHEET"),
+    "dopesheet MASK": ("header", "DOPESHEET"),
+    "dopesheet CACHEFILE": ("header", "DOPESHEET"),
+    "graph FCURVES": ("native", "curve editor"),
+    "graph DRIVERS": ("handoff", "DRIVERS"),
+    "image VIEW": ("native", "Image Editor"),
+    "image UV": ("native", "UV Editor; selecting UVs by hand is UV_EDITING's"),
+    "image PAINT": ("native", "Image Editor's painting"),
+    "image MASK": ("handoff", "MASK"),
+    "shader OBJECT": ("native", "Shader Editor"),
+    "shader WORLD": ("handoff", "WORLD_NODES"),
+    "shader LINESTYLE": ("header", "WORLD_NODES"),
+    "tree ShaderNodeTree": ("native", "Shader Editor"),
+    "tree GeometryNodeTree": ("native", "Geometry Nodes"),
+    "tree CompositorNodeTree": ("native", "Compositor"),
+    "tree TextureNodeTree": ("handoff", "TEXTURE_NODES"),
+    "sequencer SEQUENCER": ("header", "SEQUENCE_EDITOR"),
+    "sequencer PREVIEW": ("header", "SEQUENCE_EDITOR"),
+    "sequencer SEQUENCER_PREVIEW": ("handoff", "SEQUENCE_EDITOR"),
+    "outliner VIEW_LAYER": ("native", "Outliner"),
+    "outliner SCENES": ("header", "OUTLINER"),
+    "outliner SEQUENCE": ("header", "OUTLINER"),
+    "outliner LIBRARIES": ("header", "OUTLINER"),
+    "outliner DATA_API": ("header", "OUTLINER"),
+    "outliner LIBRARY_OVERRIDES": ("header", "OUTLINER"),
+    "outliner ORPHAN_DATA": ("header", "OUTLINER"),
+    "files FILES": ("native", "the system's Files picker"),
+    "files ASSETS": ("handoff", "ASSETS"),
+}
+HANDOFF_EDITORS = {
+    "DOPESHEET": ("DOPESHEET_EDITOR", {"ui_mode": "DOPESHEET"}),
+    "DRIVERS": ("GRAPH_EDITOR", {"mode": "DRIVERS"}),
+    "NLA_EDITOR": ("NLA_EDITOR", {}),
+    "SEQUENCE_EDITOR": ("SEQUENCE_EDITOR", {"view_type": "SEQUENCER_PREVIEW"}),
+    "CLIP_EDITOR": ("CLIP_EDITOR", {}),
+    "MASK": ("IMAGE_EDITOR", {"mode": "MASK"}),
+    "WORLD_NODES": ("NODE_EDITOR", {"tree_type": "ShaderNodeTree", "shader_type": "WORLD"}),
+    "TEXTURE_NODES": ("NODE_EDITOR", {"tree_type": "TextureNodeTree"}),
+    "TEXT_EDITOR": ("TEXT_EDITOR", {}),
+    "CONSOLE": ("CONSOLE", {}),
+    "INFO": ("INFO", {}),
+    "SPREADSHEET": ("SPREADSHEET", {}),
+    "OUTLINER": ("OUTLINER", {}),
+    "ASSETS": ("FILE_BROWSER", {"browse_mode": "ASSETS"}),
+    "UV_EDITING": None,
+}
+# A save during these visits is read back: what the file says the window shows.
+HANDOFF_SAVES = ("NLA_EDITOR", "UV_EDITING")
+handoff_state = {}
+
+
+def _handoff_classes_check(problems, offered):
+    enums = {"space": (bpy.types.Space, "type"), "dopesheet": (bpy.types.SpaceDopeSheetEditor, "ui_mode"),
+             "graph": (bpy.types.SpaceGraphEditor, "mode"), "image": (bpy.types.SpaceImageEditor, "mode"),
+             "shader": (bpy.types.SpaceNodeEditor, "shader_type"),
+             "sequencer": (bpy.types.SpaceSequenceEditor, "view_type"),
+             "outliner": (bpy.types.SpaceOutliner, "display_mode"),
+             "files": (bpy.types.SpaceFileBrowser, "browse_mode")}
+    found = ["%s %s" % (kind, item.identifier) for kind, (struct, prop) in enums.items()
+             for item in struct.bl_rna.properties[prop].enum_items]
+    found += ["tree %s" % tree.bl_rna.identifier for tree in bpy.types.NodeTree.__subclasses__()
+              if tree.bl_rna.identifier.endswith("NodeTree")]
+    report["editors and modes"] = len(found)
+    for key in found:
+        if key not in HANDOFF_CLASSES:
+            problems.append("EDIT-11: %s is neither native, handed off, nor left out with a reason" % key)
+    for key, (kind, what) in HANDOFF_CLASSES.items():
+        if kind in ("handoff", "header") and what not in offered:
+            problems.append("EDIT-11: %s names the hand-off %s, which the settings view does not offer" % (key, what))
+    for editor in offered:
+        if not any(kind in ("handoff", "header") and what == editor for kind, what in HANDOFF_CLASSES.values()):
+            problems.append("EDIT-11: the hand-off %s is offered for no editor or mode" % editor)
+
+
+def _handoff_read_back(path):
+    """What a saved file says its window shows, read by another Blender."""
+    import subprocess
+    code = ("import bpy, json; w = bpy.data.window_managers[0].windows[0]; "
+            "print('HANDOFF ' + json.dumps({'workspace': w.workspace.name, 'screen': w.screen.name, "
+            "'areas': sorted(a.type for a in w.screen.areas), 'maximized': w.screen.show_fullscreen}))")
+    out = subprocess.run([bpy.app.binary_path, "-b", "--factory-startup", path, "--python-expr", code],
+                         capture_output=True, text=True, timeout=240).stdout
+    line = next((line for line in out.splitlines() if line.startswith("HANDOFF ")), None)
+    return json.loads(line[len("HANDOFF "):]) if line else {"error": out[-400:]}
+
+
+def tick_handoff():
+    global step
+    try:
+        pump()
+        step += 1
+        problems = report.setdefault("problems", [])
+        cases = report.setdefault("cases", {})
+        window = bpy.context.window_manager.windows[0]
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            subs["settings"] = subscribe("settings")
+            return 0.5
+        if step < 5:
+            return 0.5
+        top = tree(subs["settings"]) or {}
+        nodes = {n["key"]: n for n in top.get("children", [])}
+        desktop = nodes.get("desktop", {}).get("value")
+        phase = handoff_state.get("phase", "classes")
+        if phase == "classes":
+            offered = [o for o in (nodes.get("desktop_open") or {}).get("options", []) if o]
+            report["offered"] = offered
+            _handoff_classes_check(problems, offered)
+            # The UV Editor's own button is a caller too.
+            handoff_state.update(phase="next", queue=offered + ["UV_EDITING"], command=2300)
+            # On a document without the UV Editing workspace, so it is added from the startup file.
+            workspace = bpy.data.workspaces.get("UV Editing")
+            if workspace is not None and workspace != window.workspace:
+                bpy.data.batch_remove([workspace])
+            return 0.5
+        if phase == "next":
+            if not handoff_state["queue"]:
+                handoff_state["phase"] = "saved"
+                return 0.1
+            editor = handoff_state["queue"].pop(0)
+            handoff_state["command"] += 1
+            handoff_state.update(editor=editor, workspace=window.workspace.name,
+                                 areas=sorted(a.type for a in window.screen.areas), phase="landed")
+            cases[editor] = {"from": [window.workspace.name, desktop]}
+            set_text(subs["settings"], "desktop_open", editor, handoff_state["command"])
+            return 2.0
+        editor = handoff_state.get("editor")
+        entry = cases.get(editor, {})
+        if phase in ("landed", "back") and acks.get(handoff_state["command"]) is None:
+            # Answered once Blender ran it: a loaded machine takes its time.
+            handoff_state["waits"] = handoff_state.get("waits", 0) + 1
+            if handoff_state["waits"] < 60:
+                return 0.25
+        handoff_state["waits"] = 0
+        if phase == "landed":
+            entry["ack"] = acks.get(handoff_state["command"])
+            entry["desktop"] = desktop
+            entry["workspace"] = window.workspace.name
+            entry["areas"] = sorted(a.type for a in window.screen.areas)
+            expected = HANDOFF_EDITORS.get(editor, "unknown")
+            if entry["ack"] != "ok" or desktop is not True:
+                problems.append("EDIT-11: %s did not open the Desktop Interface: %s" % (editor, entry))
+            elif expected is None:
+                if not window.workspace.name.startswith("UV Editing"):
+                    problems.append("EDIT-11: %s did not land on its workspace: %s" % (editor, entry))
+            elif expected == "unknown":
+                problems.append("EDIT-11: the hand-off %s is not known to this scenario" % editor)
+            else:
+                space_type, settings = expected
+                area = next((a for a in window.screen.areas if a.type == space_type), None)
+                space = area and area.spaces.active
+                entry["settings"] = space and {name: getattr(space, name, None) for name in settings}
+                if area is None or entry["settings"] != settings or not window.screen.show_fullscreen:
+                    problems.append("EDIT-11: %s is not shown full screen as asked: %s" % (editor, entry))
+            if editor in HANDOFF_SAVES:
+                path = os.path.join(bpy.app.tempdir, "handoff_%s.blend" % editor)
+                with bpy.context.temp_override(window=window):
+                    bpy.ops.wm.save_as_mainfile(filepath=path, copy=True)
+                handoff_state.setdefault("saves", []).append((editor, path, handoff_state["workspace"]))
+            handoff_state["command"] += 1
+            set_bool(subs["settings"], "desktop", False, handoff_state["command"])
+            handoff_state["phase"] = "back"
+            return 2.0
+        if phase == "back" and sorted(a.type for a in window.screen.areas) != handoff_state["areas"]:
+            # The iPad interface's layout comes back over the next updates.
+            handoff_state["settle"] = handoff_state.get("settle", 0) + 1
+            if handoff_state["settle"] < 20:
+                return 0.25
+        handoff_state["settle"] = 0
+        if phase == "back":
+            entry["back"] = {"ack": acks.get(handoff_state["command"]), "desktop": desktop,
+                             "workspace": window.workspace.name,
+                             "areas": sorted(a.type for a in window.screen.areas)}
+            if (desktop is not False or window.workspace.name != handoff_state["workspace"] or
+                    entry["back"]["areas"] != handoff_state["areas"]):
+                problems.append("EDIT-11: Return to iPad Interface after %s did not come back to %s %s: %s"
+                                % (editor, handoff_state["workspace"], handoff_state["areas"], entry["back"]))
+            handoff_state["phase"] = "next"
+            return 0.5
+        if phase == "saved":
+            for editor, path, workspace in handoff_state.get("saves", []):
+                read = _handoff_read_back(path)
+                cases[editor]["saved"] = read
+                if read.get("workspace") != workspace or read.get("maximized") is not False:
+                    problems.append("EDIT-11: a save during %s wrote the visit, not %s as the iPad interface "
+                                    "had it: %s" % (editor, workspace, read))
+            finish("done" if not problems else "error")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
 # Every scenario, by the name `mac_bridge_check.py --scenario` takes: the one list (ROUND7 U4d).
 # `mac_bridge_check.py`'s SCENARIOS must name exactly these, which `bl_native_test_runners.py`
 # checks; a name not here ends the run with an error, never another scenario's run.
@@ -7290,7 +7514,7 @@ SCENARIOS = {
     "header": tick_header, "popups": tick_popups, "statuskeys": tick_statuskeys,
     "answers": tick_answers, "animkeys": tick_animkeys, "nodegroups": tick_nodegroups,
     "timelinekeys": tick_timelinekeys, "assettap": tick_assettap,
-    "renderimage": tick_renderimage, "storyboard": tick_storyboard,
+    "renderimage": tick_renderimage, "storyboard": tick_storyboard, "handoff": tick_handoff,
 }
 
 

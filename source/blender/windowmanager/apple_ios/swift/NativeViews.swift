@@ -505,6 +505,11 @@ enum BlenderSettings {
   /** The size of Blender's own interface as Blender has it, see `SettingsModel.desktopScale`. */
   static var desktopScale: Double? { node("desktop_scale")?.number?.value }
   static var keymap: String? { node("keymap")?.choice?.value }
+  /** Blender's editors this interface has no form of, each opened in the Desktop Interface by setting
+   * `desktop_open` to it (ROUND6 EDIT-11): the list is Blender's, so none is left unnamed here. */
+  static var desktopEditors: [Blender_NativeUI_Option] {
+    node("desktop_open")?.choice?.allOptions.filter { $0.value != nil } ?? []
+  }
 }
 
 /* -------------------------------------------------------------------- */

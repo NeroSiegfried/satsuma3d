@@ -491,6 +491,30 @@ struct DocumentToolbar: ToolbarContent {
     }
   }
 
+  /** The editors with no form here (NLA, Drivers, the Text Editor and the rest), each opened in the
+   * Desktop Interface full screen, with Back to Previous; Return to iPad Interface comes back to the
+   * workspace this was on (ROUND6 EDIT-11, decision R6-15). */
+  @ViewBuilder
+  private var desktopEditors: some View {
+    let editors = BlenderSettings.desktopEditors
+    Section {
+      Menu {
+        ForEach(editors, id: \.value) { editor in
+          Button {
+            BlenderSettings.set("desktop_open", .text(editor.value ?? ""))
+          } label: {
+            Label { Text(editor.label ?? editor.value ?? "") } icon: { iconImage(BlenderIcon.image(editor.icon)) }
+          }
+          .accessibilityIdentifier("blender.desktop_open.\(editor.value ?? "")")
+        }
+      } label: {
+        Label("Open in Desktop Interface", systemImage: "macwindow")
+      }
+      .disabled(editors.isEmpty)
+      .accessibilityIdentifier("blender.desktop_open")
+    }
+  }
+
   /** The sidebar: its menu chooses what shows beside and below the viewport. */
   private var sidebarMenu: some View {
     Menu {
@@ -503,6 +527,7 @@ struct DocumentToolbar: ToolbarContent {
         shell.assets.toggle()
       }
       nodeEditorToggles
+      desktopEditors
 #if os(visionOS)
       Section {
         sidebarToggle("3D Volume", icon: UIImage(systemName: "cube.transparent"),

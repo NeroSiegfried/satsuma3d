@@ -18,6 +18,7 @@
 namespace blender {
 
 struct ARegion;
+struct Main;
 struct bContext;
 struct wmWindowManager;
 struct wmKeyMapItem;
@@ -111,6 +112,13 @@ void WM_native_ui_starter_library_ensure();
  * true when no platform interface is registered.
  */
 bool WM_native_ui_desktop_mode();
+
+/**
+ * Around writing \a bmain to a file (\a begin, then not): while a hand-off visits the Desktop
+ * Interface, the workspace and layout the iPad interface was on are written in place of the
+ * visit's, so a save never keeps where the visit went (ROUND6 EDIT-11).
+ */
+void WM_native_ui_visit_write(Main *bmain, bool begin);
 
 /**
  * Say something to the person in the interface's own way, briefly and without stopping them: what

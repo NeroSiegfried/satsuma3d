@@ -608,7 +608,7 @@ enum ShellSnapshots {
         }
         if words[1] == "desktop" {
           /* As the UV Editor's ⋯ menu does: Blender's own interface, on its UV Editing workspace. */
-          BlenderSettings.set("desktop_uv_editing", .bool(true))
+          BlenderSettings.set("desktop_open", .text("UV_EDITING"))
           try? await Task.sleep(for: .seconds(2))
           break
         }
