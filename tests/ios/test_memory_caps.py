@@ -25,6 +25,9 @@ TIERS = (
     ('12 GB', int(8.9 * GB), int(11.6 * GB), (2278, 1139, 0)),
     ('16 GB', int(12.2 * GB), int(15.6 * GB), (3123, 1561, 0)),
     ('unknown available, 8 GB', 0, 8 * GB, (1024, 512, 4096)),
+    # The device round's iPad (iPad13,10, swap on): more left of the app's limit than the RAM
+    # holds; the caps count only the RAM (7520 MB → a quarter 1880, an eighth 940).
+    ('8 GB with swap', 8158 * 1024 ** 2, 7520 * 1024 ** 2, (1880, 940, 4096)),
 )
 # Blender's defaults: undo memory 0 (unlimited), cache 4096 MB (half the memory at most), textures 0.
 BLENDER_DEFAULTS = (0, 4096, 0)

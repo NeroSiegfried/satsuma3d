@@ -40,11 +40,28 @@ final class SessionDiagnostics: NSObject, MXMetricManagerSubscriber {
     }
     let formatter = DateFormatter()
     formatter.dateFormat = "yyyy-MM-dd HH:mm:ss ZZZZZ"
-    let available = Double(os_proc_available_memory()) / 1_048_576
-    let installed = Double(ProcessInfo.processInfo.physicalMemory) / 1_048_576
-    return String(format: "%@ %@ %@ (%@), %@, %@ %@, memory available %.0f MB of %.0f MB",
+    /* Three numbers from three sources, none a share of another (device round: "8158 MB of
+     * 7520 MB"): what is left of the app's limit (os_proc_available_memory, which counts
+     * compressed and swapped pages, so it can exceed the RAM), the app's own footprint now
+     * (task_info), and the RAM (hw.memsize). */
+    let left = Double(os_proc_available_memory()) / 1_048_576
+    let ram = Double(ProcessInfo.processInfo.physicalMemory) / 1_048_576
+    return String(format: "%@ %@ %@ (%@), %@, %@ %@, memory: the app may use %.0f MB more (in use %.0f MB; "
+                  + "the limit counts compressed and swapped memory), RAM %.0f MB",
                   formatter.string(from: Date()), AppIdentity.name, version, build, machine,
-                  UIDevice.current.systemName, UIDevice.current.systemVersion, available, installed)
+                  UIDevice.current.systemName, UIDevice.current.systemVersion, left, footprintMegabytes(), ram)
+  }
+
+  /** The app's memory as the system counts it against its limit, in megabytes; -1 if unknown. */
+  private static func footprintMegabytes() -> Double {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+    let result = withUnsafeMutablePointer(to: &info) {
+      $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+        task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+      }
+    }
+    return result == KERN_SUCCESS ? Double(info.phys_footprint) / 1_048_576 : -1
   }
 
   /* Daily metrics: how many times the app was ended, and why. */

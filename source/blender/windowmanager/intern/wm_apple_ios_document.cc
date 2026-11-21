@@ -471,10 +471,14 @@ void WM_apple_ios_memory_defaults()
   U.glreslimit = short(texture_limit);
   WM_native_ui_session_log(
       "memory",
-      fmt::format("start-up: {} MB available of {} MB; undo memory {} MB (was {}), cache {} MB "
-                  "(was {}), texture limit {} (was {})",
+      /* Two different measures, never "of" each other: what is left of the app's limit (it
+       * counts compressed and swapped pages, so it can exceed the RAM) and the RAM itself. */
+      fmt::format("start-up: iOS lets the app use {} MB more (its limit counts compressed and "
+                  "swapped memory), RAM {} MB; caps from {} MB: undo memory {} MB (was {}), "
+                  "cache {} MB (was {}), texture limit {} (was {})",
                   available / (1024 * 1024),
                   physical / (1024 * 1024),
+                  wm::apple_ios::memory_caps_base(available, physical) / (1024 * 1024),
                   U.undomemory,
                   undo,
                   U.memcachelimit,

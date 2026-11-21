@@ -1564,6 +1564,20 @@ check(0 <= userdef_b5.find('WM_apple_ios_memory_defaults();') < userdef_b5.find(
       (SWIFT.parents[1] / 'intern/wm_apple_ios_native.cc').read_text(encoding='utf-8'),
       "R6 BUSY-5: the iPad's memory limits at start-up; low memory keeps the work and frees what it can")
 
+# Device round (2026-11-21): the launch line read "memory available 8158 MB of 7520 MB". What is
+# left of the app's limit (os_proc_available_memory, which counts compressed and swapped pages) is
+# not a share of the RAM (hw.memsize): no memory line may put one "of" the other, and the caps take
+# their shares of the RAM at most (`memory_caps_base`; `tests/ios/test_memory_caps.py` has the
+# device's numbers).
+launch_b5 = (SWIFT / 'SessionDiagnostics.swift').read_text(encoding='utf-8')
+memory_lines_b5 = [s for s in [text for _line, text in literals(launch_b5)] + re.findall(r'"([^"\n]*)"', document_b5)
+                   if 'MB' in s]
+check(memory_lines_b5 and not any(re.search(r'available[^"]*MB of', s) for s in memory_lines_b5) and
+      'memory_caps_base(available_bytes, physical_bytes)' in
+      (SWIFT.parents[1] / 'intern/wm_apple_ios_memory.hh').read_text(encoding='utf-8') and
+      'phys_footprint' in launch_b5,
+      "Memory lines name each number's source; what is left of the limit is never shown as a share of the RAM")
+
 # ROUND6 DESK-1 (H1, H3, H12, C1, C10; decision R6-6): over Blender's own interface the app draws one
 # small cluster, in every screen state, Focus Mode included: it is shown on `model.desktop` alone,
 # never gated by what Blender's screen shows. It holds the way back, Undo and Redo through the shell's

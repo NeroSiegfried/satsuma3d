@@ -31,15 +31,30 @@ struct MemoryCaps {
 };
 
 /**
+ * The memory the caps are shares of. `os_proc_available_memory` is what is left of the app's
+ * limit, and iPadOS counts compressed and swapped pages against that limit, so on an iPad with
+ * swap it can exceed the RAM itself (device round: 8158 MB left on a 7520 MB iPad). What lives in
+ * the RAM is the most the caches can count on: never more than \a physical_bytes when that is
+ * known; half of it when the allowance is unknown (0).
+ */
+inline uint64_t memory_caps_base(const uint64_t available_bytes, const uint64_t physical_bytes)
+{
+  if (available_bytes == 0) {
+    return physical_bytes / 2;
+  }
+  return physical_bytes ? std::min(available_bytes, physical_bytes) : available_bytes;
+}
+
+/**
  * \param available_bytes: what iOS lets the app allocate now (`os_proc_available_memory`), 0 when
- * unknown, then half of \a physical_bytes.
- * \param physical_bytes: the device's memory.
+ * unknown; see #memory_caps_base.
+ * \param physical_bytes: the device's memory (`hw.memsize`).
  */
 inline MemoryCaps memory_caps(const uint64_t available_bytes, const uint64_t physical_bytes)
 {
   constexpr uint64_t megabyte = 1024 * 1024;
   constexpr uint64_t gigabyte = 1024 * megabyte;
-  const uint64_t available = available_bytes ? available_bytes : physical_bytes / 2;
+  const uint64_t available = memory_caps_base(available_bytes, physical_bytes);
   const int64_t available_megabytes = int64_t(available / megabyte);
   MemoryCaps caps;
   caps.undo_megabytes = int(std::clamp<int64_t>(available_megabytes / 4, 256, 4096));
