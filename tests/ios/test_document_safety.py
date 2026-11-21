@@ -143,6 +143,13 @@ class SaveFailureIsSaidTest(unittest.TestCase):
         outcome = body_of(self.document, '- (void)writeOutcome:(NSString *)outcome')
         for said in ('[self saveFailed:reason]', '[self saveBusy]', '[self writeSucceeded]'):
             self.assertIn(said, outcome)
+        # A write Blender finished can still fail as UIKit moves it into place: that error must
+        # not be taken as said already (seen on the iPad: a save into a read-only folder failed
+        # with no alert and the header still "saved").
+        self.assertIn('_outcomeSaid = ![outcome isEqual:@"written"];', outcome,
+                      "Only an outcome that is not a success may silence handleError")
+        self.assertNotIn('_outcomeSaid = YES', self.document,
+                         "Marking every outcome as said drops UIKit's failure after a write")
 
     def test_blenders_reason_is_kept(self):
         write = body_of(self.doc, 'static bool wm_document_write(')

@@ -352,7 +352,10 @@ static WMIOSFolderGrant *folder_grant_shown = nil;
 
 - (void)writeOutcome:(NSString *)outcome reason:(NSString *)reason
 {
-  _outcomeSaid = YES;
+  /* Only a write that did not succeed has said all there is: after Blender wrote, UIKit can still
+   * fail to move the file into place (a read-only folder; seen on the iPad, a save "failed" with
+   * no word), and that failure is #handleError's to say. */
+  _outcomeSaid = ![outcome isEqual:@"written"];
   if ([outcome isEqual:@"written"]) {
     [self writeSucceeded];
   }
