@@ -430,12 +430,28 @@ std::shared_ptr<DictionaryValue> read_storyboard(bContext *C,
   const Strip *active = seq::select_active_get(scene);
   if (ed) {
     for (Strip &strip : *seq::active_seqbase_get(ed)) {
-      if (strip.is_effect() || strip.type == STRIP_TYPE_SOUND) {
-        continue;
-      }
       const int left = strip.left_handle();
       const int right = strip.right_handle(scene);
       auto item = strips->append_dict();
+      /* Sound and effect strips, which the storyboard does not edit: drawn as locked blocks
+       * where they are, moved with the rest when shots make room (ROUND6 EDIT-10, D17). */
+      if (strip.is_effect() || strip.type == STRIP_TYPE_SOUND) {
+        PointerRNA ptr = RNA_pointer_create_discrete(&scene->id, RNA_Strip, &strip);
+        PropertyRNA *type = RNA_struct_find_property(&ptr, "type");
+        const char *kind = nullptr;
+        if (type) {
+          RNA_property_enum_name_gettexted(C, &ptr, type, RNA_property_enum_get(&ptr, type), &kind);
+        }
+        item->append_str("name", strip.name + 2);
+        item->append_int("channel", strip.channel);
+        item->append_int("start", left);
+        item->append_int("end", right);
+        item->append_int("locked", 1);
+        item->append_str("kind", kind ? kind : IFACE_("Strip"));
+        item->append_int("muted", (strip.flag & SEQ_MUTE) != 0);
+        item->append_int("color", strip.color_tag);
+        continue;
+      }
       item->append_str("name", strip.name + 2);
       item->append_int("channel", strip.channel);
       item->append_int("start", left);
@@ -615,25 +631,59 @@ void clear_drawings(Main &bmain, Scene &shot)
   FOREACH_SCENE_OBJECT_END;
 }
 
-/** Makes room after `after` on its channel, moving the shots after it later by `length`. */
-void make_room(Scene *scene, const int channel, const int frame, const int length)
+/** Makes room at `frame`, moving every strip starting there or later, on every channel, and the
+ * markers, later by `length` (a negative one closes it again): Blender's own shift, as its gap
+ * removal does, so sound and effects stay in step with the shots (ROUND6 EDIT-10, D17). Moving
+ * one channel left them behind. */
+void make_room(Scene *scene, const int frame, const int length)
 {
   Editing *ed = seq::editing_get(scene);
-  if (!ed) {
+  if (!ed || length == 0) {
     return;
   }
-  Vector<Strip *> later;
-  for (Strip &strip : *seq::active_seqbase_get(ed)) {
-    if (strip.channel == channel && strip.left_handle() >= frame) {
-      later.append(&strip);
-    }
+  seq::transform_offset_after_frame(scene, seq::active_seqbase_get(ed), length, frame);
+  DEG_id_tag_update(&scene->id, ID_RECALC_SEQUENCER_STRIPS);
+}
+
+/** Runs one of Blender's operators for an edit; whether it finished. Nested, as a button's call
+ * is: it makes no undo step of its own, the edit makes one for all it changed, before and after
+ * the operator (ROUND6 EDIT-10, D17). */
+bool run_operator(bContext *C, const char *idname, PointerRNA *properties)
+{
+  wmWindowManager *wm = CTX_wm_manager(C);
+  wm->op_undo_depth++;
+  const wmOperatorStatus status = WM_operator_name_call(
+      C, idname, wm::OpCallContext::ExecDefault, properties, nullptr);
+  wm->op_undo_depth--;
+  return (status & OPERATOR_FINISHED) != 0;
+}
+
+/** A new shot at `frame` on `channel`: a copy of `source` (its world, settings, camera and
+ * layers), selected and active. The copy is of `source` itself: the Sequencer's Add New Scene
+ * copies the window's scene, which is not always the shot a new one follows (found by the
+ * harness, ROUND6 EDIT-10). */
+Strip *add_shot(bContext *C, Scene *scene, Scene *source, const eSceneCopyMethod method,
+                const int frame, const int channel)
+{
+  Main *bmain = CTX_data_main(C);
+  Scene *shot = BKE_scene_duplicate(bmain,
+                                    source,
+                                    method,
+                                    eDupli_ID_Flags(U.dupflag | USER_DUP_OBJECT),
+                                    LIB_ID_DUPLICATE_IS_ROOT_ID);
+  if (!shot) {
+    return nullptr;
   }
-  std::sort(later.begin(), later.end(), [](const Strip *a, const Strip *b) {
-    return a->left_handle() > b->left_handle();
-  });
-  for (Strip *strip : later) {
-    seq::transform_translate_strip(scene, strip, length);
-  }
+  Editing *ed = seq::editing_ensure(scene);
+  seq::LoadData load_data;
+  seq::add_load_data_init(&load_data, shot->id.name + 2, nullptr, frame, channel);
+  load_data.scene = shot;
+  Strip *added = seq::add_scene_strip(scene, ed->current_strips(), &load_data);
+  select_only(scene, added);
+  DEG_id_tag_update(&scene->id, ID_RECALC_SEQUENCER_STRIPS);
+  DEG_relations_tag_update(bmain);
+  WM_event_add_notifier(C, NC_SCENE | ND_SEQUENCER, scene);
+  return added;
 }
 
 /** Shows the shot under the edit's playhead, as Blender's storyboard does, keeping the tool as it
@@ -963,13 +1013,14 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     }
     /* Blender's own operators, on the layer made active. */
     grease_pencil->set_active_layer(layer);
-    WM_operator_name_call(C,
-                          action == "layer_delete" ? "GREASE_PENCIL_OT_layer_remove" :
-                                                     "GREASE_PENCIL_OT_layer_duplicate",
-                          wm::OpCallContext::ExecDefault,
-                          nullptr,
-                          nullptr);
-    return "";
+    const bool remove = action == "layer_delete";
+    if (!run_operator(C,
+                      remove ? "GREASE_PENCIL_OT_layer_remove" : "GREASE_PENCIL_OT_layer_duplicate",
+                      nullptr))
+    {
+      return std::nullopt;
+    }
+    return remove ? "Remove Layer" : "Duplicate Layer";
   }
   if (action == "layer_active" || action == "layer_visible" || action == "layer_move") {
     GreasePencil *grease_pencil = shown_grease_pencil(C);
@@ -1009,9 +1060,10 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     return undo;
   }
   if (action == "layer_add") {
-    WM_operator_name_call(C, "GREASE_PENCIL_OT_layer_add", wm::OpCallContext::ExecDefault, nullptr,
-                          nullptr);
-    return "";
+    if (!run_operator(C, "GREASE_PENCIL_OT_layer_add", nullptr)) {
+      return std::nullopt;
+    }
+    return "Add Layer";
   }
   if (action == "set_scene") {
     if (!strip || strip->type != STRIP_TYPE_SCENE) {
@@ -1044,39 +1096,36 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     if (!strip) {
       return std::nullopt;
     }
+    /* Checked before anything changes: only a shot has a scene to copy (D17). */
+    if (action == "duplicate" && (strip->type != STRIP_TYPE_SCENE || !strip->scene)) {
+      edit_failure = IFACE_("Only a shot can be duplicated here");
+      return std::nullopt;
+    }
     select_only(scene, strip);
     if (action == "delete") {
       PointerRNA properties = WM_operator_properties_create("SEQUENCER_OT_delete");
       RNA_boolean_set(&properties, "delete_data", false);
-      WM_operator_name_call(C, "SEQUENCER_OT_delete", wm::OpCallContext::ExecDefault,
-                            &properties, nullptr);
+      const bool done = run_operator(C, "SEQUENCER_OT_delete", &properties);
       WM_operator_properties_free(&properties);
+      if (!done) {
+        return std::nullopt;
+      }
       sync_scene(C);
-      return "";
+      return "Delete Shot";
     }
-    /* A copy of the shot and its scene, right after it, the later shots making room. */
+    /* A copy of the shot and its scene, right after it, every later strip making room. */
     const int length = strip->right_handle(scene) - strip->left_handle();
     const int after = strip->right_handle(scene);
     const int channel = strip->channel;
     Scene *shot_scene = strip->scene;
-    make_room(scene, channel, after, length);
-    if (!shot_scene) {
+    make_room(scene, after, length);
+    if (!add_shot(C, scene, shot_scene, SCE_COPY_FULL, after, channel)) {
+      /* Nothing added: the room closed again, as it was. */
+      make_room(scene, after, -length);
       return std::nullopt;
     }
-    Scene *previous = CTX_data_scene(C);
-    CTX_data_scene_set(C, shot_scene);
-    PointerRNA properties = WM_operator_properties_create("SEQUENCER_OT_scene_strip_add_new");
-    RNA_enum_set(&properties, "type", SCE_COPY_FULL);
-    RNA_int_set(&properties, "frame_start", after);
-    RNA_int_set(&properties, "channel", channel);
-    /* Placed where asked, not then moved with a pointer as the Sequencer's own Add does. */
-    RNA_boolean_set(&properties, "move_strips", false);
-    WM_operator_name_call(C, "SEQUENCER_OT_scene_strip_add_new", wm::OpCallContext::ExecDefault,
-                          &properties, nullptr);
-    WM_operator_properties_free(&properties);
-    CTX_data_scene_set(C, previous);
     sync_scene(C);
-    return "";
+    return "Duplicate Shot";
   }
   if (action == "template") {
     /* A shot's scene kept as a template new shots can start from, or no longer. */
@@ -1086,7 +1135,8 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
       return std::nullopt;
     }
     ID *id = &strip->scene->id;
-    if (lookup_flag(query, "value", true)) {
+    const bool keep = lookup_flag(query, "value", true);
+    if (keep) {
       if (asset::mark_id(id)) {
         asset::generate_preview(C, id);
       }
@@ -1096,7 +1146,8 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     }
     asset::list::storage_tag_main_data_dirty();
     WM_main_add_notifier(NC_ASSET | NA_EDITED, nullptr);
-    return "";
+    /* A change to the file, undone as one step (D17). */
+    return keep ? "Save as Template" : "Remove Template";
   }
   if (action == "add") {
     /* After the selected shot, or the shot under the playhead, or at the end. */
@@ -1147,7 +1198,7 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
       }
       /* A shot of its own, not another template. */
       asset::clear_id(&shot->id);
-      make_room(scene, channel, frame, shot->r.efra - shot->r.sfra + 1);
+      make_room(scene, frame, shot->r.efra - shot->r.sfra + 1);
       seq::LoadData load_data;
       seq::add_load_data_init(&load_data, shot->id.name + 2, nullptr, frame, channel);
       load_data.scene = shot;
@@ -1159,7 +1210,8 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
       DEG_id_tag_update(&scene->id, ID_RECALC_FRAME_CHANGE);
       sync_scene(C);
       WM_event_add_notifier(C, NC_SCENE | ND_SEQUENCER, scene);
-      return "";
+      /* No operator made a step for it: one here, the template, the room and the shot (D17). */
+      return "Add Shot";
     }
     /* A copy of the shot it follows, to fit the sequence: its world, render settings, camera and
      * layers, its contents then taken out. A blank panel the file keeps, without one. */
@@ -1168,20 +1220,16 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
                     template_scene      ? template_scene :
                                           CTX_data_scene(C);
     const int length = source ? source->r.efra - source->r.sfra + 1 : 48;
-    make_room(scene, channel, frame, length);
-    Scene *previous = CTX_data_scene(C);
-    CTX_data_scene_set(C, source);
-    PointerRNA properties = WM_operator_properties_create("SEQUENCER_OT_scene_strip_add_new");
+    if (!source) {
+      edit_failure = IFACE_("There is no scene to start a shot from");
+      return std::nullopt;
+    }
+    make_room(scene, frame, length);
     /* A copy whole, camera, layers and settings, its drawings then emptied. */
-    RNA_enum_set(&properties, "type", source ? SCE_COPY_FULL : SCE_COPY_EMPTY);
-    RNA_int_set(&properties, "frame_start", frame);
-    RNA_int_set(&properties, "channel", channel);
-    /* Placed where asked, not then moved with a pointer as the Sequencer's own Add does. */
-    RNA_boolean_set(&properties, "move_strips", false);
-    WM_operator_name_call(C, "SEQUENCER_OT_scene_strip_add_new", wm::OpCallContext::ExecDefault,
-                          &properties, nullptr);
-    WM_operator_properties_free(&properties);
-    CTX_data_scene_set(C, previous);
+    if (!add_shot(C, scene, source, SCE_COPY_FULL, frame, channel)) {
+      make_room(scene, frame, -length);
+      return std::nullopt;
+    }
     if (Strip *added = seq::select_active_get(scene); added && added->scene && added->scene != source) {
       clear_drawings(*CTX_data_main(C), *added->scene);
       DEG_relations_tag_update(CTX_data_main(C));
@@ -1191,7 +1239,9 @@ std::optional<std::string> apply_edit(bContext *C, const DictionaryValue &query)
     DEG_id_tag_update(&scene->id, ID_RECALC_FRAME_CHANGE);
     sync_scene(C);
     WM_event_add_notifier(C, NC_SCENE | ND_FRAME, scene);
-    return "";
+    /* One step for the room, the copy and its emptied drawings: made after the operator, the
+     * drawings would come back on Redo. */
+    return "Add Shot";
   }
   return std::nullopt;
 }
@@ -1209,7 +1259,13 @@ std::string native_storyboard_edit(bContext *C, const DictionaryValue &edit)
 {
   SequencerSpaceContext space(C);
   edit_failure.clear();
+  /* Nested, as an operator's own calls are: what it runs makes no undo step of its own (the
+   * shot's Draw Mode, entered as it shows, made one after the edit's, so Undo undid nothing).
+   * The edit makes one for all it changed (ROUND6 EDIT-10, D17). */
+  wmWindowManager *wm = CTX_wm_manager(C);
+  wm->op_undo_depth++;
   const std::optional<std::string> undo = apply_edit(C, edit);
+  wm->op_undo_depth--;
   if (!undo) {
     return edit_failure.empty() ? IFACE_("This storyboard change could not be made.") :
                                   edit_failure;

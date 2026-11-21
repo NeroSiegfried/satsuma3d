@@ -1193,7 +1193,11 @@ final class RenderSession {
     present()
   }
 
-  func renderAnimation(_ animation: Bool) {
+  /** The Storyboard's edit, the workspace's sequencer scene, as an animation: every shot in turn
+   * with its sound and effects, not the one shot the window shows (ROUND6 EDIT-10, D17). */
+  func renderStory() { renderAnimation(true, story: true) }
+
+  func renderAnimation(_ animation: Bool, story: Bool = false) {
     /* One render at a time: a second request shows the one in progress. */
     if model.rendering {
       present()
@@ -1210,7 +1214,8 @@ final class RenderSession {
       }
     }
     begin(animation ? .frames : .still, id: id, folder: folder,
-          phase: animation ? "Starting" : "Rendering Image", verb: animation ? "animation" : "image")
+          phase: animation ? "Starting" : "Rendering Image",
+          verb: story ? "story" : animation ? "animation" : "image")
   }
 
   /** Render the frames an animation is still missing, from the first one. */
@@ -1609,6 +1614,9 @@ public final class SwiftRender: NSObject, UIAdaptivePresentationControllerDelega
 
   @objc(renderAnimation:)
   public func renderAnimation(_ animation: Bool) { session.renderAnimation(animation) }
+
+  /** The Storyboard's Render Story. */
+  public func renderStory() { session.renderStory() }
 
   /* The sheet was swiped away; a render goes on. */
   public func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {

@@ -1674,9 +1674,11 @@ void bridge_setting_execute(bContext *C, const BridgeSettingCommand &command)
         expression = "bl_ui.native_render.make_video(bpy.context, " + folder + ")";
       }
       else {
+        /* `story`: the workspace's sequencer scene, the Storyboard's edit (R6 EDIT-10). */
         expression = std::string("bl_ui.native_render.start(bpy.context, ") +
                      (verb == "image" ? "False" : "True") + ", " + folder + ", " +
-                     (verb == "continue" ? "True" : "False") + ")";
+                     (verb == "continue" ? "True" : "False") + ", " +
+                     (verb == "story" ? "True" : "False") + ")";
       }
     }
     BPY_run_string_eval(C, imports, expression.c_str());
@@ -5521,8 +5523,8 @@ views::CommandResult bridge_render_view_command(bContext *C,
   const std::string_view verb = target.substr(0, target.find(':'));
   const bool with_folder = verb.size() < target.size() && verb.size() + 1 < target.size();
   if (command.op() != views::protocol::Op::Invoke ||
-      !(ELEM(target, "image", "animation", "cancel", "clear") ||
-        (with_folder && ELEM(verb, "image", "animation", "continue", "video"))))
+      !(ELEM(target, "image", "animation", "story", "cancel", "clear") ||
+        (with_folder && ELEM(verb, "image", "animation", "story", "continue", "video"))))
   {
     r_error = "Not something rendering does";
     return views::CommandResult::Failed;

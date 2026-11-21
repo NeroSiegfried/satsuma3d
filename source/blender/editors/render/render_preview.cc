@@ -2281,6 +2281,10 @@ void ED_preview_icon_job(
     ip->scene = icon_scene;
     ip->depsgraph = BKE_scene_ensure_depsgraph(
         ip->bmain, ip->scene, BKE_view_layer_default_render(ip->scene));
+    /* The job draws the scene's evaluated copy, from its thread: a scene no window shows (a
+     * scene asset, or one an undo step just read back) has none yet, and drawing it crashed.
+     * Evaluated here, on the main thread (iPad port, ROUND6 EDIT-10). */
+    BKE_scene_graph_evaluated_ensure(ip->depsgraph, ip->bmain);
     ip->active_object = nullptr;
   }
   else {

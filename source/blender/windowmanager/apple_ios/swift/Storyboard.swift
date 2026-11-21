@@ -44,6 +44,11 @@ struct StoryboardShot: Equatable, Identifiable {
   var keys: [Int]
   /** Its scene's frames in the edit's: plus this. */
   var offset: Int
+  /** A sound or effect strip, which the storyboard does not edit: drawn where it is, locked, and
+   * moved with the rest by Blender when shots make room (ROUND6 EDIT-10, D17). */
+  var locked: Bool
+  /** What kind of strip it is, as Blender names it ("Sound", "Color"), for a locked one. */
+  var kind: String
 
   var id: String { name }
 
@@ -62,6 +67,8 @@ struct StoryboardShot: Equatable, Identifiable {
     aspect = json.double("aspect") ?? 16.0 / 9.0
     keys = ((json["keys"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.intValue }
     offset = json.int("offset") ?? 0
+    locked = json.bool("locked")
+    kind = json.string("kind") ?? ""
     pictures = ((json["pictures"] as? [Any]) ?? []).compactMap { entry in
       guard let pair = entry as? [Any], pair.count == 2, let frame = (pair[0] as? NSNumber)?.intValue,
             let path = pair[1] as? String else { return nil }
@@ -95,6 +102,8 @@ final class StoryboardModel {
   private(set) var loop = false
   private(set) var loopRange = 1...250
   private(set) var shots: [StoryboardShot] = []
+  /** The sound and effect strips, locked: shown, never edited here. */
+  private(set) var lockedStrips: [StoryboardShot] = []
   /** The scenes a shot can show instead. */
   private(set) var scenes: [String] = []
   /** The scene assets a new shot can start from, by name and where they are. */
@@ -120,7 +129,7 @@ final class StoryboardModel {
   /** How the pictures are asked for: the frames between them, and their height in pixels. */
   @ObservationIgnored private var pictureState: [Int] = []
 
-  var channels: Int { max(1, shots.map(\.channel).max() ?? 1) }
+  var channels: Int { max(1, (shots + lockedStrips).map(\.channel).max() ?? 1) }
 
   /** Set here, until Blender's snapshot shows it. */
   @ObservationIgnored private var loopPending = false
@@ -188,7 +197,10 @@ final class StoryboardModel {
       if let top = layers.first, !layers.contains(where: \.active) { activateLayer(top) }
     }
     let now = Date()
-    let next = snapshot.array("strips").map(StoryboardShot.init).map { shot in
+    let strips = snapshot.array("strips").map(StoryboardShot.init)
+    let locked = strips.filter(\.locked)
+    if locked != lockedStrips { lockedStrips = locked }
+    let next = strips.filter { !$0.locked }.map { shot in
       guard let kept = expected[shot.id] else { return shot }
       let agrees = kept.shot.start == shot.start && kept.shot.end == shot.end && kept.shot.channel == shot.channel
       if agrees || now > kept.until {
@@ -503,6 +515,11 @@ struct StoryboardView: View {
             .transition(.opacity.combined(with: .offset(y: -keyRailHeight)))
         }
       }
+      if opened == nil {
+        ForEach(model.lockedStrips) { strip in
+          lockedView(strip, laneHeight: laneHeight)
+        }
+      }
       if let opened {
         layerStrips(opened, top: rulerHeight + laneHeight)
           .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
@@ -742,6 +759,17 @@ struct StoryboardView: View {
       }
       .editorHeaderButton()
       .accessibilityIdentifier("blender.storyboard.add")
+      /* The whole edit, every shot in turn with its sound and effects, as Blender's Render
+       * Sequencer Animation: Share › Render Animation renders the one shot the window shows
+       * (ROUND6 EDIT-10, D17). */
+      Button {
+        ShellCommands.current?.render?.renderStory()
+      } label: {
+        Label("Render Story", systemImage: "film.stack")
+      }
+      .editorHeaderButton()
+      .disabled(model.shots.isEmpty || ShellCommands.current?.render == nil)
+      .accessibilityIdentifier("blender.storyboard.render")
       EditorCloseButton(label: "Close Story", action: timeline.toggleStoryboard)
     }
     .padding(.horizontal, 12)
@@ -1224,11 +1252,43 @@ struct StoryboardView: View {
     .accessibilityAddTraits(shot.selected ? [.isSelected, .isButton] : .isButton)
   }
 
+  /** A sound or effect strip where it is, locked: the storyboard edits only shots, and moves
+   * these with them as shots make room. The Video Sequencer, in the Desktop Interface, edits
+   * them. */
+  private func lockedView(_ strip: StoryboardShot, laneHeight: CGFloat) -> some View {
+    let width = max(8, x(strip.end) - x(strip.start) - 2)
+    let height = laneHeight - 6
+    let top = rulerHeight + CGFloat(strip.channel - 1) * (laneHeight + railHeight) + 3
+    let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+    return HStack(spacing: 4) {
+      Image(systemName: "lock.fill")
+        .font(.system(size: 9, weight: .bold))
+      if width >= 60 {
+        Text(strip.kind.isEmpty ? strip.name : "\(strip.kind): \(strip.name)")
+          .lineLimit(1)
+      }
+    }
+    .font(.caption2.weight(.semibold))
+    .foregroundStyle(.secondary)
+    .padding(.horizontal, 6)
+    .frame(width: width, height: height, alignment: .leading)
+    .background(tagColor(strip.color).opacity(0.18), in: shape)
+    .overlay(shape.strokeBorder(Color.white.opacity(0.15), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+    .opacity(strip.muted ? 0.45 : 1)
+    .offset(x: x(strip.start) + 1, y: top)
+    .allowsHitTesting(false)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("\(strip.kind.isEmpty ? "Strip" : strip.kind) \(strip.name), locked")
+    .accessibilityValue("Frames \(strip.start) to \(strip.end - 1)")
+  }
+
   /** What can be done with a chosen shot, as the system's edit menu over it. */
   private func shotMenu(_ shot: StoryboardShot) -> UIMenu {
     UIMenu(children: [
       UIAction(title: "Edit", image: UIImage(systemName: "arrow.up.forward.square")) { _ in model.enter(shot) },
-      UIAction(title: "Duplicate", image: UIImage(systemName: "plus.square.on.square")) { _ in
+      /* Only a shot has a scene to copy (D17). */
+      UIAction(title: "Duplicate", image: UIImage(systemName: "plus.square.on.square"),
+               attributes: shot.sceneStrip ? [] : .disabled) { _ in
         model.send("duplicate", ["name": shot.name])
       },
       UIAction(title: "Rename…", image: UIImage(systemName: "pencil")) { _ in
@@ -1268,7 +1328,9 @@ struct StoryboardView: View {
         newName = shot.name
         renaming = shot
       }
-      Button("Duplicate", systemImage: "plus.square.on.square") { model.send("duplicate", ["name": shot.name]) }
+      if shot.sceneStrip {
+        Button("Duplicate", systemImage: "plus.square.on.square") { model.send("duplicate", ["name": shot.name]) }
+      }
       let drawings = Array(selectedKeys.frames(of: "shot:" + shot.name))
       if !drawings.isEmpty {
         Button(drawings.count == 1 ? "Delete Drawing" : "Delete \(drawings.count) Drawings", systemImage: "trash",

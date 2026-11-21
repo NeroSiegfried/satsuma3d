@@ -5,6 +5,7 @@
 """Sweeps of the iPad shell's Swift sources for constructs that are known to go wrong on the
 device, so a class of fault found once cannot come back (ROUND5 Stage 6). The Swift itself is
 only compiled by the iPad build; this reads it as text, so it runs with any Blender build."""
+import ast
 import json
 import re
 from pathlib import Path
@@ -1493,7 +1494,7 @@ check('AVAssetWriter' not in render_swift and 'BlenderRender.start(' in render_s
       'Continue from Frame' in render_swift and 'Make Video of' in render_swift and
       'Save Frames to Files…' in render_swift and '"Stop Rendering?"' in render_swift and
       'NativeViews.shared.outcome(of: sent)' in render_swift and
-      'ELEM(verb, "image", "animation", "continue", "video")' in bridge_text and
+      'ELEM(verb, "image", "animation", "story", "continue", "video")' in bridge_text and
       'WM_jobs_has_running(wm)' in bridge_text and
       'def make_video(' in render_py and 'MANIFEST = "Render.json"' in render_py,
       "R6 BUSY-3: renders keep their frames, continue, make videos with FFmpeg, and ask before losing work")
@@ -2038,4 +2039,34 @@ check('ImageUser user = {};' not in image_cc_e9.replace('ImageUser user = {};\n 
 image_swift_e9 = (SWIFT / 'ImageEditor.swift').read_text(encoding='utf-8')
 check('model.send("save_as")' in image_swift_e9 and '"IMAGE_OT_save_as", wm::OpCallContext::InvokeDefault' in image_cc_e9,
       "R6 EDIT-9 (D21): Save As runs Blender's own operator with its options and picker")
+# ROUND6 EDIT-10 (D17): the storyboard publishes every strip (sound and effects locked), makes room
+# with Blender's all-channel shift, runs operators nested so each edit is one undo step of its own,
+# and every action it takes is driven by the harness's `storyboard` scenario (undo and redo of each)
+# or named as a view action that is not an undo step.
+story_cc_e10 = (SWIFT.parents[2] / 'editors/space_sequencer/sequencer_native.cc').read_text(encoding='utf-8')
+apply_e10 = story_cc_e10[story_cc_e10.index('std::optional<std::string> apply_edit('):]
+apply_e10 = apply_e10[:apply_e10.index('\n}\n')]
+actions_e10 = set(re.findall(r'action == "(\w+)"', apply_e10))
+harness_e10 = (SWIFT.parents[1] / 'native_ui/tests/mac_bridge_harness.py').read_text(encoding='utf-8')
+edits_e10 = ast.literal_eval(re.search(r'STORYBOARD_EDITS = (\([^)]*\))', harness_e10).group(1))
+views_e10 = ast.literal_eval(re.search(r'STORYBOARD_VIEW_ACTIONS = (\([^)]*\))', harness_e10).group(1))
+driven_e10 = {name.split()[0] for name in edits_e10} | set(views_e10)
+check(len(actions_e10) >= 20 and actions_e10 <= driven_e10,
+      "R6 EDIT-10 (D17): every storyboard action is driven with undo and redo, or is a view action (%s)" %
+      sorted(actions_e10 - driven_e10))
+check('item->append_int("locked", 1);' in story_cc_e10 and
+      'seq::transform_offset_after_frame(' in story_cc_e10 and 'strip.channel == channel' not in story_cc_e10,
+      "R6 EDIT-10 (D17): sound and effects are published locked and moved with the shots")
+check(apply_e10.count('WM_operator_name_call(') == 1 and 'SCREEN_OT_animation_play' in apply_e10 and
+      'wm->op_undo_depth++;' in story_cc_e10 and 'return "";' not in apply_e10.replace(
+          'return "";\n  }\n  if (action == "loop")', '').replace(
+          'return "";\n  }\n  if (action == "play")', '').replace(
+          'return "";\n  }\n  if (action == "sync")', '').replace(
+          'return "";\n  }\n  if (action == "select")', ''),
+      "R6 EDIT-10 (D17): operators run nested and every data edit names its one undo step")
+storyboard_swift_e10 = (SWIFT / 'Storyboard.swift').read_text(encoding='utf-8')
+render_py_e10 = (SWIFT.parents[4] / 'scripts/startup/bl_ui/native_render.py').read_text(encoding='utf-8')
+check('renderStory()' in storyboard_swift_e10 and 'use_sequencer_scene' in render_py_e10 and
+      '"story"' in bridge_e8,
+      "R6 EDIT-10 (D17): Render Story renders the workspace's sequencer scene")
 print('PASS: native shell sources ' + json.dumps(checks))

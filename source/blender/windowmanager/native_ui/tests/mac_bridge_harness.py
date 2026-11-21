@@ -6223,6 +6223,16 @@ def canvas_command(subscription, target, op, params, command_id):
             FloatValue.Start(builder)
             FloatValue.AddValue(builder, value)
             kind, v = Value.Value.FloatValue, FloatValue.End(builder)
+        elif isinstance(value, (list, tuple)):
+            # A list of integers, such as the storyboard's frames (ROUND6 EDIT-10).
+            from Blender.NativeUI import IntsValue
+            IntsValue.StartValueVector(builder, len(value))
+            for number in reversed(value):
+                builder.PrependInt64(int(number))
+            numbers = builder.EndVector()
+            IntsValue.Start(builder)
+            IntsValue.AddValue(builder, numbers)
+            kind, v = Value.Value.IntsValue, IntsValue.End(builder)
         else:
             text = builder.CreateString(str(value))
             TextValue.Start(builder)
@@ -6908,6 +6918,363 @@ def tick_renderimage():
     return 0.3
 
 
+# ROUND6 EDIT-10 (D17): the Storyboard shows every strip of the edit (sound and effects as locked
+# blocks), moves them with the shots when a shot makes room, makes one undo step per edit (one Undo
+# gives back exactly the state before it, one Redo the state after), checks before it changes
+# anything, and Render Story renders the sequencer scene, not the shot the window shows. Every
+# action `sequencer_native.cc` takes is one of STORYBOARD_EDITS or STORYBOARD_VIEW_ACTIONS, which
+# `bl_native_shell_sources.py` checks: a new action fails it until it is driven here.
+STORYBOARD_EDITS = (
+    "select", "add", "duplicate", "move", "trim", "rename", "set_scene", "template", "add template",
+    "layer_rename", "layer_clear", "shot_keys_move", "shot_keys_delete", "layer_keys_move",
+    "layer_keys_delete", "layer_add", "layer_active", "layer_move", "layer_visible", "layer_lock",
+    "layer_duplicate", "layer_delete", "delete")
+# The playhead, the loop (Blender's preview range), playback and scene sync change what is shown,
+# not the file: no undo step, as Blender's own do not make one either.
+STORYBOARD_VIEW_ACTIONS = ("frame", "loop", "play", "sync")
+storyboard_state = {"at": 0, "problems": [], "found": {}, "index": 0, "phase": "setup"}
+
+
+def _story():
+    return bpy.data.scenes.get("Story Edit")
+
+
+def _story_strip(name):
+    return _story().sequence_editor.strips.get(name)
+
+
+def _story_snapshot():
+    story = _story()
+    strips = sorted((st.name, st.channel, st.left_handle, st.right_handle, bool(st.select),
+                     st.scene.name if st.type == 'SCENE' and st.scene else "")
+                    for st in story.sequence_editor.strips)
+    shots = {}
+    for scene in bpy.data.scenes:
+        if scene == story:
+            continue
+        layers = []
+        for ob in scene.objects:
+            if ob.type != 'GREASEPENCIL':
+                continue
+            data = ob.data
+            active = data.layers.active.name if data.layers.active else ""
+            for layer in data.layers:
+                layers.append((ob.name, layer.name, layer.name == active, bool(layer.lock), bool(layer.hide),
+                               sorted(f.frame_number for f in layer.frames),
+                               sum(len(f.drawing.strokes) for f in layer.frames if f.drawing)))
+        shots[scene.name] = {"layers": layers, "template": scene.asset_data is not None}
+    return {"mark": story.get("mark"), "strips": strips, "shots": shots,
+            "markers": sorted((m.name, m.frame) for m in story.timeline_markers)}
+
+
+def _story_records():
+    view = views.get(subs["storyboard"], {"nodes": {}})
+    return [node.get("record", {}) for node in view["nodes"].values() if "record" in node]
+
+
+def _story_shown_layers():
+    """The drawing shown: its object and layer names, as the storyboard's layer edits take them."""
+    ob = bpy.context.view_layer.objects.active
+    if not ob or ob.type != 'GREASEPENCIL':
+        return None, []
+    return ob, [layer.name for layer in ob.data.layers]
+
+
+def _story_params(name):
+    """The edit to send for `name`, from the edit as it is now, and what it must have done."""
+    story = _story()
+    found = storyboard_state["found"]
+    ob, layers = _story_shown_layers()
+
+    def aligned():
+        # The effects and sound stay where they were against shot B, whatever moved.
+        b = _story_strip("Shot B")
+        out = []
+        for other in ("Tint", "Title", "Blur", "Music"):
+            st = _story_strip(other)
+            if st is not None and b is not None and st.left_handle != b.left_handle:
+                out.append("%s starts at %d, Shot B at %d" % (other, st.left_handle, b.left_handle))
+        return out
+
+    if name == "select":
+        return {"action": "select", "name": "Shot A"}, lambda: [] if _story_strip("Shot A").select else ["Shot A not selected"]
+    if name == "add":
+        return {"action": "add"}, aligned
+    if name == "duplicate":
+        return {"action": "duplicate", "name": "Shot A"}, aligned
+    if name == "move":
+        b = _story_strip("Shot B")
+        return {"action": "move", "name": "Shot B", "start": b.left_handle + 6, "channel": 1}, lambda: [
+            "Blur did not follow Shot B"] if _story_strip("Blur").left_handle != _story_strip("Shot B").left_handle else []
+    if name == "trim":
+        a = _story_strip("Shot A")
+        end = a.right_handle - 4
+        return {"action": "trim", "name": "Shot A", "side": "right", "frame": end}, lambda: [] if _story_strip("Shot A").right_handle == end else ["Shot A not trimmed"]
+    if name == "rename":
+        return {"action": "rename", "name": "Shot A", "value": "Opening"}, lambda: [] if _story_strip("Opening") else ["not renamed"]
+    if name == "set_scene":
+        return {"action": "set_scene", "name": "Opening", "value": "Scene B"}, lambda: [] if _story_strip("Opening").scene.name == "Scene B" else ["scene not set"]
+    if name == "template":
+        return {"action": "template", "name": "Shot B", "value": 1}, lambda: [] if bpy.data.scenes["Scene B"].asset_data else ["not a template"]
+    if name == "add template":
+        template = next((r for r in _story_records() if r.get("name") == "Scene B" and r.get("id")), None)
+        found["template listed"] = bool(template)
+        if not template:
+            return None, None
+        count = len(story.sequence_editor.strips)
+        return {"action": "add", "template": template["id"]}, lambda: [] if len(_story().sequence_editor.strips) == count + 1 else ["no shot added"]
+    if name in ("shot_keys_move", "shot_keys_delete"):
+        strip = story.sequence_editor.active_strip
+        if strip is None or strip.type != 'SCENE' or ob is None:
+            return None, None
+        frame = strip.left_handle  # The shot's first frame: its drawings' key at frame 1.
+        if name == "shot_keys_move":
+            return {"action": name, "name": strip.name, "frames": [frame], "delta": 2}, None
+        return {"action": name, "name": strip.name, "frames": [frame + 2]}, None
+    if name == "delete":
+        count = len(story.sequence_editor.strips)
+        return {"action": "delete", "name": "Shot B"}, lambda: [] if _story_strip("Shot B") is None else ["not deleted"]
+    if ob is None:
+        return None, None
+    if name == "layer_rename":
+        return {"action": name, "layer": "Lines", "value": "Ink"}, lambda: [] if "Ink" in _story_shown_layers()[1] else ["not renamed"]
+    if name == "layer_clear":
+        return {"action": name, "layer": "Ink"}, None
+    if name == "layer_keys_move":
+        ob.data.layers["Ink"].frames.new(5)
+        return {"action": name, "layer": "Ink", "frames": [5], "delta": 1}, None
+    if name == "layer_keys_delete":
+        return {"action": name, "layer": "Ink", "frames": [6]}, None
+    if name == "layer_add":
+        return {"action": name}, lambda: [] if len(_story_shown_layers()[1]) == len(layers) + 1 else ["no layer added"]
+    if name == "layer_active":
+        return {"action": name, "layer": "Ink"}, None
+    if name == "layer_move":
+        other = next((n for n in layers if n != "Ink"), None)
+        return ({"action": name, "layer": "Ink", "target": other, "above": 1}, None) if other else (None, None)
+    if name == "layer_visible":
+        return {"action": name, "layer": "Ink", "value": 0}, None
+    if name == "layer_lock":
+        return {"action": name, "layer": "Ink", "value": 1}, None
+    if name == "layer_duplicate":
+        return {"action": name, "layer": "Ink"}, lambda: [] if len(_story_shown_layers()[1]) == len(layers) + 1 else ["no layer duplicated"]
+    if name == "layer_delete":
+        extra = next((n for n in layers if n not in ("Ink", "Lines")), None)
+        return ({"action": name, "layer": extra}, None) if extra else (None, None)
+    return None, None
+
+
+def _story_setup():
+    story = bpy.data.scenes.new("Story Edit")
+    story.render.resolution_x, story.render.resolution_y = 64, 36
+    story.render.resolution_percentage = 100
+    story.render.image_settings.file_format = 'PNG'
+    story.view_settings.view_transform = 'Standard'
+    for letter in ("A", "B"):
+        scene = bpy.data.scenes.new("Scene " + letter)
+        scene.render.engine = 'BLENDER_WORKBENCH'
+        scene.render.resolution_x, scene.render.resolution_y = 64, 36
+        scene.frame_start, scene.frame_end = 1, 24
+        camera = bpy.data.objects.new("Camera " + letter, bpy.data.cameras.new("Camera " + letter))
+        scene.collection.objects.link(camera)
+        scene.camera = camera
+        drawing = bpy.data.objects.new("Drawing " + letter, bpy.data.grease_pencils.new("Drawing " + letter))
+        scene.collection.objects.link(drawing)
+        layer = drawing.data.layers.new("Lines")
+        layer.frames.new(1).drawing.add_strokes([3])
+    ed = story.sequence_editor_create()
+    ed.strips.new_scene("Shot A", bpy.data.scenes["Scene A"], 1, 1)
+    b = ed.strips.new_scene("Shot B", bpy.data.scenes["Scene B"], 1, 25)
+    tint = ed.strips.new_effect("Tint", 'COLOR', 2, 25, length=24)
+    tint.color = (1.0, 0.0, 0.0)
+    ed.strips.new_effect("Title", 'TEXT', 3, 25, length=12)
+    ed.strips.new_effect("Blur", 'GAUSSIAN_BLUR', 5, 25, input1=b)
+    found = storyboard_state["found"]
+    try:
+        import wave
+        path = os.path.join(os.path.dirname(REPORT), "story.wav")
+        with wave.open(path, "wb") as f:
+            f.setnchannels(1)
+            f.setsampwidth(2)
+            f.setframerate(8000)
+            f.writeframes(b"\0\0" * 8000)
+        ed.strips.new_sound("Music", path, 4, 25)
+        found["sound"] = "added"
+    except Exception as ex:
+        found["sound"] = "not added: %s" % ex
+    story.timeline_markers.new("Cut", frame=30)
+    story.frame_start, story.frame_end = 1, 48
+    bpy.context.workspace.sequencer_scene = story
+    # The window follows the shot under the playhead, as the Storyboard's own story scene does.
+    bpy.context.workspace.use_scene_time_sync = True
+
+
+def tick_storyboard():
+    global step
+    state = storyboard_state
+    problems = state["problems"]
+    found = state["found"]
+    try:
+        pump()
+        step += 1
+        at = state["at"]
+        state["at"] += 1
+        phase = state["phase"]
+        if phase == "setup":
+            if at == 0:
+                lib.WM_native_ui_test_install_hooks()
+                enter("object")
+                _story_setup()
+                subs["storyboard"] = subscribe("storyboard")
+                canvas_command(subs["storyboard"], "state", Op.Op.Set, {"step": 12, "height": 32}, 7700)
+            elif at == 4:
+                # Every strip is published: the locked ones as such.
+                records = [r for r in _story_records() if "channel" in r and "end" in r]
+                published = sorted(r.get("name") for r in records)
+                locked = sorted(r.get("name") for r in records if r.get("locked"))
+                strips = _story().sequence_editor.strips
+                found["published"], found["locked"] = published, locked
+                if published != sorted(st.name for st in strips):
+                    problems.append("EDIT-10: the storyboard publishes %r of %r" % (published, sorted(st.name for st in strips)))
+                hidden = sorted(st.name for st in strips if st.type in ('SOUND', 'COLOR', 'TEXT', 'GAUSSIAN_BLUR'))
+                if locked != hidden:
+                    problems.append("EDIT-10: locked strips %r, not the sound and effects %r" % (locked, hidden))
+                state["phase"], state["wait"] = "edit", 0
+            return 0.3
+        if phase == "edit":
+            index = state["index"]
+            if index >= len(STORYBOARD_EDITS):
+                state["phase"], state["at"] = "refuse", 0
+                return 0.3
+            name = STORYBOARD_EDITS[index]
+            sub = state.setdefault("sub", 0)
+            state["sub"] += 1
+            if sub == 0:
+                params, check = _story_params(name)
+                if params is None:
+                    # The template list loads in the background: wait for it a while.
+                    state["wait"] += 1
+                    if state["wait"] < 40:
+                        state["sub"] = 0
+                        return 0.3
+                    problems.append("EDIT-10: %s could not be driven (nothing to edit)" % name)
+                    state["index"], state["sub"], state["wait"] = index + 1, 0, 0
+                    return 0.3
+                state["wait"] = 0
+                story = _story()
+                story["mark"] = index
+                bpy.ops.ed.undo_push(message="harness story %d" % index)
+                state["before"] = _story_snapshot()
+                state["check"] = check
+                canvas_command(subs["storyboard"], "edit", Op.Op.Invoke, dict(params, sequence=index + 1), 7710 + index)
+            elif sub == 3:
+                answer = acks.get(7710 + index)
+                after = _story_snapshot()
+                state["after"] = after
+                if answer != "ok":
+                    problems.append("EDIT-10: %s was refused: %r" % (name, answer))
+                elif after == state["before"]:
+                    problems.append("EDIT-10: %s changed nothing" % name)
+                check = state.get("check")
+                for problem in (check() if check else []):
+                    problems.append("EDIT-10: %s: %s" % (name, problem))
+            elif sub == 4:
+                # Undo waits for jobs, as the shell's does: a template's preview renders as a job.
+                if any(bpy.app.is_job_running(kind) for kind in ('RENDER_PREVIEW', 'RENDER')) and state["wait"] < 40:
+                    state["wait"] += 1
+                    state["sub"] = 4
+                    return 0.3
+                state["wait"] = 0
+                bpy.ops.ed.undo()
+            elif sub == 6:
+                undone = _story_snapshot()
+                if undone != state["before"]:
+                    diff = {k: [state["before"][k], undone[k]] for k in undone if undone[k] != state["before"].get(k)}
+                    problems.append("EDIT-10: one Undo after %s does not give back the state before it: %r" % (name, diff))
+                bpy.ops.ed.redo()
+            elif sub == 8:
+                redone = _story_snapshot()
+                if redone != state["after"]:
+                    diff = {k: [state["after"][k], redone[k]] for k in redone if redone[k] != state["after"].get(k)}
+                    problems.append("EDIT-10: one Redo after %s does not give back the state after it: %r" % (name, diff))
+                found.setdefault("driven", []).append(name)
+                state["index"], state["sub"] = index + 1, 0
+            return 0.3
+        if phase == "refuse":
+            # Duplicate on a strip that is not a shot is refused before anything moves.
+            if at == 0:
+                state["before"] = _story_snapshot()
+                canvas_command(subs["storyboard"], "edit", Op.Op.Invoke, {"action": "duplicate", "name": "Tint", "sequence": 99}, 7799)
+            elif at == 3:
+                found["duplicate an effect"] = acks.get(7799)
+                if acks.get(7799) in (None, "ok"):
+                    problems.append("EDIT-10: Duplicate of an effect strip was not refused: %r" % acks.get(7799))
+                if _story_snapshot() != state["before"]:
+                    problems.append("EDIT-10: a refused Duplicate changed the edit")
+                state["phase"], state["at"] = "render", 0
+            return 0.3
+        if phase == "render":
+            story = _story()
+            if at == 0:
+                tint = _story_strip("Tint")
+                for other in ("Title", "Blur"):
+                    if _story_strip(other):
+                        _story_strip(other).mute = True
+                story.frame_start = tint.left_handle
+                story.frame_end = tint.left_handle + 1
+                state["folder"] = os.path.join(os.path.dirname(REPORT), "story frames")
+                subs["render"] = subscribe("render")
+                found["window scene"] = bpy.context.window_manager.windows[0].scene.name
+                state["written"] = []
+                bpy.app.handlers.render_write.append(lambda s, *_: state["written"].append((s.name, s.frame_current)))
+                invoke(subs["render"], "story:" + state["folder"], 7800)
+                state["sent"] = time.monotonic()
+                return 0.3
+            value = _render_state()
+            if value("state") in ("done", "error", "cancelled") and at > 3:
+                found["render"] = {"state": value("state"), "message": value("message")}
+                manifest_path = os.path.join(state["folder"], "Render.json")
+                manifest = json.load(open(manifest_path)) if os.path.exists(manifest_path) else {}
+                found["manifest"] = {k: manifest.get(k) for k in ("scene", "story", "wanted")}
+                found["files"] = sorted(os.listdir(state["folder"])) if os.path.isdir(state["folder"]) else None
+                found["render"].update(done=value("done"), total=value("total"), written=state.get("written"),
+                                       answer=acks.get(7800))
+                if value("state") != "done" or manifest.get("scene") != "Story Edit" or not manifest.get("story"):
+                    problems.append("EDIT-10: Render Story did not render the story: %r" % found["render"])
+                frames = sorted(manifest.get("frames", {}).values())
+                if len(frames) != 2:
+                    problems.append("EDIT-10: Render Story wrote %r, not the story's two frames" % frames)
+                elif found["window scene"] == "Story Edit":
+                    problems.append("EDIT-10: the window shows the story itself, so the render proves nothing")
+                else:
+                    image = bpy.data.images.load(os.path.join(state["folder"], frames[0]))
+                    w, h = image.size
+                    i = ((h // 2) * w + w // 2) * 4
+                    pixel = list(image.pixels[i:i + 3])
+                    found["pixel"] = [round(c, 2) for c in pixel]
+                    # The Tint strip over the shots: red, not the shot the window shows.
+                    if not (pixel[0] > 0.8 and pixel[1] < 0.2 and pixel[2] < 0.2):
+                        problems.append("EDIT-10: Render Story's frame is %r, not the story's red Tint" % found["pixel"])
+                report["found"] = found
+                report["problems"] = problems
+                finish("done" if not problems else "error")
+                return None
+            if time.monotonic() - state["sent"] > 180:
+                problems.append("EDIT-10: Render Story did not end in 180 s: %r" % value("state"))
+                report["found"] = found
+                report["problems"] = problems
+                finish("error")
+                return None
+            return 0.5
+    except Exception:
+        report["error"] = traceback.format_exc()
+        report["found"] = found
+        report["problems"] = problems
+        finish("error")
+        return None
+    return 0.3
+
+
 # Every scenario, by the name `mac_bridge_check.py --scenario` takes: the one list (ROUND7 U4d).
 # `mac_bridge_check.py`'s SCENARIOS must name exactly these, which `bl_native_test_runners.py`
 # checks; a name not here ends the run with an error, never another scenario's run.
@@ -6923,7 +7290,7 @@ SCENARIOS = {
     "header": tick_header, "popups": tick_popups, "statuskeys": tick_statuskeys,
     "answers": tick_answers, "animkeys": tick_animkeys, "nodegroups": tick_nodegroups,
     "timelinekeys": tick_timelinekeys, "assettap": tick_assettap,
-    "renderimage": tick_renderimage,
+    "renderimage": tick_renderimage, "storyboard": tick_storyboard,
 }
 
 

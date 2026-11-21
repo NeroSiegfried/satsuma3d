@@ -380,10 +380,15 @@ def _save_still(scene, folder):
 
 def _invoke(scene, animation):
     """Start Blender's render job for `scene`. Without a window (a background session) the render
-    runs to its end here, and what follows it runs as it returns."""
+    runs to its end here, and what follows it runs as it returns. The story is the workspace's
+    sequencer scene, rendered as Blender's Render Sequencer Animation does (ROUND6 EDIT-10)."""
+    if _job.get("story"):
+        which = {"use_sequencer_scene": True}
+    else:
+        which = {"scene": scene.name}
     if bpy.app.background:
         _job["synchronous"] = True
-        result = bpy.ops.render.render('EXEC_DEFAULT', animation=animation, scene=scene.name)
+        result = bpy.ops.render.render('EXEC_DEFAULT', animation=animation, **which)
         _follow_up()
         return result
     window = bpy.context.window
@@ -394,8 +399,8 @@ def _invoke(scene, animation):
         if window is None:
             raise RuntimeError("There is no window to render from.")
         with bpy.context.temp_override(window=window, screen=window.screen):
-            return bpy.ops.render.render('INVOKE_DEFAULT', animation=animation, scene=scene.name)
-    return bpy.ops.render.render('INVOKE_DEFAULT', animation=animation, scene=scene.name)
+            return bpy.ops.render.render('INVOKE_DEFAULT', animation=animation, **which)
+    return bpy.ops.render.render('INVOKE_DEFAULT', animation=animation, **which)
 
 
 def _run(scene, animation):
@@ -409,10 +414,12 @@ def _run(scene, animation):
         _end(state="error", message="Rendering could not start.")
 
 
-def start(context, animation, folder=None, resume=False):
+def start(context, animation, folder=None, resume=False, story=False):
     """Render the image, or the animation when `animation` is true, into `folder` (the iPad's
     folder for this render; a temporary one when not given). With `resume`, the animation in
-    `folder` goes on from its first missing frame. Never raises: what goes wrong is the state."""
+    `folder` goes on from its first missing frame. With `story`, the animation is the workspace's
+    sequencer scene, the edit the Storyboard shows, not the shot the window shows (ROUND6 EDIT-10,
+    D17); a resumed story stays one. Never raises: what goes wrong is the state."""
     global _restore, _display, _job
     if _state.get("state") == "rendering" and _job is not None:
         return  # The iPad shows the render in progress.
@@ -420,14 +427,36 @@ def start(context, animation, folder=None, resume=False):
         _set_state(state="error", message="Something is already rendering. Wait for it, or stop it.")
         return
     try:
-        _start(context, animation, folder, resume)
+        _start(context, animation, folder, resume, story)
     except Exception as ex:
         _end(state="error", message=str(ex) or type(ex).__name__)
 
 
-def _start(context, animation, folder, resume):
+def story_scene(context):
+    """The scene the Storyboard edits, the workspace's sequencer scene, or None."""
+    workspace = context.workspace
+    return workspace.sequencer_scene if workspace else None
+
+
+def _start(context, animation, folder, resume, story=False):
     global _restore, _display, _job
-    scene = context.scene
+    if resume and folder is not None:
+        story = story or bool((_read_manifest(folder) or {}).get("story"))
+    if story:
+        scene = story_scene(context)
+        if not animation:
+            _set_state(state="error", message="Only the whole story can be rendered from it.")
+            return
+        if scene is None or not (scene.sequence_editor and scene.sequence_editor.strips_all):
+            _set_state(state="error", message="The story has no shots to render.")
+            return
+        if not scene.render.use_sequencer:
+            _set_state(state="error", message=(
+                "The story's Output has Sequencer turned off, so it would render no shots. "
+                "Turn it on in its Output properties."))
+            return
+    else:
+        scene = context.scene
     if scene.camera is None and not (scene.render.use_sequencer and scene.sequence_editor and
                                      scene.sequence_editor.strips_all):
         _set_state(state="error", message="Add a camera to the scene to render it.")
@@ -454,7 +483,7 @@ def _start(context, animation, folder, resume):
             manifest = {"version": 1, "frames": {}}
         render = scene.render
         manifest.update(
-            scene=scene.name, format=plan["format"], ext=plan["ext"], movie=plan["movie"],
+            scene=scene.name, story=bool(story), format=plan["format"], ext=plan["ext"], movie=plan["movie"],
             linear=plan["linear"], wanted=_scene_frames(scene), fps=render.fps / render.fps_base,
             width=int(render.resolution_x * render.resolution_percentage / 100),
             height=int(render.resolution_y * render.resolution_percentage / 100),
@@ -480,7 +509,8 @@ def _start(context, animation, folder, resume):
         render.use_overwrite = False
         render.use_placeholder = False
 
-    _job = {"folder": folder, "animation": bool(animation), "manifest": manifest, "phase": "frames"}
+    _job = {"folder": folder, "animation": bool(animation), "manifest": manifest, "phase": "frames",
+            "story": bool(story)}
     done = len(manifest["frames"]) if animation else 0
     _set_state(
         state="rendering",
