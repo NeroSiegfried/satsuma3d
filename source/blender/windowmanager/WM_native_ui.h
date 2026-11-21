@@ -128,6 +128,12 @@ bool WM_native_ui_busy_label(char *label, size_t size);
 /** A line of the session's log (see `WM_native_ui_session_log`), from the interface's own code:
  * \a kind such as "layout" or "reveal". Safe from any thread. */
 void WM_native_ui_log(const char *kind, const char *text);
+/** As #WM_native_ui_log for a state that is worked out again and again (each menu build, each
+ * frame, each layout pass): written only when \a text differs from what \a topic last wrote, so
+ * the log says each change once and nothing per frame (ROUND6 §0 rule 7). An empty \a text
+ * writes nothing and forgets the last line, so the same line after it is said again (a fault that
+ * went away and came back). Safe from any thread. */
+void WM_native_ui_log_changed(const char *kind, const char *topic, const char *text);
 /** One `msgbus` line in the session's log: what the message guard (#WM_native_ui_msgbus_guard)
  * did this session, \a when ("closed", "leaving"). Only when it handled a message since the last
  * such line, unless \a always. Safe from any thread (ROUND7 U4b). */

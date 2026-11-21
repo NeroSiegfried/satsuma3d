@@ -2826,13 +2826,15 @@ std::shared_ptr<io::serialize::Value> bridge_python_value(bContext *C,
   BridgeTimer timer(part);
   const char *imports[] = {"bpy", "bl_ui", nullptr};
   std::shared_ptr<io::serialize::Value> value = BPY_run_string_as_value(C, imports, expression, nullptr);
-  if (!value) {
-    /* Python's error goes to the console, which a device does not keep: say it in the session's
-     * log, or a whole feature fails without a trace (Stage 2A's reveal rules did, for a day). */
-    WM_native_ui_session_log("error", (std::string("python ") + part + " failed: " +
-                                       std::string(expression).substr(0, 120))
-                                          .c_str());
-  }
+  /* Python's error goes to the console, which a device does not keep: say it in the session's
+   * log, or a whole feature fails without a trace (Stage 2A's reveal rules did, for a day). Views
+   * are built again and again: said when it starts failing, and again after it worked. */
+  const std::string topic = std::string("python ") + part;
+  WM_native_ui_log_changed(
+      "error",
+      topic.c_str(),
+      value ? "" :
+              (topic + " failed: " + std::string(expression).substr(0, 120)).c_str());
   return value;
 #else
   UNUSED_VARS(C, part, expression);
@@ -6235,6 +6237,26 @@ extern "C" void WM_native_ui_log(const char *kind, const char *text)
   }
 }
 
+extern "C" void WM_native_ui_log_changed(const char *kind, const char *topic, const char *text)
+{
+  if (kind == nullptr || topic == nullptr || text == nullptr) {
+    return;
+  }
+  {
+    static std::mutex mutex;
+    static Map<std::string, std::string> last;
+    std::scoped_lock lock(mutex);
+    std::string &said = last.lookup_or_add_default(topic);
+    if (said == text) {
+      return;
+    }
+    said = text;
+  }
+  if (text[0] != '\0') {
+    WM_native_ui_session_log(kind, text);
+  }
+}
+
 void WM_native_ui_notice(const int level, const char *text, const char *button)
 {
   if (text == nullptr || text[0] == '\0') {
@@ -9212,7 +9234,9 @@ bool WM_native_ui_view3d_frame_insets(const wmWindow *win,
       region->winrct.ymin,
       region->winrct.ymax,
       used || top + bottom == 0 ? "" : " (top and bottom not used: too little left)");
-  WM_native_ui_log("viewport", line.c_str());
+  /* Worked out at every menu build and command with no position (ROUND6 TOUCH-7): said only
+   * when it changes (device round: 60 identical lines a second at launch). */
+  WM_native_ui_log_changed("viewport", "frame insets", line.c_str());
   if (used) {
     *r_top = top;
     *r_bottom = bottom;

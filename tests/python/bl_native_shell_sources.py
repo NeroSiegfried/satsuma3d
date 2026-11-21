@@ -2170,3 +2170,65 @@ guide_e = guide_e[guide_e.index('struct GestureGuide: View {'):guide_e.index('st
 check('List {' not in guide_e and 'Section {' not in guide_e and '.background(' not in guide_e,
       "How to Use separates its sections with space and a plain heading, not boxes")
 print('PASS: sheets separate with space ' + json.dumps(len(tinted_found)))
+
+# Device round (2026-11-21), ROUND6 §0 rule 7 "nothing per frame": `viewport frame insets …` was
+# written at every menu build (about 60 lines a second at launch). What is worked out again and
+# again says a line only when it changes (`WM_native_ui_log_changed`). Swept: everything the view
+# builders, the frame insets and the pointer's middle reach in `wm_native_ui.cc` (the call graph
+# within the file), and in Swift what layout passes, display links and view bodies reach. A
+# logging function reached from them must compare with what it said last (`!=` or a `guard`
+# before the line), or be listed here with why it is said once.
+native_n3 = c_code_only((SWIFT.parents[1] / 'intern/wm_native_ui.cc').read_text(encoding='utf-8'))
+bodies_n3 = {}
+for m in re.finditer(r'^(?:[A-Za-z_][\w:<>,\*& ]*?\s)?\**&?(\w+)\s*\([^;{}]*\)\s*(?:const\s*)?\{', native_n3, re.M):
+    if m.group(1) not in ('if', 'for', 'while', 'switch', 'return'):
+        bodies_n3[m.group(1)] = bodies_n3.get(m.group(1), '') + native_n3[m.end():c_balanced(native_n3, m.end() - 1)]
+roots_n3 = [n for n in bodies_n3 if re.search(r'_view_build$|_json$|_frame_insets$|_view_middle$|_draw$', n)]
+reach_n3, stack_n3 = {}, [(n, [n]) for n in roots_n3]
+while stack_n3:
+    name, path = stack_n3.pop()
+    if name in reach_n3:
+        continue
+    reach_n3[name] = path
+    stack_n3 += [(c, path + [c]) for c in set(re.findall(r'\b(\w+)\s*\(', bodies_n3[name]))
+                 if c in bodies_n3 and c not in reach_n3 and c != 'WM_native_ui_log_changed']
+per_build_logs_n3 = sorted(' -> '.join(path) for name, path in reach_n3.items()
+                           if re.search(r'\bWM_native_ui_(?:session_)?log\s*\(', bodies_n3[name]))
+check(len(roots_n3) >= 20 and 'WM_native_ui_view3d_frame_insets' in roots_n3 and
+      'WM_native_ui_log_changed("viewport", "frame insets"' in
+      (SWIFT.parents[1] / 'intern/wm_native_ui.cc').read_text(encoding='utf-8') and not per_build_logs_n3,
+      "Nothing per build: what the view builders reach logs only on change (WM_native_ui_log_changed): %s" %
+      per_build_logs_n3)
+# Said once, at a slide's end, not at each of its steps.
+SWIFT_ONCE_N3 = {('DocumentWindow.swift', 'noteSlide')}
+swift_per_frame_n3 = []
+for path in sources():
+    text = path.read_text(encoding='utf-8')
+    funcs = {}
+    for m in re.finditer(r'\bfunc (\w+)\s*(?:<[^>]*>)?\([^{]*?\{', text):
+        funcs.setdefault(m.group(1), []).append((m.group(1), m.end(), balanced(text, m.end() - 1, '{', '}')))
+    roots = ['layoutSubviews', 'viewDidLayoutSubviews', 'draw'] + re.findall(
+        r'CADisplayLink\(target: self, selector: #selector\((\w+)', text)
+    stack = [span for root in roots for span in funcs.get(root, [])]
+    for m in re.finditer(r'\bvar body: some View \{', text):
+        body = text[m.end():balanced(text, m.end() - 1, '{', '}')]
+        if 'WM_native_ui_log(' in body:
+            swift_per_frame_n3.append('%s: a view body logs' % path.name)
+    seen = set()
+    while stack:
+        name, start, end = stack.pop()
+        if (start, end) in seen:
+            continue
+        seen.add((start, end))
+        body = text[start:end]
+        for k in re.finditer(r'WM_native_ui_log\(', body):
+            before = body[:k.start()]
+            if '!=' not in before and 'guard ' not in before and (path.name, name) not in SWIFT_ONCE_N3:
+                swift_per_frame_n3.append('%s %s line %d' % (path.name, name, text[:start + k.start()].count('\n') + 1))
+        stack += [span for callee, spans in funcs.items() if re.search(r'\b%s\(' % callee, body) for span in spans]
+check(not swift_per_frame_n3,
+      "Nothing per frame in Swift: what layout passes, display links and bodies reach logs only on change: %s" %
+      swift_per_frame_n3)
+print('PASS: nothing per frame ' + json.dumps([len(roots_n3), len(reach_n3)]))
+
+# Device roun
