@@ -7499,6 +7499,153 @@ def tick_handoff():
     return 0.3
 
 
+# ROUND6 EDIT-12 (D11): the top bar's, the Timeline header's and the status bar's controls, each with
+# a home in the iPad interface or left out with the reason written (as FILES-7 walks the File menu).
+# Blender's own drawing code is read (its `prop`, `operator`, `popover`, `menu` and `template_*`
+# calls); the Timeline header's are the ones the timeline's Playback and Keying draws, and each must
+# come out of it projected, its popovers opening with something in them. Then the preview range is
+# turned off from it, and a typed frame is taken.
+BARS_PANEL = "VIEW3D_PT_native_timeline_header"
+BARS_ELSEWHERE = {
+    # The top bar (`TOPBAR_HT_upper_bar`).
+    "menu TOPBAR_MT_editor_menus": "the native File and Edit menus and the system menu bar",
+    "template_reports_banner": "messages (1B)",
+    "template_running_jobs": "the render sheet; other jobs BUSY-1",
+    "template_ID_tabs": "workspace tabs: by design; a workspace is reached by EDIT-11's hand-off",
+    "operator screen.region_toggle": "the top bar's own toggles: the shell's sidebar menu",
+    "operator screen.back_to_previous": "a temporary full screen's way back: the iPad interface never shows "
+                                        "one; in the Desktop Interface it is the top bar's own (EDIT-11)",
+    # The status bar (`STATUSBAR_HT_header`).
+    "template_input_status": "the modal bar (4A)",
+    "template_status_info": "the statistics overlay (Viewport Overlays)",
+    "template_ID_tabs_status": "none",
+}
+bars_state = {}
+
+
+def _bars_calls(module, names):
+    """The calls Blender's drawing code makes: `prop name`, `operator id`, `popover id`, `menu id`,
+    and `template_*` by its name, in the functions and classes named."""
+    import ast
+    import importlib
+    tree = ast.parse(open(importlib.import_module(module).__file__).read())
+    calls = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in names:
+            for call in ast.walk(node):
+                if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute):
+                    continue
+                kind = call.func.attr
+                strings = [a.value for a in call.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+                strings += [k.value.value for k in call.keywords if k.arg == "panel" and isinstance(k.value, ast.Constant)]
+                if kind in ("prop", "operator", "popover", "menu") and strings:
+                    calls.add("%s %s" % (kind, strings[-1] if kind == "prop" else strings[0]))
+                elif kind.startswith("template_"):
+                    calls.add(kind)
+    return calls
+
+
+def _bars_operator(node):
+    op = node.get("operator") or ""
+    if "_OT_" in op:
+        module, name = op.split("_OT_", 1)
+        op = "%s.%s" % (module.lower(), name)
+    return op
+
+
+def tick_bars():
+    global step
+    state = bars_state
+    try:
+        pump()
+        step += 1
+        problems = report.setdefault("problems", [])
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            _census_lib().UI_native_panel_census_record(True)
+            scene = bpy.context.scene
+            scene.use_preview_range = True
+            scene.frame_preview_start, scene.frame_preview_end = 10, 20
+            state["sub"] = subscribe("properties", tab="POPOVER:%s\tHEADER" % BARS_PANEL)
+            return 1.0
+        if step == 4:
+            top = tree(state["sub"]) or {}
+            nodes = list(_census_nodes(top))
+            entries = json.loads(_census_lib().UI_native_panel_census_take())
+            projected = [e for e in entries if e["outcome"] == "projected"]
+            report["not projected"] = sorted({"%s %s: %s %s" % (e["button"], e["detail"], e["outcome"], e["reason"])
+                                              for e in entries if e["outcome"] != "projected" and e["button"] != "Walk"})
+            shown = {"prop %s" % n["property"] for n in nodes if n.get("property")}
+            shown |= {"operator %s" % _bars_operator({"operator": e["detail"]}) for e in projected
+                      if "_OT_" in (e["detail"] or "")}
+            # A header's popovers are drawn in it, flattened (MODE-1), or as buttons that open them.
+            popovers = {e["detail"] for e in entries if e["button"] == "Popover"}
+            popovers |= {(n.get("params") or {}).get("panel") for n in _header_popovers(top)}
+            popovers.discard(None)
+            shown |= {"popover %s" % p for p in popovers}
+            if any(n.get("content") == "Reference" and n.get("label") == "Scene" for n in nodes):
+                shown.add("prop scene")
+            report["shown"] = sorted(shown)
+            # The Timeline header's controls, as `playback_controls` draws them in a 3D View.
+            wanted = _bars_calls("bl_ui.space_time", {"playback_controls"})
+            # Drawn by Blender only in a Timeline (play reversed with JACK, subframes' frame field).
+            wanted -= {"prop frame_float", "prop use_scene_time_sync"}
+            # Start and End are the preview range's while it is on, the scene's while it is off.
+            wanted -= ({"prop frame_start", "prop frame_end"} if bpy.context.scene.use_preview_range else
+                       {"prop frame_preview_start", "prop frame_preview_end"})
+            missing = sorted(c for c in wanted if not c.startswith("template_") and c not in shown)
+            if missing:
+                problems.append("EDIT-12: the Timeline header's controls missing from Playback and Keying: %s" % missing)
+            for what in ("prop scene", "prop view_layer"):
+                if what not in shown:
+                    problems.append("EDIT-12: the top bar's %s is not in Playback and Keying: %s" % (
+                        what.split()[1], sorted(shown)))
+            # The top bar and status bar: everything else has a home elsewhere, written down.
+            for module, names in (("bl_ui.space_topbar", {"TOPBAR_HT_upper_bar"}),
+                                  ("bl_ui.space_statusbar", {"STATUSBAR_HT_header"})):
+                for call in sorted(_bars_calls(module, names)):
+                    if call in ("template_ID", "template_search") or call in BARS_ELSEWHERE:
+                        continue
+                    problems.append("EDIT-12: %s's %s has no home: neither in Playback and Keying nor "
+                                    "written as elsewhere" % (module, call))
+            state["popovers"] = {p: subscribe("properties", tab="POPOVER:%s\tHEADER" % p) for p in popovers}
+            preview = next((n for n in nodes if n.get("property") == "use_preview_range"), None)
+            frame = next((n for n in nodes if n.get("property") == "frame_current"), None)
+            if preview is None or frame is None:
+                problems.append("EDIT-12: no preview range toggle or frame field to use")
+            else:
+                set_bool(state["sub"], preview["key"], False, 5201)
+                set_float(state["sub"], frame["key"], 42, 5202)
+            return 1.0
+        if step == 8:
+            empty = []
+            for panel, sub in state.get("popovers", {}).items():
+                # A setting of its own, not a note that it is only in the Desktop Interface.
+                filled = [n for n in _census_nodes(tree(sub) or {}) if n.get("property")
+                          and not n["property"].startswith("POPOVER:")]
+                if not filled:
+                    empty.append(panel)
+            report["popovers"] = sorted(state.get("popovers", {}))
+            if empty:
+                problems.append("EDIT-12: these popovers of Playback and Keying open with nothing in them: %s" % empty)
+            for panel in ("TIME_PT_playback", "TIME_PT_keyframing_settings", "TIME_PT_auto_keyframing"):
+                if panel not in state.get("popovers", {}):
+                    problems.append("EDIT-12: Playback and Keying offers no %s" % panel)
+            scene = bpy.context.scene
+            report["after"] = {"preview": scene.use_preview_range, "frame": scene.frame_current,
+                               "acks": [acks.get(5201), acks.get(5202)]}
+            if scene.use_preview_range or scene.frame_current != 42:
+                problems.append("EDIT-12: the preview range was not cleared or the typed frame not taken: %s"
+                                % report["after"])
+            finish("done" if not problems else "error")
+            return None
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
 # Every scenario, by the name `mac_bridge_check.py --scenario` takes: the one list (ROUND7 U4d).
 # `mac_bridge_check.py`'s SCENARIOS must name exactly these, which `bl_native_test_runners.py`
 # checks; a name not here ends the run with an error, never another scenario's run.
@@ -7515,6 +7662,7 @@ SCENARIOS = {
     "answers": tick_answers, "animkeys": tick_animkeys, "nodegroups": tick_nodegroups,
     "timelinekeys": tick_timelinekeys, "assettap": tick_assettap,
     "renderimage": tick_renderimage, "storyboard": tick_storyboard, "handoff": tick_handoff,
+    "bars": tick_bars,
 }
 
 

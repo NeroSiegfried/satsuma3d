@@ -920,7 +920,38 @@ class WM_OT_native_node_tree_new(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class VIEW3D_PT_native_timeline_header(bpy.types.Panel):
+    """The iPad timeline's Playback and Keying (ROUND6 EDIT-12, D11): what Blender keeps only in the
+    Timeline's header and the top bar, drawn by Blender's own code as its header draws it there: the
+    top bar's scene and view layer, then the Timeline header's playback controls (Playback, Keying
+    and Auto Keying popovers, the transport, Time Jump, playhead snapping, the current frame to type
+    in, the preview range to set or clear). Its popovers open as the 3D Viewport header's do. The
+    Marker menu's commands need an animation editor's region (`operator_markers_region_active`):
+    they are the Dope Sheet's, reached by its hand-off (EDIT-11)."""
+    bl_label = "Playback and Keying"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'HEADER'
+    bl_ui_units_x = 14
+
+    def draw(self, context):
+        from bl_ui.space_time import playback_controls
+        layout = self.layout
+        window = context.window
+        scene = window.scene
+        # As the top bar's right side draws them (`TOPBAR_HT_upper_bar.draw_right`).
+        layout.template_ID(window, "scene", new="scene.new", unlink="scene.delete")
+        # The top bar's `template_search` as the name list it is: picked by name from Blender's list
+        # (PANEL-11), beside its New and Remove.
+        row = layout.row(align=True)
+        row.prop_search(window, "view_layer", scene, "view_layers", text="View Layer")
+        row.operator("scene.view_layer_add", text="", icon='ADD')
+        row.operator("scene.view_layer_remove", text="", icon='REMOVE')
+        layout.separator()
+        playback_controls(layout, context)
+
+
 classes = (
+    VIEW3D_PT_native_timeline_header,
     WM_OT_native_panel_edit,
     WM_OT_native_node_tree_new,
     VIEW3D_PT_native_sculpt_settings,

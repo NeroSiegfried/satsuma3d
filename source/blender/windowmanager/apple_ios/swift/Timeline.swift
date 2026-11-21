@@ -532,6 +532,8 @@ private struct FrameFollower: ViewModifier {
 struct TimelineContent: View {
   let store: TimelineStore
   @State private var transportWidth: CGFloat = 0
+  /** Playback and Keying while it shows (ROUND6 EDIT-12). */
+  @State private var playback: PanelsModel?
 
   var body: some View {
     let expanded = store.expanded
@@ -552,6 +554,7 @@ struct TimelineContent: View {
       }
       HStack(spacing: 0) {
         if showsStoryboardButton { storyboardButton }
+        playbackButton
         curvesButton
         keysButton
       }
@@ -561,7 +564,40 @@ struct TimelineContent: View {
     .foregroundStyle(.primary)
   }
 
-  private var trailingButtons: Int { showsStoryboardButton ? 3 : 2 }
+  private var trailingButtons: Int { showsStoryboardButton ? 4 : 3 }
+
+  /** What Blender keeps in the Timeline's header and the top bar (ROUND6 EDIT-12, D11): the scene and
+   * view layer, Playback, Keying and Auto Keying, the current frame to type in, the preview range to
+   * set or clear. Drawn by Blender as its header draws it, in a popover as the viewport header's. */
+  private var playbackButton: some View {
+    Button {
+      playback = PanelsModel(mode: .popover, tab: "POPOVER:VIEW3D_PT_native_timeline_header\tHEADER")
+    } label: {
+      Image(systemName: "slider.horizontal.3")
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("Playback and Keying")
+    .accessibilityIdentifier("blender.timeline.playback")
+    .popover(isPresented: Binding(get: { playback != nil }, set: { if !$0 { closePlayback() } })) {
+      if let playback {
+        ScrollView {
+          PanelsForm(model: playback, scrolls: false)
+        }
+        .frame(minWidth: 340, idealWidth: 380, minHeight: 160, idealHeight: 480)
+        .presentationCompactAdaptation(.popover)
+        .tint(PanelStyle.tint)
+        .onDisappear { closePlayback() }
+      }
+    }
+  }
+
+  /** Blender stops building the popover's view once it is gone. */
+  private func closePlayback() {
+    if let playback { NativeViews.shared.unsubscribe(playback.view) }
+    playback = nil
+  }
 
   private var showsStoryboardButton: Bool {
 #if os(visionOS)

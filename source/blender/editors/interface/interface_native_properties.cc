@@ -3241,10 +3241,13 @@ static PanelType *button_popover_panel(const Button &but)
 }
 
 /** Whether a popover's panel is drawn in the 3D Viewport's context, as the viewport's header and
- * top bar open it: the 3D Viewport's own panels and the top bar's (Grease Pencil's layers). */
+ * top bar open it: the 3D Viewport's own panels and the top bar's (Grease Pencil's layers), and the
+ * Timeline header's (Playback, Keying, Auto Keying, Time Jump, Playhead), which the iPad timeline's
+ * Playback and Keying opens (ROUND6 EDIT-12): they draw the scene's and the tool settings'. */
 static bool viewport_popover_space(const PanelType &panel)
 {
-  return ELEM(panel.space_type, SPACE_VIEW3D, SPACE_TOPBAR);
+  return ELEM(panel.space_type, SPACE_VIEW3D, SPACE_TOPBAR) ||
+         (panel.space_type == SPACE_ACTION && panel.region_type == RGN_TYPE_HEADER);
 }
 
 /** Blender's own 3D Viewport header, which the `HEADER` tab draws. */

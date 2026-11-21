@@ -673,6 +673,14 @@ check('BlenderSettings.desktopEditors' in topbar_text and 'desktopEditors\n' in 
 check(not any('"desktop_uv_editing"' in path.read_text(encoding='utf-8') for path in SWIFT.glob('*.swift')) and
       '"desktop_uv_editing"' not in bridge_text,
       "EDIT-11: no one-off hand-off setting is left beside `desktop_open`")
+# ROUND6 EDIT-12 (D11): the timeline's Playback and Keying is Blender's Timeline header and the top
+# bar's scene and view layer, drawn by Blender (harness scenario `bars` walks the three bars).
+timeline_text = (SWIFT / 'Timeline.swift').read_text(encoding='utf-8')
+panels_text = (ROOT / 'scripts/startup/bl_ui/native_panels.py').read_text(encoding='utf-8')
+check('"POPOVER:VIEW3D_PT_native_timeline_header\\tHEADER"' in timeline_text and 'playbackButton\n' in timeline_text
+      and 'class VIEW3D_PT_native_timeline_header(' in panels_text and
+      '    VIEW3D_PT_native_timeline_header,\n' in panels_text and 'playback_controls(layout, context)' in panels_text,
+      "EDIT-12: the timeline's Playback and Keying opens Blender's Timeline header as a popover")
 files_text = (ROOT / 'source/blender/windowmanager/intern/wm_files.cc').read_text(encoding='utf-8')
 # The crash file is written from a crash handler and is not a document: the one write left out.
 check(files_text.count('BLO_write_file(') == files_text.count('const NativeVisitWriteScope visit(bmain);') + 1 and
