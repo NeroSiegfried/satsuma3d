@@ -31,7 +31,10 @@ wmDocumentWrite WM_apple_ios_document_write(
     bContext *C, const char *filepath, bool preview, bool when_idle, std::string &r_error);
 bool WM_apple_ios_document_is_loaded();
 bool WM_apple_ios_document_set_aside(bContext *C, const char *why);
-bool WM_apple_ios_document_copy_write(bContext *C, const char *filepath, std::string &r_error);
+bool WM_apple_ios_document_copy_write(bContext *C,
+                                      const char *filepath,
+                                      bool holds_work,
+                                      std::string &r_error);
 std::string WM_apple_ios_document_template_write(bContext *C,
                                                  const char *filepath,
                                                  const char *preview,
@@ -98,7 +101,10 @@ bool wm_apple_ios_document_set_aside_wait(const char *why)
   return kept;
 }
 
-static void writeFreshCopy(NSString *name, UIViewController *presenter, void (^done)(NSURL *url));
+static void writeFreshCopy(NSString *name,
+                           UIViewController *presenter,
+                           BOOL holds_work,
+                           void (^done)(NSURL *url));
 @class WMIOSBlendDocument;
 static void wm_apple_ios_document_file_now_go(WMIOSBlendDocument *document,
                                               NSURL *documentURL,
@@ -342,6 +348,14 @@ static WMIOSFolderGrant *folder_grant_shown = nil;
   if (_failure || _busy) {
     WM_native_ui_log("document", "saved again after a failed save");
   }
+  /* What the failure's alert says is no longer true, however the save came about (saving along the
+   * way, Save, closing): it goes (device round: it stayed up over a document that had saved). */
+  if (_problemAlert.presentingViewController && !_problemAlert.isBeingDismissed) {
+    WM_native_ui_log("document", "save problem alert taken down: saved since");
+    [_problemAlert.presentingViewController dismissViewControllerAnimated:YES completion:nil];
+  }
+  [_problemAlert release];
+  _problemAlert = nil;
   [_failure release];
   _failure = nil;
   [_failureShown release];
@@ -805,8 +819,13 @@ static WMIOSFolderGrant *folder_grant_shown = nil;
   _holdAnswer = 2;
   WM_native_ui_log("document", [@"held: a copy to work on, " stringByAppendingString:name].UTF8String);
   NSURL *next_to = [[self.fileURL copy] autorelease];
-  writeFreshCopy(name, nil, ^(NSURL *copy) {
+  writeFreshCopy(name, nil, YES, ^(NSURL *copy) {
     if (copy) {
+      /* The copy holds every change (Blender marked it saved with the write): closing this
+       * document as the copy opens asks nothing (device round: "Close? changes are not saved"
+       * although they were). An edit from here on marks it changed again. */
+      _blenderModified = NO;
+      _recovered = NO;
       wm_apple_ios_launcher_adopt_copy(copy, next_to);
     }
   });
@@ -1271,7 +1290,10 @@ static void presentExporter(NSURL *url, UIViewController *presenter)
 
 /** A fresh copy of what Blender has loaded, written from memory into a new temporary folder:
  * `done` gets it, or nil after an alert with Blender's reason. */
-static void writeFreshCopy(NSString *name, UIViewController *presenter, void (^done)(NSURL *url))
+static void writeFreshCopy(NSString *name,
+                           UIViewController *presenter,
+                           BOOL holds_work,
+                           void (^done)(NSURL *url))
 {
   [presenter retain];
   void (^finish)(NSURL *) = [done copy];
@@ -1287,8 +1309,8 @@ static void writeFreshCopy(NSString *name, UIViewController *presenter, void (^d
     auto error = std::make_shared<std::string>("The copy could not be written yet.");
     bool timed_out = false;
     const bool written = engine_wait(
-        [path, error](blender::bContext *C) {
-          return blender::WM_apple_ios_document_copy_write(C, path.c_str(), *error);
+        [path, error, holds_work](blender::bContext *C) {
+          return blender::WM_apple_ios_document_copy_write(C, path.c_str(), holds_work, *error);
         },
         &timed_out);
     NSString *reason = timed_out ? @"Busy. Try again when the current work has finished." :
@@ -1443,7 +1465,7 @@ static void wm_apple_ios_document_file_now_go(WMIOSBlendDocument *document,
                  return;
                }
                WM_native_ui_log("document", "file now: the save failed, a fresh copy instead");
-               writeFreshCopy(name, presenter, ^(NSURL *copy) {
+               writeFreshCopy(name, presenter, NO, ^(NSURL *copy) {
                  finish(copy);
                  release_all();
                });
@@ -1451,7 +1473,7 @@ static void wm_apple_ios_document_file_now_go(WMIOSBlendDocument *document,
       });
       return;
     }
-    writeFreshCopy(name, presenter, ^(NSURL *copy) {
+    writeFreshCopy(name, presenter, NO, ^(NSURL *copy) {
       finish(copy);
       release_all();
     });

@@ -1270,13 +1270,26 @@ wmDocumentWrite WM_apple_ios_document_write(bContext *C,
   return wmDocumentWrite::Written;
 }
 
-bool WM_apple_ios_document_copy_write(bContext *C, const char *filepath, std::string &r_error)
+bool WM_apple_ios_document_copy_write(bContext *C,
+                                      const char *filepath,
+                                      const bool holds_work,
+                                      std::string &r_error)
 {
   const bool success = wm_document_write(C, filepath, true, r_error);
+  wmWindowManager *wm = CTX_wm_manager(C);
+  if (success && holds_work && wm) {
+    /* The copy the person goes on with holds every change: the held document has nothing left
+     * unsaved, so closing it does not ask (device round, SAFE-2). Marked here, with the write, so
+     * an edit after it marks the document changed again (#WM_file_tag_modified). */
+    wm->file_saved = 1;
+    WM_main_add_notifier(NC_WM | ND_DATACHANGED, nullptr);
+  }
   WM_native_ui_session_log(
       "document",
-      fmt::format("{} {}", success ? "copy written" : "copy could not be written",
-                  BLI_path_basename(filepath))
+      fmt::format("{} {}{}",
+                  success ? "copy written" : "copy could not be written",
+                  BLI_path_basename(filepath),
+                  success && holds_work ? ", it holds the work" : "")
           .c_str());
   return success;
 }

@@ -127,8 +127,12 @@ void WM_apple_ios_factory_preferences(bContext *C);
  * work is dropped (ROUND7 U4d). */
 bool WM_apple_ios_document_set_aside(bContext *C, const char *why);
 /** Write what Blender has loaded to `filepath` as a copy, for Save a Copy: the document and its
- * auto-save are left as they are. */
-bool WM_apple_ios_document_copy_write(bContext *C, const char *filepath, std::string &r_error);
+ * auto-save are left as they are. With \a holds_work (the copy is opened to work on in place of
+ * a held document), nothing is left unsaved once it is written. */
+bool WM_apple_ios_document_copy_write(bContext *C,
+                                      const char *filepath,
+                                      bool holds_work,
+                                      std::string &r_error);
 /**
  * The front door (ROUND5 9D, decision 61): a file command run in a document window, from a key, a
  * menu, Search or a button, in either interface, takes the document's route instead of loading or

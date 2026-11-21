@@ -184,6 +184,16 @@ class SaveFailureIsSaidTest(unittest.TestCase):
         self.assertIn('wm_apple_ios_share_document_file(', share)
         self.assertNotIn('.save(to:', share)
 
+    def test_a_later_save_takes_the_failure_alert_down(self):
+        # Device round (2026-11-21): "could not be saved" stayed up after the document saved by
+        # another path. Every success comes through #writeSucceeded: it takes the alert down.
+        succeeded = body_of(self.document, '- (void)writeSucceeded')
+        self.assertIn('dismissViewControllerAnimated:YES', succeeded)
+        self.assertLess(succeeded.index('_problemAlert.presentingViewController'),
+                        succeeded.index('_problemAlert = nil;'))
+        # And the alert is the one failure alert: every failure presents through #presentProblem.
+        self.assertEqual(self.document.count('_problemAlert = [alert retain];'), 1)
+
     def test_the_header_says_not_saved(self):
         model = (APPLE / 'swift/ShellModel.swift').read_text(encoding='utf-8')
         self.assertIn('wm_apple_ios_document_status()', model)
@@ -228,6 +238,27 @@ class OverwriteQuestionIsAskedTest(unittest.TestCase):
         self.assertLess(edited.index('[self presentHold:NO]'), edited.index('[self saveAlongTheWay]'))
         save = body_of(self.document, '- (void)saveNow')
         self.assertLess(save.index('[self presentHold:NO]'), save.index('saveForPerson:'))
+
+    def test_a_copy_that_holds_the_work_leaves_nothing_unsaved(self):
+        # Device round (2026-11-21): after Keep Read-Only and Save a Copy and Work on That, the
+        # copy opened and closing the held document still asked "Close? changes are not saved to
+        # it", although the copy held them. Each fresh copy says whether it holds the work: only a
+        # copy opened in the document's place does, and then Blender marks it saved with the
+        # write (so a later edit marks it changed again) and the document asks nothing.
+        calls = re.findall(r'writeFreshCopy\(name, (?:nil|presenter), (YES|NO), \^', self.document)
+        self.assertEqual(len(calls), self.document.count('writeFreshCopy(name,'),
+                         "Every fresh copy says whether it holds the work")
+        copy_on = body_of(self.document, '- (void)saveCopyAndWorkOnIt')
+        self.assertIn('writeFreshCopy(name, nil, YES,', copy_on)
+        self.assertLess(copy_on.index('_blenderModified = NO;'),
+                        copy_on.index('wm_apple_ios_launcher_adopt_copy('))
+        self.assertLess(copy_on.index('_recovered = NO;'), copy_on.index('wm_apple_ios_launcher_adopt_copy('))
+        self.assertEqual(calls.count('YES'), 1, "Only the copy opened in place holds the work")
+        write = body_of(self.doc, 'bool WM_apple_ios_document_copy_write(')
+        self.assertRegex(write, r'if \(success && holds_work && wm\) \{\s*/\*[^*]*(?:\*[^/][^*]*)*\*/\s*'
+                                r'wm->file_saved = 1;')
+        closing = body_of(self.document, '- (BOOL)needsAnswerBeforeClosing')
+        self.assertIn('_blenderModified || _recovered', closing)
 
     def test_closing_a_held_document_asks(self):
         back = body_of(self.launcher, 'void wm_apple_ios_launcher_show_documents(id sender)')
