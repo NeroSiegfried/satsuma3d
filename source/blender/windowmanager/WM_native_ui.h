@@ -125,6 +125,15 @@ void WM_native_ui_navigation_hover_set(bool active);
  * interface's veil while Blender is held up (ROUND6 BUSY-2). False with nothing named, as between
  * operators or while a script runs. Safe from any thread. */
 bool WM_native_ui_busy_label(char *label, size_t size);
+/** Whether the work holding Blender up can be stopped part way, for the veil's Stop: -1 nothing
+ * holds it, 0 it cannot be stopped (it ends by itself), 1 it can, 2 Stop was asked. Safe from any
+ * thread. */
+int WM_native_ui_busy_stop_state(void);
+/** Stop the work holding Blender up, as desktop's Esc does (`G.is_break`), when it can be stopped;
+ * false when it cannot. Safe from any thread. */
+bool WM_native_ui_busy_stop(void);
+/** Whether operator \a idname's blocking run stops part way when asked (`G.is_break`). */
+bool WM_native_ui_busy_breakable_idname(const char *idname);
 /** A line of the session's log (see `WM_native_ui_session_log`), from the interface's own code:
  * \a kind such as "layout" or "reveal". Safe from any thread. */
 void WM_native_ui_log(const char *kind, const char *text);

@@ -865,6 +865,9 @@ static std::mutex bridge_busy_mutex;
 static std::array<const char *, 16> bridge_busy_names{};
 static std::array<const char *, 16> bridge_busy_idnames{};
 static int bridge_busy_depth = 0;
+/** Stop was asked for the work that holds Blender now, until that work ends. */
+static bool bridge_busy_stop_asked = false;
+
 
 void WM_native_ui_busy_push(const char *name, const char *idname)
 {
@@ -890,6 +893,11 @@ void WM_native_ui_busy_pop()
 {
   std::scoped_lock lock(bridge_busy_mutex);
   bridge_busy_depth = std::max(0, bridge_busy_depth - 1);
+  if (bridge_busy_depth == 0 && bridge_busy_stop_asked) {
+    /* The work Stop was asked for has ended: nothing later may read the stop as its own. */
+    bridge_busy_stop_asked = false;
+    G.is_break = false;
+  }
 }
 
 extern "C" bool WM_native_ui_busy_label(char *label, const size_t size)
@@ -900,6 +908,71 @@ extern "C" bool WM_native_ui_busy_label(char *label, const size_t size)
     return false;
   }
   BLI_strncpy(label, name, size);
+  return true;
+}
+
+/**
+ * The operators whose blocking run (exec, as a script or the snapshot's `op` step runs them) ends
+ * part way when `G.is_break` is set, as desktop's Esc sets it: each reads it in its exec path (a
+ * render's and a bake's test-break callback, the point cache's and the fluid's bake loops), which
+ * `script_native_shell_sources` checks for each. Any other blocking operator cannot be stopped:
+ * the veil says so rather than offer a Stop that does nothing (device round, 2026-11-21).
+ */
+static constexpr const char *bridge_busy_breakable[] = {
+    "RENDER_OT_render",
+    "OBJECT_OT_bake",
+    "PTCACHE_OT_bake",
+    "PTCACHE_OT_bake_all",
+    "FLUID_OT_bake_all",
+    "FLUID_OT_bake_data",
+    "FLUID_OT_bake_noise",
+    "FLUID_OT_bake_mesh",
+    "FLUID_OT_bake_particles",
+    "FLUID_OT_bake_guides",
+};
+
+extern "C" bool WM_native_ui_busy_breakable_idname(const char *idname)
+{
+  return idname && std::any_of(std::begin(bridge_busy_breakable),
+                               std::end(bridge_busy_breakable),
+                               [&](const char *name) { return STREQ(name, idname); });
+}
+
+extern "C" int WM_native_ui_busy_stop_state()
+{
+  std::scoped_lock lock(bridge_busy_mutex);
+  if (bridge_busy_depth <= 0) {
+    return -1;
+  }
+  const int depth = std::min(bridge_busy_depth, int(bridge_busy_idnames.size()));
+  for (int i = 0; i < depth; i++) {
+    if (WM_native_ui_busy_breakable_idname(bridge_busy_idnames[i])) {
+      return bridge_busy_stop_asked ? 2 : 1;
+    }
+  }
+  return 0;
+}
+
+extern "C" bool WM_native_ui_busy_stop()
+{
+  const char *name = nullptr;
+  {
+    std::scoped_lock lock(bridge_busy_mutex);
+    const int depth = std::min(bridge_busy_depth, int(bridge_busy_idnames.size()));
+    for (int i = depth - 1; i >= 0 && name == nullptr; i--) {
+      if (WM_native_ui_busy_breakable_idname(bridge_busy_idnames[i])) {
+        name = bridge_busy_names[i];
+      }
+    }
+    if (name == nullptr) {
+      return false;
+    }
+    bridge_busy_stop_asked = true;
+  }
+  /* What desktop's Esc does while it blocks (`wm_event_add_ghostevent`); the operator resets it
+   * as it starts and reads it as it runs. */
+  G.is_break = true;
+  WM_native_ui_session_log("busy", fmt::format("Stop asked for {}", name ? name : "?").c_str());
   return true;
 }
 

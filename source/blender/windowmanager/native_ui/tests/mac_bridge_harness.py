@@ -3310,7 +3310,46 @@ class TEST_OT_busy_probe(bpy.types.Operator):
         buffer = ctypes.create_string_buffer(256)
         named = lib.WM_native_ui_busy_label(buffer, 256)
         report["busy_label"] = buffer.value.decode() if named else None
+        # Device round (2026-11-21): work that cannot stop part way says so; Stop does nothing.
+        report["probe_stop_state"] = lib.WM_native_ui_busy_stop_state()
+        report["probe_stop"] = bool(lib.WM_native_ui_busy_stop())
         return {'FINISHED'}
+
+
+def _busy_render_stop():
+    """A blocking (exec) animation render of twelve frames, stopped by the veil's Stop from its
+    first frame's `render_post` handler, as the veil does from the interface's thread: Stop is
+    offered (1), taken (2), and the render ends after that frame instead of rendering them all."""
+    import tempfile
+    scene = bpy.context.scene
+    saved = (scene.render.engine, scene.render.resolution_percentage, scene.frame_start, scene.frame_end,
+             scene.render.filepath)
+    frames = []
+
+    def post(_scene, _depsgraph=None):
+        frames.append(bpy.context.scene.frame_current)
+        if len(frames) == 1:
+            report["render_stop_state_before"] = lib.WM_native_ui_busy_stop_state()
+            report["render_stop"] = bool(lib.WM_native_ui_busy_stop())
+            report["render_stop_state_after"] = lib.WM_native_ui_busy_stop_state()
+    with tempfile.TemporaryDirectory() as directory:
+        scene.render.engine = 'BLENDER_WORKBENCH'
+        scene.render.resolution_percentage = 5
+        scene.frame_start, scene.frame_end = 1, 12
+        scene.render.filepath = directory + "/frame_"
+        bpy.app.handlers.render_post.append(post)
+        try:
+            bpy.ops.render.render(animation=True)
+        except RuntimeError as error:
+            report["render_stop_error"] = str(error)
+        finally:
+            bpy.app.handlers.render_post.remove(post)
+            (scene.render.engine, scene.render.resolution_percentage, scene.frame_start, scene.frame_end,
+             scene.render.filepath) = saved
+    report["render_frames_before_stop"] = frames
+    report["render_stop_state_idle"] = lib.WM_native_ui_busy_stop_state()
+    report["breakable_render"] = bool(lib.WM_native_ui_busy_breakable_idname(b"RENDER_OT_render"))
+    report["breakable_apply"] = bool(lib.WM_native_ui_busy_breakable_idname(b"OBJECT_OT_modifier_apply"))
 
 
 def _busy_buttons(subscription, operator):
@@ -3327,8 +3366,13 @@ def tick_busy():
         if step == 1:
             lib.WM_native_ui_busy_label.restype = ctypes.c_bool
             lib.WM_native_ui_busy_label.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
+            lib.WM_native_ui_busy_stop_state.restype = ctypes.c_int
+            lib.WM_native_ui_busy_stop.restype = ctypes.c_bool
+            lib.WM_native_ui_busy_breakable_idname.restype = ctypes.c_bool
+            lib.WM_native_ui_busy_breakable_idname.argtypes = [ctypes.c_char_p]
             bpy.utils.register_class(TEST_OT_busy_probe)
             bpy.ops.test.busy_probe()
+            _busy_render_stop()
             idle = ctypes.create_string_buffer(256)
             report["busy_label_idle"] = bool(lib.WM_native_ui_busy_label(idle, 256))
             cube = bpy.data.objects["Cube"]
@@ -3388,6 +3432,11 @@ def tick_busy():
             report["cancel_while_locked"] = acks.get(707)
             report["render_running_after_cancel"] = bpy.app.is_job_running('RENDER')
             ok = (report["busy_label"] == "Busy Probe" and not report["busy_label_idle"] and
+                  report["probe_stop_state"] == 0 and report["probe_stop"] is False and
+                  report["render_stop_state_before"] == 1 and report["render_stop"] is True and
+                  report["render_stop_state_after"] == 2 and report["render_stop_state_idle"] == -1 and
+                  1 <= len(report["render_frames_before_stop"]) < 12 and
+                  report["breakable_render"] and not report["breakable_apply"] and
                   report["first_remove"] == "ok" and (report["second_remove"] or "").startswith("Not done") and
                   len(report["modifiers_left"]) == 1 and
                   (report["command_during_job"] or "").startswith("Wait for Baking point cache") and

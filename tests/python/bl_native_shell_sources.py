@@ -742,6 +742,7 @@ LOG_KINDS = {
     'op': 'the commands you ran with their settings', 'modal': 'the commands you ran with their settings',
     'key': 'the commands you ran with their settings', 'menu': 'the commands you ran with their settings',
     'popup': 'the commands you ran with their settings', 'reveal': 'the commands you ran with their settings',
+    'busy': 'the commands you ran with their settings',
     'info': 'the messages the app', 'warning': 'the messages the app', 'error': 'the messages the app',
     'document': 'when documents opened and saved', 'save': 'when documents opened and saved',
     'interface': 'which interface showed',
@@ -2231,4 +2232,34 @@ check(not swift_per_frame_n3,
       swift_per_frame_n3)
 print('PASS: nothing per frame ' + json.dumps([len(roots_n3), len(reach_n3)]))
 
-# Device roun
+# Device round (2026-11-21): a render run by exec (blocking) showed BUSY-2's veil "Render…" with
+# no way to stop it for twelve minutes. The veil offers Stop whenever the operator holding Blender
+# stops part way when asked (`G.is_break`, desktop's Esc), from the interface's own thread, and
+# says plainly when it cannot. Each operator on the list reads `G.is_break` in its blocking run:
+# the evidence for each is checked here, so the list cannot name one that ignores it.
+native_b2 = (SWIFT.parents[1] / 'intern/wm_native_ui.cc').read_text(encoding='utf-8')
+breakable_b2 = native_b2[native_b2.index('static constexpr const char *bridge_busy_breakable[] = {'):]
+breakable_b2 = re.findall(r'"(\w+)"', breakable_b2[:breakable_b2.index('};')])
+EDITORS_B2 = ROOT / 'source/blender/editors'
+BREAK_EVIDENCE_B2 = {
+    'RENDER_OT_render': (EDITORS_B2 / 'render/render_internal.cc',
+                         ('RE_test_break_cb(re, nullptr, render_break);', 'static bool render_break(')),
+    'OBJECT_OT_bake': (EDITORS_B2 / 'object/object_bake_api.cc',
+                       ('RE_test_break_cb(re, nullptr, bake_break);', 'static bool bake_break(')),
+    'PTCACHE_OT_bake': (ROOT / 'source/blender/blenkernel/intern/pointcache.cc', ('if (cancel || G.is_break) {',)),
+    'PTCACHE_OT_bake_all': (ROOT / 'source/blender/blenkernel/intern/pointcache.cc', ('if (cancel || G.is_break) {',)),
+}
+for name in ('all', 'data', 'noise', 'mesh', 'particles', 'guides'):
+    BREAK_EVIDENCE_B2['FLUID_OT_bake_' + name] = (
+        EDITORS_B2 / 'physics/physics_fluid.cc', ('fluid_bake_startjob(job, &worker_status);', 'if (G.is_break) {'))
+missing_b2 = [name for name in breakable_b2 if name not in BREAK_EVIDENCE_B2 or not all(
+    s in BREAK_EVIDENCE_B2[name][0].read_text(encoding='utf-8') for s in BREAK_EVIDENCE_B2[name][1])]
+veil_b2 = (SWIFT / 'CompileIndicator.swift').read_text(encoding='utf-8')
+veil_b2 = veil_b2[veil_b2.index('final class BusyVeilState'):]
+check(sorted(breakable_b2) == sorted(BREAK_EVIDENCE_B2) and not missing_b2 and
+      'G.is_break = true;' in native_b2[native_b2.index('extern "C" bool WM_native_ui_busy_stop()'):] and
+      'WM_native_ui_busy_stop_state()' in veil_b2 and 'WM_native_ui_busy_stop()' in veil_b2 and
+      'Button("Stop") { state.requestStop() }' in veil_b2 and
+      '"Cannot be stopped part way; it ends by itself"' in veil_b2,
+      "The busy veil offers Stop for work that stops when asked, and says when it cannot: %s %s" % (
+          breakable_b2, missing_b2))

@@ -198,6 +198,11 @@ final class BusyVeilState {
 
   private(set) var shown = false
   private(set) var label = ""
+  /** What Stop can do for the work (device round: a render run by exec held the app for twelve
+   * minutes with no way out): `.stoppable` offers Stop, `.stopping` once it was asked, `.unstoppable`
+   * says plainly that it ends by itself. From `WM_native_ui_busy_stop_state`. */
+  enum Stop: Equatable { case unstoppable, stoppable, stopping }
+  private(set) var stop = Stop.unstoppable
 
   func refresh() {
     var finished: Int32 = 0, total: Int32 = 0, busy = 0.0
@@ -209,10 +214,19 @@ final class BusyVeilState {
       let text = named ? buffer.withUnsafeBufferPointer { String(cString: $0.baseAddress!) } : ""
       let label = text.isEmpty ? "Working" : text
       if self.label != label { self.label = label }
+      let state = WM_native_ui_busy_stop_state()
+      let stop: Stop = state == 2 ? .stopping : state == 1 ? .stoppable : .unstoppable
+      if self.stop != stop { self.stop = stop }
     }
     if held != shown {
       withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .easeOut(duration: 0.15)) { shown = held }
     }
+  }
+
+  /** Stop the work, as desktop's Esc does; shown as stopping at once, before Blender reads it. */
+  func requestStop() {
+    guard stop == .stoppable, WM_native_ui_busy_stop() else { return }
+    stop = .stopping
   }
 }
 
@@ -231,6 +245,24 @@ struct BusyVeil: View {
             .font(.footnote)
             .foregroundStyle(.secondary)
             .lineLimit(1)
+          switch state.stop {
+          case .stoppable:
+            /* As the jobs pill's Stop: a plain word in the capsule, no box of its own. */
+            Button("Stop") { state.requestStop() }
+              .font(.footnote.weight(.semibold))
+              .buttonStyle(.plain)
+              .foregroundStyle(Color.accentColor)
+              .accessibilityIdentifier("blender.busy-veil.stop")
+          case .stopping:
+            Text("Stopping")
+              .font(.footnote)
+              .foregroundStyle(.tertiary)
+          case .unstoppable:
+            Text("Cannot be stopped part way; it ends by itself")
+              .font(.footnote)
+              .foregroundStyle(.tertiary)
+              .lineLimit(1)
+          }
         }
         .padding(.horizontal, 16)
         .frame(height: 36)
@@ -238,12 +270,14 @@ struct BusyVeil: View {
       }
       .ignoresSafeArea()
       .contentShape(Rectangle())
-      /* Taps are swallowed while Blender cannot answer them. */
+      /* Taps are swallowed while Blender cannot answer them; Stop is answered by the interface's
+       * own thread (`WM_native_ui_busy_stop`), so it works while Blender is held. */
       .onTapGesture {}
       .gesture(DragGesture(minimumDistance: 0).onEnded { _ in })
       .transition(.opacity)
-      .accessibilityElement(children: .ignore)
-      .accessibilityLabel("\(state.label), please wait")
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel(state.stop == .unstoppable ? "\(state.label), please wait; it cannot be stopped part way"
+                                                     : "\(state.label), please wait")
       .accessibilityAddTraits(.updatesFrequently)
       .accessibilityIdentifier("blender.busy-veil")
     }
