@@ -6,6 +6,8 @@
 
 #include "GHOST_IOSNativeInterface.hh"
 #include "wm_apple_ios_alerts.hh"
+#include "WM_native_ui.h"
+#import "wm_apple_ios_launcher.hh"
 
 @class WMIOSDialogRequest;
 
@@ -249,13 +251,97 @@ void wm_apple_ios_dialog_cancel(uint64_t identifier)
   });
 }
 
+/** The handlers of the Cancel actions #wm_apple_ios_cancel_action made, by action (weak). */
+static NSMapTable<UIAlertAction *, id> *cancel_handlers()
+{
+  static NSMapTable<UIAlertAction *, id> *table = [[NSMapTable weakToStrongObjectsMapTable] retain];
+  return table;
+}
+
+UIAlertAction *wm_apple_ios_cancel_action(NSString *title, void (^handler)(UIAlertAction *action))
+{
+  UIAlertAction *action = [UIAlertAction actionWithTitle:title
+                                                   style:UIAlertActionStyleCancel
+                                                 handler:handler];
+  [cancel_handlers() setObject:handler ? [[handler copy] autorelease] : (id)[NSNull null]
+                        forKey:action];
+  return action;
+}
+
+/** The app's own alerts on screen, outside the dialog queue (the document's, the launcher's,
+ * the shell's), each as its Cancel: dismissed, then its Cancel's handler run, as UIKit does for a
+ * tap. One whose Cancel is not known is dismissed and said, never left up without a word. */
+static int alerts_cancel_all(NSSet<UIViewController *> *queued)
+{
+  NSMutableArray<UIAlertController *> *alerts = [NSMutableArray array];
+  for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+    if (![scene isKindOfClass:UIWindowScene.class]) {
+      continue;
+    }
+    for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+      for (UIViewController *top = window.rootViewController.presentedViewController; top;
+           top = top.presentedViewController)
+      {
+        if ([top isKindOfClass:UIAlertController.class] && !top.isBeingDismissed &&
+            ![queued containsObject:top])
+        {
+          [alerts addObject:(UIAlertController *)top];
+        }
+      }
+    }
+  }
+  /* The top one first, as a person would answer them. */
+  for (UIAlertController *alert in alerts.reverseObjectEnumerator) {
+    UIAlertAction *cancel = nil;
+    for (UIAlertAction *action in alert.actions) {
+      if (action.style == UIAlertActionStyleCancel) {
+        cancel = action;
+      }
+    }
+    id handler = cancel ? [cancel_handlers() objectForKey:cancel] : nil;
+    NSString *title = alert.title ?: @"(untitled)";
+    if (cancel && handler) {
+      WM_native_ui_log("snapshot", [@"dialog cancel: alert " stringByAppendingString:title].UTF8String);
+    }
+    else if (cancel) {
+      /* A Cancel made elsewhere (Swift's `UIAlertAction(…, style: .cancel)` with no handler):
+       * dismissing it is all its Cancel does when it has none, which cannot be read here. */
+      WM_native_ui_log("snapshot", [@"dialog cancel: alert dismissed, its Cancel not known: "
+                                       stringByAppendingString:title]
+                                       .UTF8String);
+    }
+    else {
+      WM_native_ui_log("snapshot", [@"dialog cancel: alert with no Cancel dismissed: "
+                                       stringByAppendingString:title]
+                                       .UTF8String);
+    }
+    [cancel retain];
+    [handler retain];
+    [alert.presentingViewController dismissViewControllerAnimated:NO
+                                                       completion:^{
+                                                         if (handler && handler != [NSNull null]) {
+                                                           ((void (^)(UIAlertAction *))handler)(
+                                                               cancel);
+                                                         }
+                                                         [handler release];
+                                                         [cancel release];
+                                                       }];
+  }
+  return int(alerts.count);
+}
+
 extern "C" int wm_apple_ios_dialogs_cancel_all(void)
 {
   int count = 0;
+  NSMutableSet<UIViewController *> *queued = [NSMutableSet set];
   for (WMIOSDialogRequest *request in [[dialog_queue copy] autorelease]) {
+    if (request.controller) {
+      [queued addObject:request.controller];
+    }
     /* As Cancel: Blender is told, unlike #wm_apple_ios_dialog_cancel, which Blender asks. */
     [request finish:-1];
     count++;
   }
-  return count;
+  /* The document's and the launcher's own alerts too (device round: `dialog cancel` left them). */
+  return count + alerts_cancel_all(queued);
 }

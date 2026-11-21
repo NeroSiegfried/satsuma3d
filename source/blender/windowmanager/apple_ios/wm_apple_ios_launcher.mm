@@ -1008,7 +1008,7 @@ static NSURL *launcher_pending_url = nil;
         alertControllerWithTitle:[NSString stringWithFormat:@"“%@” could not be read", name]
                          message:nil
                   preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:wm_apple_ios_cancel_action(@"OK", nil)];
     [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
     return;
   }
@@ -1032,7 +1032,7 @@ static NSURL *launcher_pending_url = nil;
         alertControllerWithTitle:[NSString stringWithFormat:@"Import “%@”", name]
                          message:@"Open a document, or make a new one, and it is imported into it."
                   preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:wm_apple_ios_cancel_action(@"OK", nil)];
     [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
   }
 }
@@ -1316,9 +1316,7 @@ static NSString *launcherRecoveredName(NSURL *item)
                                              [self importAndOpen:item name:file];
                                            }]];
   }
-  [list addAction:[UIAlertAction actionWithTitle:items.count ? @"Cancel" : @"OK"
-                                            style:UIAlertActionStyleCancel
-                                          handler:nil]];
+  [list addAction:wm_apple_ios_cancel_action(items.count ? @"Cancel" : @"OK", nil)];
   [presenter presentViewController:list animated:YES completion:nil];
 }
 
@@ -1486,9 +1484,7 @@ static void launcherKeepOpeningVersion(NSURL *document)
                                        });
                                      });
                                }]];
-  [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
-                                            style:UIAlertActionStyleCancel
-                                          handler:nil]];
+  [alert addAction:wm_apple_ios_cancel_action(@"Cancel", nil)];
   [presenter presentViewController:alert animated:YES completion:nil];
 }
 
@@ -1655,11 +1651,9 @@ static void launcherKeepOpeningVersion(NSURL *document)
                                    }]];
     }
   }
-  [alert addAction:[UIAlertAction actionWithTitle:@"Stay Here"
-                                            style:UIAlertActionStyleCancel
-                                          handler:^(UIAlertAction *) {
-                                            WM_native_ui_log("launch", "after an unclean end: stay here");
-                                          }]];
+  [alert addAction:wm_apple_ios_cancel_action(@"Stay Here", ^(UIAlertAction *) {
+    WM_native_ui_log("launch", "after an unclean end: stay here");
+  })];
   WM_native_ui_log("launch", [@"said: " stringByAppendingString:message].UTF8String);
   [self presentViewController:alert animated:YES completion:nil];
 }

@@ -9,6 +9,12 @@
  * `AppIdentity.name` in Swift (ROUND5 8A). */
 NSString *wm_apple_ios_app_name();
 
+/** A Cancel-style action for an alert of the app's own (the document's, the launcher's): as
+ * `UIAlertAction actionWithTitle:style:UIAlertActionStyleCancel handler:`, and known to
+ * #wm_apple_ios_dialogs_cancel_all, which answers it as a person's Cancel would (a check launch's
+ * `dialog cancel` step). Every Cancel action of those alerts is made here (tests/ios sweep). */
+UIAlertAction *wm_apple_ios_cancel_action(NSString *title, void (^handler)(UIAlertAction *action));
+
 /** The open document, or nil in the launcher. */
 UIDocument *wm_apple_ios_launcher_document();
 /** Whether a document is open that the system's back action can return from. */

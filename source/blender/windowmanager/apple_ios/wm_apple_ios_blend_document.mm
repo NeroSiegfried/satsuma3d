@@ -482,11 +482,9 @@ static WMIOSFolderGrant *folder_grant_shown = nil;
                                               [self closeWithoutSaving];
                                             }]];
   }
-  [alert addAction:[UIAlertAction actionWithTitle:@"Not Now"
-                                            style:UIAlertActionStyleCancel
-                                          handler:^(UIAlertAction *) {
-                                            _closeRequested = NO;
-                                          }]];
+  [alert addAction:wm_apple_ios_cancel_action(@"Not Now", ^(UIAlertAction *) {
+    _closeRequested = NO;
+  })];
   [_problemAlert release];
   _problemAlert = [alert retain];
   WM_native_ui_log("document",
@@ -636,11 +634,9 @@ static WMIOSFolderGrant *folder_grant_shown = nil;
                                                  [self chooseNeighbourFolder:folder];
                                                }];
   [alert addAction:give];
-  [alert addAction:[UIAlertAction actionWithTitle:@"Not Now"
-                                            style:UIAlertActionStyleCancel
-                                          handler:^(UIAlertAction *) {
-                                            WM_native_ui_log("document", "neighbours: not now");
-                                          }]];
+  [alert addAction:wm_apple_ios_cancel_action(@"Not Now", ^(UIAlertAction *) {
+    WM_native_ui_log("document", "neighbours: not now");
+  })];
   alert.preferredAction = give;
   WM_native_ui_log("document", [@"neighbours said: " stringByAppendingString:title].UTF8String);
   [presenter presentViewController:alert animated:YES completion:nil];
@@ -769,11 +765,10 @@ static WMIOSFolderGrant *folder_grant_shown = nil;
                                               [self answerHold:2 closing:NO];
                                             }]];
   }
-  [alert addAction:[UIAlertAction actionWithTitle:closing ? @"Cancel" : @"Not Now"
-                                            style:UIAlertActionStyleCancel
-                                          handler:^(UIAlertAction *) {
-                                            WM_native_ui_log("document", "held: not answered");
-                                          }]];
+  [alert addAction:wm_apple_ios_cancel_action(closing ? @"Cancel" : @"Not Now",
+                                              ^(UIAlertAction *) {
+                                                WM_native_ui_log("document", "held: not answered");
+                                              })];
   alert.preferredAction = copy;
   [_holdAlert release];
   _holdAlert = [alert retain];
@@ -1187,9 +1182,7 @@ static const CFTimeInterval document_save_interval = 60.0;
                                           handler:^(UIAlertAction *) {
                                             [self reopen:NO];
                                           }]];
-  [alert addAction:[UIAlertAction actionWithTitle:@"Not Now"
-                                            style:UIAlertActionStyleCancel
-                                          handler:nil]];
+  [alert addAction:wm_apple_ios_cancel_action(@"Not Now", nil)];
   WM_native_ui_log("document", "refusal shown: Save a Copy, Reopen Document, Not Now");
   [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
 }
@@ -1207,9 +1200,7 @@ static const CFTimeInterval document_save_interval = 60.0;
                                           handler:^(UIAlertAction *) {
                                             [self openAsLastSaved:"revert"];
                                           }]];
-  [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
-                                            style:UIAlertActionStyleCancel
-                                          handler:nil]];
+  [alert addAction:wm_apple_ios_cancel_action(@"Cancel", nil)];
   WM_native_ui_log("document", "revert: asked");
   [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
 }
@@ -1407,17 +1398,15 @@ void wm_apple_ios_document_file_now(UIViewController *presenter, void (^done)(NS
                                                 handler:^(UIAlertAction *) {
                                                   go(NO);
                                                 }]];
-        [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
-                                                  style:UIAlertActionStyleCancel
-                                                handler:^(UIAlertAction *) {
-                                                  WM_native_ui_log("document",
-                                                                   "include external files: "
-                                                                   "cancelled");
-                                                  finish(nil);
-                                                  [presenter release];
-                                                  [document release];
-                                                  [finish release];
-                                                }]];
+        [alert addAction:wm_apple_ios_cancel_action(@"Cancel", ^(UIAlertAction *) {
+          WM_native_ui_log("document",
+                           "include external files: "
+                           "cancelled");
+          finish(nil);
+          [presenter release];
+          [document release];
+          [finish release];
+        })];
         WM_native_ui_log("document",
                          [NSString stringWithFormat:@"include external files asked: %d, %d not "
                                                     @"packable",
