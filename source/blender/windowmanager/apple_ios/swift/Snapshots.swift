@@ -476,7 +476,9 @@ enum ShellSnapshots {
           try? await Task.sleep(for: .seconds(1))
         }
       case "touch":
-        var parts = step.split(separator: " ").map(String.init)
+        /* The words after the verb (the verb itself was read as the place, so every `touch` step
+         * was "unknown" on the device; ROUND7 U4b, `dbf1fba681d` in `move/5.3`). */
+        var parts = step.split(separator: " ").dropFirst().map(String.init)
         /* `@<WHERE>[#<button type>[:last]]` in place of `<x> <y>`: the place Blender's map has, with
          * `+` for the space in its name (`@TOPBAR+HEADER#16:last`, `@PROPERTIES+WINDOW#6`). */
         if let place = parts.first, place.hasPrefix("@"), let window = ShellModel.current?.window {
