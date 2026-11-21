@@ -443,10 +443,11 @@ struct TextStyleSection: View {
     .onChange(of: style.map { "\($0.key)=\($0.value)" }.sorted()) { _, _ in local.removeAll() }
   }
 
+  /** A group of rows with dividers, apart from the next by the stack's spacing: no card behind
+   * it (ROUND6 device round: space separates, not boxes). */
   private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
     VStack(spacing: 0) { content() }
       .padding(.horizontal, 12)
-      .background(PanelStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
   }
 
   /** The family by name, which the system's font picker chooses. */

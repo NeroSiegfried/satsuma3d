@@ -2097,3 +2097,62 @@ check('renderStory()' in storyboard_swift_e10 and 'use_sequencer_scene' in rende
       '"story"' in bridge_e8,
       "R6 EDIT-10 (D17): Render Story renders the workspace's sequencer scene")
 print('PASS: native shell sources ' + json.dumps(checks))
+
+# Sheets separate with space, not boxes (the owner, ROUND6 device round: "every div should be well
+# thought out and not separation for the sake of separation"). Every tinted or glass container,
+# grouped list and Form in the shell's Swift is counted per file; a file's count may only change
+# with this reviewed list, each entry saying why its containers are a unit a person must see as
+# one (a control's own style, a selection, a HUD over the 3D View that needs contrast, Blender's own
+# drawing). A container added only to set content apart fails here: use spacing and a heading.
+TINTED_CONTAINER = re.compile(
+    r'\.background\([^\n]*\bin:\s*(?:RoundedRectangle|UnevenRoundedRectangle|Capsule|Circle|ShellShape|shape\b|rounded\b)'
+    r'|\.background\(\s*(?:RoundedRectangle|UnevenRoundedRectangle|Capsule\(|Circle\(|shape\.fill|rounded\.fill)'
+    r'|\.listStyle\(\.insetGrouped\)|\bGroupBox\b|\.glassBackgroundEffect\(in:|\.panelGlass\(in:|\bForm \{')
+TINTED_CONTAINERS_REVIEWED = {
+    'ARPreview.swift': (1, "HUD capsule over the camera picture: needs contrast"),
+    'Assets.swift': (2, "the browser's glass panel over the 3D View (glass style) and a filter chip (a control)"),
+    'BlenderBridge.swift': (1, "a capsule chip: a control's own shape"),
+    'CompileIndicator.swift': (3, "pills over the 3D View (shader compile, jobs): HUD, needs contrast"),
+    'DesktopCluster.swift': (1, "the cluster's key buttons: a control's own style, over the Desktop Interface"),
+    'FCurveEditor.swift': (1, "Form of a key's fields: the system's control layout in a popover (kept; owner may decide)"),
+    'FaceControl.swift': (1, "HUD capsule over the 3D View"),
+    'FontPicker.swift': (4, "text fields and option chips: controls' own shapes"),
+    'HierarchyView.swift': (2, "the selected row's highlight, and a HUD capsule"),
+    'ImageEditor.swift': (3, "label and close capsules over the canvas (contrast), New Image's Form (system controls)"),
+    'InspectorView.swift': (1, "HUD capsule over the 3D View"),
+    'ItemCard.swift': (1, "the Item card over the 3D View: HUD, needs contrast"),
+    'Launcher.swift': (1, "visionOS window glass: the platform's window surface"),
+    'NativeControls.swift': (4, "Blender's text field and popover surfaces (its widget look), HUD capsules"),
+    'NativeLists.swift': (4, "Blender's list box and text field (its widget look), a selected chip, a HUD capsule"),
+    'NativePanels.swift': (4, "the selected tab, a HUD capsule, Blender's panels as boxes (Blender draws them so), a drag highlight"),
+    'NodeEditor.swift': (6, "nodes, sockets and badges on the node canvas: Blender's own drawing"),
+    'QuickActions.swift': (5, "the action bar's buttons and pressed states over the 3D View: HUD controls"),
+    'Rails.swift': (12, "the tool rail and its pressed and selected tools over the 3D View: HUD controls"),
+    'RedoStrip.swift': (1, "the operator dialog's Form: the system's control layout (kept; owner may decide)"),
+    'RenderSheet.swift': (4, "controls over the rendered picture (contrast) and the selected frame"),
+    'SettingsSheet.swift': (4, "the pressure curve's plot area, two Settings Forms (system controls), Settings page icons"),
+    'ShellMessages.swift': (1, "a message capsule over the 3D View: HUD"),
+    'SqueezePalette.swift': (4, "the Pencil palette's ring and label over the 3D View: HUD"),
+    'Storyboard.swift': (3, "a strip's colour tag and labels over shot pictures (contrast)"),
+    'TemplatePicker.swift': (1, "a template tile: one tappable unit"),
+    'UIKitInterop.swift': (6, "tooltip, glass and Blender surfaces of the shared styles (definitions, not uses)"),
+    'VisionOrnaments.swift': (2, "visionOS ornaments: the platform's window surfaces"),
+}
+tinted_found = {}
+for path in sources():
+    count = len(TINTED_CONTAINER.findall(path.read_text(encoding='utf-8')))
+    if count:
+        tinted_found[path.name] = count
+tinted_unreviewed = sorted(
+    "%s: %d found, %s reviewed" % (name, count, TINTED_CONTAINERS_REVIEWED.get(name, (0,))[0])
+    for name, count in tinted_found.items() if TINTED_CONTAINERS_REVIEWED.get(name, (0,))[0] != count)
+tinted_stale = sorted(set(TINTED_CONTAINERS_REVIEWED) - set(tinted_found))
+check(not tinted_unreviewed and not tinted_stale,
+      "Sheets separate with space, not boxes: tinted containers not on the reviewed list (say why "
+      "each is a unit, or use spacing and a heading): %s; listed but gone: %s" % (
+          tinted_unreviewed, tinted_stale))
+guide_e = (SWIFT / 'SettingsSheet.swift').read_text(encoding='utf-8')
+guide_e = guide_e[guide_e.index('struct GestureGuide: View {'):guide_e.index('struct GestureGuideSheet')]
+check('List {' not in guide_e and 'Section {' not in guide_e and '.background(' not in guide_e,
+      "How to Use separates its sections with space and a plain heading, not boxes")
+print('PASS: sheets separate with space ' + json.dumps(len(tinted_found)))

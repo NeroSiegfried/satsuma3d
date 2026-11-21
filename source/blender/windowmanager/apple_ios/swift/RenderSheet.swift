@@ -732,9 +732,8 @@ struct RenderProgressCard: View {
       }
     }
     .animation(.smooth, value: model.progress)
+    /* On the sheet itself, set apart by space, not a card (ROUND6 device round). */
     .padding(16)
-    .background(Color(uiColor: .secondarySystemGroupedBackground),
-                in: RoundedRectangle(cornerRadius: 16, style: .continuous))
   }
 }
 

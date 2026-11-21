@@ -28,9 +28,9 @@
  * - `gate <label>`: the input gate's answer (ROUND5 9G.1) at the viewport's middle and at a point
  *   left of the middle, where a sheet's dimmed surround is, written to the log as
  *   `gate <label> centre <answer> side <answer>`: `takes`, or why Blender is given no input there;
- * - `present render|search|templates`: the render sheet, Search, or the template picker as File ›
- *   New… opens it (the last only in the scratch document); `present close`: what is presented, as
- *   its Cancel would;
+ * - `present render|search|templates|guide`: the render sheet, Search, the template picker as File ›
+ *   New… opens it (only in the scratch document), or How to Use; `present close`: what is
+ *   presented, as its Cancel would;
  * - `dialog cancel`: every native dialog and alert, as their Cancel;
  * - `edit <identifier>`: put a number field into editing, as a tap does, so a shot shows the full
  *   value it is typed from (ROUND5 7E.7): the first field shown whose node key ends in it, or
@@ -302,6 +302,11 @@ enum ShellSnapshots {
             ShellCommands.current?.render?.showRenders()
           case "search":
             ShellModel.current?.searchOpen = true
+          case "guide":
+            /* How to Use, as the first launch shows it (a check launch never shows it by itself). */
+            if let root = shownRoot {
+              root.present(UIHostingController(rootView: GestureGuideSheet()), animated: false)
+            }
           case "templates":
             /* As File › New… does inside a document: the template picker, cancelled by `present
              * close` before anything is made. */

@@ -408,7 +408,8 @@ struct EnumChoiceList: View {
           }
         }
       }
-      .listStyle(.insetGrouped)
+      /* A plain list of choices, not boxed sections (ROUND6 device round). */
+      .listStyle(.plain)
       .navigationTitle(request.title)
       .navigationBarTitleDisplayMode(.inline)
     }

@@ -999,8 +999,8 @@ extension View {
 }
 
 extension View {
-  /** Lists of choices, grouped as the platform groups its lists. */
-  func groupedListStyle() -> some View { self.listStyle(.insetGrouped) }
+  /** Lists of choices: plain rows, not boxed sections (ROUND6 device round: space separates). */
+  func groupedListStyle() -> some View { self.listStyle(.plain) }
 
   /** A search field that stays in the navigation bar. */
   func searchableInBar(text: Binding<String>) -> some View {

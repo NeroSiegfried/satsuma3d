@@ -240,11 +240,9 @@ final class SwiftScenePanels {
             Toggle("Show Overlays", isOn: Binding(
               get: { model.viewportOption("overlays") },
               set: { model.send("viewport:overlays", .set_, .bool($0)) }))
-              .padding(.horizontal, 16)
-              .padding(.vertical, 12)
-              .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-              .padding(.horizontal, 16)
-              .padding(.vertical, 8)
+              /* A plain row above the overlays, not a box (ROUND6 device round). */
+              .padding(.horizontal, 32)
+              .padding(.vertical, 14)
               /* Pinned above the overlays, which scroll under it out of sight. */
               .frame(maxWidth: .infinity)
               .background(Color(uiColor: .systemGroupedBackground))
