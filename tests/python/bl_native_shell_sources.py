@@ -2276,3 +2276,29 @@ check('WM_window_rect_calc(win, &screen_rect);' in onscreen_b2d and
                 onscreen_b2d) is not None and
       'GPU_clear_color(border[0], border[1], border[2], 1.0f);' in onscreen_b2d,
       "The window's pixels outside Blender's screen (the Desktop Interface's band) are cleared each draw")
+
+# Run B3 (2026-11-26), grey screen: opening a second file while one is open faded Blender's window
+# out, and the new document opened within the 0.3 s fade. The fade in was decided from
+# `window.hidden`, still NO mid-fade, so it never ran and the window stayed at alpha 0 over the
+# launcher's grey. The show and hide decide from the window's target alpha, and only the latest
+# fade's end may hide the window. Every UIKit fade whose end hides a window or view is held to the
+# same rule: its completion checks that no later change superseded it.
+system_b3 = (ROOT / 'intern/ghost/intern/GHOST_SystemIOS.mm').read_text(encoding='utf-8')
+visible_b3 = system_b3[system_b3.index('void GHOST_ios_document_window_set_visible('):]
+visible_b3 = visible_b3[:visible_b3.index('\n}\n')]
+check('window.hidden == visible' not in visible_b3 and
+      'window.alpha == 1.0' in visible_b3 and
+      re.search(r'completion:\^\(BOOL\) \{\s+if \(fade == document_window_fades && '
+                r'!document_window_visible\)', visible_b3) is not None,
+      "The document window's fade in is decided from its alpha, so a file opened mid fade out shows")
+fades_b3 = []
+for path_b3 in sorted((ROOT / 'intern/ghost/intern').glob('*IOS*.mm')) + sorted(
+        (ROOT / 'source/blender/windowmanager/apple_ios').glob('*.mm')):
+    text_b3 = path_b3.read_text(encoding='utf-8')
+    for m_b3 in re.finditer(r'completion:\^\(BOOL[^)]*\)\s*\{(?P<body>[^{}]*)\}', text_b3):
+        if re.search(r'\.hidden = YES|removeFromSuperview', m_b3.group('body')) and \
+                not re.search(r'\bif \(', m_b3.group('body')):
+            fades_b3.append('%s:%d' % (path_b3.name, text_b3.count('\n', 0, m_b3.start()) + 1))
+check(not fades_b3,
+      "Every fade that hides or removes a view at its end first checks it was not superseded: %s" %
+      fades_b3)

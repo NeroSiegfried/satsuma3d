@@ -75,28 +75,40 @@ static UIWindow *launcher_window = nil;
 /** Blender's main window, which shows the open document, see `GHOST_WindowIOS.mm`. */
 extern UIWindow *document_window;
 static bool document_window_visible = false;
+/** Counts the fades, so that only the latest one's end hides the window. */
+static uint64_t document_window_fades = 0;
 
 void GHOST_ios_document_window_set_visible(bool visible, bool animated)
 {
   document_window_visible = visible;
   /* The window, not the view's: a window never shown yet holds no views. */
   UIWindow *window = document_window;
-  if (window && window.hidden == visible) {
-    /* Cross-fade between the launcher and Blender, as the document opens or closes. */
+  /* Decided from where the window is going, never from `hidden` alone: a fade out keeps the
+   * window unhidden for its 0.3 s, so a document that opens within it (opening a second file
+   * while one is open) found the window "shown", was never faded back in, and left the launcher's
+   * grey on screen (device checks of build 2). */
+  const bool shown = window && !window.hidden && window.alpha == 1.0;
+  const bool hiding = window && !window.hidden && window.alpha != 0.0;
+  if (window && (visible ? !shown : hiding)) {
+    /* Cross-fade between the launcher and Blender, as the document opens or closes. A fade that
+     * is still running is taken over from where it is. */
     if (visible) {
-      window.alpha = 0;
-      window.hidden = NO;
+      if (window.hidden) {
+        window.alpha = 0;
+        window.hidden = NO;
+      }
       [window makeKeyWindow];
     }
     else {
       [launcher_window makeKeyWindow];
     }
+    const uint64_t fade = ++document_window_fades;
     [UIView animateWithDuration:UIAccessibilityIsReduceMotionEnabled() || !animated ? 0 : 0.3
         animations:^{
           window.alpha = visible ? 1 : 0;
         }
         completion:^(BOOL) {
-          if (!document_window_visible) {
+          if (fade == document_window_fades && !document_window_visible) {
             window.hidden = YES;
           }
         }];
