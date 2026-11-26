@@ -203,6 +203,15 @@ if(WITH_BUILDINFO)
   set(BUILD_LINKFLAGS "${PLATFORM_LINKFLAGS}")
   set(BUILD_SYSTEM "CMake")
 
+  if(WITH_APPLE_CROSSPLATFORM)
+    # The iPad app is handed to other people: its build information names no folder of the Mac
+    # that built it (ROUND7 R7-19). The link flags hold the symbols list by its absolute path
+    # (`-unexported_symbols_list`, `platform_apple.cmake`), under the builder's home folder. They
+    # keep the path relative to the source folder.
+    string(REPLACE "${CMAKE_SOURCE_DIR}/" "" BUILD_LINKFLAGS "${BUILD_LINKFLAGS}")
+    string(REPLACE "${CMAKE_BINARY_DIR}/" "" BUILD_LINKFLAGS "${BUILD_LINKFLAGS}")
+  endif()
+
   if(WITH_COMPILER_SHORT_FILE_MACRO)
     # It's not necessary to include path information
     # about the system building Blender in the executable.

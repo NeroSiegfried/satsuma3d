@@ -150,7 +150,12 @@ if [ ! -f "$MESON_BUILD/build.ninja" ]; then
       -Dpython.platlibdir="lib/python$PYTHON_SHORT_VERSION/site-packages" \
       -Dpython.purelibdir="lib/python$PYTHON_SHORT_VERSION/site-packages"
 fi
-IPHONEOS_DEPLOYMENT_TARGET="$MINIMUM_OS" "${MESON[@]}" compile -C "$MESON_BUILD" -j "$JOBS"
+# With the same environment as the setup: a build folder used before regenerates itself here when
+# its cross file is written again, and without it asks the Mac's Python for the suffix (ROUND7 IN).
+env _PYTHON_SYSCONFIGDATA_NAME="$SYSCONFIG_NAME" \
+    PYTHONPATH="$BUILD_DIR/target_sysconfig" \
+    IPHONEOS_DEPLOYMENT_TARGET="$MINIMUM_OS" \
+  "${MESON[@]}" compile -C "$MESON_BUILD" -j "$JOBS"
 
 # 3. Relink every extension module as MH_DYLIB, then check it against the module it replaces.
 "$HOST_PYTHON" "$BLENDER_DIR/release/ios/relink_python_extensions.py" \

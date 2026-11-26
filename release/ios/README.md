@@ -68,11 +68,15 @@ address, team, identity, profile). The script, logging each step to `<build dir>
 4. rebuilds NumPy's modules as dynamic libraries with `build_numpy_ios.sh` and proves them with
    `check_numpy_replacements.py` (see below);
 5. rebuilds OpenImageDenoise with its framework loader with `build_oidn_ios.sh` and proves it with
-   `check_oidn_replacements.py` (see below);
+   `check_oidn_replacements.py` (see below); both build under `WORK_ROOT`
+   (`/Users/Shared/satsuma3d/testflight/<build dir name>`), never under a home folder, because
+   Cython keeps each module's source path in the module;
 6. runs `prepare_testflight.py --without-plugins` with both sets of replacements: every library becomes a framework, each Python
    module gets its `.fwork` marker, each framework whose binary uses a required reason API gets
    a privacy manifest, any app extension is left out (decision 36), and
-   the layout is checked (`check_prepared`); then writes the encryption key from
+   the layout is checked (`check_prepared`); an app any file of which holds the home folder of the
+   Mac preparing it is refused, with the count and the files named, and no setting passes it
+   (ROUND7 R7-19); then writes the encryption key from
    `check_no_encryption_library.py` (see "Encryption" below);
 7. checks the prepared app: its identity in `Info.plist` (id, name, version, build, source
    address and commit, iPad only, minimum OS), the icon and glyphs in `Assets.car`

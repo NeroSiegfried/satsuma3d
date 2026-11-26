@@ -25,9 +25,15 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
+    # Only the modules the build makes now: a build folder used before may hold modules of an
+    # earlier configuration (another extension suffix), which must not reach the output (ROUND7 IN).
+    targets = subprocess.check_output(['ninja', '-t', 'targets', 'all'], cwd=build, text=True)
+    current = {line.rsplit(': ', 1)[0] for line in targets.splitlines() if ': ' in line}
     count = 0
     for binary in sorted(build.rglob('*.so')):
         target = str(binary.relative_to(build))
+        if target not in current:
+            continue
         command = subprocess.check_output(['ninja', '-t', 'commands', '-s', target], cwd=build, text=True).strip()
         words = shlex.split(command)
         if '-bundle' not in words or words.count('-o') != 1 or any(w in words for w in ('&&', ';', '|')):
@@ -38,6 +44,10 @@ def main():
         destination.parent.mkdir(parents=True, exist_ok=True)
         words[words.index('-bundle')] = '-dynamiclib'
         words[words.index('-o') + 1] = str(destination)
+        # The install name is the module's own name, not the output path: that path is in the build
+        # folder, under the builder's home folder, and a folder of replacements holding it is never
+        # reused (ROUND7 R7-19, IN). Packaging sets the framework's install name anyway.
+        words += ['-install_name', '@rpath/' + binary.name]
         for i, word in enumerate(words):
             if word == '-isysroot':
                 words[i + 1] = sdk

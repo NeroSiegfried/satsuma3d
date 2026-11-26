@@ -434,6 +434,11 @@ if(WITH_APPLE_CROSSPLATFORM)
   # The native interface is split into Objective-C categories, which the linker would otherwise
   # leave out of static libraries, as nothing refers to their symbols.
   string(APPEND PLATFORM_LINKFLAGS " -ObjC")
+  # No debug map in the iPad's Release executable (ROUND7 R7-19). The linker otherwise records the
+  # absolute path of every object that carries debug information (Python's prebuilt objects, through
+  # `python_without_openssl/libpython3.13.a`): 263 paths into the build folder, under the builder's
+  # home folder. Release makes no dSYM from it (Blender's own objects have no debug information).
+  string(APPEND CMAKE_EXE_LINKER_FLAGS_RELEASE " -Wl,-S")
 else()
   set(PLATFORM_LINKFLAGS
     "-fexceptions -framework CoreServices -framework Foundation -framework IOKit -framework AppKit -framework Cocoa -framework Carbon -framework AudioUnit -framework AudioToolbox -framework CoreAudio -framework Metal -framework QuartzCore"

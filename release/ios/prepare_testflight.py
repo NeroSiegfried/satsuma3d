@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from home_folder import files_holding_home
 from required_reason_apis import MANIFEST, categories_used, declared, manifest_for
 
 
@@ -66,6 +67,22 @@ def verify_platform(binary, minimum_os):
 # Blender's logo and icon artwork, which the app must not carry (ROUND5 8B, decision 34).
 BLENDER_ARTWORK = ('blender_liquid_glass*', 'blender_icon.icns', 'blender_logo_mono.svg')
 BLENDER_ICON_NAME = 'blender_liquid_glass'
+
+
+def home_folder_problem(app, home=None):
+    """ROUND7 R7-19: the files of \a app that hold the home folder of the Mac preparing it (as given
+    and resolved), as one problem naming the count and up to ten files; None when there are none.
+
+    Binary or text, the executable, Python's files and every resource: a path under the builder's
+    home folder in the app tells whoever unpacks it the builder's login name. NumPy's and
+    OpenImageDenoise's replacements are held to the same before they are reused (`build_testflight.sh`).
+    There is no setting that passes it: the build is fixed to keep the path out.
+    """
+    holding = files_holding_home(app, home)
+    if not holding:
+        return None
+    return (f'{len(holding)} file{"s" if len(holding) != 1 else ""} of the app hold the home folder of '
+            f'the Mac that built it (ROUND7 R7-19): ' + ', '.join(holding[:10]))
 
 
 def check_artwork(app):
@@ -309,6 +326,9 @@ def _prepare(source, output, replacements, without_plugins=False):
     problems = check_prepared(output)
     if problems:
         raise ValueError('The prepared app breaks the framework layout:\n  ' + '\n  '.join(problems))
+    home = home_folder_problem(output)
+    if home:
+        raise ValueError(home)
     return len(libraries)
 
 

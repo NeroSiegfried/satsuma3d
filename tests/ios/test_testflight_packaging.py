@@ -18,7 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "release" / "ios"))
 
 from archive_testflight import APP_ENTITLEMENTS, signing_entitlements
 from check_numpy_replacements import check as check_replacements
-from prepare_testflight import check_artwork, check_icons, check_prepared, dependencies, macho_type, prepare
+from prepare_testflight import (check_artwork, check_icons, check_prepared, dependencies,
+                                home_folder_problem, macho_type, prepare)
 from required_reason_apis import MANIFEST, manifest_for, scan
 
 
@@ -98,6 +99,40 @@ class TestFlightPackagingTest(unittest.TestCase):
         self.assertEqual(check_prepared(output), [])
         with self.assertRaises(ValueError):
             prepare(self.app, output, {})
+
+    def test_refuses_an_app_holding_the_home_folder(self):
+        """ROUND7 R7-19: a made-up app is prepared when no file holds the home folder, and refused,
+        with the count and the files named, when its executable and a resource do. The home folder
+        is only ever read at run time here (this file must not hold one)."""
+        home = str(Path.home())
+        library = self.lib / 'libExample.1.dylib'
+        self.compile('lib', 'int example(void) { return 42; }', '-dynamiclib',
+                     '-Wl,-install_name,@rpath/libExample.1.dylib', '-o', library)
+        self.compile('app', 'int example(void); int main(void) { return example(); }',
+                     library, '-o', self.app / 'Test')
+        (self.app / 'Assets/datafiles').mkdir(parents=True)
+        (self.app / 'Assets/datafiles/notes.txt').write_text('built under /opt/satsuma\n')
+        clean = self.root / 'Clean.app'
+        prepare(self.app, clean, {})
+        self.assertIsNone(home_folder_problem(clean))
+        self.compile('app', 'int example(void); const char *where = "%s/src/creator.c";\n'
+                     'int main(void) { return where[0] + example(); }' % home, library, '-o', self.app / 'Test')
+        (self.app / 'Assets/datafiles/notes.txt').write_text('built under %s/build\n' % home)
+        dirty = self.root / 'Dirty.app'
+        with self.assertRaises(ValueError) as refused:
+            prepare(self.app, dirty, {})
+        message = str(refused.exception)
+        self.assertIn('2 files of the app hold the home folder', message)
+        self.assertIn('Test', message)
+        self.assertIn('Assets/datafiles/notes.txt', message)
+        self.assertFalse(dirty.exists())
+        # A made-up home, built from pieces, so the finder is shown to read any file it is given.
+        someone = '/' + '/'.join(('Users', 'someone'))
+        (clean / 'Assets/datafiles/notes.txt').write_bytes(b'\0\x01' + someone.encode() + b'/x.c\0')
+        self.assertEqual(home_folder_problem(clean, someone),
+                         '1 file of the app hold the home folder of the Mac that built it (ROUND7 R7-19): '
+                         'Assets/datafiles/notes.txt')
+        self.assertIsNone(home_folder_problem(clean, '/' + '/'.join(('Users', 'nobody'))))
 
     def test_prepared_layout_check(self):
         """ROUND5 8F.2: the layout check finds a loose library, a second binary in a framework and a
@@ -355,6 +390,19 @@ class BuildScriptTest(unittest.TestCase):
         self.assertIn('--without-plugins', text)
         # The icon follows the checkout, not a stale cache entry (the icon's folder was renamed).
         self.assertIn('-UIOS_APP_ICON -UIOS_APP_ICON_NAME', text)
+
+    def test_numpy_and_denoiser_built_under_a_neutral_root(self):
+        """ROUND7 R7-19: NumPy and OpenImageDenoise build under WORK_ROOT, never under a home folder,
+        and earlier replacements are reused only when no file of them holds the home folder."""
+        text = self.SCRIPT.read_text()
+        self.assertIn('  WORK_ROOT=/Users/Shared/satsuma3d/testflight\n', text)
+        self.assertIn('"$release/build_numpy_ios.sh" "$work/numpy" "$replacements"', text)
+        self.assertIn('"$release/build_oidn_ios.sh" "$work/oidn" "$denoiser"', text)
+        self.assertEqual(text.count('&& holds_no_home "$'), 2)
+        result = self.run_with(f'WORK_ROOT={Path.home()}/satsuma-work\nBUILD_DIR=/nonexistent/b2\n'
+                               f'LIBDIR={self.SCRIPT.parent}\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('is under the home folder', result.stderr)
 
     def run_with(self, settings):
         with tempfile.TemporaryDirectory() as temporary:

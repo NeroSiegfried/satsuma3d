@@ -13,7 +13,9 @@
 #   3. stage      `cmake --install`: the complete app at <build-dir>/bin/Blender.app
 #   4. numpy      NumPy's modules rebuilt and relinked as dynamic libraries (`build_numpy_ios.sh`)
 #   5. oidn       OpenImageDenoise rebuilt to find its device module as a framework (`build_oidn_ios.sh`)
-#   6. prepare    every library a framework, without app extensions (`prepare_testflight.py`);
+#   6. prepare    every library a framework, without app extensions (`prepare_testflight.py`), which
+#                 refuses an app any file of which holds this Mac's home folder (ROUND7 R7-19; no
+#                 setting passes it);
 #                 every cipher listed and the encryption key written from the check and the owner's
 #                 recorded claim (`check_no_encryption_library.py`, ENCRYPTION_CLAIM)
 #   7. checks     identity, layout, privacy manifests, artwork (`test_testflight_packaging.py`)
@@ -58,6 +60,11 @@ main() {
   PROFILE=
   BUILD_DIR="$workspace/build_ios_testflight"
   LIBDIR="$checkout/lib/ios_arm64"
+  # Where NumPy and OpenImageDenoise are built (steps 4 and 5): a root that is the same for anyone,
+  # never under a home folder. Cython keeps each module's source path in the module, for tracebacks,
+  # so a work folder in the build folder put the builder's home folder into the app (ROUND7 R7-19;
+  # tester build 1 held it in four NumPy frameworks).
+  WORK_ROOT=/Users/Shared/satsuma3d/testflight
   if [ -f "$settings" ]; then
     echo "Settings: $settings"
     set -a
@@ -90,7 +97,12 @@ main() {
   if [ "$BUILD_DIR" = "$workspace/build_ios_device" ]; then
     fail "BUILD_DIR is the development build; tester builds use their own (decision 37)"
   fi
-  mkdir -p "$logs"
+  case "$WORK_ROOT/" in
+    "$HOME"/*|"$(cd "$HOME" && pwd -P)"/*)
+      fail "WORK_ROOT $WORK_ROOT is under the home folder: what is built there keeps its path (ROUND7 R7-19)" ;;
+  esac
+  local work="$WORK_ROOT/$(basename "$BUILD_DIR")"
+  mkdir -p "$logs" "$work"
 
   # The commit the build names as its source.
   local commit dirty=""
@@ -145,7 +157,10 @@ main() {
   step build
   if ! xcodebuild -project "$BUILD_DIR/Blender.xcodeproj" -target install -configuration Release \
        -parallelizeTargets CODE_SIGNING_ALLOWED=NO > "$logs/build.log" 2>&1; then
-    grep " error:" "$logs/build.log" | sort -u | head -20
+    # `|| true`: with no compiler error (a failed script phase) grep finds nothing, and pipefail
+    # would end the script there without a word (ROUND7 U3).
+    { grep " error:" "$logs/build.log" | sort -u | head -20; } || true
+    grep -A3 "^The following build commands failed:" "$logs/build.log" || true
     fail_log build
   fi
   local product="$BUILD_DIR/bin/Release/Blender.app"
@@ -169,11 +184,12 @@ main() {
   local replacements="$BUILD_DIR/numpy_replacements"
   local bundled_numpy="$LIBDIR/python/lib/python3.13/site-packages/numpy"
   if [ -d "$replacements" ] && "$python" -B "$release/check_numpy_replacements.py" \
-       "$bundled_numpy" "$replacements" > "$logs/numpy-check.log" 2>&1; then
+       "$bundled_numpy" "$replacements" > "$logs/numpy-check.log" 2>&1 \
+     && holds_no_home "$replacements" >> "$logs/numpy-check.log"; then
     echo "  reusing $replacements"
   else
     rm -rf "$replacements"
-    "$release/build_numpy_ios.sh" "$BUILD_DIR/numpy" "$replacements" > "$logs/numpy.log" 2>&1 \
+    "$release/build_numpy_ios.sh" "$work/numpy" "$replacements" > "$logs/numpy.log" 2>&1 \
       || fail_log numpy
     tail -1 "$logs/numpy.log"
   fi
@@ -183,11 +199,12 @@ main() {
   local denoiser="$BUILD_DIR/oidn_replacements"
   local bundled_oidn="$LIBDIR/openimagedenoise/lib"
   if [ -d "$denoiser" ] && (cd "$release" && "$python" -B check_oidn_replacements.py \
-       "$bundled_oidn" "$denoiser") > "$logs/oidn-check.log" 2>&1; then
+       "$bundled_oidn" "$denoiser") > "$logs/oidn-check.log" 2>&1 \
+     && holds_no_home "$denoiser" >> "$logs/oidn-check.log"; then
     echo "  reusing $denoiser"
   else
     rm -rf "$denoiser"
-    PREBUILT="$bundled_oidn" "$release/build_oidn_ios.sh" "$BUILD_DIR/oidn" "$denoiser" \
+    PREBUILT="$bundled_oidn" "$release/build_oidn_ios.sh" "$work/oidn" "$denoiser" \
       > "$logs/oidn.log" 2>&1 || fail_log oidn
     tail -1 "$logs/oidn.log"
   fi
@@ -341,6 +358,14 @@ PLIST
   echo "Archive: $archive"
   echo "Package: $(ls "$export_dir"/*.ipa)"
   echo "Nothing was uploaded. Validating and uploading are separate steps, on the owner's word."
+}
+
+# A folder of replacements an earlier run made is reused only when no file of it holds the home
+# folder (ROUND7 R7-19: those made before the work moved under WORK_ROOT do).
+holds_no_home() {
+  # `release` and `python` are main()'s.
+  (cd "$release" && "$python" -B -c 'import sys; from home_folder import files_holding_home
+found = files_holding_home(sys.argv[1]); print(f"{len(found)} files hold the home folder: {found[:10]}" if found else "no file holds the home folder"); sys.exit(1 if found else 0)' "$1")
 }
 
 step() {
