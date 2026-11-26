@@ -607,6 +607,8 @@ enum ShellSnapshots {
               "large": .large, "extraLarge": .extraLarge, "extraExtraLarge": .extraExtraLarge,
               "extraExtraExtraLarge": .extraExtraExtraLarge, "accessibilityMedium": .accessibilityMedium,
               "accessibilityLarge": .accessibilityLarge, "accessibilityExtraLarge": .accessibilityExtraLarge,
+              "accessibilityExtraExtraLarge": .accessibilityExtraExtraLarge,
+              "accessibilityExtraExtraExtraLarge": .accessibilityExtraExtraExtraLarge,
             ]
             guard let size = sizes[words[1]] else {
               WM_native_ui_log("snapshot", "unknown step: \(step)")

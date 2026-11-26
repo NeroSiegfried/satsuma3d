@@ -2352,6 +2352,22 @@ check('bridge_progress_stalled(key,' in jobs_b3 and 'key + ":stalled"' in jobs_b
       'if let working = model.working' in sheet_b3,
       "A render's figure that stands still is said as work with the engine's words")
 
+# Run B3, large text: at the accessibility sizes the document window's labels wrapped inside a word
+# ("Se-lect", "Collec-tions") or were cut ("Actio..."): it is laid out in points for set widths. Its
+# text is held, once at its root, to the size it is laid out for, and the Outliner's Select keeps
+# its word whole.
+window_text_b3 = (SWIFT / 'DocumentWindow.swift').read_text(encoding='utf-8')
+hierarchy_b3 = (SWIFT / 'HierarchyView.swift').read_text(encoding='utf-8')
+metrics_b3 = (SWIFT / 'QuickActions.swift').read_text(encoding='utf-8')
+body_b3 = window_text_b3[window_text_b3.index('  public var body: some View {\n    window\n'):]
+body_b3 = body_b3[:body_b3.index('\n  }\n')]
+check('static let limit = DynamicTypeSize.xxxLarge' in metrics_b3 and
+      'dynamicTypeSize(...ShellText.limit)' in metrics_b3 and
+      re.search(r'\.shellChromeText\(\)\s*$', body_b3) is not None and
+      re.search(r'"Select"\) \{.*?\.lineLimit\(1\)\s+\.fixedSize\(\)\s+'
+                r'\.accessibilityIdentifier\("blender\.hierarchy\.select"\)', hierarchy_b3, re.S) is not None,
+      "The document window's text keeps to the size it is laid out for")
+
 # Run B3, the number field that went into typing (build 2's 5l.1): the check script's step "tap a
 # panel's header" (`touch @PROPERTIES+WINDOW#-2`) was answered with the middle of Properties, as if
 # no kind had been asked, because every negative kind meant "the region". It tapped a number field,

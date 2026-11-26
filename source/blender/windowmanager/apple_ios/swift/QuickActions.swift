@@ -935,3 +935,23 @@ struct NumberPad: View {
 }
 
 /** \} */
+
+/** The text sizes the document window is laid out for (Run B3). */
+enum ShellText {
+  /** The largest text size the document window is laid out for: its bars, the pills of the bottom
+   * stack, the gizmo column, the rails, the job pills, the Desktop Interface's cluster, and the
+   * Outliner and Properties in their columns of set width. At the accessibility sizes their labels
+   * wrapped inside a word ("Se-lect", "Collec-tions") or were cut ("Actio..."), device checks of
+   * build 2 and Run B3. The sheets with forms of their own (Settings, About, Render) still follow
+   * the person's whole setting. See #shellChromeText. Apart
+   * from #ShellMetrics, which is built alone (without SwiftUI) by `test_shell_overlays.py`. */
+  static let limit = DynamicTypeSize.xxxLarge
+}
+
+extension View {
+  /** Holds the document window's text to #ShellText.limit (Run B3), applied once at
+   * its root; `bl_native_shell_sources.py` checks the place. */
+  func shellChromeText() -> some View {
+    dynamicTypeSize(...ShellText.limit)
+  }
+}

@@ -217,9 +217,14 @@ struct HierarchyPanel: View {
       .fontWeight(store.editing ? .semibold : .regular)
       .buttonStyle(.bordered)
       .buttonBorderShape(.capsule)
+      /* Its word whole: the title gives way first (it wrapped as "Se-lect", Run B3). */
+      .lineLimit(1)
+      .fixedSize()
       .accessibilityIdentifier("blender.hierarchy.select")
       Text("Outliner")
         .font(.headline)
+        .lineLimit(1)
+        .minimumScaleFactor(0.6)
         .frame(maxWidth: .infinity)
       Menu {
         Button("New Collection", systemImage: "folder.badge.plus") {

@@ -1054,6 +1054,10 @@ public struct DocumentWindow: View {
       .overlay { RollDialLayer() }
       .overlay { ColorRollLayer() }
 #endif
+      /* Everything the window draws is laid out in points for set widths (the bars, the pills, the
+       * gizmo column, the sidebars' columns): its text keeps to the size those are made for (Run B3,
+       * #ShellText.limit). */
+      .shellChromeText()
   }
 
   @ViewBuilder
