@@ -3967,6 +3967,10 @@ static bool ios_momentum_stopped(const CGPoint velocity)
     text_field.clipsToBounds = YES;
     text_field.leftView = [[[UIView alloc] initWithFrame:CGRectMake(0, 0, 4, 4)] autorelease];
     text_field.leftViewMode = UITextFieldViewModeAlways;
+    /* Shown only while Blender edits a text: opaque, a field left on screen covered Blender's
+     * own (an empty dark box over a number field, which stayed in the iPad interface after
+     * leaving the Desktop Interface; device checks of build 2). */
+    text_field.hidden = YES;
 
     [window->rootWindow addSubview:text_field];
 
@@ -4314,6 +4318,7 @@ static bool ios_momentum_stopped(const CGPoint velocity)
     [self storeKeyboardString:text_field.text];
 
     if (!onscreen_keyboard_active) {
+      text_field.hidden = NO;
       text_field.userInteractionEnabled = YES;
       const bool key_input_was_shown = [self keyInputShown];
       if (![text_field becomeFirstResponder]) {
@@ -4361,6 +4366,8 @@ static bool ios_momentum_stopped(const CGPoint velocity)
        on the view)
        */
       text_field.userInteractionEnabled = NO;
+      /* Off the screen with the keyboard, see #initUITextField. */
+      text_field.hidden = YES;
 
       /* Save the input to a c-string */
       [self storeKeyboardString:text_field.text];

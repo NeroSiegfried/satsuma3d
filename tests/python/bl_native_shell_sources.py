@@ -2302,3 +2302,19 @@ for path_b3 in sorted((ROOT / 'intern/ghost/intern').glob('*IOS*.mm')) + sorted(
 check(not fades_b3,
       "Every fade that hides or removes a view at its end first checks it was not superseded: %s" %
       fades_b3)
+
+# Run B3, the dark box: the field typed into (DESK-3) is opaque, so that Blender's field under it
+# never shows at once, and it was never hidden: after any text edit an empty dark box stayed over
+# the field, in the Desktop Interface and after leaving it. It is hidden from its creation, shown
+# for the keyboard and hidden with it.
+window_b3 = (ROOT / 'intern/ghost/intern/GHOST_WindowIOS.mm').read_text(encoding='utf-8')
+init_b3 = window_b3[window_b3.index('- (void)initUITextField'):]
+init_b3 = init_b3[:init_b3.index('\n}\n')]
+popup_b3 = window_b3[window_b3.index('- (GHOST_TSuccess)popupOnscreenKeyboard:'):]
+popup_b3 = popup_b3[:popup_b3.index('\n}\n')]
+hide_b3 = window_b3[window_b3.index('- (GHOST_TSuccess)hideOnscreenKeyboard'):]
+hide_b3 = hide_b3[:hide_b3.index('\n}\n')]
+check(init_b3.index('text_field.hidden = YES;') < init_b3.index('addSubview:text_field') and
+      popup_b3.index('text_field.hidden = NO;') < popup_b3.index('[text_field becomeFirstResponder]') and
+      'text_field.hidden = YES;' in hide_b3,
+      "The field typed into shows only while the keyboard is up")
