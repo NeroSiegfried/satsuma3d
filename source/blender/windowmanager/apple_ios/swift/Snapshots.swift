@@ -238,7 +238,24 @@ enum ShellSnapshots {
           guard parts.count == 2 else { continue }
           properties[parts[0]] = Double(parts[1]).map { .float($0) } ?? .text(parts[1])
         }
-        Operators.run(name, properties)
+        /* Every run says how it ended (Run B3: a render run here returned at once and said
+         * nothing). Blender answers once the operator returned, which for a blocking one (a render
+         * run without its window) is when it ends, so the answer is waited for beside the script. */
+        let command = Operators.runAnswered(name, properties)
+        WM_native_ui_log("snapshot", "op \(name): sent")
+        Task { @MainActor in
+          let started = Date()
+          while Date().timeIntervalSince(started) < 900 {
+            if let outcome = NativeViews.shared.outcome(of: command) {
+              let seconds = String(format: "%.1f", Date().timeIntervalSince(started))
+              WM_native_ui_log("snapshot", "op \(name): " + ((outcome.flatMap { $0.isEmpty ? nil : $0 }).map { "failed: \($0)" } ?? "done") +
+                               " after \(seconds) s")
+              return
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+          }
+          WM_native_ui_log("snapshot", "op \(name): no answer in 900 s")
+        }
         try? await Task.sleep(for: .milliseconds(600))
       case "pad":
         /* The number pad of a waiting operation, as its 123 button shows it. */

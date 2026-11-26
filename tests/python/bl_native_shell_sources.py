@@ -2318,3 +2318,18 @@ check(init_b3.index('text_field.hidden = YES;') < init_b3.index('addSubview:text
       popup_b3.index('text_field.hidden = NO;') < popup_b3.index('[text_field becomeFirstResponder]') and
       'text_field.hidden = YES;' in hide_b3,
       "The field typed into shows only while the keyboard is up")
+
+# Run B3, silent runs: a check script's `op` step said nothing when its operator was cancelled
+# without a reason (a render, which returned at once). The step waits for Blender's answer beside
+# the script and logs it, and the bridge logs every operator run by name that cancels unexplained.
+snap_b3 = (SWIFT / 'Snapshots.swift').read_text(encoding='utf-8')
+op_b3 = snap_b3[snap_b3.index('case "op":'):]
+op_b3 = op_b3[:op_b3.index('case "pad":')]
+views_b3 = (SWIFT.parents[1] / 'intern/wm_native_ui_views.cc').read_text(encoding='utf-8')
+run_b3 = views_b3[views_b3.index('bool operator_run('):]
+run_b3 = run_b3[:run_b3.index('\n}\n')]
+check('Operators.runAnswered(' in op_b3 and 'Operators.run(' not in op_b3 and
+      'outcome(of: command)' in op_b3 and 'no answer in 900 s' in op_b3 and
+      'const wmOperatorStatus status = WM_operator_name_call_ptr(' in run_b3 and
+      'status & OPERATOR_CANCELLED' in run_b3 and 'WM_native_ui_log("op",' in run_b3,
+      "A command run by name, and a script's op step, never end without a word")

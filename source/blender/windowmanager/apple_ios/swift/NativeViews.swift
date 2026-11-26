@@ -460,6 +460,11 @@ enum Operators {
   static func run(_ name: String, _ properties: [String: NativeValue] = [:], failed: (() -> Void)? = nil) {
     NativeViews.shared.send(view, target: name, op: .invoke, params: properties, failed: failed)
   }
+
+  /** As `run`, keeping Blender's answer: the command's number, for `NativeViews.outcome(of:)`. */
+  static func runAnswered(_ name: String, _ properties: [String: NativeValue] = [:]) -> UInt32 {
+    NativeViews.shared.send(view, target: name, op: .invoke, params: properties, answer: true)
+  }
 }
 
 /** The scene as 3D geometry, for Apple Vision Pro and the AR preview: what is done to it, through

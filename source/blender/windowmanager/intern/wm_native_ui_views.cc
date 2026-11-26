@@ -969,7 +969,7 @@ bool operator_run(bContext *C,
     wmWindowManager *wm = CTX_wm_manager(C);
     ReportList *reports = CTX_wm_reports(C);
     const Report *before = reports ? BKE_reports_last_displayable(reports) : nullptr;
-    WM_operator_name_call_ptr(C,
+    const wmOperatorStatus status = WM_operator_name_call_ptr(C,
                               ot,
                               operator_navigates(idname) ||
                                       WM_native_ui_is_document_command(ot->idname) ||
@@ -987,6 +987,13 @@ bool operator_run(bContext *C,
     if (report && report != before && report->type >= RPT_ERROR) {
       r_error = report->message;
       valid = false;
+    }
+    else if (status & OPERATOR_CANCELLED) {
+      /* Cancelled without a reason (Run B3: a script's render returned at once and said nothing).
+       * A cancel is an answer, not a failure: many operations cancel when there is nothing to do.
+       * It is written to the session log, so no run of a command by name ends unseen. */
+      WM_native_ui_log("op",
+                       (idname + ": cancelled, without a reason given").c_str());
     }
   }
   WM_operator_properties_free(&ptr);
