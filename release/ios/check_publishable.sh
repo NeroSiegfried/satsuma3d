@@ -113,12 +113,23 @@ done
 sort -u -o "$patterns" "$patterns"
 echo "Private strings: $(grep -c . "$patterns") gathered from this Mac"
 
+# A `/Users/<name>/` path is a home path, except `/Users/Shared/`: macOS's shared folder, which is
+# no one's (NumPy and OpenImageDenoise for a tester build are built under
+# `/Users/Shared/satsuma3d/testflight` so they name no one's home; ROUND7 R7-19, U2b). The exact
+# home folder of this Mac is still among the private strings above.
+holds_home_path() {
+  sed 's#/Users/Shared/##g' | grep -q -E '/Users/[A-Za-z0-9._-]+/'
+}
+
 files="$(git diff --name-only --diff-filter=AMT "$base" "$tip")"
 if [ -n "$files" ]; then
   hits="$(printf '%s\n' "$files" | tr '\n' '\0' |
     xargs -0 git grep -l -F -f "$patterns" "$tip" -- 2>/dev/null | sed "s/^$tip://")"
-  generic="$(printf '%s\n' "$files" | tr '\n' '\0' |
-    xargs -0 git grep -l -E '/Users/[A-Za-z0-9._-]+/' "$tip" -- 2>/dev/null | sed "s/^$tip://")"
+  generic=""
+  for path in $(printf '%s\n' "$files" | tr '\n' '\0' |
+      xargs -0 git grep -l -E '/Users/[A-Za-z0-9._-]+/' "$tip" -- 2>/dev/null | sed "s/^$tip://"); do
+    git show "$tip:$path" | holds_home_path && generic="$generic $path"
+  done
   for path in $hits; do
     fail "$path holds a private string of this Mac (home path, team id or device id)"
   done
@@ -130,7 +141,7 @@ fi
 for commit in $commits; do
   message="$(git log -1 --format=%B "$commit")"
   if printf '%s\n' "$message" | grep -q -F -f "$patterns" ||
-      printf '%s\n' "$message" | grep -q -E '/Users/[A-Za-z0-9._-]+/'; then
+      printf '%s\n' "$message" | holds_home_path; then
     fail "the message of $(git rev-parse --short "$commit") holds a home path, team id or device id"
   fi
 done

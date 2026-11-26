@@ -84,6 +84,20 @@ class CheckPublishableTest(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn('home path', out)
 
+    def test_shared_folder_is_not_a_home_path(self):
+        """ROUND7 U2b: `/Users/Shared/` is no one's home; another user's folder beside it still fails."""
+        shared = '/Users/' + 'Shared/satsuma3d/deps53_ios'
+        code, out = self.check(self.commit('release/ios/notes.txt', 'Built in %s.\n' % shared,
+                                           message='Built in %s\n' % shared))
+        self.assertEqual(code, 0, out)
+        code, out = self.check(self.commit('release/ios/notes.txt', 'In %s and %s/x.\n' % (shared, '/Users/' + 'someone')))
+        self.assertEqual(code, 1, out)
+        self.assertIn('home path', out)
+        code, out = self.check(self.commit('release/ios/notes.txt', 'Text.\n',
+                                           message='Built in %s and %s/x\n' % (shared, '/Users/' + 'someone')))
+        self.assertEqual(code, 1, out)
+        self.assertIn('message', out)
+
     def test_private_string_in_message_fails(self):
         code, out = self.check(self.commit('release/ios/notes.txt', 'Text.\n',
                                            message='Built in %s/build\n' % os.path.expanduser('~')))
