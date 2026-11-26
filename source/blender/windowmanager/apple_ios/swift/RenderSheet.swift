@@ -57,7 +57,13 @@ struct RenderStatus {
   func string(_ key: String) -> String? { values[key]?.value(type: Blender_NativeUI_TextValue.self)?.value }
   func double(_ key: String) -> Double? { values[key]?.value(type: Blender_NativeUI_FloatValue.self)?.value }
   func int(_ key: String) -> Int { Int(double(key) ?? 0) }
-  func bool(_ key: String) -> Bool { (double(key) ?? 0) != 0 }
+  func bool(_ key: String) -> Bool {
+    /* A flag the bridge sends as one (`state:stalled`), or a number from the Python status. */
+    if let data = values[key], data.valueType == .boolvalue {
+      return data.value(type: Blender_NativeUI_BoolValue.self)?.value ?? false
+    }
+    return (double(key) ?? 0) != 0
+  }
   func strings(_ key: String) -> [String] {
     guard let texts = values[key]?.value(type: Blender_NativeUI_TextsValue.self) else { return [] }
     return (0..<texts.valueCount).compactMap { texts.value(at: $0) }
@@ -515,6 +521,9 @@ final class RenderModel: ObservableObject {
   @Published var title = ""
   @Published var progress = 0.0
   @Published var phase = ""
+  /** The render's figure stands still short of the end: what the engine does then, said in place
+   * of the figure and the time left (Run B3, `bridge_progress_stalled`); nil while it moves. */
+  @Published var working: String?
   @Published var remaining: String?
   /** The frame rendered last, while an animation renders. */
   @Published var live: UIImage?
@@ -710,17 +719,25 @@ struct RenderProgressCard: View {
           .font(.headline)
           .contentTransition(.numericText())
         Spacer()
-        Text(model.progress, format: .percent.precision(.fractionLength(0)))
-          .font(.headline.monospacedDigit())
-          .foregroundStyle(.secondary)
-          .contentTransition(.numericText(value: model.progress))
+        if let working = model.working {
+          Text(working.isEmpty ? "Working" : working)
+            .font(.footnote.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        else {
+          Text(model.progress, format: .percent.precision(.fractionLength(0)))
+            .font(.headline.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .contentTransition(.numericText(value: model.progress))
+        }
       }
       ProgressView(value: model.progress)
         .progressViewStyle(.linear)
         .controlSize(.large)
         .accessibilityLabel(model.phase)
       HStack {
-        Text(model.remaining ?? "Estimating time…")
+        Text(model.working != nil ? "Estimating time…" : model.remaining ?? "Estimating time…")
           .font(.footnote)
           .foregroundStyle(.secondary)
           .contentTransition(.opacity)
@@ -1367,6 +1384,8 @@ final class RenderSession {
     /* Frames there before a Continue are not progress of this render's. */
     let resumed = Double(status.int("resumed"))
     model.progress = min(1, (Double(done) - resumed + samples) / max(1, total - resumed))
+    let working = status.bool("stalled") ? (status.string("engine_phase") ?? "").trimmingCharacters(in: .whitespaces) : nil
+    if model.working != working { model.working = working }
     let video = status.string("phase") == "video"
     BackgroundRender.shared.needsGPU = status.bool("gpu")
     if done != lastDone, !video {

@@ -57,6 +57,11 @@ enum BlenderJobs {
     let progress: Double
     /** Stop was asked for and the job has not ended yet. */
     let stopping: Bool
+    /** What it does now, as Blender says it ("Sample 1008/1024"); empty when it says nothing. */
+    let phase: String
+    /** Its progress has stood still short of the end: shown as working, with its phase, rather
+     * than as a figure that does not move (Run B3: a render read 98 % for most of its time). */
+    let stalled: Bool
   }
 
   static var jobs: [Job] {
@@ -64,7 +69,12 @@ enum BlenderJobs {
     return view.children(of: top).map { node in
       let progress = view.node(node.key + ":progress")?.content(Blender_NativeUI_Data.self)?
         .value(type: Blender_NativeUI_FloatValue.self)?.value ?? 0
-      return Job(id: node.key, name: node.label, progress: progress, stopping: node.node.description == "stopping")
+      let phase = view.node(node.key + ":phase")?.content(Blender_NativeUI_Data.self)?
+        .value(type: Blender_NativeUI_TextValue.self)?.value ?? ""
+      let flag = view.node(node.key + ":stalled")?.content(Blender_NativeUI_Data.self)
+      let stalled = flag?.valueType == .boolvalue && (flag?.value(type: Blender_NativeUI_BoolValue.self)?.value ?? false)
+      return Job(id: node.key, name: node.label, progress: progress, stopping: node.node.description == "stopping",
+                 phase: phase.trimmingCharacters(in: .whitespaces), stalled: stalled)
     }
   }
 
@@ -89,7 +99,15 @@ private struct JobPill: View {
         .font(.footnote)
         .foregroundStyle(.secondary)
         .lineLimit(1)
-      if job.progress > 0 && !job.stopping {
+      if job.stalled && !job.phase.isEmpty && !job.stopping {
+        Text(job.phase)
+          .font(.system(size: 12).monospacedDigit())
+          .foregroundStyle(.tertiary)
+          .lineLimit(1)
+          .truncationMode(.tail)
+          .frame(maxWidth: 220, alignment: .leading)
+      }
+      if job.progress > 0 && !job.stopping && !job.stalled {
         ProgressView(value: job.progress)
           .frame(width: 88)
         Text(job.progress, format: .percent.precision(.fractionLength(0)))
@@ -122,7 +140,8 @@ private struct JobPill: View {
     .transition(.opacity.combined(with: .offset(y: -6)))
     .accessibilityElement(children: .contain)
     .accessibilityLabel(name)
-    .accessibilityValue(job.progress > 0 ? "\(Int((job.progress * 100).rounded())) percent" : "Working")
+    .accessibilityValue(job.progress > 0 && !job.stalled ? "\(Int((job.progress * 100).rounded())) percent" :
+                          job.phase.isEmpty ? "Working" : job.phase)
     .accessibilityIdentifier("blender.job")
   }
 }

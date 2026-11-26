@@ -5592,6 +5592,58 @@ static double bridge_render_samples(const Scene *scene)
   return fraction;
 }
 
+/** What the render is doing now, the last part of the text its job keeps with the result, as
+ * desktop's render window shows it: "Sample 12/64", "Denoising", "Rendering 12 / 64 samples";
+ * empty when it says nothing. A render's progress counts only its samples, so it stands still at
+ * the end while the engine does what follows them (Run B3: Cycles with adaptive sampling read 98 %
+ * from the start of a long render); this says what it is doing then. */
+static std::string bridge_render_phase(const Scene *scene)
+{
+  Render *re = scene ? RE_GetSceneRender(scene) : nullptr;
+  if (re == nullptr) {
+    return "";
+  }
+  std::string phase;
+  const RenderResult *result = RE_AcquireResultRead(re);
+  if (result && result->text) {
+    const std::string_view text = result->text;
+    const size_t bar = text.rfind(" | ");
+    phase = std::string(bar == std::string_view::npos ? text : text.substr(bar + 3));
+  }
+  RE_ReleaseResult(re);
+  return phase;
+}
+
+/**
+ * Whether a job's progress has stood still for a while short of its end (Run B3). A render's
+ * progress counts samples: Cycles with adaptive sampling reports nearly all of them early, then
+ * works on (the last samples, loading the denoiser, denoising) with the figure unchanged, which read
+ * as "98 %" for most of a long render. The views then say it is working, with what it is doing, and
+ * give no figure that stands still. Keyed by \a key, the job's; forgotten once the job ends.
+ */
+static bool bridge_progress_stalled(const std::string &key, double progress)
+{
+  constexpr double stall_seconds = 3.0;
+  struct Seen {
+    double progress, changed, looked;
+  };
+  static std::map<std::string, Seen> seen;
+  const double now = BLI_time_now_seconds();
+  /* Jobs not looked at for a minute have ended. */
+  for (auto it = seen.begin(); it != seen.end();) {
+    it = (now - it->second.looked > 60.0) ? seen.erase(it) : std::next(it);
+  }
+  /* As the views show it, a whole percent: a figure that moves by less stands still on screen. */
+  progress = std::round(std::clamp(progress, 0.0, 1.0) * 100.0) / 100.0;
+  auto found = seen.find(key);
+  if (found == seen.end() || found->second.progress != progress) {
+    seen[key] = {progress, now, now};
+    return false;
+  }
+  found->second.looked = now;
+  return progress > 0.0 && progress < 1.0 && now - found->second.changed >= stall_seconds;
+}
+
 /** The render's state, as `bl_ui.native_render.status` gives it: a node of data for each of
  * its values, such as `state`, `done` and `image`. Built again soon while it renders. Buttons:
  * `image` and `animation` render, `cancel` and `clear`. */
@@ -5648,6 +5700,8 @@ void bridge_render_view_build(bContext *C,
    * (R6 BUSY-1, G13: a still read 0 % until it was done). */
   const bool rendering = bridge_text(*state, "state") == "rendering";
   double samples = 0.0;
+  std::string phase;
+  bool stalled = false;
   if (rendering) {
     for (const wmJobListItem &job : WM_jobs_list(CTX_wm_manager(C))) {
       if (job.job_type == WM_JOB_TYPE_RENDER) {
@@ -5657,6 +5711,8 @@ void bridge_render_view_build(bContext *C,
            * result: "Rendering 12 / 64 samples" (Cycles: "Sample 12/64"). */
           samples = bridge_render_samples(static_cast<const Scene *>(job.owner));
         }
+        phase = bridge_render_phase(static_cast<const Scene *>(job.owner));
+        stalled = bridge_progress_stalled("render", samples);
       }
     }
   }
@@ -5665,6 +5721,13 @@ void bridge_render_view_build(bContext *C,
         buffer,
         views::protocol::Value::FloatValue,
         views::protocol::CreateFloatValue(buffer, samples).Union());
+  });
+  /* What it does now, and whether its figure stands still (Run B3, #bridge_progress_stalled). */
+  builder.add(top, "state:engine_phase", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return bridge_data(buffer, std::string_view(phase));
+  });
+  builder.add(top, "state:stalled", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+    return bridge_data(buffer, stalled);
   });
   if (rendering) {
     /* Its progress, which no notifier tells of. */
@@ -5728,6 +5791,18 @@ static void bridge_jobs_view_build(bContext *C,
           buffer,
           views::protocol::Value::FloatValue,
           views::protocol::CreateFloatValue(buffer, progress).Union());
+    });
+    /* What it is doing, a render's from its own text, and whether its figure stands still: the
+     * pill then says it works rather than show a figure that does not move (Run B3). */
+    const std::string phase = job.job_type == WM_JOB_TYPE_RENDER ?
+                                  bridge_render_phase(static_cast<const Scene *>(job.owner)) :
+                                  std::string();
+    const bool stalled = bridge_progress_stalled(key, std::clamp(double(job.progress), 0.0, 1.0));
+    builder.add(node, key + ":phase", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      return bridge_data(buffer, std::string_view(phase));
+    });
+    builder.add(node, key + ":stalled", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
+      return bridge_data(buffer, stalled);
     });
     builder.add(node, key + ":stop", [&](ViewBuffer &buffer, NodeFields &fields) {
       fields.label = IFACE_("Stop");

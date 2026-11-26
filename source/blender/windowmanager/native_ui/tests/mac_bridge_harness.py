@@ -3538,6 +3538,80 @@ def tick_render_progress():
         return None
 
 
+# Run B3 (device checks of build 2): the job pill read 98 % four seconds into a Cycles render that
+# ran about 100 s more. Cycles with adaptive sampling (its default) reports nearly all its samples
+# early, then works on with the figure unchanged (on this Mac at 100 %: 3 % to 98 % within a second,
+# then seconds more). A figure that stands still short of the end must be marked `stalled` within a
+# few seconds, with what the engine says it does, in the `jobs` view and in the `render` view.
+render_stall_state = {}
+
+
+def tick_render_stall():
+    global step
+    try:
+        pump()
+        step += 1
+        problems = report.setdefault("problems", [])
+        if step == 1:
+            subs["jobs"] = subscribe("jobs")
+            subs["render"] = subscribe("render")
+            scene = bpy.context.scene
+            scene.render.engine = 'CYCLES'
+            scene.cycles.device = 'CPU'
+            scene.cycles.samples = 1024
+            scene.cycles.use_adaptive_sampling = True
+            scene.cycles.use_denoising = True
+            scene.render.resolution_percentage = 100
+            report["seen"] = []
+            return 0.3
+        if step == 3:
+            invoke(subs["render"], "image", 610)
+            render_stall_state["sent"] = time.monotonic()
+            return 0.1
+        if step < 3:
+            return 0.3
+        now = time.monotonic() - render_stall_state["sent"]
+        nodes = views.get(subs["jobs"], {"nodes": {}})["nodes"]
+        render = views.get(subs["render"], {"nodes": {}})["nodes"]
+        jobs = sorted(k[:-len(":progress")] for k in nodes if k.startswith("job:2:") and k.endswith(":progress"))
+        if jobs:
+            key = jobs[0]
+            row = (round(now, 2), nodes.get(key + ":progress", {}).get("value"),
+                   nodes.get(key + ":stalled", {}).get("value"), nodes.get(key + ":phase", {}).get("value"),
+                   render.get("state:stalled", {}).get("value"))
+            report["seen"].append(row)
+        state = render.get("state:state", {}).get("value")
+        if (state in ("done", "error", "cancelled") and now > 2) or now > 240:
+            seen = report["seen"]
+            # The longest time the figure stood still short of the end, and whether it was said.
+            longest, start, said = 0.0, None, False
+            for t, progress, stalled, phase, render_stalled in seen:
+                if start is None or progress != start[1]:
+                    start, said = (t, progress), False
+                said = said or (stalled is True and render_stalled is True and bool((phase or "").strip()))
+                if progress is not None and 0 < progress < 1:
+                    still = t - start[0]
+                    longest = max(longest, still)
+                    if still >= 5.0 and not said:
+                        problems.append("a render's figure stood at %.2f for %.1f s, not marked stalled with "
+                                        "its phase: %r" % (progress, still, (t, progress, stalled, phase,
+                                                                             render_stalled)))
+                        break
+            report["longest still"] = round(longest, 2)
+            report["seen"] = [r for i, r in enumerate(seen) if i % 5 == 0][-40:]
+            report["render state"] = state
+            if longest < 5.0:
+                problems.append("the render's figure never stood still for 5 s: this check proves nothing "
+                                "here (longest %.1f s)" % longest)
+            finish("done" if not problems and state == "done" else "error")
+            return None
+        return 0.1
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+
+
 # ROUND6 BUSY-1 (G6, G13, B1, D12): every job Blender's status bar would show is in the `jobs` view,
 # with its progress and a Stop that ends it. The sweep walks `eWM_JobType` as `WM_api.hh` declares it:
 # each type the harness can start is started, must be listed, and must end within a few seconds of
@@ -7766,7 +7840,7 @@ SCENARIOS = {
     "answers": tick_answers, "animkeys": tick_animkeys, "nodegroups": tick_nodegroups,
     "timelinekeys": tick_timelinekeys, "assettap": tick_assettap,
     "renderimage": tick_renderimage, "storyboard": tick_storyboard, "handoff": tick_handoff,
-    "bars": tick_bars,
+    "bars": tick_bars, "renderstall": tick_render_stall,
 }
 
 

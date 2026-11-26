@@ -2333,3 +2333,21 @@ check('Operators.runAnswered(' in op_b3 and 'Operators.run(' not in op_b3 and
       'const wmOperatorStatus status = WM_operator_name_call_ptr(' in run_b3 and
       'status & OPERATOR_CANCELLED' in run_b3 and 'WM_native_ui_log("op",' in run_b3,
       "A command run by name, and a script's op step, never end without a word")
+
+# Run B3, the render's figure: Cycles with adaptive sampling reports nearly all its samples at once
+# and then works on, so the job pill read 98 % for most of a long render. Both views that show a
+# render's progress say when its figure stands still, with the engine's own words, and the pill
+# and the render sheet show those words, not the figure, then.
+ui_b3 = (SWIFT.parents[1] / 'intern/wm_native_ui.cc').read_text(encoding='utf-8')
+jobs_b3 = ui_b3[ui_b3.index('static void bridge_jobs_view_build('):]
+jobs_b3 = jobs_b3[:jobs_b3.index('\n}\n')]
+render_b3 = ui_b3[ui_b3.index('void bridge_render_view_build('):]
+render_b3 = render_b3[:render_b3.index('\n}\n')]
+pill_b3 = (SWIFT / 'CompileIndicator.swift').read_text(encoding='utf-8')
+sheet_b3 = (SWIFT / 'RenderSheet.swift').read_text(encoding='utf-8')
+check('bridge_progress_stalled(key,' in jobs_b3 and 'key + ":stalled"' in jobs_b3 and
+      'key + ":phase"' in jobs_b3 and 'bridge_progress_stalled("render",' in render_b3 and
+      '"state:stalled"' in render_b3 and '"state:engine_phase"' in render_b3 and
+      '!job.stalled' in pill_b3 and 'status.bool("stalled")' in sheet_b3 and
+      'if let working = model.working' in sheet_b3,
+      "A render's figure that stands still is said as work with the engine's words")
