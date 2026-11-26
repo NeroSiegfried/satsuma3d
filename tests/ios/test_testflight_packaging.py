@@ -391,6 +391,20 @@ class BuildScriptTest(unittest.TestCase):
         # The icon follows the checkout, not a stale cache entry (the icon's folder was renamed).
         self.assertIn('-UIOS_APP_ICON -UIOS_APP_ICON_NAME', text)
 
+    def test_developer_account_only_on_the_owners_flag(self):
+        """R7-19's run (build 2): `-allowProvisioningUpdates` lets xcodebuild create or change
+        certificates, profiles and App IDs in the developer account. Both scripts pass it only when
+        the owner gives `--allow-provisioning-updates`, never by default."""
+        for script in (self.SCRIPT, self.SCRIPT.parent / 'upload_testflight.sh'):
+            text = script.read_text()
+            code = [line for line in text.splitlines() if not line.lstrip().startswith('#')]
+            self.assertEqual(sum(line.count('-allowProvisioningUpdates') for line in code), 1, script.name)
+            self.assertIn('[ -n "$account" ] && account_args=(-allowProvisioningUpdates)', text)
+            self.assertIn('--allow-provisioning-updates)', text)
+            self.assertIn('"${account_args[@]+"${account_args[@]}"}"', text)
+        build = self.SCRIPT.read_text()
+        self.assertIn("Signing with Xcode's account is the owner's step", build)
+
     def test_numpy_and_denoiser_built_under_a_neutral_root(self):
         """ROUND7 R7-19: NumPy and OpenImageDenoise build under WORK_ROOT, never under a home folder,
         and earlier replacements are reused only when no file of them holds the home folder."""
@@ -798,6 +812,12 @@ class UploadScriptTest(unittest.TestCase):
                      'encryption check  no encryption library', '1. general encryption library: none',
                      '3. unreviewed: none', 'Nothing sent', '--upload-build 3'):
             self.assertIn(text, result.stdout)
+
+    def test_owners_flag_alone_sends_nothing(self):
+        """`--allow-provisioning-updates` without `--upload-build` prints and sends nothing."""
+        result = self.run_script('--allow-provisioning-updates')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Nothing sent', result.stdout)
 
     def test_key_rule_for_every_verdict_and_claim(self):
         """ROUND5 8M.2, E7: the archive's key must be the one the rule writes: false only with no

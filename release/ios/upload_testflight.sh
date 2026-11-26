@@ -7,6 +7,7 @@
 #
 #     release/ios/upload_testflight.sh [<settings-file>]                       # prints, sends nothing
 #     release/ios/upload_testflight.sh --upload-build <n> [<settings-file>]    # uploads build <n>
+#     release/ios/upload_testflight.sh --allow-provisioning-updates --upload-build <n> [<settings-file>]
 #
 # Takes the archive `build_testflight.sh` made (`<build dir>/Satsuma3D.xcarchive`, with its exported
 # `.ipa` beside it, so the export has run) and prints what it would send: the app, its version,
@@ -30,6 +31,12 @@
 # `testers/<version>-<n>` and pushes that tag, and only that tag, to `github`. Raise BUILD_NUMBER in
 # the settings before the next build: App Store Connect refuses a number twice.
 #
+# The upload signs for App Store Connect again. Without a distribution certificate in this Mac's
+# keychain that needs Xcode's account (cloud signing), which `xcodebuild` uses only with
+# `-allowProvisioningUpdates`; that flag also lets it create or change certificates, profiles and App
+# IDs in the developer account. It is passed only with `--allow-provisioning-updates`, which is the
+# owner's to give (no agent passes it).
+#
 # **No agent runs this with `--upload-build` unless its brief quotes the owner's word, given in
 # that session, for that build** (G4). Apple's processing and beta review follow the upload; read
 # what App Store Connect reports afterwards.
@@ -42,7 +49,7 @@ fail() {
 }
 
 main() {
-  local upload_build="" settings=""
+  local upload_build="" settings="" account=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --upload-build)
@@ -50,8 +57,12 @@ main() {
         upload_build="$2"
         shift 2
         ;;
+      --allow-provisioning-updates)
+        account=yes
+        shift
+        ;;
       -h|--help)
-        sed -n '8,9p' "$0" | sed 's/^# \{0,4\}//'
+        sed -n '8,10p' "$0" | sed 's/^# \{0,4\}//'
         return 0
         ;;
       -*) fail "unknown option $1" ;;
@@ -191,8 +202,11 @@ main() {
 </dict>
 </plist>
 PLIST
+  # The developer account only on the owner's flag (see the top of this file).
+  local account_args=()
+  [ -n "$account" ] && account_args=(-allowProvisioningUpdates)
   xcodebuild -exportArchive -archivePath "$archive" -exportPath "$BUILD_DIR/upload" \
-    -exportOptionsPlist "$options" -allowProvisioningUpdates > "$logs/upload.log" 2>&1 \
+    -exportOptionsPlist "$options" "${account_args[@]+"${account_args[@]}"}" > "$logs/upload.log" 2>&1 \
     || { tail -20 "$logs/upload.log" >&2; fail "the upload failed; nothing was tagged ($logs/upload.log)"; }
   echo "Uploaded build $build. Apple processes it next; App Store Connect reports the result."
 

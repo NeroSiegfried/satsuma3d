@@ -87,6 +87,11 @@ address, team, identity, profile). The script, logging each step to `<build dir>
    an `.ipa` with `xcodebuild -exportArchive` (`method` `app-store-connect`, `destination`
    `export`, `manageAppVersionAndBuildNumber` false). Without them it stops after the checks and
    says what is missing.
+   The export signs for App Store Connect. With no distribution certificate in this Mac's
+   keychain that needs Xcode's account (cloud signing), and `xcodebuild` reaches the account only
+   with `-allowProvisioningUpdates`, which also lets it create or change certificates, profiles and
+   App IDs. The script passes that flag only when given `--allow-provisioning-updates`, which is
+   the owner's to give; without it an export that cannot sign stops with the archive kept.
 
 Uploading is a separate step on the owner's word; the script has no upload code path, and a test
 holds that.
@@ -129,7 +134,8 @@ the commit is on the `github` remote's `ipad/main` (`git ls-remote`; nothing is 
 the tag `testers/<version>-<build>` is free. It sends nothing unless called with
 `--upload-build <n>`, `<n>` being the archive's build number. Then it uploads with
 `xcodebuild -exportArchive` and export options `method` `app-store-connect`, `destination`
-`upload` (Xcode's own account, from its settings), tags the commit `testers/<version>-<build>`
+`upload` (Xcode's own account, from its settings; `-allowProvisioningUpdates` only with the
+owner's `--allow-provisioning-updates`, as above), tags the commit `testers/<version>-<build>`
 and pushes that tag alone. Each upload is the owner's word, given for that build (gate G4).
 Validating without uploading (Xcode 27.2): export `method` `validation` is Xcode's "Validate with
 App Store Connect" (`IDEDistributionMethodiOSAppStoreValidation` in `IDEDistribution.framework`).

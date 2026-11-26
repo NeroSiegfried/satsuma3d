@@ -5,7 +5,7 @@
 
 # One command from nothing to a tester build of the iPad app (ROUND5 8F.4).
 #
-#     release/ios/build_testflight.sh [<settings-file>]
+#     release/ios/build_testflight.sh [--allow-provisioning-updates] [<settings-file>]
 #
 # Steps, each logged to <build-dir>/logs/:
 #   1. configure  a separate Xcode build directory for the tester app (never the development one)
@@ -26,6 +26,13 @@
 # stops after the checks and says what is missing. **It never uploads**: there is no upload step,
 # and the export options say `destination` `export`. Uploading is the owner's, each time (G4).
 #
+# The export signs for App Store Connect. Without a distribution certificate in this Mac's keychain
+# that needs Xcode's account (cloud signing), which `xcodebuild` uses only with
+# `-allowProvisioningUpdates`; that flag also lets it create or change certificates, profiles and
+# App IDs in the developer account. The script passes it only when given
+# `--allow-provisioning-updates`, which is the owner's to give (no agent passes it). Without it, an
+# export that cannot sign stops with the archive kept and says so.
+#
 # The settings file (default: `testflight.env` beside the checkout) is outside the repository
 # because it holds the team; see `testflight.env.example` for its keys. Every key is optional
 # except as stated there. The development build (`build_ios_device`, `app.platypus3d.dev`) is not
@@ -39,10 +46,17 @@
 set -euo pipefail
 
 main() {
-  local checkout workspace settings
+  local checkout workspace settings="" account=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --allow-provisioning-updates) account=yes; shift ;;
+      -*) fail "unknown option $1" ;;
+      *) settings="$1"; shift ;;
+    esac
+  done
   checkout="$(cd "$(dirname "$0")/../.." && pwd)"
   workspace="$(dirname "$checkout")"
-  settings="${1:-$workspace/testflight.env}"
+  settings="${settings:-$workspace/testflight.env}"
 
   # Defaults; the settings file overrides them.
   BUNDLE_ID=app.satsuma3d
@@ -351,9 +365,22 @@ PYTHON
 </dict>
 </plist>
 PLIST
-  xcodebuild -exportArchive -archivePath "$archive" -exportPath "$export_dir" \
-    -exportOptionsPlist "$BUILD_DIR/ExportOptions.plist" -allowProvisioningUpdates \
-    > "$logs/export.log" 2>&1 || fail_log export
+  # The developer account only on the owner's flag (see the top of this file).
+  local account_args=()
+  [ -n "$account" ] && account_args=(-allowProvisioningUpdates)
+  if ! xcodebuild -exportArchive -archivePath "$archive" -exportPath "$export_dir" \
+       -exportOptionsPlist "$BUILD_DIR/ExportOptions.plist" "${account_args[@]+"${account_args[@]}"}" \
+       > "$logs/export.log" 2>&1; then
+    if [ -z "$account" ]; then
+      echo "build_testflight: archived, not exported: $archive" >&2
+      echo "  the export could not sign with what this Mac holds; the end of $logs/export.log:" >&2
+      grep -i "error" "$logs/export.log" | sort -u | head -5 >&2 || true
+      echo "  Signing with Xcode's account is the owner's step: run this script again with" >&2
+      echo "  --allow-provisioning-updates." >&2
+      exit 1
+    fi
+    fail_log export
+  fi
   echo
   echo "Archive: $archive"
   echo "Package: $(ls "$export_dir"/*.ipa)"
