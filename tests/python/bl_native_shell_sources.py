@@ -2351,3 +2351,14 @@ check('bridge_progress_stalled(key,' in jobs_b3 and 'key + ":stalled"' in jobs_b
       '!job.stalled' in pill_b3 and 'status.bool("stalled")' in sheet_b3 and
       'if let working = model.working' in sheet_b3,
       "A render's figure that stands still is said as work with the engine's words")
+
+# Run B3, the number field that went into typing (build 2's 5l.1): the check script's step "tap a
+# panel's header" (`touch @PROPERTIES+WINDOW#-2`) was answered with the middle of Properties, as if
+# no kind had been asked, because every negative kind meant "the region". It tapped a number field,
+# which went into typing, and the next step's sideways drag only ended that typing. Only -1 (no
+# kind) means the region; panel headers (-2) and every other kind are looked up in the map.
+find_b3 = ui_b3[ui_b3.index('bool WM_native_ui_touch_find('):]
+find_b3 = find_b3[:find_b3.index('\n}\n')]
+check('if (button_type == -1) {' in find_b3 and 'button_type < 0' not in find_b3 and
+      'Int32(kind.first ?? "") ?? -1' in snap_b3,
+      "A script's touch place of a kind, panel headers included, is that kind's, never the region's middle")

@@ -9208,7 +9208,10 @@ bool WM_native_ui_touch_find(const void *ghost_window,
     }
     pixel_size = zone.pixel_size;
     height = zone.window_height;
-    if (button_type < 0) {
+    /* No type asked (-1): the region's middle. Any other is a kind of button in the map, panel
+     * headers (-2) included: a check script's "tap a panel's header" was answered with the
+     * region's middle, a number field, which then went into typing (Run B3, build 2's 5l.1). */
+    if (button_type == -1) {
       xy[0] = BLI_rcti_cent_x(&zone.rect);
       xy[1] = BLI_rcti_cent_y(&zone.rect);
       found = true;

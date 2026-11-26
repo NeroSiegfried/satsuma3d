@@ -34,7 +34,7 @@ SCENARIOS = ("actions", "tabs", "menus", "mirror", "reveal", "knife", "precision
              "tolerance", "waiting", "touchstart", "jobs", "renderprogress", "busy", "renderkeep",
              "desk", "hold", "typing", "windows", "margins", "census", "stale", "header",
              "popups", "statuskeys", "answers", "animkeys", "nodegroups", "timelinekeys",
-             "assettap", "renderimage", "storyboard", "handoff", "bars", "renderstall")
+             "assettap", "renderimage", "storyboard", "handoff", "bars", "numdrag", "renderstall")
 
 
 # A scenario that walks every menu item of every mode needs longer than the others' five minutes.
@@ -173,7 +173,7 @@ def main():
             env["BLENDER_USER_RESOURCES"] = os.path.join(directory, "user")
             extra = ["--offline-mode"]
         if args.scenario in ("fingers", "undo", "tolerance", "waiting", "touchstart", "desk", "hold", "typing", "margins",
-                             "popups", "statuskeys"):
+                             "popups", "statuskeys", "numdrag"):
             # Events made by the scenario, as a finger's would arrive (ROUND6 TOUCH).
             extra = ["--enable-event-simulate"]
         code, killed = run_with_deadline(

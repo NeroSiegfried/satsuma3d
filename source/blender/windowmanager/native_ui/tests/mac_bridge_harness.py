@@ -7824,6 +7824,124 @@ def tick_bars():
     return 0.3
 
 
+# Run B3: build 2's device check saw a number field go into typing after a finger's sideways drag in
+# Blender's own interface. The drag itself works (the iPad and this scenario agree); the check
+# script had tapped the field just before, through a touch place lookup that answered "a panel's
+# header" with the middle of Properties (`WM_native_ui_touch_find`). This scenario keeps the drag
+# itself checked: the finger's events as the shell makes them (`interfaceTouchMoved` and
+# `pressInterface` in GHOST_WindowIOS.mm), the cursor over the field, the press once the finger has
+# moved past its slop, twelve moves of 10 points, the release. The value must change and no text be
+# edited, on the first number field of Properties' Object tab (the location, in a stacked column,
+# where Blender waits to tell a sideways drag from one down the column) and on the seventh.
+numdrag_state = {}
+
+
+def _numdrag_value():
+    cube = bpy.data.objects["Cube"]
+    return [round(v, 4) for v in list(cube.location) + list(cube.rotation_euler) + list(cube.scale) +
+            list(cube.delta_location)]
+
+
+def tick_numdrag():
+    global step
+    try:
+        pump()
+        step += 1
+        problems = report.setdefault("problems", [])
+        cases = report.setdefault("cases", {})
+        if TOUCH is None or SIMULATE_FINGER is None or TEXT_FOCUS is None:
+            problems.append("this build has no touch map, finger simulation or text focus query")
+            finish("error")
+            return None
+        if step == 1:
+            lib.WM_native_ui_test_install_hooks()
+            subs["settings"] = subscribe("settings")
+            cube = bpy.data.objects["Cube"]
+            bpy.context.view_layer.objects.active = cube
+            cube.select_set(True)
+            return 0.5
+        if step == 2:
+            set_bool(subs["settings"], "desktop", True, 1500)
+            return 1.0
+        if step == 3:
+            window = _view3d()[0]
+            area = next(a for a in window.screen.areas if a.type == 'PROPERTIES')
+            area.spaces[0].context = 'OBJECT'
+            return 0.6
+        if step < 6:
+            return 0.5
+        window = _view3d()[0]
+        number = _button_types()["Num"]
+        if "queue" not in numdrag_state:
+            rows = [(where, int(kind), rect) for where, kind, _t, rect in _touch_map()
+                    if kind != "zone" and where == "PROPERTIES WINDOW"]
+            fields = [rect for where, kind, rect in rows if kind == number]
+            report["number fields"] = len(fields)
+            if not fields:
+                problems.append("no number field in Properties' map")
+                finish("error")
+                return None
+            # The first (Location X, in a stacked column) and the one the device check dragged.
+            numdrag_state["queue"] = [("first field", fields[0])] + (
+                [("field 6", fields[6])] if len(fields) > 6 else [])
+            numdrag_state["phase"] = "next"
+        phase = numdrag_state["phase"]
+        if phase == "next":
+            if not numdrag_state["queue"]:
+                SIMULATE_FINGER(0.0)
+                finish("done" if not problems else "error")
+                return None
+            name, rect = numdrag_state["queue"].pop(0)
+            x, y = _centre(rect)
+            numdrag_state.update(name=name, x=x, y=y, moves=0, before=_numdrag_value())
+            SIMULATE_FINGER(2.0)
+            # The finger lands: the cursor over the field, nothing pressed.
+            _simulate(window, 'MOUSEMOVE', 'NOTHING', x, y)
+            numdrag_state["phase"] = "press"
+            return 0.03
+        if phase == "press":
+            x, y = numdrag_state["x"], numdrag_state["y"]
+            # Past the slop: the press where it began, then the cursor where the finger is.
+            _simulate(window, 'MOUSEMOVE', 'NOTHING', x, y)
+            _simulate(window, 'LEFTMOUSE', 'PRESS', x, y)
+            _simulate(window, 'MOUSEMOVE', 'NOTHING', x + 20, y)
+            numdrag_state.update(phase="move", moves=1)
+            return 0.025
+        if phase == "move":
+            numdrag_state["moves"] += 1
+            x, y = numdrag_state["x"], numdrag_state["y"]
+            _simulate(window, 'MOUSEMOVE', 'NOTHING', x + 20 * numdrag_state["moves"], y)
+            if numdrag_state["moves"] >= 12:
+                numdrag_state["phase"] = "release"
+                return 0.15
+            return 0.025
+        if phase == "release":
+            x, y = numdrag_state["x"], numdrag_state["y"]
+            _simulate(window, 'LEFTMOUSE', 'RELEASE', x + 240, y)
+            numdrag_state["phase"] = "check"
+            return 0.6
+        if phase == "check":
+            focus, _count = _text_focus()
+            after = _numdrag_value()
+            name = numdrag_state["name"]
+            cases[name] = {"before": numdrag_state["before"], "after": after, "text focus": focus}
+            if after == numdrag_state["before"]:
+                problems.append("%s: a finger's sideways drag did not change the value" % name)
+            if focus:
+                problems.append("%s: a finger's sideways drag left the field in typing" % name)
+                x, y = numdrag_state["x"], numdrag_state["y"]
+                _simulate(window, 'ESC', 'PRESS', x, y)
+                _simulate(window, 'ESC', 'RELEASE', x, y)
+            SIMULATE_FINGER(0.0)
+            numdrag_state["phase"] = "next"
+            return 0.6
+    except Exception:
+        report["error"] = traceback.format_exc()
+        finish("error")
+        return None
+    return 0.3
+
+
 # Every scenario, by the name `mac_bridge_check.py --scenario` takes: the one list (ROUND7 U4d).
 # `mac_bridge_check.py`'s SCENARIOS must name exactly these, which `bl_native_test_runners.py`
 # checks; a name not here ends the run with an error, never another scenario's run.
@@ -7840,7 +7958,7 @@ SCENARIOS = {
     "answers": tick_answers, "animkeys": tick_animkeys, "nodegroups": tick_nodegroups,
     "timelinekeys": tick_timelinekeys, "assettap": tick_assettap,
     "renderimage": tick_renderimage, "storyboard": tick_storyboard, "handoff": tick_handoff,
-    "bars": tick_bars, "renderstall": tick_render_stall,
+    "bars": tick_bars, "numdrag": tick_numdrag, "renderstall": tick_render_stall,
 }
 
 
