@@ -2263,3 +2263,16 @@ check(sorted(breakable_b2) == sorted(BREAK_EVIDENCE_B2) and not missing_b2 and
       '"Cannot be stopped part way; it ends by itself"' in veil_b2,
       "The busy veil offers Stop for work that stops when asked, and says when it cannot: %s %s" % (
           breakable_b2, missing_b2))
+
+# Device checks of build 2 (2026-11-26): the Desktop Interface's band (`WM_window_rect_calc`) is
+# outside Blender's screen, and Blender draws on the window's pixels without clearing them, so the
+# band kept the last picture drawn there (the iPad interface's gizmo, a Timeline and status bar from
+# before the band). The window's draw clears whatever lies outside that rectangle, for any band.
+draw_b2d = (SWIFT.parents[1] / 'intern/wm_draw.cc').read_text(encoding='utf-8')
+onscreen_b2d = draw_b2d[draw_b2d.index('static void wm_draw_window_onscreen('):]
+onscreen_b2d = onscreen_b2d[:onscreen_b2d.index('ED_screen_areas_iter (win, screen, area)')]
+check('WM_window_rect_calc(win, &screen_rect);' in onscreen_b2d and
+      re.search(r'screen_rect\.ymin > 0 \|\| screen_rect\.xmax < win_size\[0\] \|\|\s+screen_rect\.ymax < win_size\[1\]',
+                onscreen_b2d) is not None and
+      'GPU_clear_color(border[0], border[1], border[2], 1.0f);' in onscreen_b2d,
+      "The window's pixels outside Blender's screen (the Desktop Interface's band) are cleared each draw")

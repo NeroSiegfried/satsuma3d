@@ -1137,6 +1137,25 @@ static void wm_draw_window_onscreen(bContext *C, wmWindow *win, int view)
 #if 0
   GPU_clear_color(0, 0, 0, 0);
 #endif
+#ifdef WITH_NATIVE_UI
+  /* Blender's screen can be laid out smaller than the window (#WM_window_rect_calc: the Desktop
+   * Interface's band for its cluster). No area draws outside that rectangle, so those pixels kept
+   * whatever was last drawn there: the iPad interface's gizmo, or a Timeline and status bar from
+   * before the band (device checks of build 2, 2026-11-26). Cleared to the editors' border, as the
+   * gaps between areas are. The areas then draw over all of the rectangle, as above. */
+  {
+    rcti screen_rect;
+    WM_window_rect_calc(win, &screen_rect);
+    const int2 win_size = WM_window_native_pixel_size(win);
+    if (screen_rect.xmin > 0 || screen_rect.ymin > 0 || screen_rect.xmax < win_size[0] ||
+        screen_rect.ymax < win_size[1])
+    {
+      float border[4];
+      ui::theme::get_color_4fv(TH_EDITOR_BORDER, border);
+      GPU_clear_color(border[0], border[1], border[2], 1.0f);
+    }
+  }
+#endif
 
   /* Blit non-overlapping area regions. */
   ED_screen_areas_iter (win, screen, area) {
