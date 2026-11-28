@@ -4582,7 +4582,13 @@ void wm_test_autorun_revert_action_exec(bContext *C)
   wm_test_autorun_revert_action_set(nullptr, nullptr);
 }
 
-/** The auto-run warning as a native alert, see #wmNativeInterface::alert. */
+/**
+ * The auto-run warning as a native alert, see #wmNativeInterface::alert, in Blender's words.
+ * Allow Execution reloads the file with its scripts on, as desktop's button does (or turns them
+ * on in place for a file not saved as it is). Keep Blocked leaves them off. It offers no
+ * "Permanently allow execution of scripts": an app for testers gains no setting that turns script
+ * blocking off for every file (R8 F4, decision R8-1), and the preference is never changed here.
+ */
 static void wm_test_autorun_warning_native(bContext *C, const wmNativeInterface &native)
 {
   wmNativeAlert alert;
@@ -4591,27 +4597,20 @@ static void wm_test_autorun_warning_native(bContext *C, const wmNativeInterface 
   alert.message = G.autoexec_fail;
   alert.message += "\n\n";
   alert.message += RPT_("This may lead to unexpected behavior");
-  alert.toggles = {{RPT_("Permanently allow execution of scripts"),
-                    (U.flag & USER_SCRIPT_AUTOEXEC_DISABLE) == 0}};
-  alert.actions = {{IFACE_("Ignore"), wmNativeAlert::Role::Cancel}, {IFACE_("Allow Execution")}};
+  alert.actions = {{IFACE_("Keep Blocked"), wmNativeAlert::Role::Cancel},
+                   {IFACE_("Allow Execution")}};
   alert.preferred_action = 0;
-  auto ignore = [](bContext *context) {
+  auto keep_blocked = [](bContext *context) {
     wm_block_autorun_warning_ignore(context, nullptr, nullptr);
   };
-  native.alert(
+  const bool shown = native.alert(
       C,
       alert,
-      [ignore](bContext *context, int action, uint64_t toggles) {
+      [keep_blocked](bContext *context, int action, uint64_t /*toggles*/) {
         if (action != 1) {
-          ignore(context);
+          keep_blocked(context);
           return;
         }
-        PointerRNA preferences = RNA_pointer_create_discrete(
-            nullptr, RNA_PreferencesFilePaths, &U);
-        PropertyRNA *property = RNA_struct_find_property(&preferences,
-                                                         "use_scripts_auto_execute");
-        RNA_property_boolean_set(&preferences, property, bool(toggles & 1));
-        RNA_property_update(context, &preferences, property);
         if (BKE_main_blendfile_path_from_global()[0] && CTX_wm_manager(context)->file_saved) {
           wm_block_autorun_warning_reload_with_scripts(context, nullptr);
         }
@@ -4619,8 +4618,15 @@ static void wm_test_autorun_warning_native(bContext *C, const wmNativeInterface 
           wm_block_autorun_warning_enable_scripts(context, nullptr);
         }
       },
-      ignore,
+      keep_blocked,
       "autorun_warning_popup");
+  if (!shown) {
+    /* Never silently: the file is open with its scripts off, and it says so. */
+    WM_global_reportf(RPT_WARNING,
+                      "%s %s",
+                      RPT_("Python scripts in this file were blocked:"),
+                      G.autoexec_fail);
+  }
 }
 
 void wm_test_autorun_warning(bContext *C)

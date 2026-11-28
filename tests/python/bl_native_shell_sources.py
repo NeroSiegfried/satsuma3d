@@ -2416,3 +2416,18 @@ check(exec_r8.count('op->type->exec(') == 3 and
       'file_select_nothing_written_message(' in written_r8 and
       'BKE_report(op->reports, RPT_ERROR' in written_r8 and 'return OPERATOR_CANCELLED;' in written_r8,
       "Every write of a file named in the picker is checked, and one that left nothing is said")
+
+# R8 F4: a file's scripts blocked at open. Both interfaces ask with the native alert in Blender's
+# words: Allow Execution (reload with scripts, as desktop's button) or Keep Blocked. No "Permanently
+# allow" (decision R8-1), and an alert that cannot show leaves a warning, never nothing.
+files_r8 = (SWIFT.parents[1] / 'intern/wm_files.cc').read_text(encoding='utf-8')
+autorun_r8 = files_r8[files_r8.index('static void wm_test_autorun_warning_native('):]
+autorun_r8 = autorun_r8[:autorun_r8.index('\n}\n')]
+check('alert.toggles' not in autorun_r8 and 'Permanently' not in autorun_r8 and
+      'IFACE_("Keep Blocked"), wmNativeAlert::Role::Cancel' in autorun_r8 and
+      'IFACE_("Allow Execution")' in autorun_r8 and
+      'wm_block_autorun_warning_reload_with_scripts(context, nullptr)' in autorun_r8 and
+      'use_scripts_auto_execute' not in autorun_r8 and
+      'const bool shown = native.alert(' in autorun_r8 and 'if (!shown)' in autorun_r8 and
+      'WM_global_reportf(RPT_WARNING' in autorun_r8,
+      "A file's blocked scripts are asked about: Allow Execution or Keep Blocked, never a permanent allow")
