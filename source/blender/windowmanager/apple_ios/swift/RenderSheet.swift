@@ -746,6 +746,9 @@ struct RenderProgressCard: View {
           .buttonStyle(.bordered)
           .controlSize(.small)
           .disabled(model.stopping)
+          /* A keyboard's Esc (or Cmd+.) stops the render, as in desktop's render window (R8 F7.2):
+           * while this sheet is up, keys never reach Blender (`blockedReason`, GHOST_WindowIOS.mm). */
+          .keyboardShortcut(.cancelAction)
       }
     }
     .animation(.smooth, value: model.progress)

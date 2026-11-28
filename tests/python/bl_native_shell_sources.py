@@ -2455,3 +2455,14 @@ check(not direct_r8 and present_r8.get('alert') == ['wm_apple_ios_launcher.mm'] 
       alert_calls_r8 >= alerts_made_r8 + 1,
       "Every alert is presented through wm_apple_ios_present_alert, which keeps the launcher's bar "
       "from showing through (direct: %s, %d calls for %d alerts)" % (direct_r8, alert_calls_r8, alerts_made_r8))
+
+# R8 F7.2: a hardware Esc while the render sheet is up. Keys reach Blender only when nothing is
+# presented (`blenderTakesKeyboard` asks `blockedReason`), and the sheet is presented, so Esc did
+# nothing there. The sheet's Stop takes Esc and Cmd+., as desktop's render window takes Esc.
+ghost_r8 = (ROOT / 'intern/ghost/intern/GHOST_WindowIOS.mm').read_text(encoding='utf-8')
+sheet_r8 = (SWIFT / 'RenderSheet.swift').read_text(encoding='utf-8')
+check('if ([self blockedReason] != nil) {\n    return false;' in ghost_r8 and
+      re.search(r'Button\(model\.stopping \? "Stopping…" : "Stop", role: \.destructive, action: model\.stop\)'
+                r'(?:\s+\.\w+\([^)]*\))*\s*(?:/\*.*?\*/\s*)?\.keyboardShortcut\(\.cancelAction\)', sheet_r8, re.S)
+      is not None,
+      "A keyboard's Esc stops a render while the render sheet is up")
