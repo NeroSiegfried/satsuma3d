@@ -7,6 +7,7 @@
 #include "GHOST_IOSNativeInterface.hh"
 #include "wm_apple_ios_alerts.hh"
 #include "WM_native_ui.h"
+#import "wm_apple_ios_blend_document.hh"
 #import "wm_apple_ios_launcher.hh"
 
 @class WMIOSDialogRequest;
@@ -178,7 +179,7 @@ static void dialogPump()
     sheet.preferredContentSize = CGSizeMake(520, 600);
     self.controller = sheet;
   }
-  [presenter presentViewController:self.controller animated:YES completion:nil];
+  wm_apple_ios_present_alert(presenter, self.controller);
   if (![self.controller isKindOfClass:UIAlertController.class]) {
     self.controller.presentationController.delegate = self;
   }

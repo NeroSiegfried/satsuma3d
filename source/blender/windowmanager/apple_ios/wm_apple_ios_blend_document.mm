@@ -491,7 +491,7 @@ static WMIOSFolderGrant *folder_grant_shown = nil;
                    [NSString stringWithFormat:@"save problem shown: %@%@", title,
                                               closing ? @" (with Close Without Saving)" : @""]
                        .UTF8String);
-  [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+  wm_apple_ios_present_alert(nil, alert);
 }
 
 - (void)closeWithoutSaving
@@ -554,7 +554,7 @@ static WMIOSFolderGrant *folder_grant_shown = nil;
   [_recoveryAlert release];
   _recoveryAlert = [alert retain];
   WM_native_ui_log("document", [@"recovered work said: " stringByAppendingString:alert.title].UTF8String);
-  [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+  wm_apple_ios_present_alert(nil, alert);
 }
 
 - (void)openAsLastSaved:(const char *)why
@@ -639,7 +639,7 @@ static WMIOSFolderGrant *folder_grant_shown = nil;
   })];
   alert.preferredAction = give;
   WM_native_ui_log("document", [@"neighbours said: " stringByAppendingString:title].UTF8String);
-  [presenter presentViewController:alert animated:YES completion:nil];
+  wm_apple_ios_present_alert(presenter, alert);
 }
 
 - (void)chooseNeighbourFolder:(NSString *)folder
@@ -776,7 +776,7 @@ static WMIOSFolderGrant *folder_grant_shown = nil;
                    [NSString stringWithFormat:@"held: asked%@%@", closing ? @" on closing" : @"",
                                               read_only ? @" (read-only)" : @""]
                        .UTF8String);
-  [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+  wm_apple_ios_present_alert(nil, alert);
 }
 
 /** 1: Save Here Anyway, 2: Keep Read-Only (or Close Without Saving when `closing`). */
@@ -1184,7 +1184,7 @@ static const CFTimeInterval document_save_interval = 60.0;
                                           }]];
   [alert addAction:wm_apple_ios_cancel_action(@"Not Now", nil)];
   WM_native_ui_log("document", "refusal shown: Save a Copy, Reopen Document, Not Now");
-  [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+  wm_apple_ios_present_alert(nil, alert);
 }
 
 - (void)revertAsked
@@ -1202,7 +1202,7 @@ static const CFTimeInterval document_save_interval = 60.0;
                                           }]];
   [alert addAction:wm_apple_ios_cancel_action(@"Cancel", nil)];
   WM_native_ui_log("document", "revert: asked");
-  [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+  wm_apple_ios_present_alert(nil, alert);
 }
 
 - (void)reopen:(BOOL)revert
@@ -1316,9 +1316,7 @@ static void writeFreshCopy(NSString *name,
         [alert addAction:[UIAlertAction actionWithTitle:@"OK"
                                                   style:UIAlertActionStyleDefault
                                                 handler:nil]];
-        [presenter ?: wm_apple_ios_top_presenter() presentViewController:alert
-                                                                animated:YES
-                                                              completion:nil];
+        wm_apple_ios_present_alert(presenter, alert);
       }
       finish(written ? copy : nil);
       [finish release];
@@ -1413,9 +1411,7 @@ void wm_apple_ios_document_file_now(UIViewController *presenter, void (^done)(NS
                                                     packable + unpackable,
                                                     unpackable]
                              .UTF8String);
-        [presenter ?: wm_apple_ios_top_presenter() presentViewController:alert
-                                                                animated:YES
-                                                              completion:nil];
+        wm_apple_ios_present_alert(presenter, alert);
       });
       return;
     }

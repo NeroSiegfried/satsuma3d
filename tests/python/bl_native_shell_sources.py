@@ -2431,3 +2431,27 @@ check('alert.toggles' not in autorun_r8 and 'Permanently' not in autorun_r8 and
       'const bool shown = native.alert(' in autorun_r8 and 'if (!shown)' in autorun_r8 and
       'WM_global_reportf(RPT_WARNING' in autorun_r8,
       "A file's blocked scripts are asked about: Allow Execution or Keep Blocked, never a permanent allow")
+
+# R8 F5: the launcher's bar (Recent, Shared, Browse) showed through an alert over the launcher (build
+# 2, after an unexpected close). Every alert of the app's own, the launcher's, the document's and
+# Blender's native dialogs, is presented by one function, which lowers the launcher's browser while
+# any alert shows over it. What else is presented directly is a picker, the browser or the
+# template picker, which cover the launcher themselves.
+present_r8 = {}
+for path in sorted((SWIFT.parent).glob('*.mm')):
+    text = path.read_text(encoding='utf-8')
+    for match in re.finditer(r'presentViewController:\s*([^\s\]]+(?:\s+templatePicker:\w+\])?)', text):
+        present_r8.setdefault(match.group(1), []).append(path.name)
+helper_r8 = (SWIFT.parent / 'wm_apple_ios_launcher.mm').read_text(encoding='utf-8')
+helper_r8 = helper_r8[helper_r8.index('void wm_apple_ios_present_alert('):]
+helper_r8 = helper_r8[:helper_r8.index('\n}\n')]
+direct_r8 = sorted(set(present_r8) - {'picker', 'browser', '[self templatePicker:completion]', 'alert'})
+alert_calls_r8 = sum(text.count('wm_apple_ios_present_alert(') for text in
+                     (path.read_text(encoding='utf-8') for path in (SWIFT.parent).glob('*.mm')))
+alerts_made_r8 = sum(len(re.findall(r'alertControllerWithTitle', path.read_text(encoding='utf-8')))
+                     for path in (SWIFT.parent).glob('*.mm'))
+check(not direct_r8 and present_r8.get('alert') == ['wm_apple_ios_launcher.mm'] and
+      'launcher_browser_lowered(true);' in helper_r8 and
+      alert_calls_r8 >= alerts_made_r8 + 1,
+      "Every alert is presented through wm_apple_ios_present_alert, which keeps the launcher's bar "
+      "from showing through (direct: %s, %d calls for %d alerts)" % (direct_r8, alert_calls_r8, alerts_made_r8))

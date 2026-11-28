@@ -863,7 +863,7 @@ static NSURL *launcher_pending_url = nil;
   [alert addAction:[UIAlertAction actionWithTitle:@"OK"
                                             style:UIAlertActionStyleDefault
                                           handler:nil]];
-  [presenter presentViewController:alert animated:YES completion:nil];
+  wm_apple_ios_present_alert(presenter, alert);
 }
 
 - (void)recordCreatedTemplateAtURL:(NSURL *)url
@@ -1009,7 +1009,7 @@ static NSURL *launcher_pending_url = nil;
                          message:nil
                   preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:wm_apple_ios_cancel_action(@"OK", nil)];
-    [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+    wm_apple_ios_present_alert(nil, alert);
     return;
   }
   const std::string path = target.path.UTF8String ?: "";
@@ -1033,7 +1033,7 @@ static NSURL *launcher_pending_url = nil;
                          message:@"Open a document, or make a new one, and it is imported into it."
                   preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:wm_apple_ios_cancel_action(@"OK", nil)];
-    [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+    wm_apple_ios_present_alert(nil, alert);
   }
 }
 
@@ -1124,7 +1124,7 @@ static NSURL *launcher_pending_url = nil;
   [alert addAction:[UIAlertAction actionWithTitle:@"OK"
                                             style:UIAlertActionStyleDefault
                                           handler:nil]];
-  [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+  wm_apple_ios_present_alert(nil, alert);
 }
 
 /** Move `source` into the app's own Documents folder, which the browser always shows, under a
@@ -1188,9 +1188,7 @@ static NSURL *launcherMoveToDocuments(NSURL *source)
             [alert addAction:[UIAlertAction actionWithTitle:@"OK"
                                                       style:UIAlertActionStyleDefault
                                                     handler:nil]];
-            [wm_apple_ios_top_presenter() presentViewController:alert
-                                                       animated:YES
-                                                     completion:nil];
+            wm_apple_ios_present_alert(nil, alert);
             return;
           }
           WM_native_ui_log("document",
@@ -1224,7 +1222,7 @@ static NSURL *launcherMoveToDocuments(NSURL *source)
     [alert addAction:[UIAlertAction actionWithTitle:@"OK"
                                               style:UIAlertActionStyleDefault
                                             handler:nil]];
-    [wm_apple_ios_top_presenter() presentViewController:alert animated:YES completion:nil];
+    wm_apple_ios_present_alert(nil, alert);
     return;
   }
   [self adoptCopy:copy nextTo:nil];
@@ -1317,7 +1315,7 @@ static NSString *launcherRecoveredName(NSURL *item)
                                            }]];
   }
   [list addAction:wm_apple_ios_cancel_action(items.count ? @"Cancel" : @"OK", nil)];
-  [presenter presentViewController:list animated:YES completion:nil];
+  wm_apple_ios_present_alert(presenter, list);
 }
 
 /** Where a document's version from opening is kept: one per document, by its path inside the
@@ -1384,7 +1382,7 @@ static void launcherKeepOpeningVersion(NSURL *document)
     [alert addAction:[UIAlertAction actionWithTitle:@"OK"
                                               style:UIAlertActionStyleDefault
                                             handler:nil]];
-    [presenter presentViewController:alert animated:YES completion:nil];
+    wm_apple_ios_present_alert(presenter, alert);
     return;
   }
   NSDateFormatter *format = [[[NSDateFormatter alloc] init] autorelease];
@@ -1473,10 +1471,7 @@ static void launcherKeepOpeningVersion(NSURL *document)
                                                                            style:
                                                                                UIAlertActionStyleDefault
                                                                          handler:nil]];
-                                           [wm_apple_ios_top_presenter()
-                                               presentViewController:failed
-                                                            animated:YES
-                                                          completion:nil];
+                                           wm_apple_ios_present_alert(nil, failed);
                                          }
                                          [problem release];
                                          [document release];
@@ -1485,7 +1480,7 @@ static void launcherKeepOpeningVersion(NSURL *document)
                                      });
                                }]];
   [alert addAction:wm_apple_ios_cancel_action(@"Cancel", nil)];
-  [presenter presentViewController:alert animated:YES completion:nil];
+  wm_apple_ios_present_alert(presenter, alert);
 }
 
 /** \} */
@@ -1655,7 +1650,7 @@ static void launcherKeepOpeningVersion(NSURL *document)
     WM_native_ui_log("launch", "after an unclean end: stay here");
   })];
   WM_native_ui_log("launch", [@"said: " stringByAppendingString:message].UTF8String);
-  [self presentViewController:alert animated:YES completion:nil];
+  wm_apple_ios_present_alert(self, alert);
 }
 
 /** A copy of the document beside it, opened instead (ROUND6 SAFE-4): what is on disk, without
@@ -1687,7 +1682,7 @@ static void launcherKeepOpeningVersion(NSURL *document)
     [alert addAction:[UIAlertAction actionWithTitle:@"OK"
                                               style:UIAlertActionStyleDefault
                                             handler:nil]];
-    [self presentViewController:alert animated:YES completion:nil];
+    wm_apple_ios_present_alert(self, alert);
     return;
   }
   [self adoptCopy:copy nextTo:url];
@@ -1812,7 +1807,7 @@ static NSString *launcherTemplateForAppTemplate(NSString *app_template)
         [alert addAction:[UIAlertAction actionWithTitle:@"OK"
                                                   style:UIAlertActionStyleDefault
                                                 handler:nil]];
-        [presenter presentViewController:alert animated:YES completion:nil];
+        wm_apple_ios_present_alert(presenter, alert);
         break;
       }
       [self openDocumentAtURL:url];
@@ -2064,6 +2059,54 @@ static void launcher_close_document(id sender)
   if (NSProcessInfo.processInfo.environment[@"PLATYPUS_SCRATCH_DOCUMENT"] == nil) {
     [NSUserDefaults.standardUserDefaults removeObjectForKey:launcher_open_document_key];
   }
+}
+
+/** The alerts shown over the launcher (weak), and the timer that brings the browser back once none
+ * is left, see #wm_apple_ios_present_alert. Owned: this file is built without ARC. */
+static NSHashTable<UIViewController *> *launcher_alerts = nil;
+static NSTimer *launcher_alerts_timer = nil;
+
+static void launcher_browser_lowered(const bool lowered)
+{
+  UIView *browser = launcher_controller.launchOptions.browserViewController.viewIfLoaded;
+  if (browser == nil || (browser.alpha == 0.0) == lowered) {
+    return;
+  }
+  [UIView animateWithDuration:0.2
+                   animations:^{
+                     browser.alpha = lowered ? 0.0 : 1.0;
+                   }];
+}
+
+void wm_apple_ios_present_alert(UIViewController *presenter, UIViewController *alert)
+{
+  UIViewController *from = presenter ?: wm_apple_ios_top_presenter();
+  UIWindow *launcher_window = launcher_controller.viewIfLoaded.window;
+  if (launcher_window != nil && from.viewIfLoaded.window == launcher_window) {
+    if (launcher_alerts == nil) {
+      launcher_alerts = [[NSHashTable weakObjectsHashTable] retain];
+    }
+    [launcher_alerts addObject:alert];
+    launcher_browser_lowered(true);
+    if (launcher_alerts_timer == nil) {
+      launcher_alerts_timer = [[NSTimer
+          scheduledTimerWithTimeInterval:0.1
+                                 repeats:YES
+                                   block:^(NSTimer *) {
+                                     for (UIViewController *shown in launcher_alerts) {
+                                       if (shown.presentingViewController != nil) {
+                                         return;
+                                       }
+                                     }
+                                     [launcher_alerts removeAllObjects];
+                                     [launcher_alerts_timer invalidate];
+                                     [launcher_alerts_timer release];
+                                     launcher_alerts_timer = nil;
+                                     launcher_browser_lowered(false);
+                                   }] retain];
+    }
+  }
+  [from presentViewController:alert animated:YES completion:nil];
 }
 
 UIViewController *wm_apple_ios_top_presenter()

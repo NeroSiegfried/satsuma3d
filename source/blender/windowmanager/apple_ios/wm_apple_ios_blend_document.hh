@@ -78,6 +78,13 @@ bool wm_apple_ios_document_set_aside_wait(const char *why);
 void wm_apple_ios_document_save_as(UIViewController *presenter);
 /** The view controller a sheet or alert is presented from: the topmost of the shown window. */
 UIViewController *wm_apple_ios_top_presenter();
+/**
+ * Present \a alert from \a presenter (nil: #wm_apple_ios_top_presenter). Every alert of the app's
+ * own goes through here (R8 F5): over the launcher, the launcher's document browser is lowered
+ * while any such alert shows. Its bar (Recent, Shared, Browse) otherwise showed through the
+ * alert's glass, over its first button (build 2, after an unexpected close).
+ */
+void wm_apple_ios_present_alert(UIViewController *presenter, UIViewController *alert);
 
 /**
  * Copy a validated document seed ("" aliases General) to a temporary location,
