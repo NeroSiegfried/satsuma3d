@@ -2399,3 +2399,20 @@ check('RE_engine_status_get(re)' in status_r8 and 'result->text' not in status_r
       'render_engine_status_set(re, info);' in engine_r8 and
       infostr_sets_r8 and all(kept for _, kept in infostr_sets_r8),
       "Every view shows a render's words from the engine's own status, never the composed text")
+
+# R8 F6: an export that returns FINISHED having written nothing (the Grease Pencil PDF export with
+# a page size of 0) was counted done on the iPad. Every write of a file named in the picker is
+# checked after it, by the rule `script_native_export` runs over every exporter, and one that left
+# nothing is said with Blender's words for why and ends cancelled.
+file_r8 = (SWIFT.parents[1] / 'intern/wm_apple_ios_file.cc').read_text(encoding='utf-8')
+exec_r8 = file_r8[file_r8.index('wmOperatorStatus WM_apple_ios_fileselect_exec('):]
+exec_r8 = exec_r8[:exec_r8.index('\n}\n')]
+written_r8 = file_r8[file_r8.index('wmOperatorStatus check_written('):]
+written_r8 = written_r8[:written_r8.index('\n}\n')]
+check(exec_r8.count('op->type->exec(') == 3 and
+      re.search(r'if \(ok && request\.mode == GHOST_IOSDocumentMode::Save\) \{\s*'
+                r'execution\.status = check_written\(op, execution\.status, started\);', exec_r8) is not None and
+      'file_select_nothing_written(facts)' in written_r8 and
+      'file_select_nothing_written_message(' in written_r8 and
+      'BKE_report(op->reports, RPT_ERROR' in written_r8 and 'return OPERATOR_CANCELLED;' in written_r8,
+      "Every write of a file named in the picker is checked, and one that left nothing is said")

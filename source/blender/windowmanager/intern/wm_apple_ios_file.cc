@@ -24,11 +24,13 @@
 #  include "RNA_access.hh"
 #  include "BLT_translation.hh"
 #  include "WM_api.hh"
+#  include "WM_native_ui.h"
 #  include "WM_native_ui.hh"
 #  include "WM_apple_ios.hh"
 #  include "wm_event_system.hh"
 #  include "wm_event_types.hh"
 
+#  include <filesystem>
 #  include <fmt/format.h>
 #  include <map>
 #  include <string>
@@ -462,6 +464,73 @@ void WM_apple_ios_fileselect_flush(bContext *C)
   }
 }
 
+namespace {
+
+/**
+ * After a write to a file named in the picker (an export, Save As of an image): when it finished
+ * and left nothing, it did not succeed, whatever it returned (R8 F6). The person is told, with
+ * Blender's own words for why, and the selection ends cancelled, so nothing counts it as done.
+ * \a started is when the write began, to know a file the exporter named itself.
+ */
+wmOperatorStatus check_written(wmOperator *op,
+                               const wmOperatorStatus status,
+                               const std::filesystem::file_time_type started)
+{
+  namespace fs = std::filesystem;
+  wm::apple_ios::WrittenFacts facts;
+  facts.finished = (status & OPERATOR_FINISHED) != 0;
+  if (!facts.finished || !RNA_struct_find_property(op->ptr, "filepath")) {
+    return status;
+  }
+  char path[FILE_MAX];
+  RNA_string_get(op->ptr, "filepath", path);
+  BLI_path_abs(path, BKE_main_blendfile_path_from_global());
+  std::error_code failure;
+  const fs::path written(path);
+  facts.exists = fs::exists(written, failure);
+  facts.is_folder = facts.exists && fs::is_directory(written, failure);
+  if (facts.exists && !facts.is_folder) {
+    facts.size = fs::file_size(written, failure);
+    if (failure) {
+      facts.size = 0;
+    }
+  }
+  if (!wm::apple_ios::file_select_nothing_written(facts)) {
+    return status;
+  }
+  const fs::path folder = written.parent_path();
+  for (fs::directory_iterator it(folder, failure), end; !failure && it != end;
+       it.increment(failure))
+  {
+    std::error_code entry_failure;
+    if (it->is_regular_file(entry_failure) && it->file_size(entry_failure) > 0 &&
+        it->last_write_time(entry_failure) >= started && !entry_failure)
+    {
+      facts.folder_written = true;
+      break;
+    }
+  }
+  if (!wm::apple_ios::file_select_nothing_written(facts)) {
+    return status;
+  }
+  /* Blender's own words for why: the operator's last warning or error. */
+  std::string reason;
+  for (const Report &report : op->reports->list) {
+    if (report.type >= RPT_WARNING && report.message) {
+      reason = report.message;
+    }
+  }
+  const std::string message = wm::apple_ios::file_select_nothing_written_message(
+      BLI_path_basename(path), reason);
+  /* One alert that says it all, rather than the warning beside it. */
+  BKE_reports_clear(op->reports);
+  BKE_report(op->reports, RPT_ERROR, message.c_str());
+  WM_native_ui_log("error", message.c_str());
+  return OPERATOR_CANCELLED;
+}
+
+}  // namespace
+
 wmOperatorStatus WM_apple_ios_fileselect_exec(bContext *C, wmOperator *op)
 {
   for (const auto &item : requests) {
@@ -492,6 +561,7 @@ wmOperatorStatus WM_apple_ios_fileselect_exec(bContext *C, wmOperator *op)
       bool folder;
       wmOperatorStatus status = OPERATOR_CANCELLED;
     } execution{C, op, request.mode == GHOST_IOSDocumentMode::Directory};
+    const auto started = std::filesystem::file_time_type::clock::now();
     char error[1024] = {};
     const bool ok = GHOST_ios_document_coordinate(
         request.path.c_str(),
@@ -506,6 +576,9 @@ wmOperatorStatus WM_apple_ios_fileselect_exec(bContext *C, wmOperator *op)
         sizeof(error));
     if (!ok) {
       BKE_report(op->reports, RPT_ERROR, error);
+    }
+    if (ok && request.mode == GHOST_IOSDocumentMode::Save) {
+      execution.status = check_written(op, execution.status, started);
     }
     if (execution.status & OPERATOR_RUNNING_MODAL) {
       /* Its `exec` handed it on (a dialog of its own, as Link and Append's list does): the

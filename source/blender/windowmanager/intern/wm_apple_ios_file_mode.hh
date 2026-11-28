@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include <string>
 #include <string_view>
 
 namespace blender::wm::apple_ios {
@@ -111,6 +112,57 @@ inline bool file_select_shows_options(const FileSelectFacts &facts)
   return (kind == FileSelectKind::Open || kind == FileSelectKind::Save ||
           kind == FileSelectKind::Directory) &&
          !facts.hide_props_region && facts.options > 0;
+}
+
+/**
+ * What a write through the picker left (R8 F6). Blender's exporters can return FINISHED having
+ * written nothing: the Grease Pencil PDF export reports "Unable to export PDF" as a warning when
+ * its page size comes out 0 (`io_grease_pencil.cc`, `grease_pencil_export_pdf_exec`), and the
+ * iPad then counted the export done. Read after every write of a file named in the picker.
+ */
+struct WrittenFacts {
+  /** The operator returned FINISHED. Anything else it has said itself. */
+  bool finished = false;
+  /** Something is at the path it was given. */
+  bool exists = false;
+  bool is_folder = false;
+  unsigned long long size = 0;
+  /** A file in the path's folder was written while it ran: an exporter that names its own files
+   * (a batch export, one file a frame) has written, though not at the path itself. */
+  bool folder_written = false;
+};
+
+/** The write finished and left nothing: no file at its path, or an empty one, and no other file
+ * written beside it. */
+inline bool file_select_nothing_written(const WrittenFacts &facts)
+{
+  if (!facts.finished) {
+    return false;
+  }
+  if (facts.exists && (facts.is_folder || facts.size > 0)) {
+    return false;
+  }
+  return !facts.folder_written;
+}
+
+/** What the person is told when nothing was written to \a name: Blender's own words for why
+ * (\a reason, the operator's last warning or error), or that it gave none. */
+inline std::string file_select_nothing_written_message(std::string_view name,
+                                                       std::string_view reason)
+{
+  std::string message = "Nothing was written to \"";
+  message += name;
+  message += "\". ";
+  if (reason.empty()) {
+    message += "The export gave no reason.";
+  }
+  else {
+    message += reason;
+    if (reason.back() != '.') {
+      message += ".";
+    }
+  }
+  return message;
 }
 
 }  // namespace blender::wm::apple_ios
