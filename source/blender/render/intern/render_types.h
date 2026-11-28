@@ -13,6 +13,7 @@
 /* ------------------------------------------------------------------------- */
 
 #include <memory>
+#include <string>
 
 #include "DNA_scene_types.h"
 
@@ -82,6 +83,16 @@ struct BaseRender {
 
   /* Guard for drawing render result using engine's `draw()` callback. */
   ThreadMutex engine_draw_mutex = BLI_MUTEX_INITIALIZER;
+
+  /**
+   * What the engine last said it does (#RenderStats::infostr, "Sample 53/4096"). The stats hold
+   * those words only for the draw that carries them, so a status read later (the iPad shell's
+   * render pill) found Blender's composed text, whose last part can be the memory figures. Kept
+   * by #render_engine_status_set, read with #RE_engine_status_get, guarded by
+   * #engine_status_mutex.
+   */
+  Mutex engine_status_mutex;
+  std::string engine_status;
 
   /**
    * GPU context and callbacks. This can be shared for recursive compositor and

@@ -3597,6 +3597,16 @@ def tick_render_stall():
                                         "its phase: %r" % (progress, still, (t, progress, stalled, phase,
                                                                              render_stalled)))
                         break
+            # R8 F2: the words are the engine's, never Blender's figures (build 3's pill read "Mem:167M,
+            # Peak: 317M"): no time or memory part, and some words whenever the figure stood still.
+            figures = re.compile(r"(Mem:|Peak:|Time:|Frame:|Remaining:|Last:)")
+            for t, progress, stalled, phase, render_stalled in seen:
+                if phase and figures.search(phase):
+                    problems.append("a render's words held figures, not the engine's status: %r" % (phase,))
+                    break
+                if stalled is True and not (phase or "").strip():
+                    problems.append("a render stood still with no words at %.2f s" % t)
+                    break
             report["longest still"] = round(longest, 2)
             report["seen"] = [r for i, r in enumerate(seen) if i % 5 == 0][-40:]
             report["render state"] = state

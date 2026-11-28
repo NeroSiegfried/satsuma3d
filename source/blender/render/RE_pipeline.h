@@ -12,6 +12,8 @@
 #include "DNA_listBase.h"
 #include "DNA_vec_types.h"
 
+#include <string>
+
 class GHOST_IContext;
 
 namespace blender {
@@ -263,6 +265,12 @@ void RE_ReleaseResultImage(struct Render *re);
 void RE_SwapResult(struct Render *re, struct RenderResult **rr);
 void RE_ClearResult(struct Render *re);
 struct RenderStats *RE_GetStats(struct Render *re);
+/**
+ * The words the render's engine last gave about what it does, as #RenderStats::infostr carried
+ * them ("Sample 53/4096", "Compositing"). The stats hold them only while they are drawn, so this
+ * keeps a copy. Empty until the engine has said anything in this render. Safe from any thread.
+ */
+std::string RE_engine_status_get(struct Render *re);
 
 /**
  * Caller is responsible for allocating `rect` in correct size!

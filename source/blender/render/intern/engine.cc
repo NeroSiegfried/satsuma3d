@@ -495,6 +495,11 @@ void RE_engine_update_stats(RenderEngine *engine, const char *stats, const char 
   if (re) {
     re->i.statstr = stats;
     re->i.infostr = info;
+    /* Kept past this draw: a status read later finds the engine's words (#RE_engine_status_get).
+     * An update with only figures leaves the words it said last. */
+    if (info && info[0]) {
+      render_engine_status_set(re, info);
+    }
     re->display->stats_draw(&re->i);
     re->i.infostr = nullptr;
     re->i.statstr = nullptr;

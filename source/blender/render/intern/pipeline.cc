@@ -488,6 +488,18 @@ RenderStats *RE_GetStats(Render *re)
   return &re->i;
 }
 
+void render_engine_status_set(Render *re, const char *info)
+{
+  std::scoped_lock lock(re->engine_status_mutex);
+  re->engine_status = info ? info : "";
+}
+
+std::string RE_engine_status_get(Render *re)
+{
+  std::scoped_lock lock(re->engine_status_mutex);
+  return re->engine_status;
+}
+
 Render *RE_NewRender(const void *owner)
 {
   Render *re;
@@ -1273,6 +1285,7 @@ static void do_render_compositor(Render *re)
         CLOG_STR_INFO(&LOG, "Executing compositor");
 
         re->i.infostr = IFACE_("Compositing");
+        render_engine_status_set(re, re->i.infostr);
         re->display->stats_draw(&re->i);
         re->i.infostr = nullptr;
 
@@ -1514,6 +1527,8 @@ static void do_render_full_pipeline(Render *re)
   BKE_scene_camera_switch_update(re->scene);
 
   re->i.starttime = BLI_time_now_seconds();
+  /* What an earlier frame's engine said is not this frame's. */
+  render_engine_status_set(re, nullptr);
 
   /* ensure no rendered results are cached from previous animated sequences */
   BKE_image_all_free_anim_ibufs(re->main, re->r.cfra);

@@ -2378,3 +2378,24 @@ find_b3 = find_b3[:find_b3.index('\n}\n')]
 check('if (button_type == -1) {' in find_b3 and 'button_type < 0' not in find_b3 and
       'Int32(kind.first ?? "") ?? -1' in snap_b3,
       "A script's touch place of a kind, panel headers included, is that kind's, never the region's middle")
+
+# R8 F2, the render's words: the pill read "Mem:167M, Peak: 317M" (build 3), because the words were
+# the last part of the text the render job composes for desktop's render window, which ends in
+# Blender's memory line after a draw that carried no engine words. The engine's own words
+# (`RenderStats::infostr`) are kept by the render module past their draw, and every view that shows
+# a render's words or samples reads them there, never the composed text.
+pipeline_r8 = (SWIFT.parents[2] / 'render/intern/pipeline.cc').read_text(encoding='utf-8')
+engine_r8 = (SWIFT.parents[2] / 'render/intern/engine.cc').read_text(encoding='utf-8')
+status_r8 = ui_b3[ui_b3.index('static std::string bridge_render_status('):]
+status_r8 = status_r8[:status_r8.index('\n}\n')]
+samples_r8 = ui_b3[ui_b3.index('static double bridge_render_samples('):]
+samples_r8 = samples_r8[:samples_r8.index('\n}\n')]
+infostr_sets_r8 = re.findall(r'(re->i\.infostr = (?!nullptr)[^;]+;)\n\s*(render_engine_status_set\(re, [^)]*\))?',
+                             pipeline_r8)
+check('RE_engine_status_get(re)' in status_r8 and 'result->text' not in status_r8 and
+      'bridge_render_status(scene)' in samples_r8 and 'result->text' not in samples_r8 and
+      'bridge_render_phase' not in ui_b3 and
+      ui_b3.count('bridge_render_status(static_cast<const Scene *>(job.owner))') == 2 and
+      'render_engine_status_set(re, info);' in engine_r8 and
+      infostr_sets_r8 and all(kept for _, kept in infostr_sets_r8),
+      "Every view shows a render's words from the engine's own status, never the composed text")

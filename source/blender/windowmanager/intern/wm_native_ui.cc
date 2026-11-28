@@ -5553,65 +5553,78 @@ views::CommandResult bridge_settings_view_command(bContext *C,
   return views::CommandResult::Done;
 }
 
-/** How far the frame being rendered is, from the text its render job keeps with the result, as
- * desktop's render window shows it; 0 when it says nothing of samples. */
-static double bridge_render_samples(const Scene *scene)
-{
-  Render *re = RE_GetSceneRender(scene);
-  if (re == nullptr) {
-    return 0.0;
-  }
-  double fraction = 0.0;
-  const RenderResult *result = RE_AcquireResultRead(re);
-  if (result && result->text) {
-    const std::string_view text = result->text;
-    int done = 0, total = 0;
-    size_t at = text.find(" samples");
-    if (at != std::string_view::npos) {
-      /* "... | Rendering 12 / 64 samples": the two numbers before it. */
-      const size_t start = text.rfind("Rendering ", at);
-      if (start != std::string_view::npos &&
-          sscanf(std::string(text.substr(start, at - start)).c_str(),
-                 "Rendering %d / %d",
-                 &done,
-                 &total) != 2)
-      {
-        total = 0;
-      }
-    }
-    else if ((at = text.find("Sample ")) != std::string_view::npos) {
-      if (sscanf(std::string(text.substr(at)).c_str(), "Sample %d/%d", &done, &total) != 2) {
-        total = 0;
-      }
-    }
-    if (total > 0) {
-      fraction = std::clamp(double(done) / double(total), 0.0, 1.0);
-    }
-  }
-  RE_ReleaseResult(re);
-  return fraction;
-}
-
-/** What the render is doing now, the last part of the text its job keeps with the result, as
- * desktop's render window shows it: "Sample 12/64", "Denoising", "Rendering 12 / 64 samples";
- * empty when it says nothing. A render's progress counts only its samples, so it stands still at
- * the end while the engine does what follows them (Run B3: Cycles with adaptive sampling read 98 %
- * from the start of a long render); this says what it is doing then. */
-static std::string bridge_render_phase(const Scene *scene)
+/**
+ * What the render's engine says it does now, from its own words (#RE_engine_status_get, kept from
+ * #RenderStats::infostr): "Sample 12/64", "Denoising", "Rendering 12 / 64 samples"; empty when it
+ * has said nothing. Every view that shows a render's words reads this (R8 F2).
+ *
+ * Not the text the render job composes for desktop's render window: its last part is the engine's
+ * words only when the draw that composed it carried them, and a draw with only figures ends it in
+ * Blender's memory line (seen on the iPad as "Mem:167M, Peak: 317M", build 3). Cycles puts its own
+ * time and memory figures before its words in a final render ("Remaining: 00:12.34 | Mem: 167M |
+ * Sample 53/4096", `intern/cycles/blender/session.cpp`, `update_status_progress`): those parts are
+ * figures the views show elsewhere or not at all, so they are left out.
+ */
+static std::string bridge_render_status(const Scene *scene)
 {
   Render *re = scene ? RE_GetSceneRender(scene) : nullptr;
   if (re == nullptr) {
     return "";
   }
-  std::string phase;
-  const RenderResult *result = RE_AcquireResultRead(re);
-  if (result && result->text) {
-    const std::string_view text = result->text;
-    const size_t bar = text.rfind(" | ");
-    phase = std::string(bar == std::string_view::npos ? text : text.substr(bar + 3));
+  const std::string status = RE_engine_status_get(re);
+  std::string words;
+  size_t start = 0;
+  while (start <= status.size()) {
+    size_t end = status.find(" | ", start);
+    if (end == std::string::npos) {
+      end = status.size();
+    }
+    std::string_view part = std::string_view(status).substr(start, end - start);
+    while (!part.empty() && part.front() == ' ') {
+      part.remove_prefix(1);
+    }
+    while (!part.empty() && part.back() == ' ') {
+      part.remove_suffix(1);
+    }
+    if (!part.empty() && !part.starts_with("Remaining:") && !part.starts_with("Mem:")) {
+      words += words.empty() ? "" : " | ";
+      words += part;
+    }
+    start = end + 3;
   }
-  RE_ReleaseResult(re);
-  return phase;
+  return words;
+}
+
+/** How far the frame being rendered is, from the engine's words (#bridge_render_status); 0 when
+ * they say nothing of samples. */
+static double bridge_render_samples(const Scene *scene)
+{
+  const std::string status = bridge_render_status(scene);
+  const std::string_view text = status;
+  double fraction = 0.0;
+  int done = 0, total = 0;
+  size_t at = text.find(" samples");
+  if (at != std::string_view::npos) {
+    /* "Rendering 12 / 64 samples": the two numbers before it. */
+    const size_t start = text.rfind("Rendering ", at);
+    if (start != std::string_view::npos &&
+        sscanf(std::string(text.substr(start, at - start)).c_str(),
+               "Rendering %d / %d",
+               &done,
+               &total) != 2)
+    {
+      total = 0;
+    }
+  }
+  else if ((at = text.find("Sample ")) != std::string_view::npos) {
+    if (sscanf(std::string(text.substr(at)).c_str(), "Sample %d/%d", &done, &total) != 2) {
+      total = 0;
+    }
+  }
+  if (total > 0) {
+    fraction = std::clamp(double(done) / double(total), 0.0, 1.0);
+  }
+  return fraction;
 }
 
 /**
@@ -5711,7 +5724,7 @@ void bridge_render_view_build(bContext *C,
            * result: "Rendering 12 / 64 samples" (Cycles: "Sample 12/64"). */
           samples = bridge_render_samples(static_cast<const Scene *>(job.owner));
         }
-        phase = bridge_render_phase(static_cast<const Scene *>(job.owner));
+        phase = bridge_render_status(static_cast<const Scene *>(job.owner));
         stalled = bridge_progress_stalled("render", samples);
       }
     }
@@ -5795,7 +5808,7 @@ static void bridge_jobs_view_build(bContext *C,
     /* What it is doing, a render's from its own text, and whether its figure stands still: the
      * pill then says it works rather than show a figure that does not move (Run B3). */
     const std::string phase = job.job_type == WM_JOB_TYPE_RENDER ?
-                                  bridge_render_phase(static_cast<const Scene *>(job.owner)) :
+                                  bridge_render_status(static_cast<const Scene *>(job.owner)) :
                                   std::string();
     const bool stalled = bridge_progress_stalled(key, std::clamp(double(job.progress), 0.0, 1.0));
     builder.add(node, key + ":phase", [&](ViewBuffer &buffer, NodeFields & /*fields*/) {
